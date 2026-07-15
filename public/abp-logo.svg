@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <rect width="128" height="128" rx="24" fill="#0f172a" />
+  <circle cx="64" cy="64" r="40" fill="#f8fafc" opacity="0.12" />
+  <path d="M44 44h18c12 0 22 10 22 22s-10 22-22 22H44z" fill="#f59e0b" />
+  <path d="M66 44h18c12 0 22 10 22 22s-10 22-22 22H66z" fill="#38bdf8" />
+  <path d="M62 44h6v44h-6z" fill="#f8fafc" opacity="0.95" />
+  <text x="64" y="108" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="700" fill="#f8fafc">A.B.P</text>
+</svg>

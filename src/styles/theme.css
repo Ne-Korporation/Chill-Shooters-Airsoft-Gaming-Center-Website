@@ -1,0 +1,52 @@
+:root{
+  --bg:255,255,255;
+  --bg2:250,250,250;
+  /* Dark font on light background */
+  --text:10,20,35;
+  --muted:60,75,95;
+
+  --card:255,255,255;
+  --border:226,232,240;
+  --shadow:0 10px 30px rgba(2,6,23,.08);
+
+  /* Slightly tinted glass for light mode (more pleasant than pure white alpha) */
+  --glass:255,255,255;
+}
+
+
+[data-theme='dark']{
+  --bg:18,18,18;
+  --bg2:20,20,20;
+  --text:245,245,245;
+  --muted:161,161,161;
+  --card:26,26,26;
+  --border:255,255,255;
+  --shadow:0 10px 30px rgba(0,0,0,.35);
+  --glass:26,26,26;
+}
+
+/* Glass panels are theme-controlled via CSS variables */
+.glass{
+  background: rgba(var(--glass), 0.78);
+  border: 1px solid rgba(var(--border), 0.25);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(12px);
+}
+
+/* Light “camouflage” (still subtle, but not identical to dark) */
+:root .glass{
+  background: rgba(var(--glass), 0.70);
+  border: 1px solid rgba(var(--border), 0.18);
+}
+
+/* Dark tweaks */
+[data-theme='dark'] .glass{
+  background: rgba(var(--glass), 0.78);
+  border: 1px solid rgba(var(--border), 0.25);
+}
+
+
+.bg-background{background: rgb(var(--bg));}
+.text-text{color: rgb(var(--text));}
+.text-muted{color: rgb(var(--muted));}
+
