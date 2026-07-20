@@ -1,4 +1,7 @@
 import React, { useMemo, useState, useEffect } from 'react'
+import { apiPost } from '../../utils/apiClient'
+import { useAuth } from '../../context/AuthContext'
+
 import { motion } from 'framer-motion'
 import { useLocation } from 'react-router-dom'
 import {
@@ -235,13 +238,19 @@ export function ReservationCalendarPage_FIXED() {
   const location = useLocation()
   const today = useMemo(() => new Date(), [])
 
+  const { user } = useAuth()
+
+  const [step, setStep] = useState<1 | 2 | 3 | 4>(1)
+  const [isConfirming, setIsConfirming] = useState(false)
+
   const packagePrefill = (location.state as PackageRecommendationPrefill | null)?.fromPackageRecommendation
     ? (location.state as PackageRecommendationPrefill)
     : undefined
 
+
   const dates = useMemo(() => Array.from({ length: 7 }).map((_, i) => addDays(today, i)), [today])
 
-  const [step, setStep] = useState<1 | 2 | 3 | 4>(1)
+
   const [waiverSubmitted, setWaiverSubmitted] = useState<boolean>(() => {
     try {
       return localStorage.getItem('waiver_submitted') === '1'
@@ -360,6 +369,52 @@ export function ReservationCalendarPage_FIXED() {
   )
 
   const timeSlots: TimeSlot[] = ['morning', 'afternoon', 'evening']
+
+  async function handleConfirm() {
+    if (!user?.id) {
+      alert('Please login to continue.')
+      return
+    }
+
+    if (!canProceed || players < effectiveMinPlayers) return
+
+    try {
+      setIsConfirming(true)
+
+      const payload = {
+        userId: user.id,
+        selectedPackageId,
+        mode,
+        fieldId,
+        reservationDate: dateISO,
+        reservationTime: slot,
+        sessionType,
+        numberOfPlayers: players,
+        totalAmount: dynamicPricing.total,
+        notes,
+        reservationStatus: 'pending',
+        // Ensure gameplay auto-create can derive schedule/game/package
+        // The reservation confirmation workflow uses these fields.
+        selectedGameplayName: selectedPackage.name,
+        packageName: selectedPackage.name,
+      }
+
+
+      console.log('Creating reservation payload:', payload)
+      const result = await apiPost<{ ok: boolean; insertedId?: string; data?: any }>('/api/reservations', payload)
+
+
+      const reservationId = result?.insertedId ?? result?.data?._id ?? result?.data?.id
+      if (!reservationId) throw new Error('Reservation id missing from API response')
+
+      localStorage.setItem('active_reservation_id', String(reservationId))
+      setStep(4)
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Failed to confirm reservation')
+    } finally {
+      setIsConfirming(false)
+    }
+  }
 
   return (
     <div className="space-y-4">
@@ -1026,8 +1081,8 @@ export function ReservationCalendarPage_FIXED() {
                 </Button>
                 <Button
                   variant="primary"
-                  disabled={!canProceed || players < effectiveMinPlayers}
-                  onClick={() => setStep(4)}
+                  disabled={!canProceed || players < effectiveMinPlayers || isConfirming}
+                  onClick={handleConfirm}
                 >
                   Confirm
                   <FiChevronRight />

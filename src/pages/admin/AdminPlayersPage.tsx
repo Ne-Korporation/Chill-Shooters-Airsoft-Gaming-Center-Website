@@ -1,9 +1,11 @@
- import React from 'react'
+import React from 'react'
 import { Card } from '../../components/ui/Card'
+import { apiGet, apiPost, apiPut, apiDelete } from '../../utils/apiClient'
 
 type PlayerStatus = 'active' | 'pending' | 'suspended'
 
 const StatusBadge = ({ status }: { status: PlayerStatus }) => {
+
   const cls =
     status === 'active'
       ? 'bg-success/20 text-success border-success/30'
@@ -22,39 +24,41 @@ const StatusBadge = ({ status }: { status: PlayerStatus }) => {
 
 export function AdminPlayersPage() {
   const [status, setStatus] = React.useState<PlayerStatus | 'all'>('all')
+  const [players, setPlayers] = React.useState<any[]>([])
+  const [loading, setLoading] = React.useState(true)
+  const [error, setError] = React.useState<string | null>(null)
 
-  const players = [
-    {
-      id: 'P-0001',
-      name: 'John A.',
-      experience: 3,
-      waiver: 'Verified',
-      status: 'active' as PlayerStatus,
-    },
-    {
-      id: 'P-0002',
-      name: 'Mika S.',
-      experience: 1,
-      waiver: 'Pending',
-      status: 'pending' as PlayerStatus,
-    },
-    {
-      id: 'P-0003',
-      name: 'Rafael C.',
-      experience: 6,
-      waiver: 'Verified',
-      status: 'active' as PlayerStatus,
-    },
-    {
-      id: 'P-0004',
-      name: 'Alyssa K.',
-      experience: 0,
-      waiver: 'Expired',
-      status: 'suspended' as PlayerStatus,
-    },
-  ]
+  React.useEffect(() => {
+    let alive = true
+    ;(async () => {
+      setLoading(true)
+      setError(null)
+      try {
+        const res = await apiGet<{ ok: boolean; data: any[] }>('/api/user_accounts?limit=200')
+        if (!alive) return
+        const docs = Array.isArray(res?.data) ? res.data : []
+        // normalize: keep page fields, but ensure we have an id field for UI
+        const normalized = docs.map((d) => ({
+          ...d,
+          id: d.id ?? d.playerId ?? d.accountId ?? (d._id ? String(d._id) : undefined),
+        }))
+        setPlayers(normalized)
+      } catch (e: any) {
+        if (!alive) return
+        setError(String(e?.message || e))
+        setPlayers([])
+      } finally {
+        if (alive) setLoading(false)
+      }
+    })()
+
+    return () => {
+      alive = false
+    }
+  }, [])
 
   const filtered = status === 'all' ? players : players.filter((p) => p.status === status)
+
 
   return (
     <div className="space-y-4">

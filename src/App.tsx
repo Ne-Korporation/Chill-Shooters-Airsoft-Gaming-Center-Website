@@ -18,6 +18,7 @@ import { PlayerProfilePage } from './pages/players/PlayerProfilePage'
 
 import { AdminDashboardPage } from './pages/admin/AdminDashboardPage'
 import { AdminReservationsPage } from './pages/admin/AdminReservationsPage'
+import { AdminGameplayPage } from './pages/admin/AdminGameplayPage'
 import { AdminPlayersPage } from './pages/admin/AdminPlayersPage'
 import { AdminEquipmentPage } from './pages/admin/AdminEquipmentPage'
 import { AdminWeaponsPage } from './pages/admin/AdminWeaponsPage'
@@ -119,6 +120,9 @@ export default function App() {
 
         <Route path="admin" element={<AdminDashboardPage />} />
         <Route path="admin/reservations" element={<AdminReservationsPage />} />
+        <Route path="admin/gameplay" element={<AdminGameplayPage />} />
+
+
         <Route path="admin/reservation-management" element={<ReservationManagementPage />} />
         <Route path="admin/players" element={<AdminPlayersPage />} />
         <Route path="admin/player-management" element={<PlayerManagementPage />} />

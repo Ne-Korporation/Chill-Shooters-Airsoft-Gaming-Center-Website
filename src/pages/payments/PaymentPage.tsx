@@ -1,6 +1,11 @@
 import React, { useMemo, useState } from 'react'
+import { apiPost } from '../../utils/apiClient'
+import toast from 'react-hot-toast'
+import { useAuth } from '../../context/AuthContext'
+
 import { motion } from 'framer-motion'
 import { FiCheck, FiChevronRight, FiFileText, FiInfo, FiLock, FiUpload, FiX } from 'react-icons/fi'
+
 
 class PaymentPageErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean }> {
   state = { hasError: false }
@@ -88,15 +93,69 @@ export function PaymentPage() {
     setUpload({ fileName: f.name, fileSize: f.size })
   }
 
+  const { user } = useAuth()
+
   const submit = async () => {
     setSubmitting(true)
     try {
-      await new Promise((r) => setTimeout(r, 900))
+      if (!user?.id) throw new Error('Please login to continue')
+
+      const activeReservationId = localStorage.getItem('active_reservation_id')
+      if (!activeReservationId) throw new Error('Active reservation not found. Please create a reservation first.')
+
+      if (method === 'gcash') {
+        if (!upload.fileName) throw new Error('Proof image is required')
+      }
+
+      // If the user selected a file, upload it to Cloudinary via backend.
+      // NOTE: We currently only store the returned URL.
+      let gcashImageUrl: string | undefined
+      if (method === 'gcash') {
+        const input = document.getElementById('payment-proof-upload') as HTMLInputElement | null
+
+        const file = input?.files?.[0]
+        if (!file) throw new Error('Proof image is required')
+
+        const formData = new FormData()
+        formData.append('file', file)
+
+        const apiUrl = (import.meta as any).env?.VITE_API_URL || 'http://localhost:3001'
+
+        const uploadRes = await fetch(`${apiUrl}/api/upload-image`, {
+          method: 'POST',
+          body: formData,
+        })
+        const uploadJson = await uploadRes.json().catch(() => null)
+        if (!uploadRes.ok) {
+          throw new Error(uploadJson?.error || uploadJson?.message || 'Upload failed')
+        }
+        gcashImageUrl = uploadJson?.url
+        if (!gcashImageUrl) throw new Error('Cloudinary upload returned no url')
+      }
+
+      // Create payment record linked to active reservation.
+      const paymentPayload = {
+        reservationId: activeReservationId,
+        userId: user.id,
+        amount: breakdown.total,
+        paymentMethod: method === 'gcash' ? 'GCash' : 'Bank',
+        paymentStatus: 'pending',
+        gcashImageUrl: gcashImageUrl || '',
+        transactionReference: method === 'gcash' ? refNo.trim() : `BANK-${refNo.trim()}`,
+        createdAt: new Date().toISOString(),
+      }
+
+      await apiPost('/api/payments', paymentPayload)
       setSuccess(true)
+      toast.success('Payment submitted')
+    } catch (e: any) {
+      toast.error(String(e?.message || e))
     } finally {
       setSubmitting(false)
     }
   }
+
+
 
   return (
     <div id="payment-section" className="space-y-4">

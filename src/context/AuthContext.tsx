@@ -1,5 +1,7 @@
 import React, { createContext, useContext, useMemo, useState } from 'react'
 
+import { apiPost } from '../utils/apiClient'
+
 type Role = 'user' | 'admin' | 'marshal' | 'registrar'
 
 type AuthUser = {
@@ -38,36 +40,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     () => ({
       user,
       isAuthenticated: !!user,
-      login: async ({ email }) => {
-        // Fake auth: allow admin/marshal/registrar by email suffix.
-        const role: Role =
-          email.endsWith('@admin.local')
-            ? 'admin'
-            : email.endsWith('@marshal.local')
-              ? 'marshal'
-              : email.endsWith('@registrar.local')
-                ? 'registrar'
-                : 'user'
-
-        const next: AuthUser = {
-          id: 'u_' + Math.random().toString(16).slice(2),
-          name: role === 'admin' ? 'Command Admin' : role === 'marshal' ? 'Marshal Lead' : role === 'registrar' ? 'Registrar Clerk' : 'Operator',
-          email,
-          role,
+      login: async ({ email, password }) => {
+        const res = await apiPost<any>('/api/auth/login', { email, password })
+        if (!res?.ok || !res?.user) {
+          throw new Error('Login failed')
         }
-
-        setUser(next)
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
+        setUser(res.user)
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(res.user))
       },
-      register: async ({ name, email }) => {
-        const next: AuthUser = {
-          id: 'u_' + Math.random().toString(16).slice(2),
-          name,
-          email,
-          role: 'user',
-        }
-        setUser(next)
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
+      register: async ({ name, email, password }) => {
+        const res = await apiPost<any>('/api/auth/register', { name, email, password })
+        if (!res?.ok) throw new Error(res?.error || 'Registration failed')
       },
       logout: () => {
         setUser(null)
@@ -85,4 +68,5 @@ export function useAuth() {
   if (!ctx) throw new Error('useAuth must be used within AuthProvider')
   return ctx
 }
+
 

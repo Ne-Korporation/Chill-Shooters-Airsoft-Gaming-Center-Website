@@ -1,6 +1,10 @@
-import React from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
+import toast from 'react-hot-toast'
+import { apiDelete, apiGet, apiPut } from '../../utils/apiClient'
+import { useAuth } from '../../context/AuthContext'
+
 
 type PaymentStatus = 'paid' | 'pending' | 'failed' | 'review'
 
@@ -36,53 +40,58 @@ const StatusPill = ({ status }: { status: PaymentStatus }) => {
 }
 
 export function AdminPaymentsPage() {
+  const { user } = useAuth()
   const [active, setActive] = React.useState<PaymentStatus | 'all'>('all')
-  const [payments, setPayments] = React.useState<PaymentItem[]>([
-    {
-      id: 'PMT-00921',
-      player: 'John A.',
-      amount: 1200,
-      method: 'GCash',
-      status: 'review',
-      date: '2026-07-18',
-      note: 'Receipt uploaded 15 min ago; needs admin confirmation.',
-    },
-    {
-      id: 'PMT-00915',
-      player: 'Mika S.',
-      amount: 800,
-      method: 'Card',
-      status: 'paid',
-      date: '2026-07-18',
-      note: 'Confirmed and matched to the weekend reservation.',
-    },
-    {
-      id: 'PMT-00890',
-      player: 'Rafael C.',
-      amount: 950,
-      method: 'GCash',
-      status: 'pending',
-      date: '2026-07-17',
-      note: 'Awaiting proof of transfer from the player.',
-    },
-    {
-      id: 'PMT-00844',
-      player: 'Alyssa K.',
-      amount: 900,
-      method: 'Card',
-      status: 'failed',
-      date: '2026-07-16',
-      note: 'Payment failed due to an authorization mismatch.',
-    },
-  ])
+  const [payments, setPayments] = React.useState<PaymentItem[]>([])
+  const [loading, setLoading] = useState(true)
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      const res = await apiGet<{ ok: boolean; data: any[] }>('/api/payments?limit=200')
+      const docs = Array.isArray(res?.data) ? res.data : []
+      setPayments(
+        docs.map((d: any) => ({
+          id: d.id ?? (d._id ? String(d._id) : ''),
+          player: d.userId ? String(d.userId) : d.player ?? '—',
+          amount: Number(d.amount ?? d.totalPHP ?? 0),
+          method: d.paymentMethod ?? d.method ?? '—',
+          status: d.paymentStatus ?? d.status ?? 'pending',
+          date: d.createdAtISO ?? d.createdAt ?? d.submittedAtISO ?? '—',
+          note: d.transactionReference ?? d.refNo ?? d.note ?? '',
+        }))
+      )
+    } catch (e: any) {
+      toast.error(String(e?.message || e))
+      setPayments([])
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    load()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+
+
+
 
   const filtered = payments.filter((payment) => (active === 'all' ? true : payment.status === active))
   const reviewCount = payments.filter((payment) => payment.status === 'review').length
   const pendingValue = payments.filter((payment) => payment.status === 'pending').reduce((sum, p) => sum + p.amount, 0)
 
-  const updateStatus = (id: string, nextStatus: PaymentStatus) => {
-    setPayments((prev) => prev.map((payment) => (payment.id === id ? { ...payment, status: nextStatus } : payment)))
+  const updateStatus = async (id: string, nextStatus: PaymentStatus) => {
+    try {
+      await apiPut(`/api/payments/${id}/verify`, { paymentStatus: nextStatus })
+      await load()
+      toast.success('Payment updated')
+    } catch (e: any) {
+      toast.error(String(e?.message || e))
+    }
   }
+
 
   return (
     <div className="space-y-4">
