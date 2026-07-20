@@ -4,6 +4,15 @@ import { getDb } from '../db/mongo.js'
 
 const router = express.Router()
 
+function formatShortId(prefix, value) {
+  return `${prefix}-${String(value).padStart(6, '0')}`
+}
+
+async function nextShortId(db, collectionName, prefix) {
+  const count = await db.collection(collectionName).countDocuments({})
+  return formatShortId(prefix, count + 1)
+}
+
 function normalizeEmail(email) {
   return String(email || '').trim().toLowerCase()
 }
@@ -38,8 +47,10 @@ router.post('/register', async (req, res) => {
     const shouldHash = process.env.PASSWORD_HASHING_ENABLED === 'true' || true
     const hashedPassword = shouldHash ? await bcrypt.hash(password, 10) : password
 
+    const nextId = await nextShortId(db, 'user_accounts', 'P')
+
     const newDoc = {
-      id: `P_${Math.random().toString(16).slice(2)}_${Date.now().toString(16)}`,
+      id: nextId,
       name: name.trim(),
       email: normalizedEmail,
       password: hashedPassword,

@@ -3,10 +3,28 @@ import { getDb, toObjectId } from '../db/mongo.js'
 
 const router = express.Router()
 
+function reservationKey(reservation) {
+  return String(reservation?.id || reservation?._id || '')
+}
+
+async function findReservation(db, rawId) {
+  const _id = toObjectId(rawId)
+  if (_id) {
+    const byObjectId = await db.collection('reservations').findOne({ _id })
+    if (byObjectId) return byObjectId
+  }
+
+  return db.collection('reservations').findOne({ id: String(rawId) })
+}
+
 function parseStatus(body) {
   const status = body?.reservationStatus
   if (!status || typeof status !== 'string') return null
-  return status
+  const lower = status.trim().toLowerCase()
+  if (lower === 'pending') return 'pending'
+  if (lower === 'needs review' || lower === 'needs_review' || lower === 'review') return 'needs review'
+  if (lower === 'confirmed' || lower === 'approved') return 'confirmed'
+  return null
 }
 
 function isAdminRole(role) {
@@ -50,10 +68,9 @@ function mapReservationToGameplay({ reservation }) {
   }
 }
 
-router.put('/reservations/:id/confirm', async (req, res) => {
+async function updateReservationStatus(req, res) {
   const { id } = req.params
-  const _id = toObjectId(id)
-  if (!_id) return res.status(400).json({ ok: false, error: 'invalid id' })
+  if (!id) return res.status(400).json({ ok: false, error: 'invalid id' })
 
   const { reservationStatus } = req.body || {}
   const nextStatus = parseStatus({ reservationStatus })
@@ -69,7 +86,7 @@ router.put('/reservations/:id/confirm', async (req, res) => {
   try {
     const db = await getDb()
 
-    const reservation = await db.collection('reservations').findOne({ _id })
+    const reservation = await findReservation(db, id)
     if (!reservation) return res.status(404).json({ ok: false, error: 'reservation not found' })
 
     const isActorAdmin = isAdminRole(actorRole)
@@ -79,45 +96,76 @@ router.put('/reservations/:id/confirm', async (req, res) => {
       }
     }
 
+    const paymentStatus =
+      nextStatus === 'confirmed'
+        ? 'confirmed'
+        : nextStatus === 'needs review'
+          ? 'review'
+          : 'pending'
+
     // Update reservation status.
+    const reservationFilter = reservation._id ? { _id: reservation._id } : { id: String(reservation.id || id) }
+
     const updateRes = await db.collection('reservations').findOneAndUpdate(
-      { _id },
+      reservationFilter,
       { $set: { reservationStatus: nextStatus, updatedAtISO: new Date().toISOString() } },
       { returnDocument: 'after', upsert: false },
     )
 
-    if (!updateRes?.value) return res.status(404).json({ ok: false, error: 'reservation not found after update' })
+    const updatedReservation = updateRes?.value ?? (await db.collection('reservations').findOne({ _id }))
+    if (!updatedReservation) return res.status(404).json({ ok: false, error: 'reservation not found after update' })
 
-    // Auto-create gameplay only when set to Confirmed.
-    if (String(nextStatus).toLowerCase() !== 'confirmed') {
-      return res.json({ ok: true, data: updateRes.value, gameplayCreated: false })
-    }
-
-    const already = await db.collection('gameplay').findOne({ reservationId: String(reservation._id) })
-    if (already) {
-      // Idempotent: don’t duplicate. Return existing.
-      return res.json({ ok: true, data: updateRes.value, gameplayCreated: false, gameplay: already })
-    }
-
-    const gameplayDoc = mapReservationToGameplay({ reservation: updateRes.value })
-
-    // Ensure reservationId + userId exist
-    gameplayDoc.reservationId = String(reservation._id)
-    gameplayDoc.userId = String(updateRes.value.userId)
-
-    const insert = await db.collection('gameplay').insertOne({
-      ...gameplayDoc,
-      // also include a deterministic id field for UI
-      id: `GP-${String(reservation._id).slice(-6)}-${Date.now()}`,
+    const payment = await db.collection('payments').findOne({
+      reservationId: reservationKey(updatedReservation),
     })
 
-    const gameplay = await db.collection('gameplay').findOne({ _id: insert.insertedId })
+    if (payment) {
+      await db.collection('payments').findOneAndUpdate(
+        { _id: payment._id },
+        {
+          $set: {
+            paymentStatus,
+            updatedAtISO: new Date().toISOString(),
+          },
+        },
+        { returnDocument: 'after', upsert: false },
+      )
+    }
 
-    return res.json({ ok: true, data: updateRes.value, gameplayCreated: true, gameplay })
+    let gameplayCreated = false
+    let gameplay = null
+
+    // Auto-create gameplay only when confirmed.
+    if (nextStatus === 'confirmed') {
+      const already = await db.collection('gameplay').findOne({ reservationId: reservationKey(updatedReservation) })
+      if (already) {
+        gameplay = already
+      } else {
+        const gameplayDoc = mapReservationToGameplay({ reservation: updatedReservation })
+
+        // Ensure reservationId + userId exist
+        gameplayDoc.reservationId = reservationKey(updatedReservation)
+        gameplayDoc.userId = String(updatedReservation.userId)
+
+        const insert = await db.collection('gameplay').insertOne({
+          ...gameplayDoc,
+          // also include a deterministic id field for UI
+          id: `GP-${reservationKey(updatedReservation).slice(-6)}-${Date.now()}`,
+        })
+
+        gameplay = await db.collection('gameplay').findOne({ _id: insert.insertedId })
+        gameplayCreated = true
+      }
+    }
+
+    return res.json({ ok: true, data: updatedReservation, gameplayCreated, gameplay, paymentStatus })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
   }
-})
+}
+
+router.put('/reservations/:id/status', updateReservationStatus)
+router.put('/reservations/:id/confirm', updateReservationStatus)
 
 export default router
 

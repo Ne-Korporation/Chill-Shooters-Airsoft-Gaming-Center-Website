@@ -404,7 +404,7 @@ export function ReservationCalendarPage_FIXED() {
       const result = await apiPost<{ ok: boolean; insertedId?: string; data?: any }>('/api/reservations', payload)
 
 
-      const reservationId = result?.insertedId ?? result?.data?._id ?? result?.data?.id
+      const reservationId = result?.data?.id ?? result?.insertedId ?? result?.data?._id
       if (!reservationId) throw new Error('Reservation id missing from API response')
 
       localStorage.setItem('active_reservation_id', String(reservationId))

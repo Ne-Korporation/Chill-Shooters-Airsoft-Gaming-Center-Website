@@ -1,7 +1,9 @@
-import express from 'express'
+﻿import express from 'express'
 import nodemailer from 'nodemailer'
 import cors from 'cors'
 import dotenv from 'dotenv'
+import path from 'path'
+import { fileURLToPath } from 'url'
 import crudRouter from './routes/crud.js'
 import authRouter from './routes/auth.js'
 import uploadRouter from './routes/uploads.js'
@@ -9,10 +11,11 @@ import reservationWorkflowsRouter from './routes/reservationWorkflows.js'
 import paymentsWorkflowsRouter from './routes/paymentsWorkflows.js'
 import { getDb } from './db/mongo.js'
 
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
 
-
-
-dotenv.config()
+dotenv.config({ path: path.resolve(__dirname, '.env') })
+dotenv.config({ path: path.resolve(process.cwd(), '.env'), override: true })
 
 const app = express()
 app.use(cors())
@@ -20,7 +23,6 @@ app.use(express.json())
 
 const PORT = process.env.PORT || 3001
 
-// Warm up Mongo connection (fail fast if misconfigured)
 getDb()
   .then(() => console.log('MongoDB connected'))
   .catch((err) => console.warn('MongoDB not connected yet:', String(err)))
@@ -40,20 +42,10 @@ if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
   console.warn('SMTP credentials not provided. /api/contact will fail until configured.')
 }
 
-// Mount dedicated routes BEFORE generic CRUD to avoid route collisions
 app.use('/api', uploadRouter)
 app.use('/api', reservationWorkflowsRouter)
-
-// Mount auth routes before the generic CRUD router so '/api/auth/*' is handled
-// by the auth router instead of being captured by the wildcard CRUD routes.
 app.use('/api/auth', authRouter)
 app.use('/api', crudRouter)
-
-
-
-
-
-
 
 app.post('/api/contact', async (req, res) => {
   const { name, email, message } = req.body || {}
@@ -77,7 +69,5 @@ app.post('/api/contact', async (req, res) => {
 })
 
 app.listen(PORT, () => {
-  // eslint-disable-next-line no-console
   console.log(`API server listening on http://localhost:${PORT}`)
 })
-

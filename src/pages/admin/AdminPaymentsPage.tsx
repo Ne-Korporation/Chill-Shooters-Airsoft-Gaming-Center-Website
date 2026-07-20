@@ -6,7 +6,7 @@ import { apiDelete, apiGet, apiPut } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
 
 
-type PaymentStatus = 'paid' | 'pending' | 'failed' | 'review'
+type PaymentStatus = 'paid' | 'pending' | 'failed' | 'review' | 'confirmed'
 
 type PaymentItem = {
   id: string
@@ -21,6 +21,8 @@ type PaymentItem = {
 const statusBadge = (status: PaymentStatus) => {
   switch (status) {
     case 'paid':
+      return 'bg-success/20 text-success border-success/30'
+    case 'confirmed':
       return 'bg-success/20 text-success border-success/30'
     case 'pending':
       return 'bg-accent/20 text-accent border-accent/30'
@@ -102,7 +104,7 @@ export function AdminPaymentsPage() {
         </div>
 
         <div className="flex flex-wrap gap-2">
-          {(['all', 'review', 'paid', 'pending', 'failed'] as const).map((status) => (
+          {(['all', 'review', 'paid', 'pending', 'failed', 'confirmed'] as const).map((status) => (
             <button
               key={status}
               onClick={() => setActive(status)}

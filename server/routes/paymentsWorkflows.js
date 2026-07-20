@@ -11,6 +11,7 @@ function parseStatus(body) {
   if (lower === 'pending') return 'pending'
   if (lower === 'failed') return 'failed'
   if (lower === 'review') return 'review'
+  if (lower === 'confirmed') return 'confirmed'
   return s
 }
 

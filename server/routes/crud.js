@@ -5,6 +5,16 @@ import { ALLOWED_COLLECTIONS } from './collections.js'
 
 const router = express.Router()
 
+function shortIdPrefixForCollection(collection) {
+  if (collection === 'reservations') return 'R'
+  if (collection === 'user_accounts') return 'P'
+  return null
+}
+
+function formatShortId(prefix, value) {
+  return `${prefix}-${String(value).padStart(6, '0')}`
+}
+
 router.get('/health', async (req, res) => {
   try {
     const db = await getDb()
@@ -95,8 +105,16 @@ router.post('/:collection', async (req, res) => {
 
   try {
     const db = await getDb()
-    const result = await db.collection(collection).insertOne(payload)
-    return res.status(201).json({ ok: true, insertedId: result.insertedId })
+    const prefix = shortIdPrefixForCollection(collection)
+    const doc = { ...payload }
+
+    if (prefix && !doc.id) {
+      const count = await db.collection(collection).countDocuments({})
+      doc.id = formatShortId(prefix, count + 1)
+    }
+
+    const result = await db.collection(collection).insertOne(doc)
+    return res.status(201).json({ ok: true, insertedId: result.insertedId, data: doc })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
   }
