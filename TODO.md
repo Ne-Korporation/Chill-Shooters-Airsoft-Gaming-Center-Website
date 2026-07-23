@@ -1,34 +1,32 @@
-# TODO - Backend + Frontend Functional Completion
+# TODO: Make Rental Packages Work with Weapons & Equipment
 
-## Phase 1 — Backend Foundations
-- [ ] Inspect current auth/session usage (token? headers?) and reservation schema expectations.
-- [ ] Add Cloudinary upload helper + backend upload route(s).
-- [ ] Add reservation confirmation endpoint logic to auto-create gameplay (no duplicates), linked by reservationId + userId.
-- [ ] Implement gameplay status/actions defaults + delete behavior.
+- [x] Plan created and approved by user
 
-## Phase 2 — Backend CRUD Validation/Scoping
-- [ ] Add reservation list scoping: users see only their own unless admin.
-- [ ] Add validations for payments and waivers payloads.
-- [ ] Ensure duplicate submissions are prevented (idempotency on reservation-confirm gameplay creation).
+## Implementation Steps - COMPLETE ✅
 
-## Phase 3 — Frontend Wiring (MongoDB-backed)
-- [ ] Update AdminEquipmentPage to use API CRUD and refresh list.
-- [ ] Update AdminRentalPackagesPage to use API CRUD and refresh list.
-- [ ] Update AdminWeaponsPage to use API CRUD and refresh list.
-- [ ] Update AdminPaymentsPage to use API CRUD and refresh list.
-- [ ] Update AdminReservationsPage to list/update reservations and trigger gameplay creation.
-- [ ] Implement AdminGameplayPage (or wire existing one) with Status/Actions and conditional Delete.
+### AdminRentalPackagesPage.tsx ✅
+- [x] API imports (apiGet, apiPost, apiPut, apiDelete) + toast
+- [x] Updated RentalPackage type (weaponIds, equipmentIds instead of includedItems)
+- [x] Removed tier field
+- [x] Added basePrice, minPlayers fields
+- [x] Fetches packages, weapons, equipment on mount via API
+- [x] Multi-select checkboxes for weapons & equipment from inventory
+- [x] **Prices shown from inventory** — no price inputs in rental packages
+- [x] Right panel shows selected weapon/equipment details with prices from inventory
+- [x] CRUD operations via API (create, save, archive, delete)
+- [x] Loading/error/saving states
 
-## Phase 4 — User Workflows
-- [ ] Update ReservationCalendarPage_FIXED to fetch packages/equipment from DB and save reservation.
-- [ ] Update PaymentPage to upload proof to Cloudinary then save payment record to MongoDB.
-- [ ] Update WaiverPage to upload waiver image (signature canvas => image blob) to Cloudinary then save waiver record.
+### AdminWeaponsPage.tsx ✅ (price already present)
+- [x] `price: number` in WeaponItem type
+- [x] Price input (₱) in add/edit form
+- [x] Price column in table
+- [x] Price sent in create/update API payloads
+- [x] Price normalized from DB on fetch
 
-## Phase 5 — Final Verification
-- [ ] Verify all API routes work for CRUD.
-- [ ] Verify MongoDB documents are created with correct links.
-- [ ] Verify gameplay auto-creation on reservation confirmation.
-- [ ] Verify gameplay delete only shows when Completed.
-- [ ] Verify uploaded images are accessible by URL.
-- [ ] Verify login works.
+### AdminEquipmentPage.tsx ✅ (price already present)
+- [x] `price: number` in InventoryItem type
+- [x] Price input (₱) in add/edit form
+- [x] Price displayed in table
+- [x] Price sent in create/update API payloads
+- [x] Price normalized from DB on fetch
 

@@ -10,6 +10,7 @@ import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { Card } from '../../components/ui/Card'
 import { useAuth } from '../../context/AuthContext'
+import { signInWithGoogle } from '../../utils/firebase'
 
 type FormValues = {
   email: string
@@ -17,7 +18,7 @@ type FormValues = {
 }
 
 export function LoginPage() {
-  const { login } = useAuth()
+  const { login, loginWithGoogle } = useAuth()
   const navigate = useNavigate()
 
   const {
@@ -49,6 +50,18 @@ export function LoginPage() {
       navigate('/app')
     } catch {
       toast.error('Authentication failed. Try again.')
+    }
+  }
+
+  async function handleGoogleSignIn() {
+    try {
+      const profile = await signInWithGoogle()
+      await loginWithGoogle({ name: profile.name, email: profile.email })
+      toast.success('Signed in with Google.')
+      navigate('/app')
+    } catch (err) {
+      console.error('Google sign-in error', err)
+      toast.error('Google sign-in failed.')
     }
   }
 
@@ -120,6 +133,12 @@ export function LoginPage() {
               <Button type="submit" disabled={isSubmitting} className="w-full">
                 {isSubmitting ? 'Verifying...' : 'Sign In'}
               </Button>
+
+              <div className="pt-3">
+                <Button type="button" onClick={handleGoogleSignIn} className="w-full">
+                  Sign in with Google
+                </Button>
+              </div>
 
               <div className="flex items-center justify-between pt-2 text-xs">
                 <button

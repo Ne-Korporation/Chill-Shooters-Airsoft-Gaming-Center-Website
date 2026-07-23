@@ -8,6 +8,7 @@ import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { Card } from '../../components/ui/Card'
 import { uid } from '../../utils/id'
+import { apiPost } from '../../utils/apiClient'
 
 type FormValues = {
   name: string
@@ -25,29 +26,20 @@ export function RegisterPage() {
   } = useForm<FormValues>({ defaultValues: { name: '', email: '', password: '' } })
 
   async function onSubmit(values: FormValues) {
-    // Persist registration to MongoDB (user_accounts)
     const payload = {
       name: values.name.trim(),
       email: values.email.trim().toLowerCase(),
       password: values.password,
     }
 
-    const res = await fetch('http://localhost:3001/api/auth/register', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    })
-
-    const json = await res.json().catch(() => null)
-    if (!res.ok) {
-      toast.error(json?.error || json?.message || 'Registration failed')
-      return
+    try {
+      await apiPost('/api/auth/register', payload)
+      toast.success('Verification code sent to your email.')
+      navigate(`/otp?email=${encodeURIComponent(payload.email)}&flow=register&t=${uid('otp')}`)
+    } catch (err: any) {
+      toast.error(err?.message || 'Registration failed')
     }
-
-    toast.success('Account created. Proceed to OTP verification.')
-    navigate(`/otp?email=${encodeURIComponent(payload.email)}&t=${uid('otp')}`)
   }
-
 
   return (
     <div className="relative min-h-screen overflow-hidden bg-background px-3 py-10 lg:py-14">

@@ -7,6 +7,7 @@ import { motion } from 'framer-motion'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { Card } from '../../components/ui/Card'
+import { apiPost } from '../../utils/apiClient'
 
 type FormValues = {
   password: string
@@ -39,8 +40,19 @@ export function ResetPasswordPage() {
         toast.error('Passwords do not match.')
         return
       }
-      toast.success('Password updated successfully.')
+      if (!email) {
+        toast.error('Missing email address.')
+        return
+      }
+
+      const res = await apiPost<{ message?: string }>('/api/auth/reset-password', {
+        email,
+        password: values.password,
+      })
+      toast.success(res?.message || 'Password updated successfully.')
       navigate('/login')
+    } catch (err: any) {
+      toast.error(err?.message || 'Unable to update password')
     } finally {
       setBusy(false)
     }
@@ -73,7 +85,7 @@ export function ResetPasswordPage() {
               <ul className="mt-2 space-y-2 text-xs text-muted">
                 <li className="flex items-start gap-2">
                   <span className="mt-1 h-1.5 w-1.5 rounded-full bg-success" />
-                  Minimum 4 characters (demo)
+                  Minimum 4 characters
                 </li>
                 <li className="flex items-start gap-2">
                   <span className="mt-1 h-1.5 w-1.5 rounded-full bg-success" />

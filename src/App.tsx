@@ -15,6 +15,7 @@ import { PackageRecommendationPage } from './pages/packages/PackageRecommendatio
 import { WaiverPage } from './pages/waiver/WaiverPage'
 import { PaymentPage } from './pages/payments/PaymentPage'
 import { PlayerProfilePage } from './pages/players/PlayerProfilePage'
+import { MyWeaponsAndEquipmentPage } from './pages/players/MyWeaponsAndEquipmentPage'
 
 import { AdminDashboardPage } from './pages/admin/AdminDashboardPage'
 import { AdminReservationsPage } from './pages/admin/AdminReservationsPage'
@@ -22,6 +23,7 @@ import { AdminGameplayPage } from './pages/admin/AdminGameplayPage'
 import { AdminPlayersPage } from './pages/admin/AdminPlayersPage'
 import { AdminEquipmentPage } from './pages/admin/AdminEquipmentPage'
 import { AdminWeaponsPage } from './pages/admin/AdminWeaponsPage'
+import { AdminWaiversPage } from './pages/admin/AdminWaiversPage'
 import { AdminRentalPackagesPage } from './pages/admin/AdminRentalPackagesPage'
 import { AdminPaymentsPage } from './pages/admin/AdminPaymentsPage'
 import { AdminReportsPage } from './pages/admin/AdminReportsPage'
@@ -33,7 +35,7 @@ import { PlayerManagementPage } from './pages/admin/PlayerManagementPage'
 
 import { RegistrarDashboardHomePage } from './pages/registrar/RegistrarDashboardHomePage'
 import { RegistrarReservationsPage } from './pages/registrar/RegistrarReservationsPage'
-import { RegistrarOngoingGamesPage } from './pages/registrar/RegistrarOngoingGamesPage'
+import { RegistrarOngoingGamesPage, RegistrarArchivedGamesPage } from './pages/registrar'
 import { RegistrarAvailedPackagesPage } from './pages/registrar/RegistrarAvailedPackagesPage'
 import { RegistrarSubmittedWaiversPage } from './pages/registrar/RegistrarSubmittedWaiversPage'
 import { RegistrarSubmittedPaymentsPage } from './pages/registrar/RegistrarSubmittedPaymentsPage'
@@ -105,12 +107,30 @@ export default function App() {
         <Route path="packages" element={<RequireRole roles={['user', 'admin', 'registrar']}>{<PackageRecommendationPage />}</RequireRole>} />
         <Route path="waiver" element={<RequireRole roles={['user', 'admin', 'registrar']}>{<WaiverPage />}</RequireRole>} />
         <Route path="payment" element={<RequireRole roles={['user', 'admin', 'registrar']}>{<PaymentPage />}</RequireRole>} />
+        <Route path="notifications" element={<RequireRole roles={['user', 'admin', 'registrar', 'marshal']}>{<AdminNotificationsPage />}</RequireRole>} />
         <Route path="players/:playerId" element={<PlayerProfilePage />} />
+        <Route path="players/:playerId/weapons-and-equipment" element={<MyWeaponsAndEquipmentPage />} />
         <Route
           path="games"
           element={
             <RequireRole roles={['marshal', 'admin']}>
               <RegistrarOngoingGamesPage />
+            </RequireRole>
+          }
+        />
+        <Route
+          path="games/ongoing"
+          element={
+            <RequireRole roles={['marshal', 'admin']}>
+              <RegistrarOngoingGamesPage />
+            </RequireRole>
+          }
+        />
+        <Route
+          path="games/archived"
+          element={
+            <RequireRole roles={['marshal', 'admin']}>
+              <RegistrarArchivedGamesPage />
             </RequireRole>
           }
         />
@@ -126,8 +146,30 @@ export default function App() {
         <Route path="admin/reservation-management" element={<ReservationManagementPage />} />
         <Route path="admin/players" element={<AdminPlayersPage />} />
         <Route path="admin/player-management" element={<PlayerManagementPage />} />
-        <Route path="admin/equipment" element={<AdminEquipmentPage />} />
-        <Route path="admin/weapons" element={<AdminWeaponsPage />} />
+        <Route
+          path="admin/equipment"
+          element={
+            <RequireRole roles={['admin', 'marshal']}>
+              <AdminEquipmentPage />
+            </RequireRole>
+          }
+        />
+        <Route
+          path="admin/weapons"
+          element={
+            <RequireRole roles={['admin', 'marshal']}>
+              <AdminWeaponsPage />
+            </RequireRole>
+          }
+        />
+        <Route
+          path="admin/waivers"
+          element={
+            <RequireRole roles={['admin']}>
+              <AdminWaiversPage />
+            </RequireRole>
+          }
+        />
         <Route path="admin/rental-packages" element={<AdminRentalPackagesPage />} />
         <Route path="admin/payments" element={<AdminPaymentsPage />} />
         <Route path="admin/reports" element={<AdminReportsPage />} />

@@ -5,7 +5,7 @@
 
 import { MongoClient } from 'mongodb'
 
-
+const USER_ACCOUNTS_COLLECTION = process.env.USER_ACCOUNTS_COLLECTION || 'user_accounts'
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/chillshootersgamecenter'
 const DB_NAME = process.env.DB_NAME || 'chillshootersgamecenter'
 
@@ -14,7 +14,7 @@ const collections = [
   'gameplay',
   'packages',
   'payments',
-  'user_accounts',
+  USER_ACCOUNTS_COLLECTION,
   'waivers',
   'weapons',
 ]
@@ -32,14 +32,16 @@ async function main() {
   const db = client.db(DB_NAME)
 
   // user_accounts: store player-facing fields
-  await ensureDoc(db.collection('user_accounts'), {
+  const userAccounts = db.collection(USER_ACCOUNTS_COLLECTION)
+
+  await ensureDoc(userAccounts, {
     id: 'P-00001',
     name: 'Demo Player',
     email: 'player@demo.com',
     password: 'player',
     role: 'user',
-    status: 'pending',
     experience: 0,
+    identityVerificationStatus: 'verified',
     createdAtISO: new Date().toISOString(),
   })
 
@@ -49,7 +51,6 @@ async function main() {
     email: 'marshal@demo.com',
     password: 'marshal',
     role: 'marshal',
-    status: 'active',
     experience: 0,
     createdAtISO: new Date().toISOString(),
   })
@@ -60,7 +61,6 @@ async function main() {
     email: 'registrar@demo.com',
     password: 'registrar',
     role: 'registrar',
-    status: 'active',
     experience: 0,
     createdAtISO: new Date().toISOString(),
   })
@@ -71,7 +71,6 @@ async function main() {
     email: 'admin@demo.com',
     password: 'admin',
     role: 'admin',
-    status: 'active',
     experience: 0,
     createdAtISO: new Date().toISOString(),
   })

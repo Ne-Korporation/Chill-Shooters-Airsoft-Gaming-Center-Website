@@ -4,11 +4,7 @@ import cors from 'cors'
 import dotenv from 'dotenv'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import crudRouter from './routes/crud.js'
-import authRouter from './routes/auth.js'
-import uploadRouter from './routes/uploads.js'
-import reservationWorkflowsRouter from './routes/reservationWorkflows.js'
-import paymentsWorkflowsRouter from './routes/paymentsWorkflows.js'
+// Routers are dynamically imported after loading environment variables
 import { getDb } from './db/mongo.js'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -16,6 +12,13 @@ const __dirname = path.dirname(__filename)
 
 dotenv.config({ path: path.resolve(__dirname, '.env') })
 dotenv.config({ path: path.resolve(process.cwd(), '.env'), override: true })
+
+// Import routers after .env is loaded so modules that read process.env get correct values
+const { default: crudRouter } = await import('./routes/crud.js')
+const { default: authRouter } = await import('./routes/auth.js')
+const { default: uploadRouter } = await import('./routes/uploads.js')
+const { default: reservationWorkflowsRouter } = await import('./routes/reservationWorkflows.js')
+const { default: paymentsWorkflowsRouter } = await import('./routes/paymentsWorkflows.js')
 
 const app = express()
 app.use(cors())

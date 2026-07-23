@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+import React, { useMemo, useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { useNavigate } from 'react-router-dom'
 import {
@@ -7,145 +7,102 @@ import {
   FiInfo,
   FiTag,
   FiUsers,
+  FiDollarSign,
 } from 'react-icons/fi'
+import toast from 'react-hot-toast'
 
 import { Card } from '../../components/ui/Card'
 import { Input } from '../../components/ui/Input'
 import { Button } from '../../components/ui/Button'
+import { apiGet } from '../../utils/apiClient'
 
-type GameMode = 'squad-deathmatch' | 'ctf' | 'search-and-destroy'
+const ENTRANCE_FEE_PER_PLAYER = 150
+
+type RentalPackage = {
+  id: string
+  name: string
+  discountPct: number
+  description: string
+  basePrice: number
+  minPlayers: number
+  weaponIds: string[]
+  equipmentIds: string[]
+  tier?: string
+  status?: string
+}
+
+type WeaponItem = {
+  id: string
+  name: string
+  category: string
+  price: number
+}
 
 type EquipmentItem = {
   id: string
   name: string
+  category: string
+  price: number
   qty: number
-  pricePerPlayer: number
 }
 
-type Package = {
-  id: string
-  name: string
-  mode: GameMode
-  basePrice: number
-  minPlayers: number
-  equipment: EquipmentItem[]
-}
+function calculateEquipmentTotal(pkg: RentalPackage, weapons: WeaponItem[], equipment: EquipmentItem[]): number {
+  const weaponTotal = (pkg.weaponIds || [])
+    .map((wid) => weapons.find((w) => w.id === wid))
+    .filter(Boolean)
+    .reduce((sum, w: any) => sum + (w.price || 0), 0)
 
-const GAME_MODES: { id: GameMode; label: string }[] = [
-  { id: 'squad-deathmatch', label: 'Squad Deathmatch' },
-  { id: 'ctf', label: 'Capture the Flag' },
-  { id: 'search-and-destroy', label: 'Search & Destroy' },
-]
+  const equipmentTotal = (pkg.equipmentIds || [])
+    .map((eid) => equipment.find((e) => e.id === eid))
+    .filter(Boolean)
+    .reduce((sum, e: any) => sum + (e.price || 0), 0)
 
-const packages: Package[] = [
-  {
-    id: 'pkg-squad-1',
-    name: 'Sentry Core (Small Unit)',
-    mode: 'squad-deathmatch',
-    basePrice: 550,
-    minPlayers: 4,
-    equipment: [
-      { id: 'eq-vest', name: 'Tactical Vest', qty: 1, pricePerPlayer: 90 },
-      { id: 'eq-mask', name: 'Protective Mask', qty: 1, pricePerPlayer: 60 },
-      { id: 'eq-goggles', name: 'Clear Goggles', qty: 1, pricePerPlayer: 45 },
-    ],
-  },
-  {
-    id: 'pkg-squad-2',
-    name: 'Tactical Advance (Squad)',
-    mode: 'squad-deathmatch',
-    basePrice: 720,
-    minPlayers: 6,
-    equipment: [
-      { id: 'eq-vest', name: 'Tactical Vest', qty: 1, pricePerPlayer: 110 },
-      { id: 'eq-mask', name: 'Protective Mask', qty: 1, pricePerPlayer: 75 },
-      { id: 'eq-mag', name: 'Extra Magazine', qty: 1, pricePerPlayer: 55 },
-    ],
-  },
-  {
-    id: 'pkg-ctf-1',
-    name: 'Objective Handler (CTF)',
-    mode: 'ctf',
-    basePrice: 640,
-    minPlayers: 5,
-    equipment: [
-      { id: 'eq-vest', name: 'Tactical Vest', qty: 1, pricePerPlayer: 95 },
-      { id: 'eq-band', name: 'Flag Band', qty: 1, pricePerPlayer: 40 },
-      { id: 'eq-mask', name: 'Protective Mask', qty: 1, pricePerPlayer: 65 },
-    ],
-  },
-  {
-    id: 'pkg-ctf-2',
-    name: 'Urban Sprint (CTF Heavy)',
-    mode: 'ctf',
-    basePrice: 820,
-    minPlayers: 7,
-    equipment: [
-      { id: 'eq-vest', name: 'Tactical Vest', qty: 1, pricePerPlayer: 120 },
-      { id: 'eq-mask', name: 'Protective Mask', qty: 1, pricePerPlayer: 85 },
-      { id: 'eq-radio', name: 'Ops Radio Band', qty: 1, pricePerPlayer: 60 },
-    ],
-  },
-  {
-    id: 'pkg-snd-1',
-    name: 'Reconline (S&D Standard)',
-    mode: 'search-and-destroy',
-    basePrice: 690,
-    minPlayers: 4,
-    equipment: [
-      { id: 'eq-mask', name: 'Protective Mask', qty: 1, pricePerPlayer: 70 },
-      { id: 'eq-goggles', name: 'Clear Goggles', qty: 1, pricePerPlayer: 50 },
-      { id: 'eq-vest', name: 'Tactical Vest', qty: 1, pricePerPlayer: 100 },
-    ],
-  },
-  {
-    id: 'pkg-snd-2',
-    name: 'Night Ops (S&D Elite)',
-    mode: 'search-and-destroy',
-    basePrice: 860,
-    minPlayers: 6,
-    equipment: [
-      { id: 'eq-vest', name: 'Tactical Vest', qty: 1, pricePerPlayer: 130 },
-      { id: 'eq-mask', name: 'Protective Mask', qty: 1, pricePerPlayer: 95 },
-      { id: 'eq-armor', name: 'Reinforced Plate', qty: 1, pricePerPlayer: 65 },
-    ],
-  },
-]
-
-function clamp(n: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, n))
-}
-
-function equipmentTotalPerPlayer(pkg: Package) {
-  return pkg.equipment.reduce((sum, e) => sum + e.pricePerPlayer, 0)
+  return weaponTotal + equipmentTotal
 }
 
 function computeTotal({
   pkg,
   players,
   budgetModel,
+  weapons,
+  equipment,
 }: {
-  pkg: Package
+  pkg: RentalPackage
   players: number
   budgetModel: 'public' | 'private'
+  weapons: WeaponItem[]
+  equipment: EquipmentItem[]
 }) {
   const sessionMultiplier = budgetModel === 'private' ? 1.25 : 1.0
-  const equipmentTotal = equipmentTotalPerPlayer(pkg)
-  const base = pkg.basePrice + equipmentTotal
 
-  const discountPct = players >= 12 ? 0.1 : players >= 8 ? 0.06 : 0.0
-  const totalBeforeDiscount = base * players * sessionMultiplier
-  const total = Math.round(totalBeforeDiscount * (1 - discountPct))
+  // Per player: basePrice + weapons + equipment + entrance fee
+  const equipmentCost = calculateEquipmentTotal(pkg, weapons, equipment)
+  const perPlayerBeforeDiscount = pkg.basePrice + equipmentCost + ENTRANCE_FEE_PER_PLAYER
+
+  // Apply package discountPct
+  const discountedPerPlayer = perPlayerBeforeDiscount * (1 - pkg.discountPct / 100)
+
+  const total = Math.round(discountedPerPlayer * players * sessionMultiplier)
   const perPlayer = Math.round(total / Math.max(1, players))
+  const originalTotal = Math.round(perPlayerBeforeDiscount * players * sessionMultiplier)
+  const savings = Math.max(0, originalTotal - total)
 
   return {
     total,
     perPlayer,
-    equipmentTotal,
+    equipmentCost,
+    entranceFee: ENTRANCE_FEE_PER_PLAYER,
+    discountPct: pkg.discountPct,
+    discountLabel: pkg.discountPct > 0 ? `${pkg.discountPct}%` : '—',
     sessionMultiplier,
-    discountPct,
-    discountLabel: discountPct > 0 ? `${Math.round(discountPct * 100)}%` : '—',
+    savings,
+    originalTotal,
+    perPlayerBeforeDiscount,
   }
+}
+
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n))
 }
 
 export function PackageRecommendationPage() {
@@ -156,8 +113,73 @@ export function PackageRecommendationPage() {
   const [players, setPlayers] = useState<number>(8)
   const [playersInput, setPlayersInput] = useState('8')
   const [playersError, setPlayersError] = useState('')
-  const [mode, setMode] = useState<GameMode>('squad-deathmatch')
   const [budgetModel, setBudgetModel] = useState<'public' | 'private'>('public')
+  const [packages, setPackages] = useState<RentalPackage[]>([])
+  const [weapons, setWeapons] = useState<WeaponItem[]>([])
+  const [equipment, setEquipment] = useState<EquipmentItem[]>([])
+  const [loading, setLoading] = useState(true)
+
+  // Fetch real packages, weapons, and equipment from API
+  useEffect(() => {
+    let cancelled = false
+    const fetchAll = async () => {
+      try {
+        const [pkgRes, wepRes, eqRes] = await Promise.all([
+          apiGet<{ ok: boolean; data: any[] }>('/api/packages?limit=200'),
+          apiGet<{ ok: boolean; data: any[] }>('/api/weapons?limit=200'),
+          apiGet<{ ok: boolean; data: any[] }>('/api/equipments?limit=200'),
+        ])
+
+        if (cancelled) return
+
+        // Parse packages
+        const pkgDocs = Array.isArray(pkgRes?.data) ? pkgRes.data : []
+        const active = pkgDocs
+          .filter((d: any) => d.status === 'active' || !d.status)
+          .map((d: any) => ({
+            id: d.id ?? (d._id ? String(d._id) : undefined),
+            name: d.name || 'Unnamed package',
+            discountPct: typeof d.discountPct === 'number' ? d.discountPct : 0,
+            description: d.description || '',
+            basePrice: typeof d.basePrice === 'number' ? d.basePrice : 0,
+            minPlayers: typeof d.minPlayers === 'number' ? d.minPlayers : 1,
+            weaponIds: Array.isArray(d.weaponIds) ? d.weaponIds : [],
+            equipmentIds: Array.isArray(d.equipmentIds) ? d.equipmentIds : [],
+            tier: d.tier || 'starter',
+            status: d.status || 'active',
+          }))
+        setPackages(active)
+
+        // Parse weapons
+        const wepDocs = Array.isArray(wepRes?.data) ? wepRes.data : []
+        setWeapons(wepDocs.map((d: any) => ({
+          id: d.id ?? (d._id ? String(d._id) : undefined),
+          name: d.name || 'Unnamed weapon',
+          category: d.category || 'rifles',
+          price: typeof d.price === 'number' ? d.price : 0,
+        })))
+
+        // Parse equipment
+        const eqDocs = Array.isArray(eqRes?.data) ? eqRes.data : []
+        setEquipment(eqDocs.map((d: any) => ({
+          id: d.id ?? (d._id ? String(d._id) : undefined),
+          name: d.name || 'Unnamed equipment',
+          category: d.category || 'gear',
+          price: typeof d.price === 'number' ? d.price : 0,
+          qty: typeof d.qty === 'number' ? d.qty : 1,
+        })))
+      } catch (e: any) {
+        if (!cancelled) {
+          toast.error(String(e?.message || e))
+          setPackages([])
+        }
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    fetchAll()
+    return () => { cancelled = true }
+  }, [])
 
   const budgetSafe = clamp(budget, 1000, 999999999)
   const minimumPlayersRequired = budgetModel === 'private' ? 10 : 1
@@ -165,21 +187,19 @@ export function PackageRecommendationPage() {
 
   const scored = useMemo(() => {
     return packages
-      .filter((p) => p.mode === mode)
       .map((pkg) => {
-        const pricing = computeTotal({ pkg, players: playerSafe, budgetModel })
+        const pricing = computeTotal({ pkg, players: playerSafe, budgetModel, weapons, equipment })
         const affordable = pricing.total <= budgetSafe
-        const overBudget = pricing.total - budgetSafe
-        const minPenalty = Math.max(0, pkg.minPlayers - playerSafe) * 600
         const delta = Math.abs(pricing.total - budgetSafe)
-        return { pkg, pricing, affordable, overBudget, minPenalty, delta }
+        const minPenalty = Math.max(0, pkg.minPlayers - playerSafe) * 600
+        return { pkg, pricing, affordable, delta, minPenalty }
       })
       .sort((a, b) => {
         if (a.affordable !== b.affordable) return a.affordable ? -1 : 1
         if (a.delta !== b.delta) return a.delta - b.delta
         return a.minPenalty - b.minPenalty
       })
-  }, [budgetSafe, budgetModel, mode, playerSafe])
+  }, [packages, budgetSafe, budgetModel, playerSafe, weapons, equipment])
 
   const best = scored[0]
   const top3 = scored.slice(0, 3)
@@ -191,12 +211,6 @@ export function PackageRecommendationPage() {
       Number(playersInput) >= minimumPlayersRequired,
   )
 
-  const savings = useMemo(() => {
-    if (!best) return 0
-    const baseline = computeTotal({ pkg: best.pkg, players: playerSafe, budgetModel: 'public' }).total
-    return Math.max(0, baseline - best.pricing.total)
-  }, [best, playerSafe])
-
   return (
     <div className="space-y-4">
       <div className="space-y-2">
@@ -205,8 +219,8 @@ export function PackageRecommendationPage() {
           <span className="uppercase tracking-[0.18em]">Packages</span>
         </div>
         <h1 className="text-3xl font-bold">Package Recommendation</h1>
-        <p className="text-muted text-sm">
-          Budget + group size → auto recommendation with comparison cards.
+        <p className="mt-1 text-sm text-muted">
+          Enter your budget and group size — we will recommend the best package for your session.
         </p>
       </div>
 
@@ -214,116 +228,111 @@ export function PackageRecommendationPage() {
         <div className="lg:col-span-2 space-y-4">
           <Card className="p-4 md:p-6">
             <div className="flex items-center gap-2 text-sm font-bold">
-              <FiUsers /> <span>Inputs</span>
+              <FiDollarSign /> <span>Your Budget & Group</span>
             </div>
+            <p className="mt-1 text-xs text-muted">
+              Used to match packages and calculate estimated total.
+            </p>
 
-            <div className="mt-5 grid gap-4 md:grid-cols-2">
+            <div className="mt-4 grid gap-4 md:grid-cols-2">
               <div>
-                <Input
-                  label="Budget (PHP)"
-                  type="number"
-                  min={1000}
-                  inputMode="numeric"
-                  value={budgetInput}
-                  onChange={(e) => {
-                    const raw = e.target.value
-                    if (raw === '') {
-                      setBudgetInput('')
-                      setBudget(0)
-                      setBudgetError('Budget is required before selecting a package.')
-                      return
-                    }
-
-                    if (!/^\d+$/.test(raw)) return
-
-                    const nextValue = Number(raw)
-                    if (nextValue < 1000) {
+                <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Budget (₱)</div>
+                <div className="mt-2">
+                  <Input
+                    type="text"
+                    value={budgetInput}
+                    onChange={(e) => {
+                      const raw = e.target.value
+                      if (raw === '') {
+                        setBudgetInput('')
+                        setBudgetError('Budget is required.')
+                        return
+                      }
+                      if (!/^\d+$/.test(raw)) {
+                        setBudgetError('Enter a valid number.')
+                        return
+                      }
+                      const nextValue = Number(raw)
+                      if (nextValue < 1000) {
+                        setBudgetError('Budget must be at least ₱1,000.')
+                      } else {
+                        setBudgetError('')
+                      }
                       setBudgetInput(raw)
                       setBudget(nextValue)
-                      setBudgetError('Budget must be at least 1000.')
-                      return
-                    }
-
-                    setBudgetInput(raw)
-                    setBudget(nextValue)
-                    setBudgetError('')
-                  }}
-                />
-                {budgetError ? <p className="mt-1 text-xs text-danger">{budgetError}</p> : null}
+                    }}
+                    onBlur={() => {
+                      if (!budgetInput) {
+                        setBudgetInput('1000')
+                        setBudget(1000)
+                        setBudgetError('')
+                        return
+                      }
+                      const currentValue = Number(budgetInput)
+                      if (Number.isNaN(currentValue) || currentValue < 1000) {
+                        setBudgetInput('1000')
+                        setBudget(1000)
+                        setBudgetError('')
+                      }
+                    }}
+                  />
+                  {budgetError ? <p className="mt-1 text-xs text-danger">{budgetError}</p> : null}
+                </div>
               </div>
+
               <div>
-                <Input
-                  label="Players"
-                  type="number"
-                  min={1}
-                  inputMode="numeric"
-                  value={playersInput}
-                  onChange={(e) => {
-                    const raw = e.target.value
-                    if (raw === '') {
-                      setPlayersInput('')
-                      setPlayers(0)
-                      setPlayersError(
-                        budgetModel === 'private'
-                          ? 'Private sessions require at least 10 players.'
-                          : 'Group size must be at least 1.',
-                      )
-                      return
-                    }
-
-                    if (!/^\d+$/.test(raw)) return
-
-                    const nextValue = Number(raw)
-                    setPlayersInput(raw)
-                    setPlayers(nextValue)
-                    setPlayersError(
-                      budgetModel === 'private' && nextValue < 10
-                        ? 'Private sessions require at least 10 players.'
-                        : nextValue < 1
-                          ? 'Group size must be at least 1.'
-                          : '',
-                    )
-                  }}
-                  onBlur={() => {
-                    const currentValue = Number(playersInput)
-                    if (!playersInput || Number.isNaN(currentValue) || currentValue <= 0) {
-                      const fallback = budgetModel === 'private' ? 10 : 1
-                      setPlayersInput(String(fallback))
-                      setPlayers(fallback)
-                      setPlayersError(
-                        budgetModel === 'private'
-                          ? 'Private sessions require at least 10 players. Resetting to 10.'
-                          : 'Group size must be at least 1. Resetting to 1.',
-                      )
-                      return
-                    }
-
-                    if (budgetModel === 'private' && currentValue < 10) {
-                      setPlayersInput('10')
-                      setPlayers(10)
-                      setPlayersError('Private sessions require at least 10 players. Resetting to 10.')
-                      return
-                    }
-
-                    if (budgetModel === 'public' && currentValue < 1) {
-                      setPlayersInput('1')
-                      setPlayers(1)
-                      setPlayersError('Group size must be at least 1. Resetting to 1.')
-                      return
-                    }
-
-                    setPlayersInput(String(clamp(currentValue, minimumPlayersRequired, 40)))
-                    setPlayers(clamp(currentValue, minimumPlayersRequired, 40))
-                    setPlayersError('')
-                  }}
-                />
-                {playersError ? <p className="mt-1 text-xs text-danger">{playersError}</p> : null}
+                <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Players</div>
+                <div className="mt-2">
+                  <Input
+                    type="text"
+                    value={playersInput}
+                    onChange={(e) => {
+                      const raw = e.target.value
+                      if (raw === '') {
+                        setPlayersInput('')
+                        setPlayersError('Number of players is required.')
+                        return
+                      }
+                      if (!/^\d+$/.test(raw)) {
+                        setPlayersError('Enter a valid number.')
+                        return
+                      }
+                      const nextValue = Number(raw)
+                      if (nextValue < minimumPlayersRequired) {
+                        setPlayersError(`Minimum ${minimumPlayersRequired} players required.`)
+                      } else if (nextValue > 40) {
+                        setPlayersError('Maximum 40 players allowed.')
+                      } else {
+                        setPlayersError('')
+                      }
+                      setPlayersInput(raw)
+                      setPlayers(nextValue)
+                    }}
+                    onBlur={() => {
+                      const currentValue = Number(playersInput)
+                      if (!playersInput || Number.isNaN(currentValue) || currentValue < minimumPlayersRequired) {
+                        setPlayersInput(String(minimumPlayersRequired))
+                        setPlayers(minimumPlayersRequired)
+                        setPlayersError('')
+                        return
+                      }
+                      if (currentValue > 40) {
+                        setPlayersInput('40')
+                        setPlayers(40)
+                        setPlayersError('')
+                        return
+                      }
+                      setPlayersInput(String(clamp(currentValue, minimumPlayersRequired, 40)))
+                      setPlayers(clamp(currentValue, minimumPlayersRequired, 40))
+                      setPlayersError('')
+                    }}
+                  />
+                  {playersError ? <p className="mt-1 text-xs text-danger">{playersError}</p> : null}
+                </div>
               </div>
 
               <div className="md:col-span-2">
-                <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">
-                  Session Type
-                </div>
+                <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Session Type</div>
                 <div className="mt-3 grid grid-cols-2 gap-2">
                   {(['public', 'private'] as const).map((t) => {
                     const active = t === budgetModel
@@ -362,30 +371,6 @@ export function PackageRecommendationPage() {
                   })}
                 </div>
               </div>
-
-              <div className="md:col-span-2">
-                <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Game Mode</div>
-                <div className="mt-3 grid gap-2 md:grid-cols-3">
-                  {GAME_MODES.map((m) => {
-                    const active = m.id === mode
-                    return (
-                      <button
-                        key={m.id}
-                        type="button"
-                        onClick={() => setMode(m.id)}
-                        className={[
-                          'rounded-2xl border p-3 text-left transition',
-                          active
-                            ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25'
-                            : 'border-white/10 bg-white/5 hover:bg-white/8',
-                        ].join(' ')}
-                      >
-                        <div className="text-sm font-bold">{m.label}</div>
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
             </div>
           </Card>
 
@@ -397,58 +382,77 @@ export function PackageRecommendationPage() {
               Ranked by affordability, then closest-to-budget, then meeting minimum player requirements.
             </p>
 
-            <div className="mt-4 grid gap-3 sm:grid-cols-3">
-              {top3.map((item) => {
-                const active = best?.pkg.id === item.pkg.id
-                const remaining = budgetSafe - item.pricing.total
-                return (
-                  <motion.div
-                    key={item.pkg.id}
-                    initial={{ opacity: 0, y: 8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.35 }}
-                    className={[
-                      'rounded-2xl border p-4 transition',
-                      active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5',
-                    ].join(' ')}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="text-sm font-bold">{item.pkg.name}</div>
-                        <div className="mt-1 text-xs text-muted">Min {item.pkg.minPlayers} players</div>
-                      </div>
-                      {active ? <FiCheck className="mt-1 text-gold" /> : <FiTag className="mt-1 text-muted" />}
-                    </div>
-
-                    <div className="mt-4">
-                      <div className="text-xs text-muted">Total est.</div>
-                      <div className="mt-1 text-2xl font-black text-gold">₱{item.pricing.total.toLocaleString()}</div>
-                    </div>
-
-                    <div className="mt-3 rounded-2xl border border-white/10 bg-black/20 p-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="text-xs text-muted">Budget fit</div>
-                        <div className={['text-xs font-bold', remaining >= 0 ? 'text-success' : 'text-danger'].join(' ')}>
-                          {remaining >= 0 ? `Within (${remaining.toLocaleString()} left)` : `Over (+${Math.abs(remaining).toLocaleString()})`}
+            {loading ? (
+              <div className="mt-4 text-sm text-muted">Loading packages...</div>
+            ) : top3.length === 0 ? (
+              <div className="mt-4 text-sm text-muted">No packages available. Ask admin to create rental packages.</div>
+            ) : (
+              <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                {top3.map((item) => {
+                  const active = best?.pkg.id === item.pkg.id
+                  const remaining = budgetSafe - item.pricing.total
+                  return (
+                    <motion.div
+                      key={item.pkg.id}
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.35 }}
+                      className={[
+                        'rounded-2xl border p-4 transition',
+                        active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5',
+                      ].join(' ')}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-bold">{item.pkg.name}</div>
+                          <div className="mt-1 text-xs text-muted">Min {item.pkg.minPlayers} players</div>
                         </div>
+                        {active ? <FiCheck className="mt-1 text-gold" /> : <FiTag className="mt-1 text-muted" />}
                       </div>
-                      <div className="mt-2 text-[11px] text-muted">Discount: {item.pricing.discountLabel} • Session {item.pricing.sessionMultiplier}×</div>
-                    </div>
 
-                    <div className="mt-4">
-                      <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Equipment included</div>
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        {item.pkg.equipment.slice(0, 3).map((e) => (
-                          <div key={e.id} className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-muted">
-                            {e.name}
-                          </div>
-                        ))}
+                      <div className="mt-4">
+                        <div className="text-xs text-muted">Total est.</div>
+                        <div className="mt-1 text-2xl font-black text-gold">₱{item.pricing.total.toLocaleString()}</div>
                       </div>
-                    </div>
-                  </motion.div>
-                )
-              })}
-            </div>
+
+                      <div className="mt-3 rounded-2xl border border-white/10 bg-black/20 p-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="text-xs text-muted">Budget fit</div>
+                          <div className={['text-xs font-bold', remaining >= 0 ? 'text-success' : 'text-danger'].join(' ')}>
+                            {remaining >= 0 ? `Within (₱${remaining.toLocaleString()} left)` : `Over (+₱${Math.abs(remaining).toLocaleString()})`}
+                          </div>
+                        </div>
+
+                        {item.pricing.discountPct > 0 && (
+                          <div className="mt-2 space-y-1">
+                            <div className="flex items-center justify-between text-[11px]">
+                              <span className="text-muted">Discount</span>
+                              <span className="font-semibold text-success">{item.pricing.discountLabel}</span>
+                            </div>
+                            <div className="flex items-center justify-between text-[11px]">
+                              <span className="text-muted">You save</span>
+                              <span className="font-semibold text-success">₱{item.pricing.savings.toLocaleString()}</span>
+                            </div>
+                            <div className="flex items-center justify-between text-[11px]">
+                              <span className="text-muted">Original price</span>
+                              <span className="text-muted line-through">₱{item.pricing.originalTotal.toLocaleString()}</span>
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="mt-2 text-[11px] text-muted">Session {item.pricing.sessionMultiplier}×</div>
+                      </div>
+
+                      {item.pkg.description && (
+                        <div className="mt-3 text-[11px] text-muted italic">
+                          {item.pkg.description}
+                        </div>
+                      )}
+                    </motion.div>
+                  )
+                })}
+              </div>
+            )}
 
             <div className="mt-4 rounded-2xl border border-white/10 bg-black/15 p-4">
               <div className="flex items-center gap-2 text-sm font-bold">
@@ -467,7 +471,9 @@ export function PackageRecommendationPage() {
               <FiTag /> <span>Best Value</span>
             </div>
 
-            {best ? (
+            {loading ? (
+              <div className="mt-4 text-sm text-muted">Loading...</div>
+            ) : best ? (
               <div className="mt-4">
                 <div className="rounded-2xl border border-accent/40 bg-accent/10 p-4">
                   <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Recommended</div>
@@ -483,12 +489,29 @@ export function PackageRecommendationPage() {
                     </div>
                   </div>
 
-                  <div className="mt-3 flex items-center justify-between gap-3">
-                    <div className="text-xs text-muted">Savings signal</div>
-                    <div className={['text-xs font-bold', savings > 0 ? 'text-success' : 'text-muted'].join(' ')}>
-                      {savings > 0 ? `₱${savings.toLocaleString()} value` : '—'}
+                  {best.pricing.discountPct > 0 ? (
+                    <div className="mt-3 space-y-1 pt-3 border-t border-accent/20">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="text-xs text-muted">Original price</div>
+                        <div className="text-xs text-muted line-through">₱{best.pricing.originalTotal.toLocaleString()}</div>
+                      </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="text-xs text-muted">Discount</div>
+                        <div className="text-xs font-semibold text-success">{best.pricing.discountLabel}</div>
+                      </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="text-xs text-muted">Savings signal</div>
+                        <div className="text-xs font-bold text-success">
+                          ₱{best.pricing.savings.toLocaleString()} value
+                        </div>
+                      </div>
                     </div>
-                  </div>
+                  ) : (
+                    <div className="mt-3 flex items-center justify-between gap-3">
+                      <div className="text-xs text-muted">Savings signal</div>
+                      <div className="text-xs text-muted">—</div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
@@ -519,7 +542,6 @@ export function PackageRecommendationPage() {
                           fromPackageRecommendation: true,
                           players: playerSafe,
                           sessionType: budgetModel,
-                          mode: best.pkg.mode,
                           selectedPackageId: best.pkg.id,
                         },
                       })
@@ -534,7 +556,7 @@ export function PackageRecommendationPage() {
                 </div>
               </div>
             ) : (
-              <div className="mt-4 text-sm text-muted">No packages found for this mode.</div>
+              <div className="mt-4 text-sm text-muted">No packages available. Ask admin to create rental packages.</div>
             )}
           </Card>
         </div>
@@ -542,4 +564,3 @@ export function PackageRecommendationPage() {
     </div>
   )
 }
-

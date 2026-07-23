@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { FiCheck, FiChevronRight, FiTrash2, FiX } from 'react-icons/fi'
+import { FiCheck, FiChevronRight, FiArchive, FiX } from 'react-icons/fi'
 import { toast } from 'react-hot-toast'
 
 import { Card } from '../../components/ui/Card'
@@ -7,7 +7,7 @@ import { Button } from '../../components/ui/Button'
 import { apiDelete, apiGet, apiPut } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
 
-type GameplayStatus = 'Scheduled' | 'Ongoing' | 'Completed' | 'Cancelled'
+type GameplayStatus = 'Scheduled' | 'Ongoing' | 'Completed' | 'Cancelled' | 'Archived'
 
 type GameplayActions = Record<string, any>
 
@@ -24,6 +24,22 @@ type GameplayDoc = {
   Status: GameplayStatus | string
   Actions?: GameplayActions
   createdAtISO?: string
+}
+
+function rowId(doc: GameplayDoc): string {
+  // Priority: gameplay's own `id` (GP-XXXXX) → MongoDB `_id` → reservationId
+  const gameplayId = doc.id ? String(doc.id).trim() : null
+  if (gameplayId) return gameplayId
+
+  // Fall back to MongoDB _id (handle both ObjectId and string forms)
+  const mongoId = doc._id
+  if (mongoId) {
+    if (typeof mongoId === 'string') return mongoId.trim()
+    if (typeof mongoId === 'object' && mongoId.$oid) return String(mongoId.$oid).trim()
+    try { return String(mongoId) } catch { /* fall through */ }
+  }
+
+  return String(doc.reservationId || '')
 }
 
 const normalizeStatus = (s: any): GameplayStatus => {
@@ -45,6 +61,8 @@ const statusTone = (status: GameplayStatus) => {
       return 'bg-success/20 text-success border-success/30'
     case 'Completed':
       return 'bg-success/20 text-success border-success/30'
+    case 'Archived':
+      return 'bg-white/5 text-muted border-white/10'
     case 'Cancelled':
       return 'bg-danger/20 text-danger border-danger/30'
   }
@@ -91,16 +109,16 @@ export function AdminGameplayPage() {
     return items.filter((it) => normalizeStatus(it.Status) === nextStatusFilter)
   }, [items, nextStatusFilter])
 
-  const canDelete = (status: GameplayStatus) => status === 'Completed'
+  const canArchive = (status: GameplayStatus) => status === 'Completed'
 
-  const statusOptions: GameplayStatus[] = ['Scheduled', 'Ongoing', 'Completed', 'Cancelled']
+  const statusOptions: GameplayStatus[] = ['Scheduled', 'Ongoing', 'Completed', 'Cancelled', 'Archived']
 
   const updateStatus = async (doc: GameplayDoc, status: GameplayStatus) => {
     try {
-      if (!doc._id && !doc.id) throw new Error('Missing gameplay id')
-      const id = doc._id ? String(doc._id) : doc.id
+      const id = rowId(doc)
+      if (!id) throw new Error('Missing gameplay id')
 
-      await apiPut(`/api/gameplay/${id}`, {
+      await apiPut(`/api/gameplay/${encodeURIComponent(id)}`, {
         $set: {
           Status: status,
           updatedAtISO: new Date().toISOString(),
@@ -114,16 +132,23 @@ export function AdminGameplayPage() {
     }
   }
 
-  const deleteGameplay = async (doc: GameplayDoc) => {
+  const archiveGameplay = async (doc: GameplayDoc) => {
     try {
-      if (!doc._id && !doc.id) throw new Error('Missing gameplay id')
-      const id = doc._id ? String(doc._id) : doc.id
+      const id = rowId(doc)
+      if (!id) throw new Error('Missing gameplay id')
 
-      const confirmed = window.confirm('Delete this gameplay permanently? This cannot be undone.')
+      const confirmed = window.confirm('Archive this gameplay? It will remain in the archive view and can be restored later.')
       if (!confirmed) return
 
-      await apiDelete(`/api/gameplay/${id}`)
-      toast.success('Gameplay deleted')
+      await apiPut(`/api/gameplay/${id}`, {
+        $set: {
+          Status: 'Archived',
+          archivedAtISO: new Date().toISOString(),
+          updatedAtISO: new Date().toISOString(),
+        },
+      })
+      toast.success('Gameplay archived')
+      setNextStatusFilter('Archived')
       await refresh()
     } catch (e: any) {
       toast.error(String(e?.message || e))
@@ -200,21 +225,21 @@ export function AdminGameplayPage() {
                             ))}
                           </select>
 
-                          {canDelete(st) ? (
+                          {canArchive(st) ? (
                             <button
-                              onClick={() => deleteGameplay(doc)}
-                              className="rounded-xl border border-danger/30 bg-danger/10 px-3 py-2 text-xs font-semibold text-danger hover:bg-danger/15 transition"
-                              title="Delete gameplay"
+                              onClick={() => archiveGameplay(doc)}
+                              className="rounded-xl border border-accent/30 bg-accent/10 px-3 py-2 text-xs font-semibold text-accent hover:bg-accent/15 transition"
+                              title="Archive gameplay"
                             >
-                              <FiTrash2 className="inline-block mr-1" /> Delete
+                              <FiArchive className="inline-block mr-1" /> Archive Game
                             </button>
                           ) : (
                             <button
                               className="rounded-xl border border-white/5 bg-white/5 px-3 py-2 text-xs text-muted opacity-60"
                               disabled
-                              title="Delete available only when COMPLETED"
+                              title="Archive available only when COMPLETED"
                             >
-                              <FiTrash2 className="inline-block mr-1" /> Delete
+                              <FiArchive className="inline-block mr-1" /> Archive Game
                             </button>
                           )}
                         </div>

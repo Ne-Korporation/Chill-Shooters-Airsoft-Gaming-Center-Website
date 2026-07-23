@@ -1,23 +1,35 @@
-# Brainstorm plan: FIX THE LIGHT MODE
+# Plan: Make Rental Packages Work with Weapons & Equipment Selection
 
-## Information gathered
-- `ThemeContext` sets `document.documentElement` attribute `data-theme` to `light`/`dark` and stores it in `localStorage`.
-- `src/styles/theme.css` defines CSS variables per theme and styles `.glass`, `.bg-background`, `.text-text`, `.text-muted`.
-- Tailwind colors in `tailwind.config.js` are currently hardcoded hex values (e.g. `background: '#121212'`, `text: '#F5F5F5'`, etc.).
-- Many components use Tailwind classes like `bg-primary`, `text-background`, `bg-white/5`, etc., which do not automatically change with `data-theme`.
+## Information Gathered
 
-## Plan (code changes)
-1. Update `tailwind.config.js` to bind Tailwind color tokens to the CSS variables from `src/styles/theme.css`.
-   - Example: `background` should map to `rgb(var(--bg))` instead of `#121212`.
-   - Similarly map `text`, `muted`, `card`, `border`, `accent`, `success`, `danger`, and primary/secondary.
-2. Keep `.glass` behavior in `src/styles/theme.css` as-is.
-3. Build + run dev to verify the light theme toggle actually changes page backgrounds/text.
+### Current State:
+1. **AdminRentalPackagesPage.tsx** - Uses local state only, hardcoded data, no API integration. Type has: `id, name, tier, discountPct, equipmentCount, status, description, includedItems: string[]`. Right panel shows simple text list of `includedItems`.
+2. **AdminWeaponsPage.tsx** - Full CRUD connected to MongoDB via `/api/weapons`. Weapons have: `id, name, category, status, note, description`.
+3. **AdminEquipmentPage.tsx** - Full CRUD connected to MongoDB via `/api/equipments`. Equipment have: `id, name, category, status, qty, note, description`.
+4. **`packages`** is in `ALLOWED_COLLECTIONS` in the server, so CRUD routes are already available.
+5. **Reservation flow** uses separate hardcoded `Package` type (different from admin rental packages).
 
-## Dependent files to edit
-- `tailwind.config.js`
-- (optional) `src/styles/theme.css` if we discover missing variables needed by the Tailwind mapping.
+### Changes Needed:
+1. Update RentalPackage type to include `weaponIds: string[]` and `equipmentIds: string[]`
+2. Add API integration to fetch/save packages from `/api/packages`
+3. Fetch weapons & equipment from APIs to populate selection UI
+4. Add multi-select UI for weapons and equipment in the form
+5. Show selected weapons & equipment details in the right panel with names/categories
+6. Keep the same UI look and feel
 
-## Followup steps
-- Run `npm run build`.
-- Manually switch theme using `ThemeToggle` and confirm: Landing/Login pages + one dashboard page have correct light backgrounds/typography.
+## Plan
+
+### Step 1: Update the **AdminRentalPackagesPage.tsx**
+- Add imports for `apiGet`, `apiPost`, `apiPut`, `apiDelete`
+- Add toast import
+- Update `RentalPackage` type to add `weaponIds: string[]`, `equipmentIds: string[]`, and remove `includedItems`
+- Fetch packages from `/api/packages` on load
+- Fetch weapons from `/api/weapons` and equipment from `/api/equipments` for selection
+- Replace `form` state from simple 3-field to include selected weapons/equipment
+- Add weapon/equipment multi-select UI in the editor panel
+- Update the right panel to show selected weapons and equipment with their details
+- Connect save/create/update/delete to backend APIs
+
+## Files to Edit:
+1. `src/pages/admin/AdminRentalPackagesPage.tsx` - Main changes
 

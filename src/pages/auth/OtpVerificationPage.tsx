@@ -7,6 +7,7 @@ import { motion } from 'framer-motion'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { Input } from '../../components/ui/Input'
+import { apiPost } from '../../utils/apiClient'
 
 type FormValues = { otp: string }
 
@@ -25,6 +26,7 @@ export function OtpVerificationPage() {
 
   const { email, flow } = useMemo(() => readQuery(), [])
   const [busy, setBusy] = useState(false)
+  const [resending, setResending] = useState(false)
 
   const {
     register,
@@ -33,17 +35,38 @@ export function OtpVerificationPage() {
   } = useForm<FormValues>({ defaultValues: { otp: '' } })
 
   async function onSubmit(values: FormValues) {
+    if (!email) {
+      toast.error('Missing email address.')
+      return
+    }
+
     setBusy(true)
     try {
-      if (values.otp.trim().length < 4) {
-        toast.error('OTP must be at least 4 digits.')
-        return
-      }
-      toast.success('OTP verified.')
+      const res = await apiPost<{ message?: string }>('/api/auth/verify-otp', { email, otp: values.otp.trim() })
+      toast.success(res?.message || 'OTP verified.')
       if (flow === 'reset') navigate(`/reset-password?email=${encodeURIComponent(email)}`)
       else navigate('/login')
+    } catch (err: any) {
+      toast.error(err?.message || 'OTP verification failed')
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function handleResend() {
+    if (!email) {
+      toast.error('Missing email address.')
+      return
+    }
+
+    setResending(true)
+    try {
+      const res = await apiPost<{ message?: string }>('/api/auth/send-otp', { email })
+      toast.success(res?.message || 'Verification code resent.')
+    } catch (err: any) {
+      toast.error(err?.message || 'Unable to resend code')
+    } finally {
+      setResending(false)
     }
   }
 
@@ -70,8 +93,8 @@ export function OtpVerificationPage() {
             </p>
 
             <Card className="p-4">
-              <div className="text-sm font-semibold">Demo OTP</div>
-              <div className="mt-2 text-xs text-muted">Any 4+ digits will verify in this frontend prototype.</div>
+              <div className="text-sm font-semibold">Verification code</div>
+              <div className="mt-2 text-xs text-muted">A 6-digit code will be sent to your inbox via Resend.</div>
             </Card>
           </div>
 
@@ -84,7 +107,7 @@ export function OtpVerificationPage() {
 
               <Input
                 label="One-time code"
-                placeholder="e.g., 1234"
+                placeholder="e.g., 123456"
                 error={errors.otp?.message}
                 {...register('otp', { required: 'OTP is required' })}
               />
@@ -98,9 +121,10 @@ export function OtpVerificationPage() {
                 <button
                   type="button"
                   className="text-accent hover:text-text transition"
-                  onClick={() => navigate('/forgot-password')}
+                  onClick={handleResend}
+                  disabled={resending}
                 >
-                  Resend
+                  {resending ? 'Sending...' : 'Resend'}
                 </button>
               </div>
             </form>

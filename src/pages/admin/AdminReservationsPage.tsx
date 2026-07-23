@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { FiAlertTriangle, FiCheck, FiClock, FiEye, FiImage, FiPrinter, FiRefreshCw, FiX } from 'react-icons/fi'
+import { createPortal } from 'react-dom'
+import { FiAlertTriangle, FiCheck, FiClock, FiEye, FiImage, FiPrinter, FiRefreshCw, FiTrash2, FiX } from 'react-icons/fi'
 import toast from 'react-hot-toast'
 
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
-import { apiGet, apiPut } from '../../utils/apiClient'
+import { apiDelete, apiGet, apiPut } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
 
 type ReservationStatus = 'pending' | 'needs review' | 'confirmed'
@@ -19,6 +20,10 @@ type ReservationDoc = {
   reservationDate?: string
   reservationTime?: string
   fieldId?: string
+  fieldIds?: string[]
+  fieldNames?: string
+  locationId?: string
+  locationName?: string
   slot?: string
   selectedPackageId?: string
   selectedGameplayName?: string
@@ -157,7 +162,6 @@ function buildDetailsBody(reservation: ReservationView) {
     ['Reservation ID', getId(reservation) || '—'],
     ['Reservation Status', normalizeReservationStatus(reservation.reservationStatus)],
     ['Customer', reservation.userName || reservation.player || '—'],
-    ['User ID', reservation.userId || '—'],
     ['Reservation Date', reservation.reservationDate || '—'],
     ['Reservation Time', reservation.reservationTime || reservation.slot || '—'],
     ['Field', reservation.fieldId || '—'],
@@ -305,9 +309,22 @@ export function AdminReservationsPage() {
         role: user.role,
         reservationStatus: nextStatus,
       })
+
+      setReservations((current) =>
+        current.map((item) => {
+          const currentId = getId(item)
+          if (currentId !== reservationId) return item
+          return { ...item, reservationStatus: nextStatus }
+        })
+      )
+
+      if (nextStatus === 'confirmed') setActive('confirmed')
+      else if (nextStatus === 'needs review') setActive('needs review')
+      else setActive('pending')
+
+      setSelectedId(null)
       toast.success(`Reservation marked as ${nextStatus}`)
       await refresh()
-      setSelectedId(reservationId)
     } catch (e: any) {
       toast.error(String(e?.message || e))
     } finally {
@@ -327,6 +344,25 @@ export function AdminReservationsPage() {
     if (!imageUrl) return toast.error('No GCash image found for this reservation')
     const reservationId = getId(selectedReservation || {}) || 'reservation'
     buildPrintableWindow(`GCash proof ${reservationId}`, buildImageBody(imageUrl))
+  }
+
+  const deleteReservation = async () => {
+    if (!selectedReservation) return
+    const reservationId = getId(selectedReservation)
+    if (!reservationId) return toast.error('Reservation id missing')
+
+    if (!window.confirm(`Are you sure you want to delete reservation ${reservationId}?\n\nThis will also delete linked payment records and gameplay data. This action cannot be undone.`)) {
+      return
+    }
+
+    try {
+      await apiDelete(`/api/reservations/${reservationId}?role=${user?.role || ''}`)
+      toast.success('Reservation deleted successfully')
+      setSelectedId(null)
+      await refresh()
+    } catch (e: any) {
+      toast.error(String(e?.message || e))
+    }
   }
 
   return (
@@ -365,13 +401,13 @@ export function AdminReservationsPage() {
           </div>
         ) : null}
 
-        <div className="mt-4 overflow-hidden rounded-2xl border border-white/5">
-          <div className="grid grid-cols-12 gap-0 bg-white/5 px-3 py-2 text-xs uppercase tracking-widest text-muted">
-            <div className="col-span-2">ID</div>
-            <div className="col-span-3">Customer</div>
-            <div className="col-span-3">Schedule</div>
-            <div className="col-span-2">Payment</div>
-            <div className="col-span-2 text-right">Actions</div>
+          <div className="mt-4 overflow-hidden rounded-2xl border border-white/5">
+          <div className="hidden sm:grid sm:grid-cols-12 gap-0 bg-white/5 px-3 py-2 text-xs uppercase tracking-widest text-muted">
+            <div className="sm:col-span-2">ID</div>
+            <div className="sm:col-span-3">Customer</div>
+            <div className="sm:col-span-3">Schedule</div>
+            <div className="sm:col-span-2">Payment</div>
+            <div className="sm:col-span-2 text-right">Actions</div>
           </div>
 
           <div className="divide-y divide-white/5">
@@ -386,24 +422,29 @@ export function AdminReservationsPage() {
                 const payment = reservation.payment
 
                 return (
-                  <div key={reservationId ?? Math.random()} className="grid grid-cols-12 items-center px-3 py-3">
-                    <div className="col-span-2 text-sm font-semibold">{reservationId ?? '—'}</div>
-                    <div className="col-span-3 text-sm text-muted">{resolveCustomerName(reservation)}</div>
-                    <div className="col-span-3 text-sm text-muted">
-                      {[reservation.reservationDate, reservation.reservationTime].filter(Boolean).join(' • ') || reservation.createdAtISO || '—'}
+                  <div key={reservationId ?? Math.random()} className="flex flex-col gap-2 sm:grid sm:grid-cols-12 sm:items-center px-3 py-3">
+                    <div className="flex items-center justify-between sm:col-span-2">
+                      <span className="text-sm font-semibold">{reservationId ?? '—'}</span>
+                      <span className="sm:hidden"><StatusPill status={reservationStatus} /></span>
                     </div>
-                    <div className="col-span-2 text-sm text-muted">
+                    <div className="sm:col-span-3 text-sm text-muted">{resolveCustomerName(reservation)}</div>
+                    <div className="sm:col-span-3 text-sm text-muted">
+                      <div>{[reservation.reservationDate, reservation.reservationTime].filter(Boolean).join(' • ') || reservation.createdAtISO || '—'}</div>
+                      <div className="mt-0.5 text-xs text-muted/70">
+                        {reservation.locationName || ''}{reservation.locationName && reservation.fieldNames ? ' • ' : ''}{reservation.fieldNames || reservation.fieldId || ''}
+                      </div>
+                    </div>
+                    <div className="sm:col-span-2 text-sm text-muted">
                       <div className="flex flex-col gap-1">
-                        <StatusPill status={payment?.paymentStatus || reservationStatus} />
+                        <StatusPill status={reservationStatus} />
                         <span className="text-xs text-muted">
                           {payment?.paymentMethod || '—'}
                           {payment?.gcashImageUrl ? ' • proof attached' : ''}
                         </span>
                       </div>
                     </div>
-                    <div className="col-span-2 text-right">
+                    <div className="sm:col-span-2 text-right">
                       <div className="flex items-center justify-end gap-2">
-                        <StatusPill status={reservationStatus} />
                         <button
                           onClick={() => openReview(reservation)}
                           className="rounded-xl border border-white/5 bg-white/5 px-3 py-2 text-xs font-semibold text-muted transition hover:bg-white/6"
@@ -427,159 +468,170 @@ export function AdminReservationsPage() {
         </div>
       </Card>
 
-      {selectedReservation ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-6 backdrop-blur-sm">
-          <div className="max-h-[92vh] w-full max-w-5xl overflow-hidden rounded-3xl border border-white/10 bg-background shadow-soft">
-            <div className="flex items-start justify-between gap-3 border-b border-white/5 p-4 md:p-5">
-              <div>
-                <div className="text-xs uppercase tracking-widest text-muted">Reservation review</div>
-                <h2 className="mt-1 text-2xl font-bold">{getId(selectedReservation) || 'Reservation details'}</h2>
-                <p className="mt-1 text-sm text-muted">Update status, inspect proof, and print details or only the GCash image.</p>
-              </div>
+      {selectedReservation && typeof document !== 'undefined'
+        ? createPortal(
+            <div className="fixed inset-0 z-[99999] flex items-center justify-center overflow-y-auto bg-black/70 px-4 py-6 backdrop-blur-sm">
+              <div className="relative z-[100000] max-h-[92vh] w-full max-w-5xl overflow-hidden rounded-3xl border border-white/10 bg-background shadow-soft">
+                <div className="flex items-start justify-between gap-3 border-b border-white/5 p-4 md:p-5">
+                  <div>
+                    <div className="text-xs uppercase tracking-widest text-muted">Reservation review</div>
+                    <h2 className="mt-1 text-2xl font-bold">{getId(selectedReservation) || 'Reservation details'}</h2>
+                    <p className="mt-1 text-sm text-muted">Update status, inspect proof, and print details or only the GCash image.</p>
+                  </div>
 
-              <button
-                onClick={() => setSelectedId(null)}
-                className="rounded-xl border border-white/5 bg-white/5 p-2 text-muted transition hover:bg-white/6"
-                aria-label="Close"
-              >
-                <FiX />
-              </button>
-            </div>
+                  <button
+                    onClick={() => setSelectedId(null)}
+                    className="rounded-xl border border-white/5 bg-white/5 p-2 text-muted transition hover:bg-white/6"
+                    aria-label="Close"
+                  >
+                    <FiX />
+                  </button>
+                </div>
 
-            <div className="grid gap-0 lg:grid-cols-[1.25fr_0.75fr]">
-              <div className="max-h-[calc(92vh-120px)] overflow-y-auto p-4 md:p-5">
-                <div className="grid gap-4 md:grid-cols-2">
-                  <Card className="p-4">
-                    <div className="text-xs uppercase tracking-widest text-muted">Reservation</div>
-                    <div className="mt-3 space-y-3 text-sm">
-                      {[
-                        ['Customer', resolveCustomerName(selectedReservation)],
-                        ['Account ID', selectedReservation.userId || '—'],
-                        ['Reservation date', selectedReservation.reservationDate || '—'],
-                        ['Reservation time', selectedReservation.reservationTime || selectedReservation.slot || '—'],
-                        ['Field', selectedReservation.fieldId || '—'],
-                        ['Session type', selectedReservation.sessionType || '—'],
-                        ['Game mode', selectedReservation.mode || selectedReservation.gameMode || '—'],
-                        ['Package', selectedReservation.packageName || selectedReservation.selectedGameplayName || selectedReservation.selectedPackageId || '—'],
-                        ['Group', selectedReservation.group || '—'],
-                        ['Players', selectedReservation.numberOfPlayers ?? '—'],
-                        ['Total amount', selectedReservation.totalAmount ? `₱${Number(selectedReservation.totalAmount).toLocaleString()}` : '—'],
-                        ['Notes', selectedReservation.notes || '—'],
-                        ['Created', selectedReservation.createdAtISO || '—'],
-                        ['Updated', selectedReservation.updatedAtISO || '—'],
-                      ].map(([label, value]) => (
-                        <div key={label} className="flex items-start justify-between gap-4 border-b border-white/5 pb-2 last:border-b-0 last:pb-0">
-                          <div className="text-muted">{label}</div>
-                          <div className="text-right font-semibold text-text">{value}</div>
+                <div className="grid gap-0 lg:grid-cols-[1.25fr_0.75fr]">
+                  <div className="max-h-[calc(92vh-120px)] overflow-y-auto p-4 md:p-5">
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <Card className="p-4">
+                        <div className="text-xs uppercase tracking-widest text-muted">Reservation</div>
+                        <div className="mt-3 space-y-3 text-sm">
+                          {[
+                            ['Customer', resolveCustomerName(selectedReservation)],
+                            ['Reservation date', selectedReservation.reservationDate || '—'],
+                            ['Reservation time', selectedReservation.reservationTime || selectedReservation.slot || '—'],
+                            ['Location', selectedReservation.locationName || '—'],
+                            ['Field', (selectedReservation.fieldNames || selectedReservation.fieldId || '—')],
+                            ['Session type', selectedReservation.sessionType || '—'],
+                            ['Game mode', selectedReservation.mode || selectedReservation.gameMode || '—'],
+                            ['Package', selectedReservation.packageName || selectedReservation.selectedGameplayName || selectedReservation.selectedPackageId || '—'],
+                            ['Group', selectedReservation.group || '—'],
+                            ['Players', selectedReservation.numberOfPlayers ?? '—'],
+                            ['Total amount', selectedReservation.totalAmount ? `₱${Number(selectedReservation.totalAmount).toLocaleString()}` : '—'],
+                            ['Notes', selectedReservation.notes || '—'],
+                            ['Created', selectedReservation.createdAtISO || '—'],
+                            ['Updated', selectedReservation.updatedAtISO || '—'],
+                          ].map(([label, value]) => (
+                            <div key={label} className="flex items-start justify-between gap-4 border-b border-white/5 pb-2 last:border-b-0 last:pb-0">
+                              <div className="text-muted">{label}</div>
+                              <div className="text-right font-semibold text-text">{value}</div>
+                            </div>
+                          ))}
                         </div>
-                      ))}
+                      </Card>
+
+                      <Card className="p-4">
+                        <div className="text-xs uppercase tracking-widest text-muted">Payment</div>
+                        <div className="mt-3 space-y-3 text-sm">
+                          {[
+                            ['Payment method', selectedReservation.payment?.paymentMethod || '—'],
+                            ['Payment status', selectedReservation.payment?.paymentStatus || '—'],
+                            ['Reference no.', selectedReservation.payment?.transactionReference || selectedReservation.payment?.refNo || '—'],
+                            ['Amount', selectedReservation.payment?.amount ?? selectedReservation.totalAmount ?? '—'],
+                          ].map(([label, value]) => (
+                            <div key={label} className="flex items-start justify-between gap-4 border-b border-white/5 pb-2 last:border-b-0 last:pb-0">
+                              <div className="text-muted">{label}</div>
+                              <div className="text-right font-semibold text-text">{value}</div>
+                            </div>
+                          ))}
+                        </div>
+
+                        {selectedReservation.payment?.paymentMethod?.toLowerCase() === 'gcash' && selectedReservation.payment.gcashImageUrl ? (
+                          <div className="mt-4 rounded-2xl border border-accent/20 bg-accent/5 p-3">
+                            <div className="flex items-center gap-2 text-xs uppercase tracking-widest text-muted">
+                              <FiImage /> GCash proof
+                            </div>
+                            <img
+                              src={selectedReservation.payment.gcashImageUrl}
+                              alt="GCash proof"
+                              className="mt-3 max-h-[320px] w-full rounded-2xl border border-white/10 object-contain bg-black/20"
+                            />
+                          </div>
+                        ) : (
+                          <div className="mt-4 rounded-2xl border border-white/5 bg-white/5 p-4 text-sm text-muted">
+                            No GCash proof image attached for this reservation.
+                          </div>
+                        )}
+                      </Card>
                     </div>
-                  </Card>
+                  </div>
 
-                  <Card className="p-4">
-                    <div className="text-xs uppercase tracking-widest text-muted">Payment</div>
-                    <div className="mt-3 space-y-3 text-sm">
-                      {[
-                        ['Payment method', selectedReservation.payment?.paymentMethod || '—'],
-                        ['Payment status', selectedReservation.payment?.paymentStatus || '—'],
-                        ['Reference no.', selectedReservation.payment?.transactionReference || selectedReservation.payment?.refNo || '—'],
-                        ['Amount', selectedReservation.payment?.amount ?? selectedReservation.totalAmount ?? '—'],
-                        ['Payment record', getId(selectedReservation.payment || {}) || '—'],
-                      ].map(([label, value]) => (
-                        <div key={label} className="flex items-start justify-between gap-4 border-b border-white/5 pb-2 last:border-b-0 last:pb-0">
-                          <div className="text-muted">{label}</div>
-                          <div className="text-right font-semibold text-text">{value}</div>
-                        </div>
-                      ))}
+                  <div className="border-t border-white/5 p-4 lg:border-l lg:border-t-0 md:p-5">
+                    <div className="text-xs uppercase tracking-widest text-muted">Status actions</div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <StatusPill status={normalizeReservationStatus(selectedReservation.reservationStatus)} />
                     </div>
 
-                    {selectedReservation.payment?.paymentMethod?.toLowerCase() === 'gcash' && selectedReservation.payment.gcashImageUrl ? (
-                      <div className="mt-4 rounded-2xl border border-accent/20 bg-accent/5 p-3">
-                        <div className="flex items-center gap-2 text-xs uppercase tracking-widest text-muted">
-                          <FiImage /> GCash proof
-                        </div>
-                        <img
-                          src={selectedReservation.payment.gcashImageUrl}
-                          alt="GCash proof"
-                          className="mt-3 max-h-[320px] w-full rounded-2xl border border-white/10 object-contain bg-black/20"
-                        />
-                      </div>
-                    ) : (
-                      <div className="mt-4 rounded-2xl border border-white/5 bg-white/5 p-4 text-sm text-muted">
-                        No GCash proof image attached for this reservation.
-                      </div>
-                    )}
-                  </Card>
+                    <div className="mt-4 space-y-2">
+                      <Button
+                        variant="ghost"
+                        className="w-full justify-start"
+                        onClick={printReservationDetails}
+                      >
+                        <FiPrinter /> Print details
+                      </Button>
+
+                      <Button
+                        variant="ghost"
+                        className="w-full justify-start"
+                        disabled={!(selectedReservation.payment?.paymentMethod?.toLowerCase() === 'gcash' && selectedReservation.payment?.gcashImageUrl)}
+                        onClick={printReservationImage}
+                      >
+                        <FiImage /> Print image only
+                      </Button>
+                    </div>
+
+                    <div className="mt-6 grid gap-2">
+                      <Button
+                        className="w-full"
+                        variant="ghost"
+                        disabled={savingStatus !== null}
+                        onClick={() => updateReservation('pending')}
+                      >
+                        <FiClock /> Mark pending
+                      </Button>
+                      <Button
+                        className="w-full"
+                        variant="ghost"
+                        disabled={savingStatus !== null}
+                        onClick={() => updateReservation('needs review')}
+                      >
+                        <FiEye /> Needs review
+                      </Button>
+                      <Button
+                        className="w-full"
+                        variant="primary"
+                        disabled={savingStatus !== null}
+                        onClick={() => updateReservation('confirmed')}
+                      >
+                        <FiCheck /> Confirm reservation
+                      </Button>
+                    </div>
+
+                    <div className="mt-4 rounded-2xl border border-white/5 bg-white/5 p-3 text-xs text-muted">
+                      Confirming the reservation also updates the linked payment to <span className="font-semibold text-text">confirmed</span> and creates gameplay once.
+                    </div>
+
+                    <div className="mt-6 flex gap-2">
+                      <Button
+                        variant="danger"
+                        className="flex-1"
+                        onClick={deleteReservation}
+                      >
+                        <FiTrash2 /> Delete reservation
+                      </Button>
+                    </div>
+
+                    <div className="mt-2 flex gap-2">
+                      <Button variant="ghost" className="flex-1" onClick={() => setSelectedId(null)}>
+                        Close
+                      </Button>
+                    </div>
+                  </div>
                 </div>
               </div>
-
-              <div className="border-t border-white/5 p-4 lg:border-l lg:border-t-0 md:p-5">
-                <div className="text-xs uppercase tracking-widest text-muted">Status actions</div>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <StatusPill status={normalizeReservationStatus(selectedReservation.reservationStatus)} />
-                  <StatusPill status={selectedReservation.payment?.paymentStatus || 'pending'} />
-                </div>
-
-                <div className="mt-4 space-y-2">
-                  <Button
-                    variant="ghost"
-                    className="w-full justify-start"
-                    onClick={printReservationDetails}
-                  >
-                    <FiPrinter /> Print details
-                  </Button>
-
-                  <Button
-                    variant="ghost"
-                    className="w-full justify-start"
-                    disabled={!(selectedReservation.payment?.paymentMethod?.toLowerCase() === 'gcash' && selectedReservation.payment?.gcashImageUrl)}
-                    onClick={printReservationImage}
-                  >
-                    <FiImage /> Print image only
-                  </Button>
-                </div>
-
-                <div className="mt-6 grid gap-2">
-                  <Button
-                    className="w-full"
-                    variant={normalizeReservationStatus(selectedReservation.reservationStatus) === 'pending' ? 'primary' : 'ghost'}
-                    disabled={savingStatus !== null}
-                    onClick={() => updateReservation('pending')}
-                  >
-                    <FiClock /> Mark pending
-                  </Button>
-                  <Button
-                    className="w-full"
-                    variant={normalizeReservationStatus(selectedReservation.reservationStatus) === 'needs review' ? 'primary' : 'ghost'}
-                    disabled={savingStatus !== null}
-                    onClick={() => updateReservation('needs review')}
-                  >
-                    <FiEye /> Needs review
-                  </Button>
-                  <Button
-                    className="w-full"
-                    variant={normalizeReservationStatus(selectedReservation.reservationStatus) === 'confirmed' ? 'primary' : 'ghost'}
-                    disabled={savingStatus !== null}
-                    onClick={() => updateReservation('confirmed')}
-                  >
-                    <FiCheck /> Confirm reservation
-                  </Button>
-                </div>
-
-                <div className="mt-4 rounded-2xl border border-white/5 bg-white/5 p-3 text-xs text-muted">
-                  Confirming the reservation also updates the linked payment to <span className="font-semibold text-text">confirmed</span> and creates gameplay once.
-                </div>
-
-                <div className="mt-6 flex gap-2">
-                  <Button variant="ghost" className="flex-1" onClick={() => setSelectedId(null)}>
-                    Close
-                  </Button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
+            </div>,
+            document.body
+          )
+        : null}
     </div>
   )
 }

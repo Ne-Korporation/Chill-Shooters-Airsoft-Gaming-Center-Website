@@ -18,7 +18,6 @@ function formatShortId(prefix, value) {
 router.get('/health', async (req, res) => {
   try {
     const db = await getDb()
-    // Ping by listing collections (cheap enough for health)
     await db.listCollections().toArray()
     return res.json({ ok: true })
   } catch (err) {
@@ -34,6 +33,22 @@ function safeIdParam(id) {
   }
 }
 
+async function findDocumentById(db, collection, id) {
+  const normalizedId = String(id || '').trim()
+  if (!normalizedId) return null
+
+  const byPublicId = await db.collection(collection).findOne({ id: normalizedId })
+  if (byPublicId) return byPublicId
+
+  const objectId = safeIdParam(normalizedId)
+  if (objectId) {
+    const byObjectId = await db.collection(collection).findOne({ _id: objectId })
+    if (byObjectId) return byObjectId
+  }
+
+  return null
+}
+
 // GET all documents
 router.get('/:collection', async (req, res) => {
   const { collection } = req.params
@@ -41,12 +56,9 @@ router.get('/:collection', async (req, res) => {
     return res.status(400).json({ ok: false, error: 'collection not allowed', collectionReceived: collection, allowed: Array.from(ALLOWED_COLLECTIONS) })
   }
 
-
   const limit = Math.min(Number(req.query.limit || 50), 200)
   const skip = Math.max(Number(req.query.skip || 0), 0)
 
-  // Basic filter support: ?filter[field]=value (optional)
-  // To keep it safe/simple, we only allow JSON-stringified filter via ?q={...}
   let filter = {}
   if (req.query.q) {
     try {
@@ -78,12 +90,9 @@ router.get('/:collection/:id', async (req, res) => {
     return res.status(400).json({ ok: false, error: 'collection not allowed' })
   }
 
-  const _id = safeIdParam(id)
-  if (!_id) return res.status(400).json({ ok: false, error: 'invalid id' })
-
   try {
     const db = await getDb()
-    const doc = await db.collection(collection).findOne({ _id })
+    const doc = await findDocumentById(db, collection, id)
     if (!doc) return res.status(404).json({ ok: false, error: 'not found' })
     return res.json({ ok: true, data: doc })
   } catch (err) {
@@ -95,11 +104,8 @@ router.get('/:collection/:id', async (req, res) => {
 router.post('/:collection', async (req, res) => {
   const { collection } = req.params
   if (!ALLOWED_COLLECTIONS.has(collection)) {
-
     return res.status(400).json({ ok: false, error: 'collection not allowed', collectionReceived: collection, allowed: Array.from(ALLOWED_COLLECTIONS) })
   }
-
-
 
   const payload = req.body || {}
 
@@ -120,15 +126,13 @@ router.post('/:collection', async (req, res) => {
   }
 })
 
-// UPDATE (replace fields provided via $set)
+// UPDATE - fixed: uses updateOne + separate findOne to avoid MongoDB driver v6 bug
+// where findOneAndUpdate with returnDocument:'after' returns value:null on success
 router.put('/:collection/:id', async (req, res) => {
   const { collection, id } = req.params
   if (!ALLOWED_COLLECTIONS.has(collection)) {
     return res.status(400).json({ ok: false, error: 'collection not allowed' })
   }
-
-  const _id = safeIdParam(id)
-  if (!_id) return res.status(400).json({ ok: false, error: 'invalid id' })
 
   const payload = req.body
   if (!payload || typeof payload !== 'object') {
@@ -137,20 +141,29 @@ router.put('/:collection/:id', async (req, res) => {
 
   try {
     const db = await getDb()
+    const existing = await findDocumentById(db, collection, id)
+    if (!existing) return res.status(404).json({ ok: false, error: 'not found' })
 
-    // If client provided { $set: {...} } use it; else default to $set: payload
+    // Build the update operation
     const update = payload.$set || payload.$inc || payload.$push || payload.$addToSet || payload.$unset
       ? payload
       : { $set: payload }
 
-    const result = await db.collection(collection).findOneAndUpdate(
-      { _id },
-      update,
-      { returnDocument: 'after', upsert: false },
-    )
+    // Prefer the public `id` field for updates to avoid ObjectId type mismatch
+    const filter = existing.id
+      ? { id: String(existing.id) }
+      : existing._id && typeof existing._id === 'object'
+        ? { _id: existing._id }
+        : { id: String(id) }
 
-    if (!result || !result.value) return res.status(404).json({ ok: false, error: 'not found' })
-    return res.json({ ok: true, data: result.value })
+    // Use updateOne + independent findOne instead of findOneAndUpdate
+    // because MongoDB driver v6+ can return { value: null } even on success
+    await db.collection(collection).updateOne(filter, update)
+
+    const updatedDoc = await findDocumentById(db, collection, existing.id || id)
+    if (!updatedDoc) return res.status(404).json({ ok: false, error: 'not found' })
+
+    return res.json({ ok: true, data: updatedDoc })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
   }
@@ -163,12 +176,16 @@ router.delete('/:collection/:id', async (req, res) => {
     return res.status(400).json({ ok: false, error: 'collection not allowed' })
   }
 
-  const _id = safeIdParam(id)
-  if (!_id) return res.status(400).json({ ok: false, error: 'invalid id' })
-
   try {
     const db = await getDb()
-    const result = await db.collection(collection).deleteOne({ _id })
+    const existing = await findDocumentById(db, collection, id)
+    if (!existing) return res.status(404).json({ ok: false, error: 'not found' })
+
+    const delFilter = existing._id && typeof existing._id === 'object'
+      ? { _id: existing._id }
+      : { id: String(existing.id || id) }
+
+    const result = await db.collection(collection).deleteOne(delFilter)
     if (!result.deletedCount) return res.status(404).json({ ok: false, error: 'not found' })
     return res.json({ ok: true })
   } catch (err) {

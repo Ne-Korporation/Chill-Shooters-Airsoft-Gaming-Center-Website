@@ -20,6 +20,7 @@ type ReservationRow = {
   id: string
   createdAtISO: string
   dateISO: string
+  locationName: string
   fieldName: string
   slotLabel: string
   sessionType: 'Public' | 'Private'
@@ -54,6 +55,7 @@ export function RegistrarReservationsPage() {
       id: 'res-12001',
       createdAtISO: new Date(addDays(today, -1)).toISOString(),
       dateISO: fmtDate(addDays(today, 1)),
+      locationName: 'Delta Stronghold (Salawag)',
       fieldName: 'Upper Ground',
       slotLabel: slotLabels.evening,
       sessionType: 'Public',
@@ -66,6 +68,7 @@ export function RegistrarReservationsPage() {
       id: 'res-12002',
       createdAtISO: new Date(addDays(today, -2)).toISOString(),
       dateISO: fmtDate(addDays(today, 2)),
+      locationName: 'Delta Stronghold (Salawag)',
       fieldName: 'Lower Ground',
       slotLabel: slotLabels.afternoon,
       sessionType: 'Private',
@@ -78,6 +81,7 @@ export function RegistrarReservationsPage() {
       id: 'res-12003',
       createdAtISO: new Date(addDays(today, -3)).toISOString(),
       dateISO: fmtDate(addDays(today, 3)),
+      locationName: 'Delta Stronghold (Langkaan)',
       fieldName: 'Forest',
       slotLabel: slotLabels.morning,
       sessionType: 'Public',
@@ -193,7 +197,8 @@ export function RegistrarReservationsPage() {
                   </td>
                   <td className="py-3 pr-3">
                     <div className="font-bold">{r.dateISO}</div>
-                    <div className="mt-1 text-xs text-muted">{r.fieldName} • {r.slotLabel}</div>
+                    <div className="mt-1 text-xs text-muted">{r.locationName}</div>
+                    <div className="text-xs text-muted/70">{r.fieldName} • {r.slotLabel}</div>
                   </td>
                   <td className="py-3 pr-3">
                     <div className="font-bold">{r.sessionType}</div>

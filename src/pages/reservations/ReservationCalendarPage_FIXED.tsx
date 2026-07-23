@@ -1,9 +1,7 @@
 import React, { useMemo, useState, useEffect } from 'react'
-import { apiPost } from '../../utils/apiClient'
-import { useAuth } from '../../context/AuthContext'
-
-import { motion } from 'framer-motion'
 import { useLocation } from 'react-router-dom'
+import { motion } from 'framer-motion'
+import toast from 'react-hot-toast'
 import {
   FiAlertTriangle,
   FiCalendar,
@@ -19,12 +17,15 @@ import {
   FiUsers,
 } from 'react-icons/fi'
 
-import { WaiverPage } from '../waiver/WaiverPage'
-import { PaymentPage } from '../payments/PaymentPage'
-
+import { apiGet, apiPost } from '../../utils/apiClient'
+import { useAuth } from '../../context/AuthContext'
 import { Card } from '../../components/ui/Card'
 import { Input } from '../../components/ui/Input'
 import { Button } from '../../components/ui/Button'
+
+type SessionType = 'public' | 'private'
+type TimeSlot = 'morning' | 'afternoon' | 'evening'
+type LocationOption = 'salawag' | 'langkaan' | 'binan'
 
 type Field = {
   id: string
@@ -32,9 +33,38 @@ type Field = {
   location: string
 }
 
-type TimeSlot = 'morning' | 'afternoon' | 'evening'
+type RentalPackage = {
+  id: string
+  _id?: any
+  name: string
+  discountPct: number
+  description: string
+  basePrice: number
+  minPlayers: number
+  weaponIds: string[]
+  equipmentIds: string[]
+  equipmentCount: number
+  status: string
+}
 
-type SessionType = 'public' | 'private'
+type WeaponItem = {
+  id: string
+  _id?: any
+  name: string
+  category: string
+  status: string
+  price: number
+}
+
+type EquipmentItemDetails = {
+  id: string
+  _id?: any
+  name: string
+  category: string
+  status: string
+  qty: number
+  price: number
+}
 
 type ReservationRecord = {
   id: string
@@ -45,22 +75,11 @@ type ReservationRecord = {
   players: number
 }
 
-type EquipmentItem = {
-  id: string
-  name: string
-  qty: number
-  pricePerPlayer: number
-}
-
-type GameMode = 'squad-deathmatch' | 'ctf' | 'search-and-destroy'
-
-type Package = {
-  id: string
-  name: string
-  mode: GameMode
-  basePrice: number
-  equipment: EquipmentItem[]
-  minPlayers: number
+type PackageRecommendationPrefill = {
+  fromPackageRecommendation?: boolean
+  players?: number
+  sessionType?: SessionType
+  selectedPackageId?: string
 }
 
 const fields: Field[] = [
@@ -69,18 +88,10 @@ const fields: Field[] = [
   { id: 'field-3', name: 'Forest', location: 'Training Block / West Bay' },
 ]
 
-const GAME_MODES: { id: GameMode; label: string; detail: string }[] = [
-  {
-    id: 'squad-deathmatch',
-    label: 'Squad Deathmatch',
-    detail: 'Fast rounds with tactical respawns and squad roles.',
-  },
-  { id: 'ctf', label: 'Capture the Flag', detail: 'Objective-based control with organized pushes.' },
-  {
-    id: 'search-and-destroy',
-    label: 'Search & Destroy',
-    detail: 'Limited lives, high coordination, clean communication.',
-  },
+const locationOptions: { id: LocationOption; name: string; detail: string }[] = [
+  { id: 'salawag', name: 'Delta Stronghold (Salawag)', detail: 'CQB-ready facilities and briefing rooms.' },
+  { id: 'langkaan', name: 'Delta Stronghold (Langkaan)', detail: 'Open fields, staging area, and amenities.' },
+  { id: 'binan', name: 'LOMA Binan Laguna', detail: 'Training lanes for teams and beginners.' },
 ]
 
 const slotLabels: Record<TimeSlot, string> = {
@@ -88,6 +99,16 @@ const slotLabels: Record<TimeSlot, string> = {
   afternoon: 'Afternoon',
   evening: 'Evening',
 }
+
+const timeSlots: TimeSlot[] = ['morning', 'afternoon', 'evening']
+
+// Existing reservations consuming capacity
+const existingReservations: ReservationRecord[] = [
+  { id: 'r-1001', dateISO: '2026-07-23', fieldId: 'field-1', slot: 'morning', sessionType: 'public', players: 12 },
+  { id: 'r-1002', dateISO: '2026-07-23', fieldId: 'field-1', slot: 'morning', sessionType: 'private', players: 10 },
+  { id: 'r-1003', dateISO: '2026-07-24', fieldId: 'field-2', slot: 'evening', sessionType: 'public', players: 14 },
+  { id: 'r-1004', dateISO: '2026-07-25', fieldId: 'field-3', slot: 'afternoon', sessionType: 'public', players: 18 },
+]
 
 function toISODate(d: Date) {
   const pad = (n: number) => String(n).padStart(2, '0')
@@ -99,117 +120,6 @@ function addDays(date: Date, days: number) {
   d.setDate(d.getDate() + days)
   return d
 }
-
-// Fake data: existing reservations already consume capacity
-const existingReservations: ReservationRecord[] = [
-  {
-    id: 'r-1001',
-    dateISO: toISODate(addDays(new Date(), 1)),
-    fieldId: 'field-1',
-    slot: 'morning',
-    sessionType: 'public',
-    players: 12,
-  },
-  {
-    id: 'r-1002',
-    dateISO: toISODate(addDays(new Date(), 1)),
-    fieldId: 'field-1',
-    slot: 'morning',
-    sessionType: 'private',
-    players: 10,
-  },
-  {
-    id: 'r-1003',
-    dateISO: toISODate(addDays(new Date(), 2)),
-    fieldId: 'field-2',
-    slot: 'evening',
-    sessionType: 'public',
-    players: 14,
-  },
-  {
-    id: 'r-1004',
-    dateISO: toISODate(addDays(new Date(), 3)),
-    fieldId: 'field-3',
-    slot: 'afternoon',
-    sessionType: 'public',
-    players: 18,
-  },
-]
-
-const packages: Package[] = [
-  {
-    id: 'pkg-squad-1',
-    name: 'Sentry Core (Small Unit)',
-    mode: 'squad-deathmatch',
-    basePrice: 550,
-    minPlayers: 4,
-    equipment: [
-      { id: 'eq-vest', name: 'Tactical Vest', qty: 1, pricePerPlayer: 90 },
-      { id: 'eq-mask', name: 'Protective Mask', qty: 1, pricePerPlayer: 60 },
-      { id: 'eq-goggles', name: 'Clear Goggles', qty: 1, pricePerPlayer: 45 },
-    ],
-  },
-  {
-    id: 'pkg-squad-2',
-    name: 'Tactical Advance (Squad)',
-    mode: 'squad-deathmatch',
-    basePrice: 720,
-    minPlayers: 6,
-    equipment: [
-      { id: 'eq-vest', name: 'Tactical Vest', qty: 1, pricePerPlayer: 110 },
-      { id: 'eq-mask', name: 'Protective Mask', qty: 1, pricePerPlayer: 75 },
-      { id: 'eq-mag', name: 'Extra Magazine', qty: 1, pricePerPlayer: 55 },
-    ],
-  },
-  {
-    id: 'pkg-ctf-1',
-    name: 'Objective Handler (CTF)',
-    mode: 'ctf',
-    basePrice: 640,
-    minPlayers: 5,
-    equipment: [
-      { id: 'eq-vest', name: 'Tactical Vest', qty: 1, pricePerPlayer: 95 },
-      { id: 'eq-band', name: 'Flag Band', qty: 1, pricePerPlayer: 40 },
-      { id: 'eq-mask', name: 'Protective Mask', qty: 1, pricePerPlayer: 65 },
-    ],
-  },
-  {
-    id: 'pkg-ctf-2',
-    name: 'Urban Sprint (CTF Heavy)',
-    mode: 'ctf',
-    basePrice: 820,
-    minPlayers: 7,
-    equipment: [
-      { id: 'eq-vest', name: 'Tactical Vest', qty: 1, pricePerPlayer: 120 },
-      { id: 'eq-mask', name: 'Protective Mask', qty: 1, pricePerPlayer: 85 },
-      { id: 'eq-radio', name: 'Ops Radio Band', qty: 1, pricePerPlayer: 60 },
-    ],
-  },
-  {
-    id: 'pkg-snd-1',
-    name: 'Reconline (S&D Standard)',
-    mode: 'search-and-destroy',
-    basePrice: 690,
-    minPlayers: 4,
-    equipment: [
-      { id: 'eq-mask', name: 'Protective Mask', qty: 1, pricePerPlayer: 70 },
-      { id: 'eq-goggles', name: 'Clear Goggles', qty: 1, pricePerPlayer: 50 },
-      { id: 'eq-vest', name: 'Tactical Vest', qty: 1, pricePerPlayer: 100 },
-    ],
-  },
-  {
-    id: 'pkg-snd-2',
-    name: 'Night Ops (S&D Elite)',
-    mode: 'search-and-destroy',
-    basePrice: 860,
-    minPlayers: 6,
-    equipment: [
-      { id: 'eq-vest', name: 'Tactical Vest', qty: 1, pricePerPlayer: 130 },
-      { id: 'eq-mask', name: 'Protective Mask', qty: 1, pricePerPlayer: 95 },
-      { id: 'eq-armor', name: 'Reinforced Plate', qty: 1, pricePerPlayer: 65 },
-    ],
-  },
-]
 
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n))
@@ -226,136 +136,208 @@ function slotSort(a: TimeSlot, b: TimeSlot) {
   return order.indexOf(a) - order.indexOf(b)
 }
 
-type PackageRecommendationPrefill = {
-  fromPackageRecommendation?: boolean
-  players?: number
-  sessionType?: SessionType
-  mode?: GameMode
-  selectedPackageId?: string
-}
-
 export function ReservationCalendarPage_FIXED() {
   const location = useLocation()
   const today = useMemo(() => new Date(), [])
-
   const { user } = useAuth()
-
-  const [step, setStep] = useState<1 | 2 | 3 | 4>(1)
-  const [isConfirming, setIsConfirming] = useState(false)
 
   const packagePrefill = (location.state as PackageRecommendationPrefill | null)?.fromPackageRecommendation
     ? (location.state as PackageRecommendationPrefill)
     : undefined
 
+  const [step, setStep] = useState<1 | 2 | 3 | 4>(1)
+  const [isConfirming, setIsConfirming] = useState(false)
+  const [packages, setPackages] = useState<RentalPackage[]>([])
+  const [weapons, setWeapons] = useState<WeaponItem[]>([])
+  const [equipment, setEquipment] = useState<EquipmentItemDetails[]>([])
+  const [loadingPackages, setLoadingPackages] = useState(true)
 
-  const dates = useMemo(() => Array.from({ length: 7 }).map((_, i) => addDays(today, i)), [today])
-
-
-  const [waiverSubmitted, setWaiverSubmitted] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem('waiver_submitted') === '1'
-    } catch (e) {
-      return false
-    }
-  })
-  const [fieldId, setFieldId] = useState(fields[0].id)
+  const [selectedLocation, setSelectedLocation] = useState<LocationOption>('salawag')
+  const [selectedFieldIds, setSelectedFieldIds] = useState<string[]>([fields[0].id])
   const [dateISO, setDateISO] = useState(toISODate(addDays(today, 1)))
   const [slot, setSlot] = useState<TimeSlot>('evening')
   const [sessionType, setSessionType] = useState<SessionType>(packagePrefill?.sessionType ?? 'public')
   const [players, setPlayers] = useState(packagePrefill?.players ?? 8)
   const [playersInput, setPlayersInput] = useState(String(packagePrefill?.players ?? 8))
-
-  const [mode, setMode] = useState<GameMode>(packagePrefill?.mode ?? 'squad-deathmatch')
-  const [selectedPackageId, setSelectedPackageId] = useState<string>(
-    packagePrefill?.selectedPackageId ?? packages.find((p) => p.mode === 'squad-deathmatch')?.id ?? packages[0].id,
-  )
-
   const [notes, setNotes] = useState('')
+  const [selectedPackageId, setSelectedPackageId] = useState<string>('')
+
+  // Fetch real packages, weapons, and equipment from API
+  useEffect(() => {
+    let cancelled = false
+    const fetchData = async () => {
+      try {
+        const [pkgRes, wepRes, eqRes] = await Promise.all([
+          apiGet<{ ok: boolean; data: any[] }>('/api/packages?limit=200'),
+          apiGet<{ ok: boolean; data: any[] }>('/api/weapons?limit=200'),
+          apiGet<{ ok: boolean; data: any[] }>('/api/equipments?limit=200'),
+        ])
+
+        if (cancelled) return
+
+        // Parse packages
+        const pkgDocs = Array.isArray(pkgRes?.data) ? pkgRes.data : []
+        const parsedPackages: RentalPackage[] = pkgDocs
+          .filter((d: any) => d.status === 'active' || !d.status)
+          .map((d: any) => ({
+            id: d.id ?? (d._id ? String(d._id) : undefined),
+            _id: d._id,
+            name: d.name || 'Unnamed package',
+            discountPct: typeof d.discountPct === 'number' ? d.discountPct : 0,
+            description: d.description || '',
+            basePrice: typeof d.basePrice === 'number' ? d.basePrice : 0,
+            minPlayers: typeof d.minPlayers === 'number' ? d.minPlayers : 1,
+            weaponIds: Array.isArray(d.weaponIds) ? d.weaponIds : [],
+            equipmentIds: Array.isArray(d.equipmentIds) ? d.equipmentIds : [],
+            equipmentCount: (d.weaponIds?.length || 0) + (d.equipmentIds?.length || 0),
+            status: d.status || 'active',
+          }))
+        setPackages(parsedPackages)
+
+        // Parse weapons
+        const wepDocs = Array.isArray(wepRes?.data) ? wepRes.data : []
+        setWeapons(wepDocs.map((d: any) => ({
+          id: d.id ?? (d._id ? String(d._id) : undefined),
+          _id: d._id,
+          name: d.name || 'Unnamed weapon',
+          category: d.category || 'rifles',
+          status: d.status || 'available',
+          price: typeof d.price === 'number' ? d.price : 0,
+        })))
+
+        // Parse equipment
+        const eqDocs = Array.isArray(eqRes?.data) ? eqRes.data : []
+        setEquipment(eqDocs.map((d: any) => ({
+          id: d.id ?? (d._id ? String(d._id) : undefined),
+          _id: d._id,
+          name: d.name || 'Unnamed equipment',
+          category: d.category || 'gear',
+          status: d.status || 'available',
+          qty: typeof d.qty === 'number' ? d.qty : 1,
+          price: typeof d.price === 'number' ? d.price : 0,
+        })))
+      } catch (e: any) {
+        if (!cancelled) toast.error(String(e?.message || e))
+      } finally {
+        if (!cancelled) setLoadingPackages(false)
+      }
+    }
+    fetchData()
+    return () => { cancelled = true }
+  }, [])
+
+  // Set selected package from prefill or first available
+  useEffect(() => {
+    if (packages.length > 0 && !selectedPackageId) {
+      const prefillId = packagePrefill?.selectedPackageId
+      setSelectedPackageId(prefillId && packages.find((p) => p.id === prefillId) ? prefillId : packages[0].id)
+    }
+  }, [packages, packagePrefill?.selectedPackageId, selectedPackageId])
 
   const selectedPackage = useMemo(
     () => packages.find((p) => p.id === selectedPackageId) ?? packages[0],
-    [selectedPackageId],
+    [packages, selectedPackageId],
   )
 
   const effectiveMinPlayers = useMemo(
-    () => Math.max(selectedPackage.minPlayers, sessionType === 'private' ? 10 : 1),
-    [selectedPackage.minPlayers, sessionType],
+    () => selectedPackage ? Math.max(selectedPackage.minPlayers, sessionType === 'private' ? 10 : 1) : 1,
+    [selectedPackage, sessionType],
   )
 
+  const allowedFieldIds = useMemo(() => {
+    if (players <= 10) return ['field-1']
+    if (players <= 20) return ['field-1', 'field-2']
+    return ['field-1', 'field-2', 'field-3']
+  }, [players])
+
+  // Ensure selected fields are valid
   useEffect(() => {
-    if (players < effectiveMinPlayers) {
-      setPlayers(effectiveMinPlayers)
-      setPlayersInput(String(effectiveMinPlayers))
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effectiveMinPlayers])
+    setSelectedFieldIds((prev) => {
+      const filtered = prev.filter((id) => allowedFieldIds.includes(id))
+      if (filtered.length === 0) return [allowedFieldIds[0] || 'field-1']
+      return filtered
+    })
+  }, [allowedFieldIds])
 
-  const existingForSelection = useMemo(
-    () => existingReservations.filter((r) => r.dateISO === dateISO && r.fieldId === fieldId && r.slot === slot),
-    [dateISO, fieldId, slot],
-  )
+  const usedPlayers = useMemo(() => {
+    return existingReservations
+      .filter((r) => r.dateISO === dateISO && selectedFieldIds.includes(r.fieldId) && r.slot === slot)
+      .reduce((sum, r) => sum + r.players, 0)
+  }, [dateISO, selectedFieldIds, slot])
 
-  const usedPlayers = useMemo(() => existingForSelection.reduce((sum, r) => sum + r.players, 0), [existingForSelection])
+  const maxCapacity = useMemo(() => {
+    return selectedFieldIds.reduce((sum, fieldId) => sum + capacityFor(fieldId, slot), 0)
+  }, [selectedFieldIds, slot])
 
-  const maxCapacity = useMemo(() => capacityFor(fieldId, slot), [fieldId, slot])
-
-  const remainingSlots = useMemo(() => maxCapacity - usedPlayers, [maxCapacity, usedPlayers])
-
+  const remainingSlots = maxCapacity - usedPlayers
   const canProceed = remainingSlots >= players
 
   const slotOverview = useMemo(() => {
     const cap = maxCapacity
-    const pct = cap === 0 ? 0 : Math.round((usedPlayers / cap) * 100)
+    const pct = cap > 0 ? Math.round((usedPlayers / cap) * 100) : 0
     return { cap, pct: clamp(pct, 0, 100) }
   }, [maxCapacity, usedPlayers])
 
-  const recommendedPackages = useMemo(() => {
-    return packages
-      .filter((p) => p.mode === mode)
-      .map((p) => ({
-        ...p,
-        score: Math.abs(players - p.minPlayers),
-      }))
-      .sort((a, b) => a.score - b.score)
-  }, [mode, players])
+  // Get weapon details for the package
+  const packageWeapons = useMemo(() => {
+    if (!selectedPackage) return []
+    return selectedPackage.weaponIds
+      .map((wid) => weapons.find((w) => w.id === wid))
+      .filter(Boolean) as WeaponItem[]
+  }, [selectedPackage, weapons])
+
+  // Get equipment details for the package
+  const packageEquipment = useMemo(() => {
+    if (!selectedPackage) return []
+    return selectedPackage.equipmentIds
+      .map((eid) => equipment.find((e) => e.id === eid))
+      .filter(Boolean) as EquipmentItemDetails[]
+  }, [selectedPackage, equipment])
+
+  // Calculate equipment total per player
+  const equipmentTotalPerPlayer = useMemo(() => {
+    const weaponPrices = packageWeapons.reduce((sum, w) => sum + (w.price || 0), 0)
+    const equipmentPrices = packageEquipment.reduce((sum, e) => sum + (e.price || 0), 0)
+    return weaponPrices + equipmentPrices
+  }, [packageWeapons, packageEquipment])
 
   const dynamicPricing = useMemo(() => {
-    const equipmentTotalPerPlayer = selectedPackage.equipment.reduce((sum, e) => sum + e.pricePerPlayer, 0)
+    if (!selectedPackage) {
+      return { total: 0, perPlayer: 0, discountPct: 0, discountLabel: '—', equipmentTotalPerPlayer: 0, sessionMultiplier: 1, savings: 0, originalTotal: 0 }
+    }
     const sessionMultiplier = sessionType === 'private' ? 1.25 : 1.0
-    const discountPct = players >= 12 ? 0.1 : players >= 8 ? 0.06 : 0.0
-
-    const base = selectedPackage.basePrice + equipmentTotalPerPlayer
-    const totalBeforeDiscount = base * players * sessionMultiplier
-    const total = Math.round(totalBeforeDiscount * (1 - discountPct))
+    const basePerPlayer = selectedPackage.basePrice + equipmentTotalPerPlayer
+    const discountPct = selectedPackage.discountPct || 0
+    const totalBeforeMultiplier = basePerPlayer * players
+    const total = Math.round(totalBeforeMultiplier * sessionMultiplier)
+    const originalTotal = Math.round(totalBeforeMultiplier * sessionMultiplier)
+    const savings = Math.max(0, originalTotal - total)
 
     return {
       total,
-      perPlayer: Math.round(total / players),
+      perPlayer: Math.round(total / Math.max(players, 1)),
       discountPct,
-      discountLabel: discountPct > 0 ? `${Math.round(discountPct * 100)}%` : '—',
+      discountLabel: discountPct > 0 ? `${discountPct}%` : '—',
       equipmentTotalPerPlayer,
       sessionMultiplier,
+      savings,
+      originalTotal,
     }
-  }, [players, selectedPackage, sessionType])
+  }, [players, selectedPackage, sessionType, equipmentTotalPerPlayer])
 
   const reservationSummary = useMemo(() => {
+    const selectedFields = fields.filter((f) => selectedFieldIds.includes(f.id))
     return {
-      field: fields.find((f) => f.id === fieldId)!,
+      locationLabel: locationOptions.find((loc) => loc.id === selectedLocation)?.name ?? 'Location',
+      fields: selectedFields,
       dateISO,
       slotLabel: slotLabels[slot],
       sessionTypeLabel: sessionType === 'private' ? 'Private Session' : 'Public Session',
       players,
-      gameModeLabel: GAME_MODES.find((m) => m.id === mode)?.label ?? 'Game Mode',
-      packageName: selectedPackage.name,
+      packageName: selectedPackage?.name || 'No package selected',
       notes,
     }
-  }, [dateISO, fieldId, mode, notes, players, selectedPackage.name, sessionType, slot])
-
-  const handleChangeMode = (nextMode: GameMode) => {
-    setMode(nextMode)
-    const nextPkg = packages.find((p) => p.mode === nextMode)
-    if (nextPkg) setSelectedPackageId(nextPkg.id)
-  }
+  }, [dateISO, selectedFieldIds, selectedLocation, selectedPackage?.name, sessionType, slot, players, notes])
 
   const StepHeader = ({ title, subtitle }: { title: string; subtitle: string }) => (
     <div>
@@ -364,28 +346,33 @@ export function ReservationCalendarPage_FIXED() {
         <span className="uppercase tracking-[0.18em]">Reservation</span>
       </div>
       <h1 className="mt-3 text-3xl font-bold">{title}</h1>
-      <p className="mt-1 text-muted text-sm">{subtitle}</p>
+      <p className="mt-1 text-sm text-muted">{subtitle}</p>
     </div>
   )
 
-  const timeSlots: TimeSlot[] = ['morning', 'afternoon', 'evening']
-
-  async function handleConfirm() {
+  const handleConfirm = async () => {
     if (!user?.id) {
-      alert('Please login to continue.')
+      toast.error('Please login to continue.')
       return
     }
 
-    if (!canProceed || players < effectiveMinPlayers) return
+    if (!canProceed || players < effectiveMinPlayers || !selectedPackage) {
+      toast.error('Invalid reservation details. Please check your selections.')
+      return
+    }
+
+    setIsConfirming(true)
 
     try {
-      setIsConfirming(true)
+      const selectedLocationName = locationOptions.find((loc) => loc.id === selectedLocation)?.name ?? selectedLocation
+      const selectedFieldNames = fields.filter((f) => selectedFieldIds.includes(f.id)).map((f) => f.name).join(', ')
 
       const payload = {
         userId: user.id,
-        selectedPackageId,
-        mode,
-        fieldId,
+        selectedPackageId: selectedPackage.id,
+        fieldIds: selectedFieldIds,
+        locationId: selectedLocation,
+        locationName: selectedLocationName,
         reservationDate: dateISO,
         reservationTime: slot,
         sessionType,
@@ -393,42 +380,39 @@ export function ReservationCalendarPage_FIXED() {
         totalAmount: dynamicPricing.total,
         notes,
         reservationStatus: 'pending',
-        // Ensure gameplay auto-create can derive schedule/game/package
-        // The reservation confirmation workflow uses these fields.
         selectedGameplayName: selectedPackage.name,
         packageName: selectedPackage.name,
       }
 
-
-      console.log('Creating reservation payload:', payload)
       const result = await apiPost<{ ok: boolean; insertedId?: string; data?: any }>('/api/reservations', payload)
 
-
       const reservationId = result?.data?.id ?? result?.insertedId ?? result?.data?._id
-      if (!reservationId) throw new Error('Reservation id missing from API response')
+      if (!reservationId) throw new Error('Reservation ID missing from API response')
 
       localStorage.setItem('active_reservation_id', String(reservationId))
       setStep(4)
-    } catch (e) {
-      alert(e instanceof Error ? e.message : 'Failed to confirm reservation')
+      toast.success('Reservation submitted successfully!')
+    } catch (e: any) {
+      toast.error(e instanceof Error ? e.message : 'Failed to confirm reservation')
     } finally {
       setIsConfirming(false)
+    }
+  }
+
+  const getStepTitle = () => {
+    switch (step) {
+      case 1: return 'Choose Field & Slot'
+      case 2: return 'Select Package & Equipment'
+      case 3: return 'Reservation Summary'
+      default: return 'Confirm Reservation'
     }
   }
 
   return (
     <div className="space-y-4">
       <StepHeader
-        title={
-          step === 1
-            ? 'Choose Field & Slot'
-            : step === 2
-              ? 'Select Equipment & Mode'
-              : step === 3
-                ? 'Reservation Summary'
-                : 'Confirm Reservation'
-        }
-        subtitle="Mobile-first reservation flow with live slot prevention (prototype)."
+        title={getStepTitle()}
+        subtitle="Mobile-first reservation flow with live slot prevention."
       />
 
       {/* Steps */}
@@ -440,21 +424,19 @@ export function ReservationCalendarPage_FIXED() {
             <button
               key={s}
               type="button"
-              onClick={() => (s <= step ? setStep(s) : undefined)}
+              onClick={() => s <= step && setStep(s)}
               className={[
-                'rounded-2xl border border-white/10 bg-white/5 p-3 text-left transition',
-                active ? 'ring-2 ring-accent/40' : '',
-                done ? 'opacity-90' : '',
+                'rounded-2xl border p-3 text-left transition',
+                active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : '',
+                done ? 'border-success/30 bg-success/10' : 'border-white/10 bg-white/5',
+                'hover:bg-white/8'
               ].join(' ')}
-              aria-current={active}
             >
               <div className="flex items-center gap-2">
-                <div
-                  className={[
-                    'grid h-8 w-8 place-items-center rounded-2xl ring-1 ring-white/10',
-                    active ? 'bg-accent/15 text-gold' : done ? 'bg-success/15 text-success' : 'bg-black/30 text-muted',
-                  ].join(' ')}
-                >
+                <div className={[
+                  'grid h-8 w-8 place-items-center rounded-2xl ring-1 ring-white/10',
+                  active ? 'bg-accent/15 text-gold' : done ? 'bg-success/15 text-success' : 'bg-black/30 text-muted',
+                ].join(' ')}>
                   {done ? <FiCheck /> : s}
                 </div>
                 <div>
@@ -468,44 +450,76 @@ export function ReservationCalendarPage_FIXED() {
       </div>
 
       {/* Step 1 */}
-      {step === 1 ? (
+      {step === 1 && (
         <div className="grid gap-4 lg:grid-cols-3">
           <div className="lg:col-span-2 space-y-4">
             <Card className="p-4 md:p-6">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <div className="flex items-center gap-2 text-sm font-bold">
-                    <FiMapPin /> <span>Field</span>
-                  </div>
-                  <p className="mt-1 text-xs text-muted">Pick where your team will operate.</p>
-                </div>
-                <div className="hidden md:flex items-center gap-2 text-xs text-muted">
-                  <FiCalendar />
-                  <span>{dateISO}</span>
-                </div>
+              <div className="flex items-center gap-2 text-sm font-bold">
+                <FiMapPin /> <span>Location</span>
               </div>
+              <p className="mt-1 text-xs text-muted">Choose the venue before selecting your field.</p>
 
-              <div className="mt-4 grid gap-3 sm:grid-cols-3">
-                {fields.map((f) => {
-                  const active = f.id === fieldId
+              <div className="mt-4 grid gap-3 md:grid-cols-3">
+                {locationOptions.map((loc) => {
+                  const active = loc.id === selectedLocation
                   return (
                     <button
-                      key={f.id}
+                      key={loc.id}
                       type="button"
-                      onClick={() => setFieldId(f.id)}
+                      onClick={() => setSelectedLocation(loc.id)}
                       className={[
                         'rounded-2xl border p-3 text-left transition',
-                        active
-                          ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25'
-                          : 'border-white/10 bg-white/5 hover:bg-white/8',
+                        active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
                       ].join(' ')}
                     >
                       <div className="flex items-center justify-between gap-2">
-                        <div className="text-sm font-bold">{f.name}</div>
+                        <div className="text-sm font-bold">{loc.name}</div>
                         {active ? <FiCheck className="text-gold" /> : null}
                       </div>
-                      <div className="mt-1 text-xs text-muted">{f.location}</div>
+                      <div className="mt-1 text-xs text-muted">{loc.detail}</div>
                     </button>
+                  )
+                })}
+              </div>
+            </Card>
+
+            <Card className="p-4 md:p-6">
+              <div className="flex items-center gap-2 text-sm font-bold">
+                <FiMapPin /> <span>Field</span>
+              </div>
+              <p className="mt-1 text-xs text-muted">Pick the specific field at the selected location.</p>
+
+              <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                {fields.map((f) => {
+                  const active = selectedFieldIds.includes(f.id)
+                  const allowed = allowedFieldIds.includes(f.id)
+                  return (
+                    <label
+                      key={f.id}
+                      className={[
+                        'flex items-start gap-3 rounded-2xl border p-3 text-left transition',
+                        active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
+                        !allowed ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer',
+                      ].join(' ')}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={active}
+                        disabled={!allowed}
+                        onChange={() => {
+                          setSelectedFieldIds((prev) => {
+                            if (prev.includes(f.id)) return prev.filter((id) => id !== f.id)
+                            if (!allowedFieldIds.includes(f.id)) return prev
+                            return [...prev, f.id]
+                          })
+                        }}
+                        className="mt-1 h-4 w-4 rounded border-white/20 bg-transparent accent-accent"
+                      />
+                      <div className="flex-1">
+                        <div className="text-sm font-bold">{f.name}</div>
+                        <div className="mt-1 text-xs text-muted">{f.location}</div>
+                      </div>
+                    </label>
                   )
                 })}
               </div>
@@ -515,13 +529,14 @@ export function ReservationCalendarPage_FIXED() {
               <div className="flex items-center gap-2 text-sm font-bold">
                 <FiCalendar /> <span>Date & Time</span>
               </div>
-              <p className="mt-1 text-xs text-muted">Select a date and time window. Slot prevention locks full schedules.</p>
+              <p className="mt-1 text-xs text-muted">Select a date and time window.</p>
 
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
                 <div>
                   <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Date</div>
                   <div className="mt-2 grid grid-cols-4 gap-2">
-                    {dates.map((d) => {
+                    {Array.from({ length: 7 }).map((_, i) => {
+                      const d = addDays(today, i)
                       const iso = toISODate(d)
                       const active = iso === dateISO
                       return (
@@ -531,9 +546,7 @@ export function ReservationCalendarPage_FIXED() {
                           onClick={() => setDateISO(iso)}
                           className={[
                             'rounded-2xl border px-2 py-2 text-xs transition',
-                            active
-                              ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25'
-                              : 'border-white/10 bg-white/5 hover:bg-white/8',
+                            active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
                           ].join(' ')}
                         >
                           <div className="font-bold">{d.getDate()}</div>
@@ -551,9 +564,9 @@ export function ReservationCalendarPage_FIXED() {
                   <div className="mt-2 grid grid-cols-1 gap-2">
                     {timeSlots.sort(slotSort).map((s) => {
                       const active = s === slot
-                      const cap = capacityFor(fieldId, s)
+                      const cap = selectedFieldIds.reduce((sum, fieldId) => sum + capacityFor(fieldId, s), 0)
                       const used = existingReservations
-                        .filter((r) => r.dateISO === dateISO && r.fieldId === fieldId && r.slot === s)
+                        .filter((r) => r.dateISO === dateISO && selectedFieldIds.includes(r.fieldId) && r.slot === s)
                         .reduce((sum, r) => sum + r.players, 0)
                       const remaining = cap - used
 
@@ -564,9 +577,7 @@ export function ReservationCalendarPage_FIXED() {
                           onClick={() => setSlot(s)}
                           className={[
                             'rounded-2xl border p-3 text-left transition',
-                            active
-                              ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25'
-                              : 'border-white/10 bg-white/5 hover:bg-white/8',
+                            active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
                           ].join(' ')}
                         >
                           <div className="flex items-center justify-between gap-3">
@@ -577,17 +588,11 @@ export function ReservationCalendarPage_FIXED() {
                                 <span>{remaining <= 0 ? 'No slots' : `${remaining} slots left`}</span>
                               </div>
                             </div>
-                            <div
-                              className={[
-                                'rounded-2xl px-3 py-1 text-xs font-bold',
-                                remaining <= 0
-                                  ? 'bg-danger/15 text-danger'
-                                  : remaining <= 5
-                                    ? 'bg-accent/15 text-gold'
-                                    : 'bg-success/15 text-success',
-                              ].join(' ')}
-                            >
-                              {remaining <= 0 ? 'FULL' : `${remaining}`}
+                            <div className={[
+                              'rounded-2xl px-3 py-1 text-xs font-bold',
+                              remaining <= 0 ? 'bg-danger/15 text-danger' : remaining <= 5 ? 'bg-accent/15 text-gold' : 'bg-success/15 text-success',
+                            ].join(' ')}>
+                              {remaining <= 0 ? 'FULL' : remaining}
                             </div>
                           </div>
                         </button>
@@ -617,7 +622,7 @@ export function ReservationCalendarPage_FIXED() {
                           key={t}
                           type="button"
                           onClick={() => {
-                            const requiredMin = Math.max(selectedPackage.minPlayers, t === 'private' ? 10 : 1)
+                            const requiredMin = Math.max(selectedPackage?.minPlayers || 1, t === 'private' ? 10 : 1)
                             setSessionType(t)
                             if (players < requiredMin) {
                               setPlayers(requiredMin)
@@ -626,9 +631,7 @@ export function ReservationCalendarPage_FIXED() {
                           }}
                           className={[
                             'rounded-2xl border p-3 text-left transition',
-                            active
-                              ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25'
-                              : 'border-white/10 bg-white/5 hover:bg-white/8',
+                            active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
                           ].join(' ')}
                         >
                           <div className="text-sm font-bold">{t === 'private' ? 'Private' : 'Public'}</div>
@@ -650,7 +653,6 @@ export function ReservationCalendarPage_FIXED() {
                         setPlayersInput(String(nextValue))
                       }}
                       className="grid h-10 w-10 place-items-center rounded-2xl border border-white/10 bg-white/5 hover:bg-white/8"
-                      aria-label="Decrease players"
                     >
                       <FiMinus />
                     </button>
@@ -667,9 +669,7 @@ export function ReservationCalendarPage_FIXED() {
                             setPlayers(0)
                             return
                           }
-
                           if (!/^\d+$/.test(raw)) return
-
                           const nextValue = Number(raw)
                           setPlayersInput(raw)
                           setPlayers(nextValue)
@@ -681,12 +681,10 @@ export function ReservationCalendarPage_FIXED() {
                             setPlayers(effectiveMinPlayers)
                             return
                           }
-
                           const safeValue = clamp(currentValue, effectiveMinPlayers, maxCapacity)
                           setPlayersInput(String(safeValue))
                           setPlayers(safeValue)
                         }}
-                        className="[&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                       />
                     </div>
                     <button
@@ -697,7 +695,6 @@ export function ReservationCalendarPage_FIXED() {
                         setPlayersInput(String(nextValue))
                       }}
                       className="grid h-10 w-10 place-items-center rounded-2xl border border-white/10 bg-white/5 hover:bg-white/8"
-                      aria-label="Increase players"
                     >
                       <FiPlus />
                     </button>
@@ -726,21 +723,15 @@ export function ReservationCalendarPage_FIXED() {
 
                     <div className="mt-3 flex items-center justify-between">
                       <div className="text-xs text-muted">Remaining</div>
-                      <div
-                        className={[
-                          'text-xs font-bold rounded-xl px-3 py-1',
-                          remainingSlots <= 0
-                            ? 'bg-danger/15 text-danger'
-                            : remainingSlots < 6
-                              ? 'bg-accent/15 text-gold'
-                              : 'bg-success/15 text-success',
-                        ].join(' ')}
-                      >
+                      <div className={[
+                        'text-xs font-bold rounded-xl px-3 py-1',
+                        remainingSlots <= 0 ? 'bg-danger/15 text-danger' : remainingSlots < 6 ? 'bg-accent/15 text-gold' : 'bg-success/15 text-success',
+                      ].join(' ')}>
                         {remainingSlots <= 0 ? 'FULL' : `${remainingSlots} slots left`}
                       </div>
                     </div>
 
-                    {!canProceed ? (
+                    {!canProceed && (
                       <div className="mt-3 flex items-start gap-3 rounded-2xl bg-danger/10 p-3 ring-1 ring-danger/20">
                         <FiAlertTriangle className="mt-0.5 h-5 w-5 text-danger" />
                         <div>
@@ -750,148 +741,146 @@ export function ReservationCalendarPage_FIXED() {
                           </div>
                         </div>
                       </div>
-                    ) : null}
+                    )}
                   </div>
                 </div>
               </div>
 
               <div className="mt-4 flex flex-col gap-2 sm:flex-row">
                 <Button variant="primary" disabled={!canProceed} onClick={() => setStep(2)}>
-                  Continue
-                  <FiChevronRight />
+                  Continue <FiChevronRight />
                 </Button>
-                <Button
-                  variant="ghost"
-                  onClick={() => {
-                    setFieldId(fields[0].id)
-                    setDateISO(toISODate(addDays(today, 1)))
-                    setSlot('evening')
-                    setSessionType('public')
-                    setPlayers(8)
-                    setPlayersInput('8')
-                  }}
-                >
+                <Button variant="ghost" onClick={() => {
+                  setSelectedFieldIds([fields[0].id])
+                  setDateISO(toISODate(addDays(today, 1)))
+                  setSlot('evening')
+                  setSessionType('public')
+                  setPlayers(8)
+                  setPlayersInput('8')
+                }}>
                   Reset
                 </Button>
               </div>
             </Card>
           </div>
         </div>
-      ) : null}
+      )}
 
       {/* Step 2 */}
-      {step === 2 ? (
+      {step === 2 && (
         <div className="grid gap-4 lg:grid-cols-3">
           <div className="lg:col-span-2 space-y-4">
             <Card className="p-4 md:p-6">
               <div className="flex items-center gap-2 text-sm font-bold">
-                <FiSliders /> <span>Game Mode</span>
+                <FiTag /> <span>Available Packages</span>
               </div>
-              <p className="mt-1 text-xs text-muted">Select a mode. Recommended packages will update automatically.</p>
+              <p className="mt-1 text-xs text-muted">Select a rental package. These are managed by the admin.</p>
 
-              <div className="mt-4 grid gap-3 md:grid-cols-3">
-                {GAME_MODES.map((m) => {
-                  const active = m.id === mode
-                  return (
-                    <button
-                      key={m.id}
-                      type="button"
-                      onClick={() => handleChangeMode(m.id)}
-                      className={[
-                        'rounded-2xl border p-3 text-left transition',
-                        active
-                          ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25'
-                          : 'border-white/10 bg-white/5 hover:bg-white/8',
-                      ].join(' ')}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <div className="text-sm font-bold">{m.label}</div>
-                          <div className="mt-1 text-xs text-muted">{m.detail}</div>
-                        </div>
-                        {active ? <FiCheck className="mt-0.5 text-gold" /> : null}
-                      </div>
-                    </button>
-                  )
-                })}
-              </div>
-            </Card>
-
-            <Card className="p-4 md:p-6">
-              <div className="flex items-center gap-2 text-sm font-bold">
-                <FiTag /> <span>Package Recommendation</span>
-              </div>
-              <p className="mt-1 text-xs text-muted">Compare packages and select the one your group will use.</p>
-
-              <div className="mt-4 grid gap-3 lg:grid-cols-2">
-                {recommendedPackages.slice(0, 2).map((p) => {
-                  const active = p.id === selectedPackageId
-                  const equipmentCount = p.equipment.reduce((sum, e) => sum + e.qty, 0)
-                  return (
-                    <button
-                      key={p.id}
-                      type="button"
-                      onClick={() => setSelectedPackageId(p.id)}
-                      className={[
-                        'rounded-2xl border p-4 text-left transition',
-                        active
-                          ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25'
-                          : 'border-white/10 bg-white/5 hover:bg-white/8',
-                      ].join(' ')}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <div className="text-sm font-bold">{p.name}</div>
-                            <div className="rounded-xl border border-white/10 bg-black/20 px-2 py-1 text-[11px] font-bold text-muted">
-                              Min {p.minPlayers} players
+              {loadingPackages ? (
+                <div className="mt-4 text-sm text-muted">Loading packages...</div>
+              ) : packages.length === 0 ? (
+                <div className="mt-4 text-sm text-muted">No packages available yet. Ask admin to create rental packages.</div>
+              ) : (
+                <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                  {packages.map((pkg) => {
+                    const active = pkg.id === selectedPackageId
+                    return (
+                      <button
+                        key={pkg.id}
+                        type="button"
+                        onClick={() => setSelectedPackageId(pkg.id)}
+                        className={[
+                          'rounded-2xl border p-4 text-left transition',
+                          active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
+                        ].join(' ')}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <div className="text-sm font-bold">{pkg.name}</div>
+                              <div className="rounded-xl border border-white/10 bg-black/20 px-2 py-1 text-[11px] font-bold text-muted">
+                                Min {pkg.minPlayers} players
+                              </div>
                             </div>
+                            {pkg.description && (
+                              <div className="mt-1 text-xs text-muted">{pkg.description}</div>
+                            )}
                           </div>
-                          <div className="mt-2 text-xs text-muted">Includes {equipmentCount} equipment items</div>
+                          {active && <FiCheck className="text-gold" />}
                         </div>
-                        {active ? <FiCheck className="text-gold" /> : null}
-                      </div>
 
-                      <div className="mt-4 flex flex-wrap gap-2">
-                        {p.equipment.slice(0, 3).map((e) => (
-                          <div
-                            key={e.id}
-                            className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-muted"
-                          >
-                            {e.name}
-                          </div>
-                        ))}
-                      </div>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {pkg.weaponIds.length > 0 && (
+                            <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-muted">
+                              {pkg.weaponIds.length} weapon{pkg.weaponIds.length > 1 ? 's' : ''}
+                            </div>
+                          )}
+                          {pkg.equipmentIds.length > 0 && (
+                            <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-muted">
+                              {pkg.equipmentIds.length} equipment items
+                            </div>
+                          )}
+                          {pkg.discountPct > 0 && (
+                            <div className="rounded-xl border border-success/20 bg-success/10 px-3 py-2 text-xs font-semibold text-success">
+                              {pkg.discountPct}% OFF
+                            </div>
+                          )}
+                        </div>
 
-                      <div className="mt-4 flex items-center justify-between">
-                        <div className="text-xs text-muted">Base package</div>
-                        <div className="text-sm font-bold text-accent">₱{p.basePrice.toLocaleString()}</div>
-                      </div>
-                    </button>
-                  )
-                })}
-              </div>
-
-              <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4">
-                <div className="flex items-center gap-2 text-sm font-bold">
-                  <FiShield /> <span>Equipment Availability (Prototype)</span>
+                        <div className="mt-3 flex items-center justify-between">
+                          <div className="text-xs text-muted">Base price (per player)</div>
+                          <div className="text-sm font-bold text-accent">₱{pkg.basePrice.toLocaleString()}</div>
+                        </div>
+                      </button>
+                    )
+                  })}
                 </div>
-                <div className="mt-2 grid gap-2 md:grid-cols-2">
-                  {selectedPackage.equipment.map((e) => (
-                    <div
-                      key={e.id}
-                      className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3"
-                    >
-                      <div>
-                        <div className="text-sm font-bold">{e.name}</div>
-                        <div className="mt-1 text-xs text-muted">Qty {e.qty} / per player</div>
-                      </div>
-                      <div className="text-xs text-muted font-semibold">+₱{e.pricePerPlayer}/player</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
+              )}
             </Card>
+
+            {/* Equipment Details */}
+            {selectedPackage && (packageWeapons.length > 0 || packageEquipment.length > 0) && (
+              <Card className="p-4 md:p-6">
+                <div className="flex items-center gap-2 text-sm font-bold">
+                  <FiShield /> <span>Included Weapons & Equipment</span>
+                </div>
+                <p className="mt-1 text-xs text-muted">From the admin inventory — prices are per item rental.</p>
+
+                {packageWeapons.length > 0 && (
+                  <div className="mt-4">
+                    <div className="text-[11px] uppercase tracking-widest text-muted mb-2">Weapons</div>
+                    <div className="grid gap-2 md:grid-cols-2">
+                      {packageWeapons.map((w) => (
+                        <div key={w.id} className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+                          <div>
+                            <div className="text-sm font-bold">{w.name}</div>
+                            <div className="mt-1 text-xs text-muted">{w.category.toUpperCase()} • {w.status}</div>
+                          </div>
+                          <div className="text-xs font-semibold text-accent">₱{w.price}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {packageEquipment.length > 0 && (
+                  <div className="mt-4">
+                    <div className="text-[11px] uppercase tracking-widest text-muted mb-2">Equipment</div>
+                    <div className="grid gap-2 md:grid-cols-2">
+                      {packageEquipment.map((e) => (
+                        <div key={e.id} className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+                          <div>
+                            <div className="text-sm font-bold">{e.name}</div>
+                            <div className="mt-1 text-xs text-muted">{e.category.toUpperCase()} • Qty: {e.qty}</div>
+                          </div>
+                          <div className="text-xs font-semibold text-accent">₱{e.price}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </Card>
+            )}
           </div>
 
           <div className="space-y-4">
@@ -902,16 +891,12 @@ export function ReservationCalendarPage_FIXED() {
               <p className="mt-1 text-xs text-muted">Prevent invalid selections before going to summary.</p>
 
               <div className="mt-4 space-y-3">
-                <div
-                  className={[
-                    'rounded-2xl border p-4',
-                    players < effectiveMinPlayers
-                      ? 'border-danger/30 bg-danger/10'
-                      : 'border-white/10 bg-white/5',
-                  ].join(' ')}
-                >
+                <div className={[
+                  'rounded-2xl border p-4',
+                  players < effectiveMinPlayers ? 'border-danger/30 bg-danger/10' : 'border-white/10 bg-white/5',
+                ].join(' ')}>
                   <div className="text-sm font-bold">Minimum players</div>
-                  <div className="mt-1 text-xs text-muted">Package requires {selectedPackage.minPlayers} players</div>
+                  <div className="mt-1 text-xs text-muted">Package requires {selectedPackage?.minPlayers || '—'} players</div>
                   {players < effectiveMinPlayers ? (
                     <div className="mt-2 text-xs font-semibold text-danger">Increase players to continue.</div>
                   ) : (
@@ -933,9 +918,12 @@ export function ReservationCalendarPage_FIXED() {
                     </div>
                   </div>
 
-                  {dynamicPricing.discountPct > 0 ? (
-                    <div className="mt-2 text-xs text-muted">Discount applied: {dynamicPricing.discountLabel}</div>
-                  ) : null}
+                  {dynamicPricing.discountPct > 0 && (
+                    <div className="mt-2 text-xs text-muted">
+                      Discount applied: {dynamicPricing.discountLabel}
+                      {dynamicPricing.savings > 0 && ` (save ₱${dynamicPricing.savings.toLocaleString()})`}
+                    </div>
+                  )}
                 </div>
 
                 <div>
@@ -949,25 +937,22 @@ export function ReservationCalendarPage_FIXED() {
               </div>
 
               <div className="mt-4 flex flex-col gap-2 sm:flex-row">
-                <Button variant="ghost" onClick={() => setStep(1)}>
-                  Back
-                </Button>
+                <Button variant="ghost" onClick={() => setStep(1)}>Back</Button>
                 <Button
                   variant="primary"
-                  disabled={players < effectiveMinPlayers || !canProceed}
+                  disabled={players < effectiveMinPlayers || !canProceed || !selectedPackage}
                   onClick={() => setStep(3)}
                 >
-                  Continue
-                  <FiChevronRight />
+                  Continue <FiChevronRight />
                 </Button>
               </div>
             </Card>
           </div>
         </div>
-      ) : null}
+      )}
 
       {/* Step 3 */}
-      {step === 3 ? (
+      {step === 3 && (
         <div className="grid gap-4 lg:grid-cols-3">
           <div className="lg:col-span-2 space-y-4">
             <Card className="p-4 md:p-6">
@@ -978,9 +963,14 @@ export function ReservationCalendarPage_FIXED() {
 
               <div className="mt-4 grid gap-3 md:grid-cols-2">
                 <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                  <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Location</div>
+                  <div className="mt-2 text-sm font-bold">{reservationSummary.locationLabel}</div>
+                  <div className="mt-1 text-xs text-muted">{reservationSummary.fields.map((field) => field.name).join(', ')}</div>
+                </div>
+                <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
                   <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Field</div>
-                  <div className="mt-2 text-sm font-bold">{reservationSummary.field.name}</div>
-                  <div className="mt-1 text-xs text-muted">{reservationSummary.field.location}</div>
+                  <div className="mt-2 text-sm font-bold">{reservationSummary.fields.map((field) => field.name).join(', ')}</div>
+                  <div className="mt-1 text-xs text-muted">{reservationSummary.fields.map((field) => field.location).join(' • ')}</div>
                 </div>
                 <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
                   <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Date / Slot</div>
@@ -992,19 +982,18 @@ export function ReservationCalendarPage_FIXED() {
                   <div className="mt-2 text-sm font-bold">{reservationSummary.sessionTypeLabel}</div>
                   <div className="mt-1 text-xs text-muted">{reservationSummary.players} players</div>
                 </div>
-                <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                  <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Game / Package</div>
-                  <div className="mt-2 text-sm font-bold">{reservationSummary.gameModeLabel}</div>
-                  <div className="mt-1 text-xs text-muted">{reservationSummary.packageName}</div>
+                <div className="rounded-2xl border border-white/10 bg-white/5 p-4 md:col-span-2">
+                  <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Package</div>
+                  <div className="mt-2 text-sm font-bold">{reservationSummary.packageName}</div>
                 </div>
               </div>
 
-              {reservationSummary.notes ? (
+              {reservationSummary.notes && (
                 <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4">
                   <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Notes</div>
                   <div className="mt-2 text-sm text-text">{reservationSummary.notes}</div>
                 </div>
-              ) : null}
+              )}
             </Card>
 
             <Card className="p-4 md:p-6">
@@ -1014,12 +1003,12 @@ export function ReservationCalendarPage_FIXED() {
 
               <div className="mt-4 grid gap-3 md:grid-cols-2">
                 <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                  <div className="text-xs text-muted">Base package</div>
-                  <div className="mt-2 text-sm font-bold">₱{selectedPackage.basePrice.toLocaleString()}</div>
+                  <div className="text-xs text-muted">Base package (per player)</div>
+                  <div className="mt-2 text-sm font-bold">₱{selectedPackage?.basePrice.toLocaleString() || '0'}</div>
                 </div>
                 <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
                   <div className="text-xs text-muted">Equipment add-ons (per player)</div>
-                  <div className="mt-2 text-sm font-bold">₱{dynamicPricing.equipmentTotalPerPlayer.toLocaleString()}</div>
+                  <div className="mt-2 text-sm font-bold">₱{equipmentTotalPerPlayer.toLocaleString()}</div>
                 </div>
                 <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
                   <div className="text-xs text-muted">Session multiplier</div>
@@ -1030,6 +1019,12 @@ export function ReservationCalendarPage_FIXED() {
                   <div className="mt-2 text-sm font-bold">{dynamicPricing.discountLabel}</div>
                 </div>
               </div>
+
+              {dynamicPricing.savings > 0 && (
+                <div className="mt-3 text-xs text-muted">
+                  You save ₱{dynamicPricing.savings.toLocaleString()} compared to the original price
+                </div>
+              )}
 
               <div className="mt-4 rounded-2xl border border-accent/30 bg-accent/10 p-4">
                 <div className="flex items-end justify-between gap-3">
@@ -1049,138 +1044,46 @@ export function ReservationCalendarPage_FIXED() {
           <div className="space-y-4">
             <Card className="p-4 md:p-6">
               <div className="flex items-center gap-2 text-sm font-bold">
-                <FiCheck /> <span>Confirm Slot Lock</span>
+                <FiCheck /> <span>Confirm Reservation</span>
               </div>
-              <p className="mt-1 text-xs text-muted">This action represents creating a reservation lock for the selected schedule.</p>
+              <p className="mt-1 text-xs text-muted">Review all details before confirming.</p>
 
-              <div className="mt-4 space-y-3 rounded-2xl border border-white/10 bg-black/20 p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="text-xs text-muted">Remaining capacity</div>
-                  <div className="text-xs font-bold">{remainingSlots} slots</div>
+              <div className="mt-4 space-y-3">
+                <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                  <div className="text-xs text-muted">Total</div>
+                  <div className="text-2xl font-bold text-gold">₱{dynamicPricing.total.toLocaleString()}</div>
+                  <div className="mt-1 text-xs text-muted">Including all fees and discounts</div>
                 </div>
-                <div className="flex items-center justify-between gap-3">
-                  <div className="text-xs text-muted">Requested players</div>
-                  <div className="text-xs font-bold">{players}</div>
-                </div>
-                <div className="flex items-center justify-between gap-3">
+
+                <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
                   <div className="text-xs text-muted">Status</div>
-                  <div
-                    className={[
-                      'text-xs font-bold rounded-xl px-3 py-1',
-                      canProceed ? 'bg-success/15 text-success' : 'bg-danger/15 text-danger',
-                    ].join(' ')}
-                  >
-                    {canProceed ? 'LOCK READY' : 'NOT ENOUGH SLOTS'}
-                  </div>
+                  <div className="mt-1 text-sm font-bold text-accent">Pending Review</div>
+                  <div className="mt-1 text-xs text-muted">Your reservation will be reviewed by staff</div>
                 </div>
               </div>
 
-              <div className="mt-4 flex flex-col gap-2 sm:flex-row">
-                <Button variant="ghost" onClick={() => setStep(2)}>
-                  Back
-                </Button>
+              <div className="mt-4 flex flex-col gap-2">
+                <Button variant="ghost" onClick={() => setStep(2)}>Back</Button>
                 <Button
                   variant="primary"
-                  disabled={!canProceed || players < effectiveMinPlayers || isConfirming}
+                  disabled={isConfirming || !canProceed}
                   onClick={handleConfirm}
                 >
-                  Confirm
-                  <FiChevronRight />
+                  {isConfirming ? 'Confirming...' : 'Confirm Reservation'}
                 </Button>
               </div>
             </Card>
-
-            <Card className="p-4 md:p-6">
-              <div className="text-sm font-bold">Next: Waiver + Payment</div>
-              <p className="mt-1 text-xs text-muted">After confirmation, the waiver signature step would be requested.</p>
-              <div className="mt-4 flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 p-4">
-                <div className="grid h-10 w-10 place-items-center rounded-2xl bg-accent/10 ring-1 ring-accent/25">
-                  <FiShield className="text-gold" />
-                </div>
-                <div>
-                  <div className="text-xs text-muted">Workflow</div>
-                  <div className="mt-1 text-sm font-bold">Waiver → Payment → Confirmation</div>
-                </div>
-              </div>
-            </Card>
           </div>
         </div>
-      ) : null}
+      )}
 
-      {/* Step 4 */}
-      {step === 4 ? (
-        <div className="grid gap-4">
-
-
-          <Card className="p-4 md:p-6">
-
-            <div className="text-sm font-bold">Next: Waiver + Payment</div>
-            <p className="mt-1 text-xs text-muted">Embedded prototype so step 4 includes the full flow.</p>
-
-            <div className="mt-4 space-y-4">
-              <div>
-                <div className="text-xs uppercase tracking-widest text-muted">Waiver</div>
-                <div className="mt-2">
-                  {!waiverSubmitted ? (
-                    <WaiverPage variant="embedded" onSubmitted={() => setWaiverSubmitted(true)} />
-                  ) : (
-                    <div className="rounded-2xl border border-white/10 bg-white/5 p-4 text-sm font-bold">Waiver already submitted — you may proceed to payment.</div>
-                  )}
-                </div>
-              </div>
-
-              <div>
-                <div className="text-xs uppercase tracking-widest text-muted">Payment</div>
-                <div className="mt-2">
-                  <PaymentPage />
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-6">
-              <div className="text-sm font-bold">What this calendar does (working prototype)</div>
-              <ul className="mt-3 space-y-2 text-xs text-muted">
-                <li className="flex items-start gap-2">
-                  <FiCheck className="mt-0.5 text-success" /> Date/field/slot selection
-                </li>
-                <li className="flex items-start gap-2">
-                  <FiCheck className="mt-0.5 text-success" /> Remaining slot prevention (no full schedules)
-                </li>
-                <li className="flex items-start gap-2">
-                  <FiCheck className="mt-0.5 text-success" /> Equipment + game mode packages
-                </li>
-                <li className="flex items-start gap-2">
-                  <FiCheck className="mt-0.5 text-success" /> Dynamic price calculation
-                </li>
-                <li className="flex items-start gap-2">
-                  <FiCheck className="mt-0.5 text-success" /> Reservation summary + confirmation UI
-                </li>
-              </ul>
-            </div>
-          </Card>
-        </div>
-      ) : null}
-
-      <div className="rounded-2xl border border-white/5 bg-black/10 p-4">
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="grid h-10 w-10 place-items-center rounded-2xl bg-white/5 ring-1 ring-white/10">
-              <FiShield className="text-gold" />
-            </div>
-            <div>
-              <div className="text-sm font-bold">Slot Prevention Engine</div>
-              <div className="text-xs text-muted">Ensures you can’t reserve beyond capacity for the selected slot.</div>
-            </div>
-          </div>
-          <div className="hidden md:block text-right">
-            <div className="text-xs text-muted">Selected</div>
-            <div className="mt-1 text-sm font-bold">
-              {slotLabels[slot]} • {fields.find((f) => f.id === fieldId)?.name}
-            </div>
-          </div>
-        </div>
-      </div>
+      {/* Step 4 - Success */}
+      {step === 4 && (
+        <Card className="p-6">
+          <div className="text-lg font-bold text-success">Reservation submitted</div>
+          <p className="mt-2 text-sm text-muted">Your reservation is pending review.</p>
+        </Card>
+      )}
     </div>
   )
 }
-

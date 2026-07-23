@@ -173,24 +173,28 @@ export function LandingPage() {
   const faqs: FAQ[] = useMemo(
     () => [
       {
-        q: 'Do you manage both private and public sessions?',
-        a: 'Yes. Pick a session type during reservation, and the system locks remaining slots to prevent overbooking.',
+        q: 'What is the age requirement to play?',
+        a: 'Players of any age may join. Minors must be accompanied by a parent or guardian and must present a valid school ID. All players are required to sign a consent form on site.',
       },
       {
-        q: 'How does equipment selection work?',
-        a: 'Select required equipment and game mode. The UI shows availability and updates the summary with included items.',
+        q: 'Do you accept walk-in players?',
+        a: 'Yes, walk-in players are accepted. However, due to limited equipment, advance reservation is highly recommended.',
       },
       {
-        q: 'What payment methods are supported?',
-        a: 'GCash and bank transfer are supported in this prototype flow, including proof upload and receipt preview.',
+        q: 'Can beginners or first-time players join?',
+        a: 'Yes, the field is open to beginners, casual players, and experienced players. Game marshals are present to guide first-time players.',
       },
       {
-        q: 'Is there guardian consent for minors?',
-        a: 'Yes. The waiver form requests guardian consent when the selected player age requires it.',
+        q: 'Is safety equipment required?',
+        a: 'Yes, protective masks are required at all times during gameplay. Other safety rules will be discussed during the orientation.',
       },
       {
-        q: 'Can admins approve or reject reservations?',
-        a: 'Admins can review reservation management requests (approve, reject, cancel, reschedule) with filters and pagination.',
+        q: 'What happens if it rains?',
+        a: 'Games may continue depending on weather conditions. In case of unsafe conditions, the field management will provide further instructions.',
+      },
+      {
+        q: 'Can players bring their own airsoft guns?',
+        a: 'Yes, players who already have their own airsoft guns may use them, provided they pass the FPS and safety checks.',
       },
     ],
     [],
@@ -282,12 +286,12 @@ export function LandingPage() {
               className={`inline-flex items-center gap-2 rounded-full border ${theme === 'light' ? 'border-gray-200/60' : 'border-white/10'} bg-white/5 px-3 py-1 text-xs text-muted`}
             >
               <span className="h-2 w-2 rounded-full bg-gold" />
-              Military-grade reservation UX for Chill Shooters
+              Inventory & Player Control—built for speed
             </motion.div>
 
             <h1 className="mt-5 text-4xl font-black tracking-tight md:text-6xl">
-              Inventory & Player Control—
-              <span className="text-gold"> built for speed</span>.
+              The #1 Airsoft Gaming Center
+              <span className="text-gold"> in Cavite</span>.
             </h1>
 
             <p className="mt-5 max-w-xl text-sm leading-relaxed text-muted md:text-base">
@@ -721,7 +725,7 @@ export function LandingPage() {
                 </div>
                 <div>
                   <div className="text-sm font-bold">Community Line</div>
-                  <div className="text-xs text-muted">(placeholder) +63 9XX XXX XXXX</div>
+                  <div className="text-xs text-muted">+63 9XX XXX XXXX</div>
                 </div>
 
               </div>
@@ -747,7 +751,7 @@ export function LandingPage() {
                           handleContactSubmit(ev)
                         }
                       }}
-                      placeholder="Write your message here. Press Ctrl+Enter to send."
+                      placeholder="Write your message here."
                       rows={4}
                       className="mt-2 w-full resize-y rounded-md bg-transparent text-sm text-text placeholder:text-muted focus:outline-none"
                     />

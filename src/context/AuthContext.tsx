@@ -15,7 +15,9 @@ type AuthContextValue = {
   user: AuthUser | null
   isAuthenticated: boolean
   login: (payload: { email: string; password: string }) => Promise<void>
+  loginWithGoogle: (payload: { name: string; email: string }) => Promise<void>
   register: (payload: { name: string; email: string; password: string }) => Promise<void>
+  updateUser: (updates: Partial<AuthUser>) => void
   logout: () => void
 }
 
@@ -36,6 +38,15 @@ function loadUser(): AuthUser | null {
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(() => loadUser())
 
+  const updateUser = React.useCallback((updates: Partial<AuthUser>) => {
+    setUser((current) => {
+      if (!current) return current
+      const next = { ...current, ...updates }
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
+      return next
+    })
+  }, [])
+
   const value = useMemo<AuthContextValue>(
     () => ({
       user,
@@ -48,16 +59,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setUser(res.user)
         localStorage.setItem(STORAGE_KEY, JSON.stringify(res.user))
       },
+      loginWithGoogle: async ({ name, email }) => {
+        const res = await apiPost<any>('/api/auth/social-login', { name, email })
+        if (!res?.ok || !res?.user) {
+          throw new Error('Social login failed')
+        }
+        setUser(res.user)
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(res.user))
+      },
       register: async ({ name, email, password }) => {
         const res = await apiPost<any>('/api/auth/register', { name, email, password })
         if (!res?.ok) throw new Error(res?.error || 'Registration failed')
       },
+      updateUser,
       logout: () => {
         setUser(null)
         localStorage.removeItem(STORAGE_KEY)
       },
     }),
-    [user],
+    [user, updateUser],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

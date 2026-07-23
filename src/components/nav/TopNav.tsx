@@ -17,6 +17,8 @@ export function TopNav({
   onLogout: () => void
 }) {
   const { theme } = useTheme()
+  const [showLogoutMenu, setShowLogoutMenu] = React.useState(false)
+
   return (
     <motion.header
       initial={{ opacity: 0, y: -10 }}
@@ -63,13 +65,41 @@ export function TopNav({
             <div className="hidden sm:block">
               <ThemeToggle />
             </div>
-            <button
-              onClick={onLogout}
-              className="rounded-xl glass p-2 text-text hover:bg-white/5"
-              aria-label="Logout"
-            >
-              <FiLogOut />
-            </button>
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setShowLogoutMenu((prev) => !prev)}
+                className="rounded-xl glass p-2 text-text hover:bg-white/5"
+                aria-label="Logout"
+              >
+                <FiLogOut />
+              </button>
+
+              {showLogoutMenu && (
+                <div className="absolute right-0 top-full mt-4 w-56 rounded-2xl border border-white/15 bg-[#0f0f10]/95 p-3 shadow-2xl backdrop-blur-sm">
+                  <div className="px-1 pb-3 text-sm font-semibold text-text">Continue to logout?</div>
+                  <div className="flex gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => setShowLogoutMenu(false)}
+                      className="flex-1 rounded-lg border border-white/10 bg-white/10 px-3 py-2 text-sm text-muted transition hover:bg-white/15"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowLogoutMenu(false)
+                        onLogout()
+                      }}
+                      className="flex-1 rounded-lg bg-white/15 px-3 py-2 text-sm font-semibold text-text transition hover:bg-white/20"
+                    >
+                      Yes
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
 
         </div>

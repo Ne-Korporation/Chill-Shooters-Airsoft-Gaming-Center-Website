@@ -14,6 +14,8 @@ import { Card } from '../../components/ui/Card'
 
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
+import { apiPost } from '../../utils/apiClient'
+import { useAuth } from '../../context/AuthContext'
 
 type WaiverState = {
   fullName: string
@@ -60,6 +62,7 @@ export function WaiverPage({
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const [hasSignature, setHasSignature] = useState(false)
+  const { user } = useAuth()
 
   const isMinor = state.age < 18
 
@@ -206,8 +209,22 @@ export function WaiverPage({
   const onSubmit = async () => {
     setSubmitting(true)
     try {
-      // Fake async submit
-      await new Promise((r) => setTimeout(r, 900))
+      await apiPost('/api/waivers', {
+        id: `WAIV-${Date.now()}`,
+        userId: user?.id || '',
+        reservationId: localStorage.getItem('active_reservation_id') || '',
+        fullName: state.fullName.trim(),
+        age: state.age,
+        guardianName: state.guardianName.trim(),
+        guardianConsent: state.guardianConsent,
+        consent: state.consent,
+        termsAccepted: state.termsAccepted,
+        isMinor,
+        hasSignature,
+        status: 'pending',
+        submittedAtISO: new Date().toISOString(),
+        createdAtISO: new Date().toISOString(),
+      })
       setSubmitted(true)
       try {
         localStorage.setItem('waiver_submitted', '1')

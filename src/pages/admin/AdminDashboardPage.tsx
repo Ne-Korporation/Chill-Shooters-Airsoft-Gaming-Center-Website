@@ -155,8 +155,8 @@ export function AdminDashboardPage() {
               subtitle="Approve/reject, reschedule, and keep schedules consistent."
             />
             <QuickAction
-              title="Player Management"
-              subtitle="Review waivers, update status, and manage access."
+              title="Users"
+              subtitle="Review players and manage marshal, admin, and registrar access."
             />
             <QuickAction
               title="Audit Logs"

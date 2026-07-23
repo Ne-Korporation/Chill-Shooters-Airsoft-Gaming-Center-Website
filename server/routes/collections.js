@@ -1,4 +1,5 @@
 export const ALLOWED_COLLECTIONS = new Set([
+  'equipment',
   'equipments',
   'gameplay',
   'packages',

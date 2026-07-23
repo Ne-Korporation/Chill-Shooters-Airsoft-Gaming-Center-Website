@@ -1,4 +1,5 @@
 import express from 'express'
+import { ObjectId } from 'mongodb'
 import { getDb, toObjectId } from '../db/mongo.js'
 
 const router = express.Router()
@@ -8,13 +9,19 @@ function reservationKey(reservation) {
 }
 
 async function findReservation(db, rawId) {
-  const _id = toObjectId(rawId)
-  if (_id) {
-    const byObjectId = await db.collection('reservations').findOne({ _id })
+  const normalizedId = String(rawId || '').trim()
+  if (!normalizedId) return null
+
+  const byId = await db.collection('reservations').findOne({ id: normalizedId })
+  if (byId) return byId
+
+  const objectIdValue = ObjectId.isValid(normalizedId) ? new ObjectId(normalizedId) : null
+  if (objectIdValue) {
+    const byObjectId = await db.collection('reservations').findOne({ _id: objectIdValue })
     if (byObjectId) return byObjectId
   }
 
-  return db.collection('reservations').findOne({ id: String(rawId) })
+  return null
 }
 
 function parseStatus(body) {
@@ -32,27 +39,20 @@ function isAdminRole(role) {
 }
 
 function mapReservationToGameplay({ reservation }) {
-  // Expect reservation schema from frontend:
-  // userId, selectedPackageId, mode, fieldId, reservationDate, reservationTime, sessionType,
-  // numberOfPlayers, totalAmount, notes, reservationStatus
-  // Frontend does not currently store gameplay/group in reservation, so we derive what we can.
-  const schedule = `${reservation.reservationDate} ${reservation.reservationTime}`.trim()
+  const scheduleParts = [reservation?.reservationDate, reservation?.reservationTime].filter(Boolean)
+  const schedule = scheduleParts.join(' • ') || reservation?.createdAtISO || ''
 
-  const game = reservation?.game || reservation?.packageName || reservation?.selectedGameplayName || reservation?.selectedPackageId || ''
-  const mode = reservation?.mode || reservation?.gameMode || ''
+  const game =
+    reservation?.game ||
+    reservation?.packageName ||
+    reservation?.selectedGameplayName ||
+    reservation?.selectedPackageId ||
+    reservation?.mode ||
+    '—'
 
-  // Group: use a friendly label if exists, otherwise fallback.
-  const group = reservation?.group || reservation?.sessionType || reservation?.fieldId || ''
-
-  const pkg = reservation?.selectedPackageId || reservation?.package || ''
-
-  // Status + Actions should be functional.
-  const status = 'Scheduled'
-  const actions = {
-    canStart: true,
-    canComplete: false,
-    canCancel: true,
-  }
+  const mode = reservation?.mode || reservation?.gameMode || reservation?.sessionType || '—'
+  const group = reservation?.group || reservation?.sessionType || `${reservation?.numberOfPlayers || '—'} players`
+  const pkg = reservation?.packageName || reservation?.selectedGameplayName || reservation?.selectedPackageId || reservation?.package || '—'
 
   return {
     Game: game,
@@ -60,11 +60,16 @@ function mapReservationToGameplay({ reservation }) {
     Mode: mode,
     Group: group,
     Package: pkg,
-    Status: status,
-    Actions: actions,
+    Status: 'Scheduled',
+    Actions: {
+      canStart: true,
+      canComplete: false,
+      canDelete: false,
+    },
     userId: reservation.userId,
     reservationId: reservation._id ? String(reservation._id) : reservation.reservationId,
     createdAtISO: new Date().toISOString(),
+    updatedAtISO: new Date().toISOString(),
   }
 }
 
@@ -103,8 +108,15 @@ async function updateReservationStatus(req, res) {
           ? 'review'
           : 'pending'
 
-    // Update reservation status.
-    const reservationFilter = reservation._id ? { _id: reservation._id } : { id: String(reservation.id || id) }
+    // Update reservation status using the stable string id first, and only use ObjectId lookup when the value is truly valid.
+    const reservationFilter = {
+      $or: [
+        { id: String(reservation?.id || id) },
+        ...(reservation?._id && ObjectId.isValid(String(reservation._id))
+          ? [{ _id: new ObjectId(String(reservation._id)) }]
+          : []),
+      ],
+    }
 
     const updateRes = await db.collection('reservations').findOneAndUpdate(
       reservationFilter,
@@ -112,7 +124,7 @@ async function updateReservationStatus(req, res) {
       { returnDocument: 'after', upsert: false },
     )
 
-    const updatedReservation = updateRes?.value ?? (await db.collection('reservations').findOne({ _id }))
+    const updatedReservation = updateRes?.value ?? (await db.collection('reservations').findOne(reservationFilter))
     if (!updatedReservation) return res.status(404).json({ ok: false, error: 'reservation not found after update' })
 
     const payment = await db.collection('payments').findOne({
@@ -120,8 +132,17 @@ async function updateReservationStatus(req, res) {
     })
 
     if (payment) {
+      const paymentFilter = {
+        $or: [
+          { reservationId: reservationKey(updatedReservation) },
+          ...(payment?._id && ObjectId.isValid(String(payment._id))
+            ? [{ _id: new ObjectId(String(payment._id)) }]
+            : []),
+        ],
+      }
+
       await db.collection('payments').findOneAndUpdate(
-        { _id: payment._id },
+        paymentFilter,
         {
           $set: {
             paymentStatus,
@@ -139,6 +160,17 @@ async function updateReservationStatus(req, res) {
     if (nextStatus === 'confirmed') {
       const already = await db.collection('gameplay').findOne({ reservationId: reservationKey(updatedReservation) })
       if (already) {
+        const normalizedGameplay = {
+          ...already,
+          Game: already.Game || already.game || updatedReservation.packageName || updatedReservation.selectedGameplayName || updatedReservation.selectedPackageId || '—',
+          Schedule: already.Schedule || [updatedReservation.reservationDate, updatedReservation.reservationTime].filter(Boolean).join(' • ') || updatedReservation.createdAtISO || '',
+          Mode: already.Mode || already.mode || updatedReservation.mode || updatedReservation.gameMode || updatedReservation.sessionType || '—',
+          Group: already.Group || already.group || updatedReservation.group || updatedReservation.sessionType || `${updatedReservation.numberOfPlayers || '—'} players`,
+          Package: already.Package || already.package || updatedReservation.packageName || updatedReservation.selectedGameplayName || updatedReservation.selectedPackageId || '—',
+          Status: already.Status || already.status || 'Scheduled',
+          updatedAtISO: new Date().toISOString(),
+        }
+        await db.collection('gameplay').updateOne({ _id: already._id }, { $set: normalizedGameplay })
         gameplay = already
       } else {
         const gameplayDoc = mapReservationToGameplay({ reservation: updatedReservation })
@@ -147,10 +179,13 @@ async function updateReservationStatus(req, res) {
         gameplayDoc.reservationId = reservationKey(updatedReservation)
         gameplayDoc.userId = String(updatedReservation.userId)
 
+        // Generate sequential GP id like GP-000001 (matching reservation R- prefix pattern)
+        const gameplayCount = await db.collection('gameplay').countDocuments({})
+        const gameplayId = `GP-${String(gameplayCount + 1).padStart(6, '0')}`
+
         const insert = await db.collection('gameplay').insertOne({
           ...gameplayDoc,
-          // also include a deterministic id field for UI
-          id: `GP-${reservationKey(updatedReservation).slice(-6)}-${Date.now()}`,
+          id: gameplayId,
         })
 
         gameplay = await db.collection('gameplay').findOne({ _id: insert.insertedId })
@@ -166,6 +201,49 @@ async function updateReservationStatus(req, res) {
 
 router.put('/reservations/:id/status', updateReservationStatus)
 router.put('/reservations/:id/confirm', updateReservationStatus)
+
+// DELETE reservation (admin/marshal only, cascades to payments + gameplay)
+router.delete('/reservations/:id', async (req, res) => {
+  const { id } = req.params
+  if (!id) return res.status(400).json({ ok: false, error: 'invalid id' })
+
+  const actorRole = req.body?.role || req.query?.role
+
+  try {
+    const db = await getDb()
+
+    const reservation = await findReservation(db, id)
+    if (!reservation) return res.status(404).json({ ok: false, error: 'reservation not found' })
+
+    if (!isAdminRole(actorRole)) {
+      return res.status(403).json({ ok: false, error: 'forbidden — admin or marshal role required' })
+    }
+
+    const reservationKeyValue = reservationKey(reservation)
+
+    // Delete linked payment records
+    await db.collection('payments').deleteMany({
+      reservationId: reservationKeyValue,
+    })
+
+    // Delete linked gameplay records
+    await db.collection('gameplay').deleteMany({
+      reservationId: reservationKeyValue,
+    })
+
+    // Delete the reservation itself
+    const reservationFilter = reservation._id ? { _id: reservation._id } : { id: String(reservation.id || id) }
+    await db.collection('reservations').deleteOne(reservationFilter)
+
+    return res.json({
+      ok: true,
+      message: 'Reservation and related records deleted successfully',
+      deletedReservationId: id,
+    })
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: String(err) })
+  }
+})
 
 export default router
 
