@@ -24,7 +24,7 @@ const app = express()
 app.use(cors())
 app.use(express.json())
 
-const PORT = process.env.PORT || 3001
+const PORT = Number(process.env.PORT) || 3001
 
 getDb()
   .then(() => console.log('MongoDB connected'))
@@ -72,6 +72,17 @@ app.post('/api/contact', async (req, res) => {
   }
 })
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`API server listening on http://localhost:${PORT}`)
+})
+
+server.on('error', (err) => {
+  if (err && err.code === 'EADDRINUSE') {
+    console.error(
+      `Port ${PORT} is already in use. Stop the process using that port or set PORT to another value before running npm run dev:all.`,
+    )
+    process.exit(1)
+  }
+
+  throw err
 })
