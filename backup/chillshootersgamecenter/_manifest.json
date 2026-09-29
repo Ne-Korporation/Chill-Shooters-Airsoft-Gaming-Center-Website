@@ -1,0 +1,47 @@
+{
+  "sourceUri": "mongodb://localhost:27017/chillshootersgamecenter",
+  "dbName": "chillshootersgamecenter",
+  "exportedAtISO": "2026-09-29T08:38:27.738Z",
+  "collections": [
+    {
+      "collection": "payments",
+      "documents": 8,
+      "file": "C:\\codes\\Capstone\\Chill-Shooters-Airsoft-Gaming-Center-Website\\backup\\chillshootersgamecenter\\payments.json"
+    },
+    {
+      "collection": "packages",
+      "documents": 3,
+      "file": "C:\\codes\\Capstone\\Chill-Shooters-Airsoft-Gaming-Center-Website\\backup\\chillshootersgamecenter\\packages.json"
+    },
+    {
+      "collection": "user_accounts",
+      "documents": 9,
+      "file": "C:\\codes\\Capstone\\Chill-Shooters-Airsoft-Gaming-Center-Website\\backup\\chillshootersgamecenter\\user_accounts.json"
+    },
+    {
+      "collection": "equipments",
+      "documents": 7,
+      "file": "C:\\codes\\Capstone\\Chill-Shooters-Airsoft-Gaming-Center-Website\\backup\\chillshootersgamecenter\\equipments.json"
+    },
+    {
+      "collection": "gameplay",
+      "documents": 3,
+      "file": "C:\\codes\\Capstone\\Chill-Shooters-Airsoft-Gaming-Center-Website\\backup\\chillshootersgamecenter\\gameplay.json"
+    },
+    {
+      "collection": "waivers",
+      "documents": 5,
+      "file": "C:\\codes\\Capstone\\Chill-Shooters-Airsoft-Gaming-Center-Website\\backup\\chillshootersgamecenter\\waivers.json"
+    },
+    {
+      "collection": "weapons",
+      "documents": 8,
+      "file": "C:\\codes\\Capstone\\Chill-Shooters-Airsoft-Gaming-Center-Website\\backup\\chillshootersgamecenter\\weapons.json"
+    },
+    {
+      "collection": "reservations",
+      "documents": 8,
+      "file": "C:\\codes\\Capstone\\Chill-Shooters-Airsoft-Gaming-Center-Website\\backup\\chillshootersgamecenter\\reservations.json"
+    }
+  ]
+}

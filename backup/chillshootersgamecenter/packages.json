@@ -1,0 +1,69 @@
+[
+  {
+    "_id": "6a61e302a00d743ad2b9185e",
+    "id": "PKG-0001",
+    "name": "begginners",
+    "discountPct": 0,
+    "description": "eweawdasd",
+    "basePrice": 0,
+    "minPlayers": 1,
+    "weaponIds": [
+      "W-R-001",
+      "W-GP-001",
+      "W-00001"
+    ],
+    "equipmentIds": [
+      "EQ-M-001",
+      "EQ-D-001"
+    ],
+    "equipmentCount": 5,
+    "status": "active",
+    "createdAtISO": "2026-07-23T09:46:42.133Z",
+    "updatedAtISO": "2026-07-23T11:47:49.594Z"
+  },
+  {
+    "_id": "6a61ff877936b0ef43c10e43",
+    "id": "PKG-0002",
+    "name": "tester",
+    "discountPct": 10,
+    "description": "For students",
+    "basePrice": 0,
+    "minPlayers": 5,
+    "weaponIds": [
+      "W-00001",
+      "W-GP-001"
+    ],
+    "equipmentIds": [
+      "EQ-M-001",
+      "EQ-D-001"
+    ],
+    "equipmentCount": 4,
+    "status": "active",
+    "createdAtISO": "2026-07-23T11:48:21.886Z",
+    "updatedAtISO": "2026-07-23T12:08:40.439Z"
+  },
+  {
+    "_id": "6a6349dbc60ccfca36a9f98a",
+    "id": "PKG-0003",
+    "name": "tester2",
+    "discountPct": 39,
+    "description": "for bigger groups",
+    "basePrice": 0,
+    "minPlayers": 38,
+    "weaponIds": [
+      "W-GP-001",
+      "W-R-001",
+      "W-R-002",
+      "W-R-003",
+      "W-R-004"
+    ],
+    "equipmentIds": [
+      "EQ-M-001",
+      "EQ-D-001",
+      "EQ-G-001"
+    ],
+    "equipmentCount": 8,
+    "status": "active",
+    "createdAtISO": "2026-07-24T11:17:47.765Z"
+  }
+]
