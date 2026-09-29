@@ -186,7 +186,7 @@ function PaymentPageContent() {
   const [cardDetails, setCardDetails] = useState<CardDetails>({ number: '', expiry: '', cvc: '' })
   const [submitting, setSubmitting] = useState(false)
   const [success, setSuccess] = useState(false)
-  const [breakdown, setBreakdown] = useState({ field: 0, equipment: 0, service: 0, total: 0 })
+  const [breakdown, setBreakdown] = useState({ field: 0, equipment: 0, entranceFee: 0, service: 0, total: 0, itemized: [] as Array<{ label: string; amount: number }> })
   const cardDigits = cardDetails.number.replace(/\D/g, '')
 
   const validateExpiry = (value: string) => {
@@ -223,11 +223,23 @@ function PaymentPageContent() {
       const pendingReservation = JSON.parse(pendingReservationJson)
       const field = Number(pendingReservation?.fieldPrice || pendingReservation?.fieldCost || 0)
       const equipment = Number(pendingReservation?.equipmentPrice || pendingReservation?.equipmentCost || 0)
+      const entranceFee = Number(pendingReservation?.entranceFee || 0)
       const service = Number(pendingReservation?.serviceFee || pendingReservation?.servicePrice || 0)
-      const total = Number(pendingReservation?.totalAmount || field + equipment + service || 0)
-      setBreakdown({ field, equipment, service, total })
+      const total = Number(pendingReservation?.totalAmount || field + equipment + entranceFee + service || 0)
+      const itemized = Array.isArray(pendingReservation?.itemizedBreakdown)
+        ? pendingReservation.itemizedBreakdown.map((item: any) => ({
+            label: String(item?.label || 'Charge'),
+            amount: Number(item?.amount || 0),
+          }))
+        : [
+            { label: 'Field reservation', amount: field },
+            { label: 'Equipment', amount: equipment },
+            { label: `Player entrance fee (${Number(pendingReservation?.numberOfPlayers || 1)} × ₱150)`, amount: entranceFee },
+            { label: 'Service fee', amount: service },
+          ]
+      setBreakdown({ field, equipment, entranceFee, service, total, itemized })
     } catch {
-      setBreakdown({ field: 0, equipment: 0, service: 0, total: 0 })
+      setBreakdown({ field: 0, equipment: 0, entranceFee: 0, service: 0, total: 0, itemized: [] })
     }
   }, [])
 
@@ -550,6 +562,18 @@ function PaymentPageContent() {
                   </div>
                 ) : null}
                 <div className="mt-3 h-px bg-white/10" />
+                {(breakdown.itemized.length > 0 ? breakdown.itemized : [
+                  { label: 'Field reservation', amount: breakdown.field },
+                  { label: 'Equipment', amount: breakdown.equipment },
+                  { label: 'Player entrance fee (150 each)', amount: breakdown.entranceFee },
+                  { label: 'Service fee', amount: breakdown.service },
+                ]).map((item) => (
+                  <div key={`${item.label}-${item.amount}`} className="mt-2 flex items-center justify-between gap-3">
+                    <div className="text-xs text-muted">{item.label}</div>
+                    <div className="text-xs font-bold">{formatPHP(item.amount)}</div>
+                  </div>
+                ))}
+                <div className="mt-3 h-px bg-white/10" />
                 <div className="mt-3 flex items-center justify-between gap-3">
                   <div className="text-xs text-muted">Total</div>
                   <div className="text-sm font-black text-gold">{formatPHP(breakdown.total)}</div>
@@ -615,18 +639,17 @@ function PaymentPageContent() {
           </div>
 
           <div className="mt-3 space-y-2 text-sm">
-            <div className="flex items-center justify-between">
-              <span className="text-muted">Field</span>
-              <span className="font-semibold">{formatPHP(breakdown.field)}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-muted">Equipment</span>
-              <span className="font-semibold">{formatPHP(breakdown.equipment)}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-muted">Service</span>
-              <span className="font-semibold">{formatPHP(breakdown.service)}</span>
-            </div>
+            {(breakdown.itemized.length > 0 ? breakdown.itemized : [
+              { label: 'Field reservation', amount: breakdown.field },
+              { label: 'Equipment', amount: breakdown.equipment },
+              { label: 'Player entrance fee (150 each)', amount: breakdown.entranceFee },
+              { label: 'Service fee', amount: breakdown.service },
+            ]).map((item) => (
+              <div key={`${item.label}-${item.amount}`} className="flex items-center justify-between">
+                <span className="text-muted">{item.label}</span>
+                <span className="font-semibold">{formatPHP(item.amount)}</span>
+              </div>
+            ))}
             <div className="h-px bg-white/10" />
             <div className="flex items-center justify-between">
               <span className="text-muted">Total</span>

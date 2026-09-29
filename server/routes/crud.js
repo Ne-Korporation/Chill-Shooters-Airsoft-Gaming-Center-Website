@@ -1,6 +1,7 @@
 import express from 'express'
 import { ObjectId } from 'mongodb'
 import { getDb, toObjectId } from '../db/mongo.js'
+import { requireAuth } from '../middleware/auth.js'
 import { ALLOWED_COLLECTIONS } from './collections.js'
 
 const router = express.Router()
@@ -200,7 +201,7 @@ router.get('/:collection/:id', async (req, res) => {
 })
 
 // CREATE
-router.post('/:collection', async (req, res) => {
+router.post('/:collection', requireAuth, async (req, res) => {
   const { collection } = req.params
   if (!ALLOWED_COLLECTIONS.has(collection)) {
     return res.status(400).json({ ok: false, error: 'collection not allowed', collectionReceived: collection, allowed: Array.from(ALLOWED_COLLECTIONS) })
@@ -325,7 +326,7 @@ router.post('/:collection', async (req, res) => {
 
 // UPDATE - fixed: uses updateOne + separate findOne to avoid MongoDB driver v6 bug
 // where findOneAndUpdate with returnDocument:'after' returns value:null on success
-router.put('/:collection/:id', async (req, res) => {
+router.put('/:collection/:id', requireAuth, async (req, res) => {
   const { collection, id } = req.params
   if (!ALLOWED_COLLECTIONS.has(collection)) {
     return res.status(400).json({ ok: false, error: 'collection not allowed' })
@@ -367,7 +368,7 @@ router.put('/:collection/:id', async (req, res) => {
 })
 
 // DELETE
-router.delete('/:collection/:id', async (req, res) => {
+router.delete('/:collection/:id', requireAuth, async (req, res) => {
   const { collection, id } = req.params
   if (!ALLOWED_COLLECTIONS.has(collection)) {
     return res.status(400).json({ ok: false, error: 'collection not allowed' })

@@ -110,24 +110,30 @@ export function AdminNotificationsPage() {
           <p className="mt-1 text-sm text-muted">View your notifications and manage delivery only if you are an admin.</p>
         </div>
 
-        {isAdmin ? (
-          <div className="flex flex-wrap gap-2">
-            {(['all', 'users', 'admins', 'registrars', 'marshals'] as Audience[]).map((item) => (
-              <button
-                key={item}
-                onClick={() => setFeedAudience(item)}
-                className={
-                  'rounded-xl border px-3 py-2 text-sm transition ' +
-                  (feedAudience === item
-                    ? 'bg-white/8 text-text border-accent/30'
-                    : 'bg-white/5 text-muted hover:bg-white/6')
-                }
-              >
-                {item === 'all' ? 'ALL' : item.toUpperCase()}
-              </button>
-            ))}
-          </div>
-        ) : null}
+        <div className="flex items-center gap-2 self-end">
+          {!isAdmin ? (
+            <Button variant="ghost" onClick={() => user?.id ? markAllAsRead(user.id, user.role) : null}>Mark all as read</Button>
+          ) : null}
+
+          {isAdmin ? (
+            <div className="flex flex-wrap gap-2">
+              {(['all', 'users', 'admins', 'registrars', 'marshals'] as Audience[]).map((item) => (
+                <button
+                  key={item}
+                  onClick={() => setFeedAudience(item)}
+                  className={
+                    'rounded-xl border px-3 py-2 text-sm transition ' +
+                    (feedAudience === item
+                      ? 'bg-white/8 text-text border-accent/30'
+                      : 'bg-white/5 text-muted hover:bg-white/6')
+                  }
+                >
+                  {item === 'all' ? 'ALL' : item.toUpperCase()}
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
       </div>
 
       <div className="rounded-3xl border border-white/5 bg-white/5 p-4">
@@ -276,15 +282,6 @@ export function AdminNotificationsPage() {
         </div>
       </div>
 
-      {!isAdmin ? (
-        <div className="rounded-3xl border border-white/5 bg-white/5 p-4">
-          <div className="text-xs uppercase tracking-widest text-muted">Read status</div>
-          <div className="mt-2 text-sm text-muted">Use the bell to clear unread items for your role and view the full feed here.</div>
-          <div className="mt-4 flex gap-2">
-            <Button variant="ghost" onClick={() => user?.id ? markAllAsRead(user.id, user.role) : null}>Mark all as read</Button>
-          </div>
-        </div>
-      ) : null}
     </div>
   )
 }

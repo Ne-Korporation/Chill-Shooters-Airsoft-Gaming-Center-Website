@@ -66,9 +66,9 @@ export function LoginPage() {
       const user = await loginWithGoogle({ name: profile.name, email: profile.email })
       toast.success('Signed in with Google.')
       navigate(getRedirectRoute(user.role))
-    } catch (err) {
+    } catch (err: any) {
       console.error('Google sign-in error', err)
-      toast.error('Google sign-in failed.')
+      toast.error(err?.message || 'Google sign-in failed.')
     }
   }
 

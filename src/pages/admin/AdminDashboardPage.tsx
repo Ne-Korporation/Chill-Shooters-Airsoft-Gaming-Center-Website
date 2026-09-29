@@ -294,6 +294,11 @@ export function AdminDashboardPage() {
               href="/app/admin/players"
             />
             <QuickAction
+              title="Partnerships"
+              subtitle="Track sponsors, schools, and community collaborations."
+              href="/app/admin/partnerships"
+            />
+            <QuickAction
               title="Audit Logs"
               subtitle="Trace recent administrative activity and changes."
               href="/app/admin/audit-logs"

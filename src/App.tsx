@@ -29,6 +29,7 @@ import { AdminPaymentsPage } from './pages/admin/AdminPaymentsPage'
 import { AdminReportsPage } from './pages/admin/AdminReportsPage'
 import { AdminNotificationsPage } from './pages/admin/AdminNotificationsPage'
 import { AdminAuditLogsPage } from './pages/admin/AdminAuditLogsPage'
+import { AdminPartnershipsPage } from './pages/admin/AdminPartnershipsPage'
 
 import { ReservationManagementPage } from './pages/admin/ReservationManagementPage'
 import { PlayerManagementPage } from './pages/admin/PlayerManagementPage'
@@ -39,6 +40,7 @@ import { RegistrarOngoingGamesPage, RegistrarArchivedGamesPage } from './pages/r
 import { RegistrarAvailedPackagesPage } from './pages/registrar/RegistrarAvailedPackagesPage'
 import { RegistrarSubmittedWaiversPage } from './pages/registrar/RegistrarSubmittedWaiversPage'
 import { RegistrarSubmittedPaymentsPage } from './pages/registrar/RegistrarSubmittedPaymentsPage'
+import { MarshalDashboardHomePage } from './pages/marshal/MarshalDashboardHomePage'
 
 import { RequireRole } from './routes/RequireRole'
 import { NotificationProvider } from './context/NotificationContext'
@@ -48,6 +50,12 @@ function AppHomePage() {
   const { user } = useAuth()
   if (user?.role === 'admin') {
     return <AdminDashboardPage />
+  }
+  if (user?.role === 'registrar') {
+    return <RegistrarDashboardHomePage />
+  }
+  if (user?.role === 'marshal') {
+    return <MarshalDashboardHomePage />
   }
   return <DashboardHomePage />
 }
@@ -60,6 +68,17 @@ function RegistrarReservationsPageWrapper() {
   )
 }
 
+function AdminDashboardPageWrapper() {
+  return (
+    <RequireRole roles={['admin']}>
+      <AdminDashboardPage />
+    </RequireRole>
+  )
+}
+
+function AdminPageWrapper({ children }: { children: React.ReactElement }) {
+  return <RequireRole roles={['admin']}>{children}</RequireRole>
+}
 
 function RegistrarOngoingGamesPageWrapper() {
   return (
@@ -149,14 +168,14 @@ export default function App() {
 
 
 
-        <Route path="admin" element={<AdminDashboardPage />} />
-        <Route path="admin/reservations" element={<AdminReservationsPage />} />
-        <Route path="admin/gameplay" element={<AdminGameplayPage />} />
+        <Route path="admin" element={<AdminDashboardPageWrapper><AdminDashboardPage /></AdminDashboardPageWrapper>} />
+        <Route path="admin/reservations" element={<AdminPageWrapper><AdminReservationsPage /></AdminPageWrapper>} />
+        <Route path="admin/gameplay" element={<AdminPageWrapper><AdminGameplayPage /></AdminPageWrapper>} />
 
 
-        <Route path="admin/reservation-management" element={<ReservationManagementPage />} />
-        <Route path="admin/players" element={<AdminPlayersPage />} />
-        <Route path="admin/player-management" element={<PlayerManagementPage />} />
+        <Route path="admin/reservation-management" element={<AdminPageWrapper><ReservationManagementPage /></AdminPageWrapper>} />
+        <Route path="admin/players" element={<AdminPageWrapper><AdminPlayersPage /></AdminPageWrapper>} />
+        <Route path="admin/player-management" element={<AdminPageWrapper><PlayerManagementPage /></AdminPageWrapper>} />
         <Route
           path="admin/equipment"
           element={
@@ -181,11 +200,12 @@ export default function App() {
             </RequireRole>
           }
         />
-        <Route path="admin/rental-packages" element={<AdminRentalPackagesPage />} />
-        <Route path="admin/payments" element={<AdminPaymentsPage />} />
-        <Route path="admin/reports" element={<AdminReportsPage />} />
-        <Route path="admin/notifications" element={<AdminNotificationsPage />} />
-        <Route path="admin/audit-logs" element={<AdminAuditLogsPage />} />
+        <Route path="admin/rental-packages" element={<AdminPageWrapper><AdminRentalPackagesPage /></AdminPageWrapper>} />
+        <Route path="admin/payments" element={<AdminPageWrapper><AdminPaymentsPage /></AdminPageWrapper>} />
+        <Route path="admin/partnerships" element={<AdminPageWrapper><AdminPartnershipsPage /></AdminPageWrapper>} />
+        <Route path="admin/reports" element={<AdminPageWrapper><AdminReportsPage /></AdminPageWrapper>} />
+        <Route path="admin/notifications" element={<AdminPageWrapper><AdminNotificationsPage /></AdminPageWrapper>} />
+        <Route path="admin/audit-logs" element={<AdminPageWrapper><AdminAuditLogsPage /></AdminPageWrapper>} />
 
         <Route path="registrar" element={<RegistrarDashboardHomePage />} />
         <Route path="registrar/reservations" element={<RegistrarReservationsPageWrapper />} />

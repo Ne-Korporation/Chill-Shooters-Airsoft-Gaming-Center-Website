@@ -11,8 +11,14 @@ type AuthUser = {
   role: Role
 }
 
+type AuthSession = {
+  user: AuthUser
+  token: string
+}
+
 type AuthContextValue = {
   user: AuthUser | null
+  token: string
   isAuthenticated: boolean
   login: (payload: { email: string; password: string }) => Promise<AuthUser>
   loginWithGoogle: (payload: { name: string; email: string }) => Promise<AuthUser>
@@ -23,25 +29,31 @@ type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | null>(null)
 
-const STORAGE_KEY = 'aim-book-play.auth.user'
+const STORAGE_KEY = 'aim-book-play.auth'
 
-function loadUser(): AuthUser | null {
+function loadSession(): AuthSession | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return null
-    return JSON.parse(raw) as AuthUser
+    const parsed = JSON.parse(raw)
+    if (!parsed?.user || !parsed?.token) return null
+    return parsed as AuthSession
   } catch {
     return null
   }
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<AuthUser | null>(() => loadUser())
+  const [session, setSession] = useState<AuthSession | null>(() => loadSession())
+
+  const user = session?.user ?? null
+  const token = session?.token ?? ''
 
   const updateUser = React.useCallback((updates: Partial<AuthUser>) => {
-    setUser((current) => {
+    setSession((current) => {
       if (!current) return current
-      const next = { ...current, ...updates }
+      const nextUser = { ...current.user, ...updates }
+      const next = { ...current, user: nextUser }
       localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
       return next
     })
@@ -50,23 +62,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const value = useMemo<AuthContextValue>(
     () => ({
       user,
+      token,
       isAuthenticated: !!user,
       login: async ({ email, password }) => {
         const res = await apiPost<any>('/api/auth/login', { email, password })
-        if (!res?.ok || !res?.user) {
+        if (!res?.ok || !res?.user || !res?.token) {
           throw new Error('Login failed')
         }
-        setUser(res.user)
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(res.user))
+        const nextSession = { user: res.user, token: res.token }
+        setSession(nextSession)
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(nextSession))
         return res.user
       },
       loginWithGoogle: async ({ name, email }) => {
         const res = await apiPost<any>('/api/auth/social-login', { name, email })
-        if (!res?.ok || !res?.user) {
+        if (!res?.ok || !res?.user || !res?.token) {
           throw new Error('Social login failed')
         }
-        setUser(res.user)
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(res.user))
+        const nextSession = { user: res.user, token: res.token }
+        setSession(nextSession)
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(nextSession))
         return res.user
       },
       register: async ({ name, email, password }) => {
@@ -75,11 +90,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       },
       updateUser,
       logout: () => {
-        setUser(null)
+        setSession(null)
         localStorage.removeItem(STORAGE_KEY)
       },
     }),
-    [user, updateUser],
+    [session, token, updateUser, user],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

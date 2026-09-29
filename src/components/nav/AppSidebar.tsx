@@ -22,6 +22,7 @@ import {
   FiClipboard,
   FiCreditCard,
   FiTarget,
+  FiBriefcase,
 } from 'react-icons/fi'
 
 type Role = 'user' | 'admin' | 'marshal' | 'registrar'
@@ -44,6 +45,7 @@ const baseItems: Item[] = [
 
 
 const marshalItems: Item[] = [
+  { label: 'Marshal Dashboard', to: '/app', icon: FiGrid, roles: ['marshal'] },
   { label: 'Games', to: '/app/games', icon: FiZap, roles: ['marshal'] },
   { label: 'Equipment', to: '/app/admin/equipment', icon: FiTool, roles: ['marshal'] },
   { label: 'Weapons', to: '/app/admin/weapons', icon: FiTruck, roles: ['marshal'] },
@@ -61,6 +63,7 @@ const adminItems: Item[] = [
   { label: 'Waivers', to: '/app/admin/waivers', icon: FiShield, roles: ['admin'] },
   { label: 'Rental Packages', to: '/app/admin/rental-packages', icon: FiPackage, roles: ['admin'] },
   { label: 'Payments', to: '/app/admin/payments', icon: FiCreditCard, roles: ['admin'] },
+  { label: 'Partnerships', to: '/app/admin/partnerships', icon: FiBriefcase, roles: ['admin'] },
   { label: 'Audit Logs', to: '/app/admin/audit-logs', icon: FiFileText, roles: ['admin'] },
 ]
 
@@ -89,10 +92,14 @@ export function AppSidebar({
   const profilePath = user?.id ? `/app/players/${encodeURIComponent(user.id)}` : '/app/players/1'
 
   const items = [
-    ...baseItems.filter((it) => !it.roles || it.roles.includes(role)),
     ...(role === 'user' || role === 'registrar' || role === 'marshal'
       ? [
           { label: 'Profile', to: profilePath, icon: FiUser, roles: ['user', 'registrar', 'marshal'] },
+        ]
+      : []),
+    ...baseItems.filter((it) => !it.roles || it.roles.includes(role)),
+    ...(role === 'user' || role === 'registrar' || role === 'marshal'
+      ? [
           { label: 'My Weapons & Equipment', to: `/app/players/${encodeURIComponent(user?.id || '1')}/weapons-and-equipment`, icon: FiTarget, roles: ['user'] },
         ]
       : []),

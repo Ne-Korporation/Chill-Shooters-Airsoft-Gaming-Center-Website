@@ -1,7 +1,30 @@
 export const apiBase = (import.meta as any).env?.VITE_API_URL || 'http://localhost:3001'
 
+function readAuthToken() {
+  try {
+    const raw = localStorage.getItem('aim-book-play.auth')
+    if (!raw) return ''
+    const parsed = JSON.parse(raw)
+    return typeof parsed?.token === 'string' ? parsed.token : ''
+  } catch {
+    return ''
+  }
+}
+
+function buildHeaders(includeJsonBody = false) {
+  const headers: Record<string, string> = {}
+  const token = readAuthToken()
+  if (token) {
+    headers.Authorization = `Bearer ${token}`
+  }
+  if (includeJsonBody) {
+    headers['Content-Type'] = 'application/json'
+  }
+  return headers
+}
+
 export async function apiGet<T>(path: string) {
-  const res = await fetch(`${apiBase}${path}`)
+  const res = await fetch(`${apiBase}${path}`, { headers: buildHeaders() })
   const json = await res.json().catch(() => null)
   if (!res.ok) {
     throw new Error(json?.error || json?.message || `GET ${path} failed`)
@@ -12,7 +35,7 @@ export async function apiGet<T>(path: string) {
 export async function apiPost<T>(path: string, body: unknown) {
   const res = await fetch(`${apiBase}${path}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: buildHeaders(true),
     body: JSON.stringify(body),
   })
   const json = await res.json().catch(() => null)
@@ -25,7 +48,7 @@ export async function apiPost<T>(path: string, body: unknown) {
 export async function apiPut<T>(path: string, body: unknown) {
   const res = await fetch(`${apiBase}${path}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: buildHeaders(true),
     body: JSON.stringify(body),
   })
   const json = await res.json().catch(() => null)
@@ -38,6 +61,7 @@ export async function apiPut<T>(path: string, body: unknown) {
 export async function apiDelete<T>(path: string) {
   const res = await fetch(`${apiBase}${path}`, {
     method: 'DELETE',
+    headers: buildHeaders(),
   })
   const json = await res.json().catch(() => null)
   if (!res.ok) {
