@@ -1,29 +1,25 @@
 import { MongoClient, ObjectId } from 'mongodb'
-
+import dns from 'dns';
+dns.setServers(['8.8.8.8', '1.1.1.1']);
 // Centralized MongoDB connection
 // Uses native MongoDB driver (no mongoose).
 
-
-
-// Allow local defaults so development works out-of-the-box.
-const MONGODB_URI =
-  process.env.MONGODB_URI || 'mongodb://localhost:27017/chillshootersgamecenter'
 const DB_NAME = process.env.DB_NAME || 'chillshootersgamecenter'
 export const USER_ACCOUNTS_COLLECTION = process.env.USER_ACCOUNTS_COLLECTION || 'user_accounts'
-
-if (!process.env.MONGODB_URI) {
-  console.warn('MONGODB_URI not set; using default:', MONGODB_URI)
-}
-
 
 let client
 let dbPromise
 
+function getMongoUri() {
+  return process.env.MONGODB_URI
+}
+
 async function getDb() {
-  if (!MONGODB_URI) throw new Error('MONGODB_URI missing')
+  const mongoUri = getMongoUri()
+  if (!mongoUri) throw new Error('MONGODB_URI missing')
 
   if (!dbPromise) {
-    client = new MongoClient(MONGODB_URI)
+    client = new MongoClient(mongoUri)
     dbPromise = client
       .connect()
       .then(() => client.db(DB_NAME))
