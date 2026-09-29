@@ -29,13 +29,13 @@ function parseStatus(body) {
   if (!status || typeof status !== 'string') return null
   const lower = status.trim().toLowerCase()
   if (lower === 'pending') return 'pending'
-  if (lower === 'needs review' || lower === 'needs_review' || lower === 'review') return 'needs review'
+  if (lower === 'needs review' || lower === 'needs_review' || lower === 'review' || lower === 'rejected') return 'needs review'
   if (lower === 'confirmed' || lower === 'approved') return 'confirmed'
   return null
 }
 
 function isAdminRole(role) {
-  return role === 'admin' || role === 'marshal'
+  return role === 'admin' || role === 'marshal' || role === 'registrar'
 }
 
 function mapReservationToGameplay({ reservation }) {

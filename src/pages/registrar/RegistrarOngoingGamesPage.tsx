@@ -6,6 +6,7 @@ import { toast } from 'react-hot-toast'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { apiGet, apiPut } from '../../utils/apiClient'
+import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
 
 type GameplayStatus = 'Scheduled' | 'Ongoing' | 'Completed' | 'Cancelled' | 'Archived'
 
@@ -79,6 +80,7 @@ export function RegistrarOngoingGamesPage() {
   const [items, setItems] = useState<GameplayDoc[]>([])
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
+  const { addNotification } = useNotifications()
 
   const refresh = async () => {
     setLoading(true)
@@ -151,6 +153,13 @@ export function RegistrarOngoingGamesPage() {
           updatedAtISO: new Date().toISOString(),
         },
       })
+      sendRoleNotifications(addNotification, {
+        roles: ['admin', 'registrar', 'marshal'],
+        type: 'gameplay_status_updated',
+        title: 'Gameplay Status Updated',
+        message: `Gameplay ${id} moved to ${nextStatus}.`,
+        linkedResourceId: id,
+      })
       toast.success(`Gameplay marked ${nextStatus.toLowerCase()}`)
       await refresh()
     } catch (e: any) {
@@ -181,6 +190,13 @@ export function RegistrarOngoingGamesPage() {
           archivedAtISO: new Date().toISOString(),
           updatedAtISO: new Date().toISOString(),
         },
+      })
+      sendRoleNotifications(addNotification, {
+        roles: ['admin', 'registrar', 'marshal'],
+        type: 'gameplay_status_updated',
+        title: 'Gameplay Archived',
+        message: `Gameplay ${id} was archived.`,
+        linkedResourceId: id,
       })
       toast.success('Gameplay archived')
       await refresh()

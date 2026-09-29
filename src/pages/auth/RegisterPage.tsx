@@ -1,8 +1,9 @@
-import React from 'react'
+import React, { useState, useMemo } from 'react'
 import { useForm } from 'react-hook-form'
 import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { motion } from 'framer-motion'
+import { FiCheck, FiEye, FiEyeOff } from 'react-icons/fi'
 
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
@@ -18,14 +19,37 @@ type FormValues = {
 
 export function RegisterPage() {
   const navigate = useNavigate()
+  const [showPassword, setShowPassword] = useState(false)
 
   const {
     register,
     handleSubmit,
+    watch,
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({ defaultValues: { name: '', email: '', password: '' } })
 
+  const password = watch('password')
+
+  const passwordChecks = useMemo(() => ({
+    hasMinLength: password ? password.length >= 8 : false,
+    hasUppercase: password ? /[A-Z]/.test(password) : false,
+    hasLowercase: password ? /[a-z]/.test(password) : false,
+    hasSpecial: password ? /[!@#$%^&*(),.?":{}|<>_\-\\[\]`~;'\/]/.test(password) : false,
+  }), [password])
+
+  const allRequirementsMet = useMemo(() =>
+    passwordChecks.hasMinLength &&
+    passwordChecks.hasUppercase &&
+    passwordChecks.hasLowercase &&
+    passwordChecks.hasSpecial,
+  [passwordChecks])
+
   async function onSubmit(values: FormValues) {
+    if (!allRequirementsMet) {
+      toast.error('Please meet all password requirements.')
+      return
+    }
+
     const payload = {
       name: values.name.trim(),
       email: values.email.trim().toLowerCase(),
@@ -101,13 +125,61 @@ export function RegisterPage() {
                 error={errors.email?.message}
                 {...register('email', { required: 'Email is required' })}
               />
-              <Input
-                label="Password"
-                type="password"
-                placeholder="Minimum 4 characters"
-                error={errors.password?.message}
-                {...register('password', { required: 'Password is required', minLength: 4 })}
-              />
+              <div>
+                <label className="mb-1.5 block text-xs font-bold uppercase tracking-[0.18em] text-muted">
+                  Password
+                </label>
+                <div className="relative">
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    placeholder="Create a strong password"
+                    className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 pr-12 text-sm text-text placeholder-muted outline-none transition focus:border-accent/40 focus:ring-2 focus:ring-accent/25"
+                    {...register('password', {
+                      required: 'Password is required',
+                      minLength: { value: 8, message: 'At least 8 characters' },
+                      validate: {
+                        hasUppercase: (v) => /[A-Z]/.test(v) || 'Need 1 uppercase',
+                        hasLowercase: (v) => /[a-z]/.test(v) || 'Need 1 lowercase',
+                        hasSpecial: (v) => /[!@#$%^&*(),.?":{}|<>_\-\\[\]`~;'\/]/.test(v) || 'Need 1 special symbol',
+                      },
+                    })}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((v) => !v)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted hover:text-text transition"
+                    tabIndex={-1}
+                  >
+                    {showPassword ? <FiEyeOff size={18} /> : <FiEye size={18} />}
+                  </button>
+                </div>
+                {errors.password?.message && (
+                  <p className="mt-1 text-xs text-danger">{errors.password.message}</p>
+                )}
+
+                {/* Password requirement checkboxes */}
+                <div className="mt-3 space-y-2">
+                  {[
+                    { label: '8+ characters', met: passwordChecks.hasMinLength },
+                    { label: '1 uppercase letter', met: passwordChecks.hasUppercase },
+                    { label: '1 lowercase letter', met: passwordChecks.hasLowercase },
+                    { label: '1 special symbol', met: passwordChecks.hasSpecial },
+                  ].map((req) => (
+                    <div key={req.label} className="flex items-center gap-2 text-xs">
+                      <span
+                        className={`grid h-5 w-5 place-items-center rounded-full border-2 transition ${
+                          req.met
+                            ? 'border-success bg-success/20 text-success'
+                            : 'border-white/20 text-muted'
+                        }`}
+                      >
+                        {req.met && <FiCheck size={12} />}
+                      </span>
+                      <span className={req.met ? 'text-success' : 'text-muted'}>{req.label}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
 
               <Button type="submit" disabled={isSubmitting} className="w-full">
                 {isSubmitting ? 'Creating...' : 'Create account'}

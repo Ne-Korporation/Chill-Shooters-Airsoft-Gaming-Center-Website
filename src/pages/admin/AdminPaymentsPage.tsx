@@ -4,6 +4,7 @@ import { Card } from '../../components/ui/Card'
 import toast from 'react-hot-toast'
 import { apiDelete, apiGet, apiPut } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
+import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
 
 
 type PaymentStatus = 'paid' | 'pending' | 'failed' | 'review' | 'confirmed'
@@ -46,6 +47,7 @@ export function AdminPaymentsPage() {
   const [active, setActive] = React.useState<PaymentStatus | 'all'>('all')
   const [payments, setPayments] = React.useState<PaymentItem[]>([])
   const [loading, setLoading] = useState(true)
+  const { addNotification } = useNotifications()
 
   const load = async () => {
     setLoading(true)
@@ -87,6 +89,13 @@ export function AdminPaymentsPage() {
   const updateStatus = async (id: string, nextStatus: PaymentStatus) => {
     try {
       await apiPut(`/api/payments/${id}/verify`, { paymentStatus: nextStatus })
+      sendRoleNotifications(addNotification, {
+        roles: ['admin', 'registrar', 'marshal'],
+        type: 'payment_verified',
+        title: 'Payment Status Updated',
+        message: `Payment ${id} was marked ${nextStatus}.`,
+        linkedResourceId: id,
+      })
       await load()
       toast.success('Payment updated')
     } catch (e: any) {

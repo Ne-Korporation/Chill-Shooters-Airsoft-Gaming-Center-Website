@@ -1,8 +1,51 @@
-import React from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
+import toast from 'react-hot-toast'
 import { Card } from '../../components/ui/Card'
 import { FiCalendar, FiShield, FiPackage, FiCreditCard, FiCheckCircle, FiZap } from 'react-icons/fi'
+import { apiGet } from '../../utils/apiClient'
 
 export function RegistrarDashboardHomePage() {
+  const [pendingReservations, setPendingReservations] = useState(0)
+  const [pendingWaivers, setPendingWaivers] = useState(0)
+  const [pendingPayments, setPendingPayments] = useState(0)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true)
+      try {
+        const [reservationsRes, waiversRes, paymentsRes] = await Promise.all([
+          apiGet<{ ok: boolean; data: any[] }>('/api/reservations?limit=200'),
+          apiGet<{ ok: boolean; data: any[] }>('/api/waivers?limit=200'),
+          apiGet<{ ok: boolean; data: any[] }>('/api/payments?limit=200'),
+        ])
+
+        const reservations = Array.isArray(reservationsRes?.data) ? reservationsRes.data : []
+        const waivers = Array.isArray(waiversRes?.data) ? waiversRes.data : []
+        const payments = Array.isArray(paymentsRes?.data) ? paymentsRes.data : []
+
+        setPendingReservations(reservations.filter((item) => String(item.reservationStatus || '').toLowerCase() === 'pending').length)
+        setPendingWaivers(waivers.filter((item) => !item.status || String(item.status).toLowerCase() === 'pending').length)
+        setPendingPayments(payments.filter((item) => {
+          const status = String(item.paymentStatus || item.status || '').toLowerCase()
+          return status === 'pending' || status === 'submitted' || status === 'review'
+        }).length)
+      } catch (e: any) {
+        toast.error(String(e?.message || e))
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    void load()
+  }, [])
+
+  const summary = useMemo(() => [
+    { label: 'Pending approvals', value: pendingReservations, tone: 'accent' },
+    { label: 'Waivers to review', value: pendingWaivers, tone: 'success' },
+    { label: 'Payments awaiting verify', value: pendingPayments, tone: 'danger' },
+  ], [pendingPayments, pendingReservations, pendingWaivers])
+
   return (
     <div className="space-y-5">
       <div className="space-y-2">
@@ -15,35 +58,19 @@ export function RegistrarDashboardHomePage() {
       </div>
 
       <div className="grid gap-4 md:grid-cols-3">
-        <Card className="p-4">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-xs uppercase tracking-widest text-muted">Pending approvals</div>
-              <div className="mt-2 text-2xl font-bold text-accent">2</div>
+        {summary.map((item) => (
+          <Card key={item.label} className="p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-xs uppercase tracking-widest text-muted">{item.label}</div>
+                <div className={`mt-2 text-2xl font-bold ${item.tone === 'accent' ? 'text-accent' : item.tone === 'success' ? 'text-success' : 'text-danger'}`}>
+                  {loading ? '…' : item.value}
+                </div>
+              </div>
+              {item.tone === 'accent' ? <FiShield className="text-gold" /> : item.tone === 'success' ? <FiCheckCircle className="text-success" /> : <FiCreditCard className="text-danger" />}
             </div>
-            <FiShield className="text-gold" />
-          </div>
-        </Card>
-
-        <Card className="p-4">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-xs uppercase tracking-widest text-muted">Waivers to review</div>
-              <div className="mt-2 text-2xl font-bold text-success">1</div>
-            </div>
-            <FiCheckCircle className="text-success" />
-          </div>
-        </Card>
-
-        <Card className="p-4">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-xs uppercase tracking-widest text-muted">Payments awaiting verify</div>
-              <div className="mt-2 text-2xl font-bold text-danger">2</div>
-            </div>
-            <FiCreditCard className="text-danger" />
-          </div>
-        </Card>
+          </Card>
+        ))}
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">

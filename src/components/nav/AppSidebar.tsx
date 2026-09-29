@@ -1,8 +1,9 @@
 import React from 'react'
-import { NavLink } from 'react-router-dom'
+import { NavLink, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import type { IconType } from 'react-icons'
 import { useAuth } from '../../context/AuthContext'
+import { useNotifications } from '../../context/NotificationContext'
 import {
   FiGrid,
   FiCalendar,
@@ -83,6 +84,8 @@ export function AppSidebar({
   className?: string
 }) {
   const { user } = useAuth()
+  const { unreadCount, getNotificationsForRole } = useNotifications()
+  const userUnread = user?.role ? getNotificationsForRole(user.role, user.id).filter((n) => !n.read).length : 0
   const profilePath = user?.id ? `/app/players/${encodeURIComponent(user.id)}` : '/app/players/1'
 
   const items = [
@@ -122,7 +125,6 @@ export function AppSidebar({
                 : 'Operator Dashboard'}
         </div>
         <div className="mt-2 text-[11px] text-muted">
-          Military-grade reservation workflow.
         </div>
       </div>
 
@@ -149,6 +151,9 @@ export function AppSidebar({
               >
                 <Icon className="text-accent" />
                 <span className="truncate">{item.label}</span>
+                {item.label === 'Notifications' && userUnread > 0 && (
+                  <span className="ml-auto h-2.5 w-2.5 rounded-full bg-success ring-2 ring-black" />
+                )}
               </NavLink>
             </motion.div>
           )

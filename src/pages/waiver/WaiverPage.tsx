@@ -1,11 +1,14 @@
-import React, { useMemo, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { motion } from 'framer-motion'
 import {
   FiAlertTriangle,
   FiCheck,
   FiChevronRight,
+  FiPrinter,
   FiShield,
   FiUser,
+  FiX,
 } from 'react-icons/fi'
 
 
@@ -14,8 +17,9 @@ import { Card } from '../../components/ui/Card'
 
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
-import { apiPost } from '../../utils/apiClient'
+import { apiGet, apiPost } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
+import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
 
 type WaiverState = {
   fullName: string
@@ -27,6 +31,24 @@ type WaiverState = {
 }
 
 type SignaturePoint = { x: number; y: number }
+
+type SubmittedWaiver = {
+  id?: string
+  _id?: string
+  userId?: string
+  reservationId?: string
+  fullName?: string
+  age?: number
+  guardianName?: string
+  guardianConsent?: boolean
+  consent?: boolean
+  termsAccepted?: boolean
+  isMinor?: boolean
+  hasSignature?: boolean
+  status?: string
+  submittedAtISO?: string
+  createdAtISO?: string
+}
 
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n))
@@ -59,10 +81,110 @@ export function WaiverPage({
 
   const [submitting, setSubmitting] = useState(false)
   const [submitted, setSubmitted] = useState(false)
+  const [waiverStatus, setWaiverStatus] = useState<string | undefined>()
+  const [submittedWaiver, setSubmittedWaiver] = useState<SubmittedWaiver | null>(null)
+  const [viewWaiverOpen, setViewWaiverOpen] = useState(false)
+  const [viewWaiverLoading, setViewWaiverLoading] = useState(false)
+  const [viewWaiverError, setViewWaiverError] = useState<string | null>(null)
+  const [viewWaiverInfo, setViewWaiverInfo] = useState<string | null>(null)
+  const [checkingSubmission, setCheckingSubmission] = useState(true)
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const [hasSignature, setHasSignature] = useState(false)
   const { user } = useAuth()
+  const { addNotification } = useNotifications()
+
+  const waiverStorageKey = user?.id ? `waiver_submitted:${user.id}` : ''
+  const waiverIdKey = user?.id ? `last_waiver_id:${user.id}` : ''
+
+  useEffect(() => {
+    if (!user?.id) {
+      setCheckingSubmission(false)
+      return
+    }
+
+    let cancelled = false
+    setCheckingSubmission(true)
+    const localWaiverId = waiverIdKey ? localStorage.getItem(waiverIdKey) : null
+    const reservationId = localStorage.getItem('active_reservation_id') || null
+
+    const matchesCurrentUser = (waiver?: SubmittedWaiver) => {
+      if (!waiver) return false
+      if (!user?.id) return false
+      return String(waiver.userId) === String(user.id)
+    }
+
+    const loadWaiver = async () => {
+      try {
+        const candidates: SubmittedWaiver[] = []
+
+        if (localWaiverId) {
+          const response = await apiGet<{ ok: boolean; data: SubmittedWaiver }>(`/api/waivers/${encodeURIComponent(localWaiverId)}`)
+          if (response?.data) candidates.push(response.data)
+        }
+
+        if (user?.id) {
+          const response = await apiGet<{ ok: boolean; data: SubmittedWaiver[] }>(
+            `/api/waivers?q=${encodeURIComponent(JSON.stringify({ userId: user.id }))}&limit=200`,
+          )
+          if (Array.isArray(response?.data)) candidates.push(...response.data)
+        }
+
+        if (reservationId) {
+          const response = await apiGet<{ ok: boolean; data: SubmittedWaiver[] }>(
+            `/api/waivers?q=${encodeURIComponent(JSON.stringify({ reservationId }))}&limit=200`,
+          )
+          if (Array.isArray(response?.data)) candidates.push(...response.data)
+        }
+
+        const existingWaiver = candidates
+          .filter(matchesCurrentUser)
+          .filter(Boolean)
+          .sort((a, b) => {
+            const aDate = String(a.submittedAtISO || a.createdAtISO || '')
+            const bDate = String(b.submittedAtISO || b.createdAtISO || '')
+            return bDate.localeCompare(aDate)
+          })[0] || null
+
+        if (!cancelled) {
+          if (existingWaiver) {
+            setState((current) => ({
+              ...current,
+              fullName: existingWaiver.fullName || current.fullName,
+              age: existingWaiver.age || current.age,
+              guardianName: existingWaiver.guardianName || current.guardianName,
+              guardianConsent: Boolean(existingWaiver.guardianConsent),
+              consent: Boolean(existingWaiver.consent),
+              termsAccepted: Boolean(existingWaiver.termsAccepted),
+            }))
+            setAgeInput(String(existingWaiver.age || 16))
+            setHasSignature(Boolean(existingWaiver.hasSignature))
+            setWaiverStatus(existingWaiver.status)
+            setSubmittedWaiver(existingWaiver)
+            setSubmitted(true)
+            if (waiverStorageKey) localStorage.setItem(waiverStorageKey, '1')
+            if (waiverIdKey && existingWaiver.id) localStorage.setItem(waiverIdKey, existingWaiver.id)
+          } else {
+            setSubmitted(false)
+            setWaiverStatus(undefined)
+            setSubmittedWaiver(null)
+            if (waiverStorageKey) localStorage.removeItem(waiverStorageKey)
+            if (waiverIdKey) localStorage.removeItem(waiverIdKey)
+          }
+        }
+      } catch (error) {
+        if (!cancelled) setSubmitted(false)
+      } finally {
+        if (!cancelled) setCheckingSubmission(false)
+      }
+    }
+
+    loadWaiver()
+
+    return () => {
+      cancelled = true
+    }
+  }, [user?.id, waiverIdKey, waiverStorageKey])
 
   const isMinor = state.age < 18
 
@@ -132,6 +254,7 @@ export function WaiverPage({
   }
 
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (submitted) return
     const canvas = canvasRef.current
     if (!canvas) return
     const rect = canvas.getBoundingClientRect()
@@ -207,9 +330,10 @@ export function WaiverPage({
   }, [])
 
   const onSubmit = async () => {
+    if (submitted || submitting) return
     setSubmitting(true)
     try {
-      await apiPost('/api/waivers', {
+      const response = await apiPost<{ ok: boolean; insertedId: string; data: SubmittedWaiver }>('/api/waivers', {
         id: `WAIV-${Date.now()}`,
         userId: user?.id || '',
         reservationId: localStorage.getItem('active_reservation_id') || '',
@@ -225,9 +349,20 @@ export function WaiverPage({
         submittedAtISO: new Date().toISOString(),
         createdAtISO: new Date().toISOString(),
       })
+      sendRoleNotifications(addNotification, {
+        roles: ['admin', 'registrar', 'marshal'],
+        type: 'waiver_submitted',
+        title: 'New Waiver Submitted',
+        message: `A new waiver was submitted by ${user?.name || user?.id || 'a player'}.`,
+        linkedResourceId: response?.data?.id,
+      })
+
       setSubmitted(true)
+      setWaiverStatus(response?.data?.status)
+      setSubmittedWaiver(response?.data || null)
       try {
-        localStorage.setItem('waiver_submitted', '1')
+        if (waiverStorageKey) localStorage.setItem(waiverStorageKey, '1')
+        if (waiverIdKey && response?.data?.id) localStorage.setItem(waiverIdKey, response.data.id)
       } catch (e) {
         // ignore
       }
@@ -239,19 +374,237 @@ export function WaiverPage({
 
   const isEmbedded = variant === 'embedded'
 
+  const loadSubmittedWaiver = async () => {
+    if (submittedWaiver) return submittedWaiver
+
+    const localWaiverId = waiverIdKey ? localStorage.getItem(waiverIdKey) : null
+    const reservationId = localStorage.getItem('active_reservation_id') || null
+
+    const tryFetchByQuery = async (query: Record<string, string>) => {
+      const response = await apiGet<{ ok: boolean; data: SubmittedWaiver[] }>(
+        `/api/waivers?q=${encodeURIComponent(JSON.stringify(query))}&limit=1`,
+      )
+      return response.data?.[0] || null
+    }
+
+    try {
+      const matchesCurrentUser = (waiver?: SubmittedWaiver) => {
+        if (!waiver) return false
+        if (!user?.id) return false
+        return String(waiver.userId) === String(user.id)
+      }
+
+      if (localWaiverId) {
+        const response = await apiGet<{ ok: boolean; data: SubmittedWaiver }>(`/api/waivers/${encodeURIComponent(localWaiverId)}`)
+        if (response.data && matchesCurrentUser(response.data)) {
+          setSubmittedWaiver(response.data)
+          return response.data
+        }
+      }
+
+      if (user?.id) {
+        const existingWaiver = await tryFetchByQuery({ userId: user.id })
+        if (existingWaiver) {
+          setSubmittedWaiver(existingWaiver)
+          return existingWaiver
+        }
+      }
+
+      if (reservationId) {
+        const existingWaiver = await tryFetchByQuery({ reservationId })
+        if (existingWaiver && matchesCurrentUser(existingWaiver)) {
+          setSubmittedWaiver(existingWaiver)
+          return existingWaiver
+        }
+      }
+    } catch (error) {
+      // ignore
+    }
+
+    return null
+  }
+
+  const handleViewWaiver = async () => {
+    if (viewWaiverLoading) return
+    console.log('handleViewWaiver clicked', { submitted, submittedWaiver, checkingSubmission, viewWaiverLoading })
+    setViewWaiverError(null)
+    setViewWaiverInfo('Clicked — loading your waiver...')
+    setViewWaiverLoading(true)
+    try {
+      const waiver = await loadSubmittedWaiver()
+      if (waiver) {
+        setViewWaiverOpen(true)
+        setViewWaiverInfo(null)
+      } else {
+        setViewWaiverError('Unable to load your submitted waiver. Please refresh the page or contact support.')
+        setViewWaiverInfo(null)
+      }
+    } finally {
+      setViewWaiverLoading(false)
+    }
+  }
+
+  const printWaiver = () => {
+    if (!submitted || checkingSubmission) return
+    const clearPrintState = () => document.body.classList.remove('printing-waiver')
+    document.body.classList.add('printing-waiver')
+    window.addEventListener('afterprint', clearPrintState, { once: true })
+    window.print()
+  }
+
   return (
-    <div className={['space-y-4', isEmbedded ? 'max-w-none' : ''].filter(Boolean).join(' ')}>
+    <div className={['waiver-page space-y-4', submitted ? 'submitted-waiver' : '', isEmbedded ? 'max-w-none' : ''].filter(Boolean).join(' ')}>
       {!isEmbedded ? (
-        <div className="space-y-2">
-          <div className="inline-flex items-center gap-2 rounded-full bg-white/5 px-4 py-2 text-xs text-muted border border-white/5">
-            <span className="h-2.5 w-2.5 rounded-full bg-accent" />
-            <span className="uppercase tracking-[0.18em]">Waiver</span>
+        <>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+            <div className="space-y-2">
+              <div className="inline-flex items-center gap-2 rounded-full bg-white/5 px-4 py-2 text-xs text-muted border border-white/5">
+                <span className="h-2.5 w-2.5 rounded-full bg-accent" />
+                <span className="uppercase tracking-[0.18em]">Waiver</span>
+              </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <h1 className="text-3xl font-bold">Online Waiver</h1>
+                {waiverStatus ? (
+                (() => {
+                  const normalizedStatus = String(waiverStatus).trim().toLowerCase()
+                  const isApproved = normalizedStatus === 'approved'
+                  const isDenied = normalizedStatus === 'denied'
+                  return (
+                    <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${isApproved ? 'border-success/30 bg-success/10 text-success' : isDenied ? 'border-danger/30 bg-danger/10 text-danger' : 'border-accent/30 bg-accent/10 text-accent'}`}>
+                      {isApproved ? 'Approved' : isDenied ? 'Denied' : 'Pending'}
+                    </span>
+                  )
+                })()
+              ) : null}
+              </div>
+              <p className="text-muted text-sm">Digital waiver with signature pad + guardian consent (prototype only).</p>
+            </div>
+            <div className="flex items-center gap-3">
+              <Button variant="ghost" disabled={viewWaiverLoading} onClick={handleViewWaiver}>
+                <FiPrinter />
+                {viewWaiverLoading ? 'Loading waiver…' : 'View my waiver'}
+              </Button>
+            </div>
           </div>
-          <h1 className="text-3xl font-bold">Online Waiver</h1>
-          <p className="text-muted text-sm">Digital waiver with signature pad + guardian consent (prototype only).</p>
+          <div className="mt-3 text-sm text-muted">
+            {checkingSubmission
+              ? 'Checking for an existing waiver…'
+              : submittedWaiver
+              ? 'Saved waiver ready to view.'
+              : 'No waiver loaded yet. Click View my waiver to search.'}
+          </div>
+          {viewWaiverLoading ? (
+            <div className="mt-3 rounded-2xl border border-accent/15 bg-accent/10 px-4 py-3 text-sm text-accent">
+              {viewWaiverInfo}
+            </div>
+          ) : viewWaiverError ? (
+            <div className="mt-3 rounded-2xl border border-danger/15 bg-danger/10 px-4 py-3 text-sm text-danger">
+              {viewWaiverError}
+            </div>
+          ) : null}
+        </>
+      ) : null}
+
+      {submitted && !isEmbedded ? (
+        <div className="rounded-2xl border border-success/25 bg-success/10 p-4 text-sm text-success">
+          {String(waiverStatus || '').trim().toLowerCase() === 'approved'
+            ? 'Waiver approved. Your waiver is cleared for play and ready to print.'
+            : 'Waiver submitted successfully. The form is closed. Use View my waiver to see your submitted waiver.'}
         </div>
       ) : null}
 
+      {viewWaiverOpen && submittedWaiver ? createPortal(
+        <div className="fixed inset-0 z-[9999] grid place-items-center bg-black/60 p-4">
+          <div className="max-h-[90vh] w-full max-w-5xl overflow-y-auto bg-white text-slate-950 dark:bg-slate-950 dark:text-white p-6 shadow-2xl">
+            <div className="flex flex-col gap-4 border-b border-slate-200/70 pb-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <div className="text-xs uppercase tracking-widest text-slate-500">Waiver document</div>
+                <h2 id="waiver-details-title" className="mt-1 text-2xl font-semibold">{submittedWaiver.fullName || 'Unnamed player'}</h2>
+                <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">This is your submitted waiver record.</p>
+              </div>
+              <div className="flex items-center gap-2 self-start sm:self-auto">
+                <Button variant="secondary" onClick={printWaiver}>
+                  <FiPrinter />
+                  Print waiver
+                </Button>
+                <button
+                  type="button"
+                  onClick={() => setViewWaiverOpen(false)}
+                  className="rounded-lg p-2 text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+                  aria-label="Close waiver view"
+                >
+                  <FiX />
+                </button>
+              </div>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2 pt-5 text-sm leading-relaxed text-slate-700 dark:text-slate-300">
+              <div>
+                <div className="text-[11px] uppercase tracking-widest text-slate-500">Waiver ID</div>
+                <p className="mt-1 font-medium">{submittedWaiver.id || submittedWaiver._id || '-'}</p>
+              </div>
+              <div>
+                <div className="text-[11px] uppercase tracking-widest text-slate-500">Submitted</div>
+                <p className="mt-1 font-medium">{submittedWaiver.submittedAtISO ? new Date(submittedWaiver.submittedAtISO).toLocaleString() : '-'}</p>
+              </div>
+              <div>
+                <div className="text-[11px] uppercase tracking-widest text-slate-500">Player ID</div>
+                <p className="mt-1 font-medium">{submittedWaiver.userId || 'Guest submission'}</p>
+              </div>
+              <div>
+                <div className="text-[11px] uppercase tracking-widest text-slate-500">Status</div>
+                <p className="mt-1 font-medium">{submittedWaiver.status || 'pending'}</p>
+              </div>
+            </div>
+
+            <div className="pt-6 text-sm leading-relaxed text-slate-700 dark:text-slate-300">
+              <p className="uppercase tracking-widest text-[11px] text-slate-500">Participant details</p>
+              <p className="mt-3"><span className="font-semibold">Name:</span> {submittedWaiver.fullName || '-'}</p>
+              <p className="mt-2"><span className="font-semibold">Age:</span> {submittedWaiver.age ?? '-'}</p>
+              <p className="mt-2"><span className="font-semibold">Reservation:</span> {submittedWaiver.reservationId || '-'}</p>
+
+              <p className="mt-6 uppercase tracking-widest text-[11px] text-slate-500">Guardian information</p>
+              {submittedWaiver.isMinor ? (
+                <>
+                  <p className="mt-3"><span className="font-semibold">Guardian name:</span> {submittedWaiver.guardianName || '-'}</p>
+                  <p className="mt-2"><span className="font-semibold">Guardian consent:</span> {submittedWaiver.guardianConsent ? 'Yes' : 'No'}</p>
+                </>
+              ) : (
+                <p className="mt-3">Not required for participants 18 or older.</p>
+              )}
+
+              <p className="mt-6 uppercase tracking-widest text-[11px] text-slate-500">Consent summary</p>
+              <ul className="mt-3 list-disc space-y-2 pl-5">
+                <li>Terms accepted: {submittedWaiver.termsAccepted ? 'Yes' : 'No'}</li>
+                <li>Participation consent: {submittedWaiver.consent ? 'Yes' : 'No'}</li>
+                <li>Signature captured: {submittedWaiver.hasSignature ? 'Yes' : 'No'}</li>
+              </ul>
+
+              <p className="mt-6 uppercase tracking-widest text-[11px] text-slate-500">Waiver terms</p>
+              <div className="mt-3 space-y-3">
+                <p>I understand that airsoft activity involves risks including, but not limited to, injury and property damage.</p>
+                <p>I agree to follow marshals’ instructions, safety rules, and field procedures at all times.</p>
+                <p>I acknowledge that protective gear is mandatory and that non-compliance may result in removal from the field.</p>
+                {submittedWaiver.isMinor ? <p>As a parent/guardian, I provide consent for my minor to participate and agree to uphold compliance with safety requirements.</p> : null}
+              </div>
+            </div>
+
+            <div className="mt-8 border-t border-slate-200/70 pt-4 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p><span className="font-semibold text-slate-700 dark:text-slate-200">Document reference:</span> {submittedWaiver.id || submittedWaiver._id || '-'}</p>
+                  <p className="mt-2"><span className="font-semibold text-slate-700 dark:text-slate-200">Displayed as:</span> waiver document view</p>
+                </div>
+                <Button variant="ghost" onClick={printWaiver}>
+                  <FiPrinter />
+                  Print waiver
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      ) : null}
 
       <div className={['grid gap-4', isEmbedded ? '' : 'lg:grid-cols-3'].filter(Boolean).join(' ')}>
         <div className="lg:col-span-2 space-y-4">
@@ -265,6 +618,7 @@ export function WaiverPage({
                 label="Full Name"
                 placeholder="e.g., Ramil Santos"
                 value={state.fullName}
+                disabled={submitted || submitting}
                 onChange={(e) => setState((s) => ({ ...s, fullName: e.target.value }))}
                 error={errors.fullName}
               />
@@ -275,6 +629,7 @@ export function WaiverPage({
                 min={1}
                 inputMode="numeric"
                 value={ageInput}
+                disabled={submitted || submitting}
                 onChange={(e) => {
                   const raw = e.target.value
                   if (raw === '') {
@@ -320,6 +675,7 @@ export function WaiverPage({
                     label="Guardian Name"
                     placeholder="e.g., Maria Santos"
                     value={state.guardianName}
+                    disabled={submitted || submitting}
                     onChange={(e) => setState((s) => ({ ...s, guardianName: e.target.value }))}
                     error={errors.guardianName}
                   />
@@ -330,6 +686,7 @@ export function WaiverPage({
                         <input
                           type="checkbox"
                           checked={state.guardianConsent}
+                          disabled={submitted || submitting}
                           onChange={(e) => setState((s) => ({ ...s, guardianConsent: e.target.checked }))}
                           className="mt-1 h-4 w-4"
                         />
@@ -358,6 +715,7 @@ export function WaiverPage({
                 </div>
                 <button
                   type="button"
+                  disabled={submitted || submitting}
                   onClick={() => setTermsOpen((v) => !v)}
                   className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-bold text-muted hover:bg-white/8 transition"
                 >
@@ -404,6 +762,7 @@ export function WaiverPage({
                     <input
                       type="checkbox"
                       checked={state.termsAccepted}
+                      disabled={submitted || submitting}
                       onChange={(e) => setState((s) => ({ ...s, termsAccepted: e.target.checked }))}
                       className="mt-1 h-4 w-4"
                     />
@@ -423,6 +782,7 @@ export function WaiverPage({
                     <input
                       type="checkbox"
                       checked={state.consent}
+                      disabled={submitted || submitting}
                       onChange={(e) => setState((s) => ({ ...s, consent: e.target.checked }))}
                       className="mt-1 h-4 w-4"
                     />
@@ -492,7 +852,7 @@ export function WaiverPage({
             <div className="mt-5 flex flex-col gap-2 sm:flex-row">
               <Button
                 variant="primary"
-                disabled={!canSubmit}
+                disabled={!canSubmit || submitted}
                 onClick={onSubmit}
               >
                 {submitting ? 'Submitting…' : submitted ? 'Submitted' : 'Submit Waiver'}
@@ -575,8 +935,6 @@ export function WaiverPage({
           </Card>
         </div>
         </div>
-
-       
       </div>
   )
 }

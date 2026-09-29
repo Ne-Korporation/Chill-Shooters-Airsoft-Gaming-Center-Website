@@ -14,8 +14,8 @@ type AuthUser = {
 type AuthContextValue = {
   user: AuthUser | null
   isAuthenticated: boolean
-  login: (payload: { email: string; password: string }) => Promise<void>
-  loginWithGoogle: (payload: { name: string; email: string }) => Promise<void>
+  login: (payload: { email: string; password: string }) => Promise<AuthUser>
+  loginWithGoogle: (payload: { name: string; email: string }) => Promise<AuthUser>
   register: (payload: { name: string; email: string; password: string }) => Promise<void>
   updateUser: (updates: Partial<AuthUser>) => void
   logout: () => void
@@ -58,6 +58,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
         setUser(res.user)
         localStorage.setItem(STORAGE_KEY, JSON.stringify(res.user))
+        return res.user
       },
       loginWithGoogle: async ({ name, email }) => {
         const res = await apiPost<any>('/api/auth/social-login', { name, email })
@@ -66,6 +67,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
         setUser(res.user)
         localStorage.setItem(STORAGE_KEY, JSON.stringify(res.user))
+        return res.user
       },
       register: async ({ name, email, password }) => {
         const res = await apiPost<any>('/api/auth/register', { name, email, password })

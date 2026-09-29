@@ -33,6 +33,105 @@ function safeIdParam(id) {
   }
 }
 
+const BLOCKING_RESERVATION_STATUSES = ['pending', 'confirmed', 'approved']
+
+const LOCATION_FIELD_DEFS = {
+  salawag: [
+    { id: 'salawag-field-1', name: 'Upper Ground' },
+    { id: 'salawag-field-2', name: 'Lower Ground' },
+    { id: 'salawag-field-3', name: 'Forest' },
+  ],
+  langkaan: [
+    { id: 'langkaan-field-1', name: 'Upper Ground' },
+    { id: 'langkaan-field-2', name: 'Lower Ground' },
+    { id: 'langkaan-field-3', name: 'Forest' },
+  ],
+  binan: [
+    { id: 'binan-field-1', name: 'Upper Ground' },
+    { id: 'binan-field-2', name: 'Lower Ground' },
+    { id: 'binan-field-3', name: 'Forest' },
+  ],
+}
+
+function normalizeLocationId(value) {
+  const v = String(value || '').trim().toLowerCase()
+  if (!v) return ''
+  if (v.includes('salawag')) return 'salawag'
+  if (v.includes('langkaan')) return 'langkaan'
+  if (v.includes('binan')) return 'binan'
+  return v
+}
+
+function getFieldBandById(fieldId) {
+  const id = String(fieldId || '').toLowerCase()
+  if (id.endsWith('-field-1')) return { min: 10, max: 19 }
+  if (id.endsWith('-field-2')) return { min: 20, max: 49 }
+  return { min: 50 }
+}
+
+function isWeekdayDateISO(isoDate) {
+  const dateValue = String(isoDate || '').trim()
+  if (!dateValue) return false
+  const d = new Date(`${dateValue}T12:00:00`)
+  if (Number.isNaN(d.getTime())) return false
+  const day = d.getDay()
+  return day >= 1 && day <= 5
+}
+
+function extractReservationFieldIds(reservation) {
+  if (Array.isArray(reservation?.fieldIds)) {
+    return reservation.fieldIds.map((id) => String(id)).filter(Boolean)
+  }
+  if (reservation?.fieldId) {
+    return [String(reservation.fieldId)]
+  }
+  return []
+}
+
+function validatePrivateFieldSelection({ locationId, fieldIds, playersCount, bookedFieldIds }) {
+  const locationFields = LOCATION_FIELD_DEFS[locationId] || []
+  const selectedFields = locationFields.filter((field) => fieldIds.includes(field.id))
+  if (selectedFields.length === 0) {
+    return { ok: false, reason: 'Select at least one valid field for the chosen location.' }
+  }
+
+  const hasBookedSelection = selectedFields.some((field) => bookedFieldIds.has(field.id))
+  if (hasBookedSelection) {
+    return { ok: false, reason: 'One or more selected fields are already booked for this location and time slot.' }
+  }
+
+  const allMeetSelectedMinimums = selectedFields.every((field) => playersCount >= getFieldBandById(field.id).min)
+  if (allMeetSelectedMinimums) return { ok: true }
+
+  const suitableFields = locationFields
+    .filter((field) => {
+      const band = getFieldBandById(field.id)
+      return playersCount >= band.min && (band.max === undefined || playersCount <= band.max)
+    })
+    .sort((a, b) => getFieldBandById(a.id).min - getFieldBandById(b.id).min)
+
+  const smallestSuitableField = suitableFields[0]
+  if (!smallestSuitableField) {
+    return { ok: false, reason: 'Selected field combination is not valid for this group size.' }
+  }
+
+  const smallestMin = getFieldBandById(smallestSuitableField.id).min
+  const smallestFieldBooked = bookedFieldIds.has(smallestSuitableField.id)
+
+  const allBelowMinimumSelectionsAreLarger = selectedFields
+    .filter((field) => playersCount < getFieldBandById(field.id).min)
+    .every((field) => {
+    const band = getFieldBandById(field.id)
+      return band.min > smallestMin
+  })
+
+  if (smallestFieldBooked && allBelowMinimumSelectionsAreLarger) {
+    return { ok: true, usedException: true }
+  }
+
+  return { ok: false, reason: 'Selected field combination is not valid for this group size.' }
+}
+
 async function findDocumentById(db, collection, id) {
   const normalizedId = String(id || '').trim()
   if (!normalizedId) return null
@@ -111,8 +210,106 @@ router.post('/:collection', async (req, res) => {
 
   try {
     const db = await getDb()
+
+    if (collection === 'waivers' && payload.userId) {
+      const existingWaiver = await db.collection(collection).findOne({ userId: String(payload.userId) })
+      if (existingWaiver) {
+        return res.status(409).json({ ok: false, error: 'User has already submitted a waiver' })
+      }
+    }
+
+    if (collection === 'reservations') {
+      const locationId = normalizeLocationId(payload.locationId || payload.location || payload.locationName)
+      const reservationDate = String(payload.reservationDate || payload.dateISO || '').trim()
+      const reservationTime = String(payload.reservationTime || payload.slot || '').trim().toLowerCase()
+      const sessionType = String(payload.sessionType || '').trim().toLowerCase()
+      const playersCount = Number(payload.numberOfPlayers ?? payload.players ?? 0)
+      const fieldIds = Array.from(new Set(
+        (Array.isArray(payload.fieldIds) ? payload.fieldIds : (payload.fieldId ? [payload.fieldId] : []))
+          .map((id) => String(id))
+          .filter(Boolean),
+      ))
+
+      if (!locationId) return res.status(400).json({ ok: false, error: 'locationId is required' })
+      if (!reservationDate) return res.status(400).json({ ok: false, error: 'reservationDate is required' })
+      if (!['morning', 'afternoon', 'evening'].includes(reservationTime)) {
+        return res.status(400).json({ ok: false, error: 'reservationTime must be morning, afternoon, or evening' })
+      }
+      if (!['public', 'private'].includes(sessionType)) {
+        return res.status(400).json({ ok: false, error: 'sessionType must be public or private' })
+      }
+      if (!Number.isFinite(playersCount) || playersCount <= 0) {
+        return res.status(400).json({ ok: false, error: 'numberOfPlayers must be greater than 0' })
+      }
+      if (fieldIds.length === 0) {
+        return res.status(400).json({ ok: false, error: 'Select at least one field.' })
+      }
+
+      const knownFieldIds = new Set((LOCATION_FIELD_DEFS[locationId] || []).map((f) => f.id))
+      const hasUnknownField = fieldIds.some((id) => !knownFieldIds.has(id))
+      if (hasUnknownField) {
+        return res.status(400).json({ ok: false, error: 'One or more selected fields are invalid for this location.' })
+      }
+
+      const isWeekday = isWeekdayDateISO(reservationDate)
+      if (isWeekday && sessionType !== 'private') {
+        return res.status(400).json({ ok: false, error: 'Weekday reservations must be private sessions.' })
+      }
+
+      const sameDateSlotReservations = await db.collection('reservations').find({
+        reservationDate,
+        reservationTime,
+      }).toArray()
+
+      const blockingReservations = sameDateSlotReservations.filter((r) => {
+        const status = String(r?.reservationStatus || '').toLowerCase()
+        const sameLocation = normalizeLocationId(r?.locationId || r?.location || r?.locationName) === locationId
+        return sameLocation && BLOCKING_RESERVATION_STATUSES.includes(status)
+      })
+
+      const bookedFieldIds = new Set(
+        blockingReservations.flatMap((r) => extractReservationFieldIds(r)),
+      )
+
+      // Weekday private game rule: one reservation per field+slot+location.
+      if (isWeekday && sessionType === 'private') {
+        const conflictedFieldIds = fieldIds.filter((id) => bookedFieldIds.has(id))
+        if (conflictedFieldIds.length > 0) {
+          return res.status(409).json({
+            ok: false,
+            error: 'One or more selected fields are already booked for this location and time slot.',
+            conflictedFieldIds,
+          })
+        }
+      }
+
+      if (sessionType === 'private') {
+        const validation = validatePrivateFieldSelection({
+          locationId,
+          fieldIds,
+          playersCount,
+          bookedFieldIds,
+        })
+        if (!validation.ok) {
+          return res.status(400).json({ ok: false, error: validation.reason })
+        }
+      }
+    }
+
     const prefix = shortIdPrefixForCollection(collection)
     const doc = { ...payload }
+
+    if (collection === 'reservations') {
+      doc.locationId = normalizeLocationId(payload.locationId || payload.location || payload.locationName)
+      doc.fieldIds = Array.from(new Set(
+        (Array.isArray(payload.fieldIds) ? payload.fieldIds : (payload.fieldId ? [payload.fieldId] : []))
+          .map((id) => String(id))
+          .filter(Boolean),
+      ))
+      if (!doc.fieldId && doc.fieldIds.length > 0) {
+        doc.fieldId = doc.fieldIds[0]
+      }
+    }
 
     if (prefix && !doc.id) {
       const count = await db.collection(collection).countDocuments({})

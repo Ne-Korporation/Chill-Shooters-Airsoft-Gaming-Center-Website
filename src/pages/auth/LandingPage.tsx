@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
@@ -18,6 +18,7 @@ import { Button } from '../../components/ui/Button'
 import { useTheme } from '../../context/ThemeContext'
 import { ThemeToggle } from '../../components/nav/ThemeToggle'
 import { Card } from '../../components/ui/Card'
+import { apiGet } from '../../utils/apiClient'
 
 type Testimonial = {
   name: string
@@ -28,6 +29,26 @@ type Testimonial = {
 type FAQ = {
   q: string
   a: string
+}
+
+type LandingMetrics = {
+  reservations: number
+  pendingPayments: number
+  pendingWaivers: number
+  activeGames: number
+  pendingItems: number
+  readiness: number
+  statusLabel: string
+}
+
+const initialMetrics: LandingMetrics = {
+  reservations: 0,
+  pendingPayments: 0,
+  pendingWaivers: 0,
+  activeGames: 0,
+  pendingItems: 0,
+  readiness: 100,
+  statusLabel: 'Ready',
 }
 
 function CamouflageOverlay({ opacity = 0.1 }: { opacity?: number }) {
@@ -83,11 +104,83 @@ function SectionTitle({
 export function LandingPage() {
   const { theme } = useTheme()
   const [faqOpen, setFaqOpen] = useState<number | null>(null)
+  const [landingMetrics, setLandingMetrics] = useState<LandingMetrics>(initialMetrics)
+  const [loadingMetrics, setLoadingMetrics] = useState(true)
 
   const handleFaqToggle = (idx: number, open: boolean) => {
     setFaqOpen(open ? null : idx)
   }
   const navigate = useNavigate()
+
+  useEffect(() => {
+    let isMounted = true
+
+    const loadMetrics = async () => {
+      setLoadingMetrics(true)
+      try {
+        const [reservationsRes, paymentsRes, waiversRes, gameplayRes] = await Promise.all([
+          apiGet<{ ok: boolean; data: any[] }>('/api/reservations?limit=200'),
+          apiGet<{ ok: boolean; data: any[] }>('/api/payments?limit=200'),
+          apiGet<{ ok: boolean; data: any[] }>('/api/waivers?limit=200'),
+          apiGet<{ ok: boolean; data: any[] }>('/api/gameplay?limit=200'),
+        ])
+
+        const reservations = Array.isArray(reservationsRes?.data) ? reservationsRes.data : []
+        const payments = Array.isArray(paymentsRes?.data) ? paymentsRes.data : []
+        const waivers = Array.isArray(waiversRes?.data) ? waiversRes.data : []
+        const gameplay = Array.isArray(gameplayRes?.data) ? gameplayRes.data : []
+
+        const pendingReservations = reservations.filter((item) => {
+          const status = String(item?.reservationStatus || '').trim().toLowerCase()
+          return status === 'pending' || status === 'needs review' || status === 'needs_review' || status === 'review'
+        }).length
+
+        const pendingPayments = payments.filter((item) => {
+          const status = String(item?.paymentStatus || item?.status || '').trim().toLowerCase()
+          return status === 'pending' || status === 'submitted' || status === 'review'
+        }).length
+
+        const pendingWaivers = waivers.filter((item) => {
+          const status = String(item?.status || '').trim().toLowerCase()
+          return status === 'pending' || !status
+        }).length
+
+        const activeGames = gameplay.filter((item) => {
+          const status = String(item?.Status || item?.status || '').trim().toLowerCase()
+          return status === 'scheduled' || status === 'ongoing' || status === 'completed'
+        }).length
+
+        const pendingItems = pendingReservations + pendingPayments + pendingWaivers
+        const readiness = Math.max(70, Math.min(100, 100 - pendingItems * 4))
+        const statusLabel = pendingItems > 0 ? 'Needs follow-up' : 'Ready'
+
+        if (isMounted) {
+          setLandingMetrics({
+            reservations: reservations.length,
+            pendingPayments,
+            pendingWaivers,
+            activeGames,
+            pendingItems,
+            readiness,
+            statusLabel,
+          })
+        }
+      } catch (error) {
+        if (isMounted) {
+          setLandingMetrics(initialMetrics)
+        }
+      } finally {
+        if (isMounted) {
+          setLoadingMetrics(false)
+        }
+      }
+    }
+
+    void loadMetrics()
+    return () => {
+      isMounted = false
+    }
+  }, [])
 
   const handleContactClick = () => {
     if (typeof window !== 'undefined') {
@@ -202,15 +295,47 @@ export function LandingPage() {
 
   const stats = useMemo(
     () => [
-      { label: 'Live Slot Control', value: '0 Overbook' },
-      { label: 'Average Setup Time', value: '< 2 Minutes' },
-      { label: 'Admin Visibility', value: 'Full Coverage' },
-      { label: 'Player Profiles', value: 'Built-In' },
+      {
+        label: 'Live reservations',
+        value: loadingMetrics ? '…' : `${landingMetrics.reservations} active`,
+      },
+      {
+        label: 'Pending payments',
+        value: loadingMetrics ? '…' : `${landingMetrics.pendingPayments}`,
+      },
+      {
+        label: 'Waiver queue',
+        value: loadingMetrics ? '…' : `${landingMetrics.pendingWaivers}`,
+      },
+      {
+        label: 'Active games',
+        value: loadingMetrics ? '…' : `${landingMetrics.activeGames}`,
+      },
     ],
-    [],
+    [landingMetrics, loadingMetrics],
   )
 
-
+  const opsLines = useMemo(
+    () => [
+      {
+        title: 'Reservations in motion',
+        detail: loadingMetrics ? 'Syncing live counts…' : `${landingMetrics.reservations} active reservations`,
+      },
+      {
+        title: 'Payments awaiting review',
+        detail: loadingMetrics ? 'Syncing live counts…' : `${landingMetrics.pendingPayments} pending payment checks`,
+      },
+      {
+        title: 'Waivers pending',
+        detail: loadingMetrics ? 'Syncing live counts…' : `${landingMetrics.pendingWaivers} awaiting review`,
+      },
+      {
+        title: 'Games in progress',
+        detail: loadingMetrics ? 'Syncing live counts…' : `${landingMetrics.activeGames} current sessions`,
+      },
+    ],
+    [landingMetrics, loadingMetrics],
+  )
 
   return (
     <div className="relative min-h-screen bg-background text-text">
@@ -297,8 +422,6 @@ export function LandingPage() {
             <p className="mt-5 max-w-xl text-sm leading-relaxed text-muted md:text-base">
               “Aim. Book. Play.” keeps reservations, waivers, payments, and admin
               workflows consistent.
-              The UI is designed like a premium operations dashboard—dark,
-              focused, and responsive.
             </p>
 
             <div className="mt-7 flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -347,53 +470,48 @@ export function LandingPage() {
                     Live Ops
                   </div>
                   <div className={`rounded-full border ${theme === 'light' ? 'border-gray-200/60' : 'border-white/10'} bg-black/40 px-3 py-1 text-xs ${theme === 'light' ? 'text-gray-800' : 'text-muted'}`}>
-                    Status: Ready
+                    Status: {loadingMetrics ? 'Syncing' : landingMetrics.statusLabel}
                   </div>
                 </div>
 
                 <div className="mt-4 grid gap-3">
-                  {[
-                    'Reservation calendar synced',
-                    'Waiver workflow armed',
-                    'Equipment availability locked',
-                    'Receipts generated & verified',
-                  ].map((line, i) => (
+                  {opsLines.map((line, i) => (
                     <div
-                      key={line}
+                      key={line.title}
                       className={`flex items-start gap-3 rounded-2xl ${theme === 'light' ? 'bg-white/10' : 'bg-black/20'} px-3 py-3 ring-1 ${theme === 'light' ? 'ring-gray-200/30' : 'ring-white/5'}`}
                     >
-                        <div className={`mt-0.5 grid h-7 w-7 place-items-center rounded-xl bg-[linear-gradient(135deg,rgba(197,163,90,0.35),rgba(47,79,47,0.1))] ring-1 ${theme === 'light' ? 'ring-gray-200/30' : 'ring-white/10'}`}>
-                          <FiCheck className="h-4 w-4 text-gold" />
-                        </div>
-                        <div>
-                          <div className="text-sm font-semibold">Step {i + 1}</div>
-                          <div className={`${theme === 'light' ? 'text-gray-800 text-xs' : 'text-xs text-muted'}`}>{line}</div>
-                        </div>
+                      <div className={`mt-0.5 grid h-7 w-7 place-items-center rounded-xl bg-[linear-gradient(135deg,rgba(197,163,90,0.35),rgba(47,79,47,0.1))] ring-1 ${theme === 'light' ? 'ring-gray-200/30' : 'ring-white/10'}`}>
+                        <FiCheck className="h-4 w-4 text-gold" />
+                      </div>
+                      <div>
+                        <div className="text-sm font-semibold">{line.title}</div>
+                        <div className={`${theme === 'light' ? 'text-gray-800 text-xs' : 'text-xs text-muted'}`}>{line.detail}</div>
+                      </div>
                     </div>
                   ))}
                 </div>
 
                 <div className="mt-5 grid grid-cols-2 gap-3">
                   <div className={`rounded-2xl bg-white/5 p-3 ring-1 ${theme === 'light' ? 'ring-gray-200/30' : 'ring-white/10'}`}>
-                    <div className={`${theme === 'light' ? 'text-gray-700 text-xs' : 'text-xs text-muted'}`}>Next briefing</div>
-                    <div className="mt-1 text-sm font-bold">18:30 / Evening</div>
+                    <div className={`${theme === 'light' ? 'text-gray-700 text-xs' : 'text-xs text-muted'}`}>Operations focus</div>
+                    <div className="mt-1 text-sm font-bold">{loadingMetrics ? 'Syncing…' : landingMetrics.pendingItems > 0 ? `${landingMetrics.pendingItems} items need review` : 'All queues clear'}</div>
                   </div>
                   <div className={`rounded-2xl bg-white/5 p-3 ring-1 ${theme === 'light' ? 'ring-gray-200/30' : 'ring-white/10'}`}>
                     <div className={`${theme === 'light' ? 'text-gray-700 text-xs' : 'text-xs text-muted'}`}>Equipment risk</div>
-                    <div className="mt-1 text-sm font-bold text-success">Low</div>
+                    <div className={`mt-1 text-sm font-bold ${landingMetrics.pendingItems > 0 ? 'text-danger' : 'text-success'}`}>{loadingMetrics ? 'Syncing…' : landingMetrics.pendingItems > 0 ? 'Needs review' : 'Low'}</div>
                   </div>
                 </div>
 
                 <div className={`mt-4 rounded-2xl border ${theme === 'light' ? 'border-gray-200/60' : 'border-white/10'} bg-black/25 p-3`}>
                   <div className="flex items-center justify-between">
-                      <div className="text-white text-xs">Operational readiness</div>
-                    <div className="text-xs font-semibold text-gold">97%</div>
+                    <div className="text-white text-xs">Operational readiness</div>
+                    <div className="text-xs font-semibold text-gold">{loadingMetrics ? '…' : `${landingMetrics.readiness}%`}</div>
                   </div>
                   <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/5">
                     <motion.div
                       className="h-full bg-[linear-gradient(90deg,rgba(197,163,90,0.9),rgba(85,107,47,0.8))]"
                       initial={{ width: 0 }}
-                      animate={{ width: '97%' }}
+                      animate={{ width: loadingMetrics ? '0%' : `${landingMetrics.readiness}%` }}
                       transition={{ duration: 0.9, ease: 'easeOut' }}
                     />
                   </div>
@@ -409,7 +527,7 @@ export function LandingPage() {
         <SectionTitle
           eyebrow="Capability Pack"
           title="Built for reservations, players, and admin operations"
-          subtitle="A dark military dashboard experience with modern SaaS polish—animations, loading states, and responsive navigation."
+          subtitle=""
         />
 
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -447,7 +565,7 @@ export function LandingPage() {
         <SectionTitle
           eyebrow="Operational Flow"
           title="How it works"
-          subtitle="A clean sequence from landing → reservation → waiver → payment → admin verification."
+          subtitle=""
         />
 
         <div className="grid gap-4 lg:grid-cols-2">
@@ -668,17 +786,17 @@ export function LandingPage() {
                     {
                       name: 'Delta Stronghold (Salawag)',
                       img: '/delta.png',
-                      desc: 'CQB-ready facilities and briefing rooms.',
+                      desc: 'Approximately 2 hectares. Can hold up to 400 Players. Ideal for small to medium groups and tournaments.',
                     },
                     {
                       name: 'Delta Stronghold (Langkaan)',
                       img: '/delta.png',
-                      desc: 'Open fields, staging area, and amenities.',
+                      desc: 'Approximately 2 hectares. Can hold up to 400 Players. Ideal for small to medium groups and tournaments.',
                     },
                     {
                       name: 'LOMA Binan Laguna',
                       img: '/loma.png',
-                      desc: 'Training lanes for teams and beginners.',
+                      desc: 'Approximately 4 hectares. Can hold up to 600 players. Ideal for large groups and tournaments.',
                     },
                   ] as const).map((loc) => (
                     <div
@@ -714,8 +832,7 @@ export function LandingPage() {
             </div>
             <div className="mt-3 text-2xl font-bold">Coordinate with Chill Shooters</div>
             <p className="mt-3 text-sm leading-relaxed text-muted">
-              This prototype focuses on the UI/UX and workflows. When connected to the backend,
-              the same screens power real reservations.
+              Any questions you want to ask? Reach out to us and we will get back to you as soon as possible.
             </p>
 
             <div className="mt-5 space-y-3">
@@ -724,10 +841,9 @@ export function LandingPage() {
                   <span className="text-gold">☎</span>
                 </div>
                 <div>
-                  <div className="text-sm font-bold">Community Line</div>
-                  <div className="text-xs text-muted">+63 9XX XXX XXXX</div>
+                  <div className="text-sm font-bold">Operations Desk</div>
+                  <div className="text-xs text-muted">support@chillshooters.com</div>
                 </div>
-
               </div>
 
   

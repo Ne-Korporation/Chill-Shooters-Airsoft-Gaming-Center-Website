@@ -47,3 +47,39 @@ body {
   scrollbar-width: none;
 }
 
+.waiver-page.submitted-waiver > .grid {
+  display: none;
+}
+
+@media print {
+  body.printing-waiver {
+    background: #fff !important;
+    color: #000 !important;
+  }
+
+  body.printing-waiver nav,
+  body.printing-waiver aside,
+  body.printing-waiver footer,
+  body.printing-waiver button {
+    display: none !important;
+  }
+
+  body.printing-waiver .glass,
+  body.printing-waiver .waiver-page .rounded-2xl {
+    background: transparent !important;
+    border-color: transparent !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    backdrop-filter: none !important;
+  }
+
+  body.printing-waiver .waiver-page {
+    max-width: none !important;
+    color: #000 !important;
+  }
+
+  body.printing-waiver .waiver-page.submitted-waiver > .grid {
+    display: grid !important;
+  }
+}
+

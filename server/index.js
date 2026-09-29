@@ -47,6 +47,7 @@ if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
 
 app.use('/api', uploadRouter)
 app.use('/api', reservationWorkflowsRouter)
+app.use('/api', paymentsWorkflowsRouter)
 app.use('/api/auth', authRouter)
 app.use('/api', crudRouter)
 

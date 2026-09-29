@@ -92,10 +92,10 @@ export function OtpVerificationPage() {
               Enter the one-time code sent to <span className="text-text font-semibold">{email || 'your email'}</span>.
             </p>
 
-            <Card className="p-4">
+            {/* <Card className="p-4">
               <div className="text-sm font-semibold">Verification code</div>
               <div className="mt-2 text-xs text-muted">A 6-digit code will be sent to your inbox via Resend.</div>
-            </Card>
+            </Card> */}
           </div>
 
           <Card className="p-4 md:p-6">
