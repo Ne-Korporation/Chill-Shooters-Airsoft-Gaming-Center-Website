@@ -44,10 +44,10 @@ export function ForgotPasswordPage() {
             <h1 className="text-3xl font-bold leading-tight lg:text-4xl">Password Reset Protocol</h1>
             <p className="text-muted">Submit your email to receive an OTP verification code for reset.</p>
 
-            <Card className="p-4">
+            {/* <Card className="p-4">
               <div className="text-sm font-semibold">Security note</div>
               <div className="mt-2 text-xs text-muted">This demo simulates sending OTP and routes you to verification.</div>
-            </Card>
+            </Card> */}
           </div>
 
           <Card className="p-4 md:p-6">

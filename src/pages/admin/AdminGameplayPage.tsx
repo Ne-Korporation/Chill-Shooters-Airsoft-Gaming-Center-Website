@@ -6,6 +6,7 @@ import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { apiDelete, apiGet, apiPut } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
+import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
 
 type GameplayStatus = 'Scheduled' | 'Ongoing' | 'Completed' | 'Cancelled' | 'Archived'
 
@@ -82,6 +83,7 @@ export function AdminGameplayPage() {
   const { user } = useAuth()
   const [items, setItems] = useState<GameplayDoc[]>([])
   const [loading, setLoading] = useState(true)
+  const { addNotification } = useNotifications()
 
   const refresh = async () => {
     setLoading(true)
@@ -125,6 +127,14 @@ export function AdminGameplayPage() {
         },
       })
 
+      sendRoleNotifications(addNotification, {
+        roles: ['admin', 'registrar', 'marshal'],
+        type: 'gameplay_status_updated',
+        title: 'Gameplay Status Updated',
+        message: `Gameplay ${id} moved to ${status}.`,
+        linkedResourceId: id,
+      })
+
       toast.success('Gameplay updated')
       await refresh()
     } catch (e: any) {
@@ -146,6 +156,13 @@ export function AdminGameplayPage() {
           archivedAtISO: new Date().toISOString(),
           updatedAtISO: new Date().toISOString(),
         },
+      })
+      sendRoleNotifications(addNotification, {
+        roles: ['admin', 'registrar', 'marshal'],
+        type: 'gameplay_status_updated',
+        title: 'Gameplay Archived',
+        message: `Gameplay ${id} was archived.`,
+        linkedResourceId: id,
       })
       toast.success('Gameplay archived')
       setNextStatusFilter('Archived')

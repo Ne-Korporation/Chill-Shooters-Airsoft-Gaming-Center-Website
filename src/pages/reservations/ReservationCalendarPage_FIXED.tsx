@@ -1,5 +1,5 @@
-import React, { useMemo, useState, useEffect } from 'react'
-import { useLocation } from 'react-router-dom'
+import React, { useMemo, useState, useEffect, useCallback } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import toast from 'react-hot-toast'
 import {
@@ -8,12 +8,15 @@ import {
   FiCheck,
   FiChevronRight,
   FiClock,
+  FiCrosshair,
   FiMapPin,
   FiMinus,
+  FiPackage,
   FiPlus,
   FiShield,
   FiSliders,
   FiTag,
+  FiTool,
   FiUsers,
 } from 'react-icons/fi'
 
@@ -31,6 +34,8 @@ type Field = {
   id: string
   name: string
   location: string
+  minPlayersPrivate: number
+  locationId: LocationOption
 }
 
 type RentalPackage = {
@@ -69,10 +74,12 @@ type EquipmentItemDetails = {
 type ReservationRecord = {
   id: string
   dateISO: string
-  fieldId: string
+  fieldIds: string[]
   slot: TimeSlot
   sessionType: SessionType
   players: number
+  reservationStatus?: string
+  locationId?: string
 }
 
 type PackageRecommendationPrefill = {
@@ -82,16 +89,70 @@ type PackageRecommendationPrefill = {
   selectedPackageId?: string
 }
 
-const fields: Field[] = [
-  { id: 'field-1', name: 'Upper Ground', location: 'Main Range / North Gate' },
-  { id: 'field-2', name: 'Lower Ground', location: 'Ops Lane / East Drop' },
-  { id: 'field-3', name: 'Forest', location: 'Training Block / West Bay' },
-]
+type SelectionMode = 'package' | 'custom'
 
-const locationOptions: { id: LocationOption; name: string; detail: string }[] = [
-  { id: 'salawag', name: 'Delta Stronghold (Salawag)', detail: 'CQB-ready facilities and briefing rooms.' },
-  { id: 'langkaan', name: 'Delta Stronghold (Langkaan)', detail: 'Open fields, staging area, and amenities.' },
-  { id: 'binan', name: 'LOMA Binan Laguna', detail: 'Training lanes for teams and beginners.' },
+const locationFields: Record<LocationOption, Field[]> = {
+  salawag: [
+    { id: 'salawag-field-1', name: 'Upper Ground', location: 'Delta Stronghold Salawag', minPlayersPrivate: 10, locationId: 'salawag' },
+    { id: 'salawag-field-2', name: 'Lower Ground', location: 'Delta Stronghold Salawag', minPlayersPrivate: 20, locationId: 'salawag' },
+    { id: 'salawag-field-3', name: 'Forest', location: 'Delta Stronghold Salawag', minPlayersPrivate: 50, locationId: 'salawag' },
+  ],
+  langkaan: [
+    { id: 'langkaan-field-1', name: 'Upper Ground', location: 'Delta Stronghold Langkaan', minPlayersPrivate: 10, locationId: 'langkaan' },
+    { id: 'langkaan-field-2', name: 'Lower Ground', location: 'Delta Stronghold Langkaan', minPlayersPrivate: 20, locationId: 'langkaan' },
+    { id: 'langkaan-field-3', name: 'Forest', location: 'Delta Stronghold Langkaan', minPlayersPrivate: 50, locationId: 'langkaan' },
+  ],
+  binan: [
+    { id: 'binan-field-1', name: 'Upper Ground', location: 'LOMA Binan Laguna', minPlayersPrivate: 10, locationId: 'binan' },
+    { id: 'binan-field-2', name: 'Lower Ground', location: 'LOMA Binan Laguna', minPlayersPrivate: 20, locationId: 'binan' },
+    { id: 'binan-field-3', name: 'Forest', location: 'LOMA Binan Laguna', minPlayersPrivate: 50, locationId: 'binan' },
+  ],
+}
+
+const locationHectares: Record<LocationOption, number> = {
+  salawag: 2,
+  langkaan: 2,
+  binan: 4,
+}
+
+function locationCapacityPerSlot(location: LocationOption, slot: TimeSlot): number {
+  const basePerHectare = 100
+  const hectares = locationHectares[location]
+  const mult = slot === 'morning' ? 1.0 : slot === 'afternoon' ? 0.95 : 0.9
+  return Math.floor(hectares * basePerHectare * mult)
+}
+
+function getFieldsForLocation(location: LocationOption): Field[] {
+  return locationFields[location] || []
+}
+
+function getMinPlayersForSelectedFields(selectedFieldIds: string[], location: LocationOption): number {
+  if (selectedFieldIds.length === 0) return 0
+  const fields = getFieldsForLocation(location)
+  return selectedFieldIds
+    .map((fieldId) => fields.find((f) => f.id === fieldId)?.minPlayersPrivate ?? 0)
+    .reduce((max, value) => Math.max(max, value), 0)
+}
+
+function getFieldCapacityBand(field: Field): { min: number; max?: number } {
+  const normalized = field.name.toLowerCase()
+  if (normalized.includes('upper')) return { min: 10, max: 19 }
+  if (normalized.includes('lower')) return { min: 20, max: 49 }
+  return { min: 50 }
+}
+
+function getFieldById(fieldId: string): Field | undefined {
+  for (const location of ['salawag', 'langkaan', 'binan'] as LocationOption[]) {
+    const field = locationFields[location].find(f => f.id === fieldId)
+    if (field) return field
+  }
+  return undefined
+}
+
+const locationOptions: { id: LocationOption; name: string; detail: string; capacity: string }[] = [
+  { id: 'salawag', name: 'Delta Stronghold (Salawag)', detail: 'Approximately 2 hectares.', capacity: '~200 players per slot' },
+  { id: 'langkaan', name: 'Delta Stronghold (Langkaan)', detail: 'Approximately 2 hectares.', capacity: '~200 players per slot' },
+  { id: 'binan', name: 'LOMA Binan Laguna', detail: 'Approximately 4 hectares.', capacity: '~400 players per slot' },
 ]
 
 const slotLabels: Record<TimeSlot, string> = {
@@ -101,14 +162,6 @@ const slotLabels: Record<TimeSlot, string> = {
 }
 
 const timeSlots: TimeSlot[] = ['morning', 'afternoon', 'evening']
-
-// Existing reservations consuming capacity
-const existingReservations: ReservationRecord[] = [
-  { id: 'r-1001', dateISO: '2026-07-23', fieldId: 'field-1', slot: 'morning', sessionType: 'public', players: 12 },
-  { id: 'r-1002', dateISO: '2026-07-23', fieldId: 'field-1', slot: 'morning', sessionType: 'private', players: 10 },
-  { id: 'r-1003', dateISO: '2026-07-24', fieldId: 'field-2', slot: 'evening', sessionType: 'public', players: 14 },
-  { id: 'r-1004', dateISO: '2026-07-25', fieldId: 'field-3', slot: 'afternoon', sessionType: 'public', players: 18 },
-]
 
 function toISODate(d: Date) {
   const pad = (n: number) => String(n).padStart(2, '0')
@@ -125,10 +178,29 @@ function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n))
 }
 
-function capacityFor(fieldId: string, slot: TimeSlot) {
-  const base = fieldId === 'field-1' ? 28 : fieldId === 'field-2' ? 24 : 22
-  const mult = slot === 'morning' ? 1.0 : slot === 'afternoon' ? 0.95 : 0.9
-  return Math.floor(base * mult)
+function isWeekday(isoDate: string): boolean {
+  const d = new Date(isoDate + 'T12:00:00')
+  const day = d.getDay()
+  return day >= 1 && day <= 5
+}
+
+function isWeekend(isoDate: string): boolean {
+  return !isWeekday(isoDate)
+}
+
+function getDatesUntilEndOfNextMonth(from: Date): string[] {
+  const dates: string[] = []
+  const end = new Date(from.getFullYear(), from.getMonth() + 2, 0)
+  const current = new Date(from)
+  while (current <= end) {
+    dates.push(toISODate(current))
+    current.setDate(current.getDate() + 1)
+  }
+  return dates
+}
+
+function capacityFor(location: LocationOption, slot: TimeSlot) {
+  return locationCapacityPerSlot(location, slot)
 }
 
 function slotSort(a: TimeSlot, b: TimeSlot) {
@@ -136,7 +208,10 @@ function slotSort(a: TimeSlot, b: TimeSlot) {
   return order.indexOf(a) - order.indexOf(b)
 }
 
+const ENTRANCE_FEE_PER_PLAYER = 150
+
 export function ReservationCalendarPage_FIXED() {
+  const navigate = useNavigate()
   const location = useLocation()
   const today = useMemo(() => new Date(), [])
   const { user } = useAuth()
@@ -151,16 +226,164 @@ export function ReservationCalendarPage_FIXED() {
   const [weapons, setWeapons] = useState<WeaponItem[]>([])
   const [equipment, setEquipment] = useState<EquipmentItemDetails[]>([])
   const [loadingPackages, setLoadingPackages] = useState(true)
+  
+  const [reservations, setReservations] = useState<ReservationRecord[]>([])
+  const [loadingReservations, setLoadingReservations] = useState(true)
+
+  const monthCalendars = useMemo(() => {
+    const monthStarts = [
+      new Date(today.getFullYear(), today.getMonth(), 1),
+      new Date(today.getFullYear(), today.getMonth() + 1, 1),
+    ]
+
+    return monthStarts.map((start) => {
+      const year = start.getFullYear()
+      const month = start.getMonth()
+      const firstWeekday = new Date(year, month, 1).getDay()
+      const daysInMonth = new Date(year, month + 1, 0).getDate()
+      const cells: Array<string | null> = []
+
+      for (let i = 0; i < firstWeekday; i += 1) cells.push(null)
+      for (let day = 1; day <= daysInMonth; day += 1) {
+        cells.push(toISODate(new Date(year, month, day)))
+      }
+      while (cells.length < 42) cells.push(null)
+
+      const weeks: Array<Array<string | null>> = []
+      for (let i = 0; i < cells.length; i += 7) {
+        weeks.push(cells.slice(i, i + 7))
+      }
+
+      return {
+        key: `${year}-${String(month + 1).padStart(2, '0')}`,
+        label: new Date(year, month, 1).toLocaleString('default', { month: 'long', year: 'numeric' }),
+        weeks,
+      }
+    })
+  }, [today])
 
   const [selectedLocation, setSelectedLocation] = useState<LocationOption>('salawag')
-  const [selectedFieldIds, setSelectedFieldIds] = useState<string[]>([fields[0].id])
-  const [dateISO, setDateISO] = useState(toISODate(addDays(today, 1)))
-  const [slot, setSlot] = useState<TimeSlot>('evening')
-  const [sessionType, setSessionType] = useState<SessionType>(packagePrefill?.sessionType ?? 'public')
-  const [players, setPlayers] = useState(packagePrefill?.players ?? 8)
-  const [playersInput, setPlayersInput] = useState(String(packagePrefill?.players ?? 8))
+  
+  const availableFields = useMemo(() => {
+    return getFieldsForLocation(selectedLocation)
+  }, [selectedLocation])
+  
+  const [selectedFieldIds, setSelectedFieldIds] = useState<string[]>(() => {
+    const fields = getFieldsForLocation('salawag')
+    return fields.length > 0 ? [fields[0].id] : []
+  })
+
+  const initialDateISO = toISODate(addDays(today, 1))
+  const todayDateISO = toISODate(today)
+  const [dateISO, setDateISO] = useState(initialDateISO)
+  const initialIsWeekend = isWeekend(initialDateISO)
+  const [slot, setSlot] = useState<TimeSlot>('morning')
+  const [selectedSlots, setSelectedSlots] = useState<TimeSlot[]>([])
+  const [slotTouched, setSlotTouched] = useState(false)
+  const [sessionType, setSessionType] = useState<SessionType>(
+    initialIsWeekend ? 'public' : 'private'
+  )
+
+  // Update selected fields when location changes
+  useEffect(() => {
+    const fields = getFieldsForLocation(selectedLocation)
+    if (fields.length > 0) {
+      setSelectedFieldIds(prev => {
+        const validIds = prev.filter(id => fields.some(f => f.id === id))
+        return validIds.length > 0 ? validIds : [fields[0].id]
+      })
+    }
+  }, [selectedLocation])
+
+  // FIXED: Fetch reservations from API with proper status filtering
+  const fetchReservations = useCallback(async () => {
+    let cancelled = false
+    try {
+      setLoadingReservations(true)
+      const res = await apiGet<{ ok: boolean; data: any[] }>('/api/reservations?limit=200')
+      if (cancelled) return
+      
+      const data = Array.isArray(res?.data) ? res.data : []
+      // IMPORTANT: Include PENDING, CONFIRMED, and APPROVED reservations
+      // This ensures slots are blocked as soon as someone books
+      const mappedReservations: ReservationRecord[] = data
+        .filter((item: any) => {
+          const status = String(item.reservationStatus || '').toLowerCase()
+          // Block slots for pending, confirmed, and approved reservations
+          return status === 'pending' || status === 'confirmed' || status === 'approved'
+        })
+        .map((item: any) => ({
+          id: String(item.id || item._id || ''),
+          dateISO: item.reservationDate || item.dateISO || '',
+          fieldIds: Array.isArray(item.fieldIds)
+            ? item.fieldIds.map((id: any) => String(id)).filter(Boolean)
+            : (item.fieldId ? [String(item.fieldId)] : []),
+          slot: (item.reservationTime || item.slot || 'morning') as TimeSlot,
+          sessionType: (item.sessionType || 'public') as SessionType,
+          players: Number(item.numberOfPlayers || item.players || 0),
+          reservationStatus: item.reservationStatus,
+          locationId: item.locationId || item.location || '',
+        }))
+      setReservations(mappedReservations)
+    } catch (e: any) {
+      if (!cancelled) {
+        console.error('Failed to fetch reservations:', e)
+      }
+    } finally {
+      if (!cancelled) setLoadingReservations(false)
+    }
+    return () => { cancelled = true }
+  }, [])
+
+  // Initial fetch
+  useEffect(() => {
+    fetchReservations()
+  }, [fetchReservations])
+
+  // FIXED: Check if we should refresh reservations (e.g., after returning from payment)
+  useEffect(() => {
+    const shouldRefresh = localStorage.getItem('refresh_reservations')
+    if (shouldRefresh === 'true') {
+      localStorage.removeItem('refresh_reservations')
+      fetchReservations()
+    }
+  }, [fetchReservations])
+
+  // Enforce session type when date changes
+  useEffect(() => {
+    const isWd = isWeekday(dateISO)
+    if (isWd) {
+      setSessionType('private')
+      setSelectedSlots([])
+      if (!slot) setSlot('morning')
+    } else {
+      setSessionType('public')
+      setSlot('morning')
+    }
+    setSlotTouched(false)
+  }, [dateISO])
+
+  const defaultPlayers = useMemo(() => {
+    if (packagePrefill?.players) return packagePrefill.players
+    const isWd = isWeekday(dateISO)
+    return isWd ? 10 : 1
+  }, [dateISO, packagePrefill?.players])
+
+  const [players, setPlayers] = useState(defaultPlayers)
+  const [playersInput, setPlayersInput] = useState(String(defaultPlayers))
   const [notes, setNotes] = useState('')
   const [selectedPackageId, setSelectedPackageId] = useState<string>('')
+
+  const [selectionMode, setSelectionMode] = useState<SelectionMode>('package')
+  const [customWeaponIds, setCustomWeaponIds] = useState<string[]>([])
+  const [customEquipmentIds, setCustomEquipmentIds] = useState<string[]>([])
+  const [ownWeapons, setOwnWeapons] = useState('')
+  const [ownEquipment, setOwnEquipment] = useState('')
+
+  const [playerApprovedWeapons, setPlayerApprovedWeapons] = useState<any[]>([])
+  const [playerApprovedEquipment, setPlayerApprovedEquipment] = useState<any[]>([])
+  const [selectedOwnWeaponIds, setSelectedOwnWeaponIds] = useState<string[]>([])
+  const [selectedOwnEquipmentIds, setSelectedOwnEquipmentIds] = useState<string[]>([])
 
   // Fetch real packages, weapons, and equipment from API
   useEffect(() => {
@@ -175,10 +398,9 @@ export function ReservationCalendarPage_FIXED() {
 
         if (cancelled) return
 
-        // Parse packages
         const pkgDocs = Array.isArray(pkgRes?.data) ? pkgRes.data : []
         const parsedPackages: RentalPackage[] = pkgDocs
-          .filter((d: any) => d.status === 'active' || !d.status)
+          .filter((d: any) => (d.status === 'active' || !d.status) && d.status !== 'archived')
           .map((d: any) => ({
             id: d.id ?? (d._id ? String(d._id) : undefined),
             _id: d._id,
@@ -194,7 +416,6 @@ export function ReservationCalendarPage_FIXED() {
           }))
         setPackages(parsedPackages)
 
-        // Parse weapons
         const wepDocs = Array.isArray(wepRes?.data) ? wepRes.data : []
         setWeapons(wepDocs.map((d: any) => ({
           id: d.id ?? (d._id ? String(d._id) : undefined),
@@ -205,7 +426,6 @@ export function ReservationCalendarPage_FIXED() {
           price: typeof d.price === 'number' ? d.price : 0,
         })))
 
-        // Parse equipment
         const eqDocs = Array.isArray(eqRes?.data) ? eqRes.data : []
         setEquipment(eqDocs.map((d: any) => ({
           id: d.id ?? (d._id ? String(d._id) : undefined),
@@ -226,51 +446,201 @@ export function ReservationCalendarPage_FIXED() {
     return () => { cancelled = true }
   }, [])
 
-  // Set selected package from prefill or first available
+  // Fetch user's approved own weapons and equipment
+  useEffect(() => {
+    if (!user?.id) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const [wepRes, eqRes] = await Promise.all([
+          apiGet<{ ok: boolean; data: any[] }>('/api/weapons?limit=200'),
+          apiGet<{ ok: boolean; data: any[] }>('/api/equipments?limit=200'),
+        ])
+        if (cancelled) return
+        const wepDocs = Array.isArray(wepRes?.data) ? wepRes.data : []
+        const eqDocs = Array.isArray(eqRes?.data) ? eqRes.data : []
+        const approvedWeapons = wepDocs.filter(
+          (d: any) => String(d.submittedBy) === String(user.id) && d.approvalStatus === 'approved'
+        )
+        const approvedEquipment = eqDocs.filter(
+          (d: any) => String(d.submittedBy) === String(user.id) && d.approvalStatus === 'approved'
+        )
+        setPlayerApprovedWeapons(approvedWeapons)
+        setPlayerApprovedEquipment(approvedEquipment)
+      } catch {
+        // silently fail
+      }
+    })()
+    return () => { cancelled = true }
+  }, [user?.id])
+
+  const cheapestPackage = useMemo(() => {
+    if (packages.length === 0) return undefined
+    return packages.reduce((cheapest, pkg) =>
+      pkg.basePrice < cheapest.basePrice ? pkg : cheapest
+    )
+  }, [packages])
+
   useEffect(() => {
     if (packages.length > 0 && !selectedPackageId) {
       const prefillId = packagePrefill?.selectedPackageId
-      setSelectedPackageId(prefillId && packages.find((p) => p.id === prefillId) ? prefillId : packages[0].id)
+      if (prefillId && packages.find((p) => p.id === prefillId)) {
+        setSelectedPackageId(prefillId)
+      } else if (cheapestPackage) {
+        setSelectedPackageId(cheapestPackage.id)
+      }
     }
-  }, [packages, packagePrefill?.selectedPackageId, selectedPackageId])
+  }, [packages, packagePrefill?.selectedPackageId, selectedPackageId, cheapestPackage])
 
   const selectedPackage = useMemo(
-    () => packages.find((p) => p.id === selectedPackageId) ?? packages[0],
-    [packages, selectedPackageId],
+    () => packages.find((p) => p.id === selectedPackageId) ?? cheapestPackage,
+    [packages, selectedPackageId, cheapestPackage],
   )
+
+  const isWd = useMemo(() => isWeekday(dateISO), [dateISO])
+
+  const getFieldSelectionValidity = useCallback((candidateFieldIds: string[], playersCount: number, slotToCheck: TimeSlot) => {
+    if (sessionType !== 'private') return true
+    if (candidateFieldIds.length === 0) return false
+
+    const fields = candidateFieldIds
+      .map((fieldId) => getFieldById(fieldId))
+      .filter(Boolean) as Field[]
+
+    if (fields.length === 0) return false
+
+    const allSelectedFieldsAvailable = fields.every((field) => isFieldSlotAvailable(field.id, slotToCheck))
+    if (!allSelectedFieldsAvailable) return false
+
+    const allMeetSelectedMinimums = fields.every((field) => playersCount >= (field.minPlayersPrivate || 0))
+    if (allMeetSelectedMinimums) return true
+
+    // Exception: if the smallest suitable field is occupied, allow a larger available field.
+    const suitableFields = getFieldsForLocation(selectedLocation)
+      .filter((candidate) => {
+        const band = getFieldCapacityBand(candidate)
+        return playersCount >= band.min && (band.max === undefined || playersCount <= band.max)
+      })
+      .sort((a, b) => getFieldCapacityBand(a).min - getFieldCapacityBand(b).min)
+
+    const smallestSuitableField = suitableFields[0]
+    if (!smallestSuitableField) return false
+
+    const smallestMin = getFieldCapacityBand(smallestSuitableField).min
+    const smallestFieldBooked = !isFieldSlotAvailable(smallestSuitableField.id, slotToCheck)
+
+    const allBelowMinimumSelectionsAreLarger = fields
+      .filter((field) => playersCount < (field.minPlayersPrivate || 0))
+      .every((field) => {
+        const band = getFieldCapacityBand(field)
+        return band.min > smallestMin
+      })
+
+    return smallestFieldBooked && allBelowMinimumSelectionsAreLarger
+  }, [selectedLocation, sessionType])
+
+  const minPlayersForFields = useMemo(() => {
+    if (sessionType === 'public') return 1
+    if (selectedFieldIds.length <= 1) {
+      const field = getFieldById(selectedFieldIds[0])
+      if (!field) return 0
+      return getFieldCapacityBand(field).min
+    }
+    return getMinPlayersForSelectedFields(selectedFieldIds, selectedLocation)
+  }, [selectedFieldIds, sessionType, selectedLocation])
 
   const effectiveMinPlayers = useMemo(
-    () => selectedPackage ? Math.max(selectedPackage.minPlayers, sessionType === 'private' ? 10 : 1) : 1,
-    [selectedPackage, sessionType],
+    () => selectionMode === 'custom'
+      ? minPlayersForFields
+      : (selectedPackage ? Math.max(selectedPackage.minPlayers, minPlayersForFields) : minPlayersForFields),
+    [selectionMode, selectedPackage, minPlayersForFields],
   )
 
-  const allowedFieldIds = useMemo(() => {
-    if (players <= 10) return ['field-1']
-    if (players <= 20) return ['field-1', 'field-2']
-    return ['field-1', 'field-2', 'field-3']
-  }, [players])
+  const meetsFieldRequirements = useMemo(() => {
+    if (sessionType === 'public') return true
+    return getFieldSelectionValidity(selectedFieldIds, players, slot)
+  }, [getFieldSelectionValidity, players, selectedFieldIds, sessionType, slot])
 
-  // Ensure selected fields are valid
+  // Check slot availability per field
+  function isFieldSlotAvailable(fieldId: string, slotToCheck: TimeSlot): boolean {
+    // For weekdays (private): only one game per time slot per field
+    if (isWd) {
+      const field = getFieldById(fieldId)
+      if (!field) return false
+      
+      const existing = reservations.some(
+        (r) => r.dateISO === dateISO && 
+               r.fieldIds.includes(fieldId) && 
+               r.slot === slotToCheck &&
+               r.locationId === selectedLocation
+      )
+      return !existing
+    }
+    // For weekends (public): multiple games allowed
+    return true
+  }
+
   useEffect(() => {
-    setSelectedFieldIds((prev) => {
-      const filtered = prev.filter((id) => allowedFieldIds.includes(id))
-      if (filtered.length === 0) return [allowedFieldIds[0] || 'field-1']
-      return filtered
-    })
-  }, [allowedFieldIds])
+    if (!isWd) return
 
-  const usedPlayers = useMemo(() => {
-    return existingReservations
-      .filter((r) => r.dateISO === dateISO && selectedFieldIds.includes(r.fieldId) && r.slot === slot)
+    setSelectedFieldIds((prev) => {
+      const stillAvailable = prev.filter((fieldId) => isFieldSlotAvailable(fieldId, slot))
+      if (stillAvailable.length > 0) {
+        const unchanged = stillAvailable.length === prev.length && stillAvailable.every((id, idx) => id === prev[idx])
+        return unchanged ? prev : stillAvailable
+      }
+
+      const firstAvailable = availableFields.find((field) => isFieldSlotAvailable(field.id, slot))
+      const fallback = firstAvailable ? [firstAvailable.id] : []
+      const unchanged = fallback.length === prev.length && fallback.every((id, idx) => id === prev[idx])
+      return unchanged ? prev : fallback
+    })
+  }, [availableFields, dateISO, isWd, reservations, selectedLocation, slot])
+
+  // Check if a specific slot is fully booked for ALL fields at this location
+  const isSlotFullyBooked = (slotToCheck: TimeSlot): boolean => {
+    const fields = getFieldsForLocation(selectedLocation)
+    
+    if (isWd) {
+      const availableFields = fields.filter(f => isFieldSlotAvailable(f.id, slotToCheck))
+      return availableFields.length === 0
+    }
+    // For weekends: slots have capacity limits
+    const cap = capacityFor(selectedLocation, slotToCheck)
+    const used = reservations
+      .filter((r) => r.dateISO === dateISO && 
+                     r.slot === slotToCheck && 
+                     r.locationId === selectedLocation)
       .reduce((sum, r) => sum + r.players, 0)
-  }, [dateISO, selectedFieldIds, slot])
+    return used >= cap
+  }
+
+  // Get available fields for a specific slot at this location
+  const getAvailableFieldsForSlot = (slotToCheck: TimeSlot): Field[] => {
+    const fields = getFieldsForLocation(selectedLocation)
+    if (isWd) {
+      return fields.filter(f => isFieldSlotAvailable(f.id, slotToCheck))
+    }
+    return fields
+  }
+
+  // Used players from reservations
+  const usedPlayers = useMemo(() => {
+    return reservations
+      .filter((r) => r.dateISO === dateISO && 
+                     r.slot === slot && 
+                     selectedFieldIds.some((fieldId) => r.fieldIds.includes(fieldId)) &&
+                     r.locationId === selectedLocation)
+      .reduce((sum, r) => sum + r.players, 0)
+  }, [dateISO, slot, selectedFieldIds, reservations, selectedLocation])
 
   const maxCapacity = useMemo(() => {
-    return selectedFieldIds.reduce((sum, fieldId) => sum + capacityFor(fieldId, slot), 0)
-  }, [selectedFieldIds, slot])
+    return capacityFor(selectedLocation, slot)
+  }, [selectedLocation, slot])
 
   const remainingSlots = maxCapacity - usedPlayers
-  const canProceed = remainingSlots >= players
+  const hasRequiredSlotSelection = isWd ? slotTouched : selectedSlots.length > 0
+  const canProceed = hasRequiredSlotSelection && remainingSlots >= players && meetsFieldRequirements
 
   const slotOverview = useMemo(() => {
     const cap = maxCapacity
@@ -278,7 +648,6 @@ export function ReservationCalendarPage_FIXED() {
     return { cap, pct: clamp(pct, 0, 100) }
   }, [maxCapacity, usedPlayers])
 
-  // Get weapon details for the package
   const packageWeapons = useMemo(() => {
     if (!selectedPackage) return []
     return selectedPackage.weaponIds
@@ -286,7 +655,6 @@ export function ReservationCalendarPage_FIXED() {
       .filter(Boolean) as WeaponItem[]
   }, [selectedPackage, weapons])
 
-  // Get equipment details for the package
   const packageEquipment = useMemo(() => {
     if (!selectedPackage) return []
     return selectedPackage.equipmentIds
@@ -294,23 +662,55 @@ export function ReservationCalendarPage_FIXED() {
       .filter(Boolean) as EquipmentItemDetails[]
   }, [selectedPackage, equipment])
 
-  // Calculate equipment total per player
   const equipmentTotalPerPlayer = useMemo(() => {
     const weaponPrices = packageWeapons.reduce((sum, w) => sum + (w.price || 0), 0)
     const equipmentPrices = packageEquipment.reduce((sum, e) => sum + (e.price || 0), 0)
     return weaponPrices + equipmentPrices
   }, [packageWeapons, packageEquipment])
 
+  const customSelectedWeapons = useMemo(() => {
+    return weapons.filter((w) => customWeaponIds.includes(w.id))
+  }, [weapons, customWeaponIds])
+
+  const customSelectedEquipment = useMemo(() => {
+    return equipment.filter((e) => customEquipmentIds.includes(e.id))
+  }, [equipment, customEquipmentIds])
+
+  const customPerPlayerTotal = useMemo(() => {
+    const wp = customSelectedWeapons.reduce((sum, w) => sum + (w.price || 0), 0)
+    const ep = customSelectedEquipment.reduce((sum, e) => sum + (e.price || 0), 0)
+    return wp + ep + ENTRANCE_FEE_PER_PLAYER
+  }, [customSelectedWeapons, customSelectedEquipment])
+
+  const customTotal = useMemo(() => {
+    return customPerPlayerTotal * players
+  }, [customPerPlayerTotal, players])
+
   const dynamicPricing = useMemo(() => {
+    if (selectionMode === 'custom') {
+      return {
+        total: customTotal,
+        perPlayer: customPerPlayerTotal,
+        discountPct: 0,
+        discountLabel: '—',
+        equipmentTotalPerPlayer: customPerPlayerTotal,
+        sessionMultiplier: 1,
+        savings: 0,
+        originalTotal: customTotal,
+        mode: 'custom' as const,
+      }
+    }
+
     if (!selectedPackage) {
-      return { total: 0, perPlayer: 0, discountPct: 0, discountLabel: '—', equipmentTotalPerPlayer: 0, sessionMultiplier: 1, savings: 0, originalTotal: 0 }
+      return { total: 0, perPlayer: 0, discountPct: 0, discountLabel: '—', equipmentTotalPerPlayer: 0, sessionMultiplier: 1, savings: 0, originalTotal: 0, mode: 'package' as const, entranceFeeTotal: 0 }
     }
     const sessionMultiplier = sessionType === 'private' ? 1.25 : 1.0
-    const basePerPlayer = selectedPackage.basePrice + equipmentTotalPerPlayer
+    const basePerPlayer = selectedPackage.basePrice + equipmentTotalPerPlayer + ENTRANCE_FEE_PER_PLAYER
     const discountPct = selectedPackage.discountPct || 0
-    const totalBeforeMultiplier = basePerPlayer * players
-    const total = Math.round(totalBeforeMultiplier * sessionMultiplier)
-    const originalTotal = Math.round(totalBeforeMultiplier * sessionMultiplier)
+    const totalBeforeDiscountAndMultiplier = basePerPlayer * players
+    const originalTotal = Math.round(totalBeforeDiscountAndMultiplier * sessionMultiplier)
+    const afterDiscount = discountPct > 0 ? Math.round(originalTotal * (1 - discountPct / 100)) : originalTotal
+    const total = afterDiscount
     const savings = Math.max(0, originalTotal - total)
 
     return {
@@ -322,11 +722,16 @@ export function ReservationCalendarPage_FIXED() {
       sessionMultiplier,
       savings,
       originalTotal,
+      mode: 'package' as const,
+      entranceFeeTotal: ENTRANCE_FEE_PER_PLAYER * players,
     }
-  }, [players, selectedPackage, sessionType, equipmentTotalPerPlayer])
+  }, [players, selectedPackage, sessionType, equipmentTotalPerPlayer, selectionMode, customTotal, customPerPlayerTotal])
 
   const reservationSummary = useMemo(() => {
-    const selectedFields = fields.filter((f) => selectedFieldIds.includes(f.id))
+    const selectedFields = availableFields.filter((f) => selectedFieldIds.includes(f.id))
+    const pkgName = selectionMode === 'custom'
+      ? 'Custom Selection (No Package)'
+      : (selectedPackage?.name || 'No package selected')
     return {
       locationLabel: locationOptions.find((loc) => loc.id === selectedLocation)?.name ?? 'Location',
       fields: selectedFields,
@@ -334,10 +739,15 @@ export function ReservationCalendarPage_FIXED() {
       slotLabel: slotLabels[slot],
       sessionTypeLabel: sessionType === 'private' ? 'Private Session' : 'Public Session',
       players,
-      packageName: selectedPackage?.name || 'No package selected',
+      packageName: pkgName,
       notes,
+      selectionMode,
+      customWeapons: customSelectedWeapons,
+      customEquipment: customSelectedEquipment,
+      ownWeapons,
+      ownEquipment,
     }
-  }, [dateISO, selectedFieldIds, selectedLocation, selectedPackage?.name, sessionType, slot, players, notes])
+  }, [dateISO, selectedFieldIds, selectedLocation, selectionMode, selectedPackage?.name, sessionType, slot, players, notes, customSelectedWeapons, customSelectedEquipment, ownWeapons, ownEquipment, availableFields])
 
   const StepHeader = ({ title, subtitle }: { title: string; subtitle: string }) => (
     <div>
@@ -356,8 +766,47 @@ export function ReservationCalendarPage_FIXED() {
       return
     }
 
-    if (!canProceed || players < effectiveMinPlayers || !selectedPackage) {
+    if (!hasRequiredSlotSelection) {
+      toast.error('Please select a time slot before proceeding.')
+      return
+    }
+
+    if (sessionType === 'private' && !meetsFieldRequirements) {
+      toast.error('The selected field combination is not valid for the current group size.')
+      return
+    }
+
+    if (isWd) {
+      const isAvailable = selectedFieldIds.every(fieldId => 
+        isFieldSlotAvailable(fieldId, slot)
+      )
+      if (!isAvailable) {
+        toast.error('One or more selected fields are no longer available for this time slot.')
+        return
+      }
+    }
+
+    const currentUsed = reservations
+      .filter((r) => r.dateISO === dateISO && 
+                     r.slot === slot && 
+                     selectedFieldIds.some((fieldId) => r.fieldIds.includes(fieldId)) &&
+                     r.locationId === selectedLocation)
+      .reduce((sum, r) => sum + r.players, 0)
+    const currentCapacity = capacityFor(selectedLocation, slot)
+    const currentRemaining = currentCapacity - currentUsed
+    
+    if (players > currentRemaining) {
+      toast.error(`Only ${currentRemaining} slots remaining. Please reduce players.`)
+      return
+    }
+
+    if (!canProceed || players < effectiveMinPlayers) {
       toast.error('Invalid reservation details. Please check your selections.')
+      return
+    }
+
+    if (selectionMode === 'package' && !selectedPackage) {
+      toast.error('Please select a package.')
       return
     }
 
@@ -365,11 +814,11 @@ export function ReservationCalendarPage_FIXED() {
 
     try {
       const selectedLocationName = locationOptions.find((loc) => loc.id === selectedLocation)?.name ?? selectedLocation
-      const selectedFieldNames = fields.filter((f) => selectedFieldIds.includes(f.id)).map((f) => f.name).join(', ')
 
-      const payload = {
+      const pkgName = selectionMode === 'custom' ? 'Custom Selection' : (selectedPackage?.name || 'Custom Selection')
+
+      const pendingReservation: any = {
         userId: user.id,
-        selectedPackageId: selectedPackage.id,
         fieldIds: selectedFieldIds,
         locationId: selectedLocation,
         locationName: selectedLocationName,
@@ -380,20 +829,32 @@ export function ReservationCalendarPage_FIXED() {
         totalAmount: dynamicPricing.total,
         notes,
         reservationStatus: 'pending',
-        selectedGameplayName: selectedPackage.name,
-        packageName: selectedPackage.name,
+        packageName: pkgName,
+        selectionMode,
       }
 
-      const result = await apiPost<{ ok: boolean; insertedId?: string; data?: any }>('/api/reservations', payload)
+      if (selectionMode === 'package') {
+        pendingReservation.selectedPackageId = selectedPackage?.id
+        pendingReservation.selectedGameplayName = selectedPackage?.name
+      } else {
+        pendingReservation.customWeaponIds = customWeaponIds
+        pendingReservation.customEquipmentIds = customEquipmentIds
+        pendingReservation.ownWeapons = ownWeapons.trim()
+        pendingReservation.ownEquipment = ownEquipment.trim()
+        pendingReservation.selectedOwnWeaponIds = selectedOwnWeaponIds
+        pendingReservation.selectedOwnEquipmentIds = selectedOwnEquipmentIds
+        pendingReservation.selectedGameplayName = 'Custom Selection'
+      }
 
-      const reservationId = result?.data?.id ?? result?.insertedId ?? result?.data?._id
-      if (!reservationId) throw new Error('Reservation ID missing from API response')
-
-      localStorage.setItem('active_reservation_id', String(reservationId))
-      setStep(4)
-      toast.success('Reservation submitted successfully!')
+      localStorage.setItem('pending_reservation', JSON.stringify(pendingReservation))
+      
+      // IMPORTANT: Set flag to refresh reservations when user returns
+      localStorage.setItem('refresh_reservations', 'true')
+      
+      toast.success('Proceed to payment to complete your reservation.')
+      navigate('/app/payment')
     } catch (e: any) {
-      toast.error(e instanceof Error ? e.message : 'Failed to confirm reservation')
+      toast.error(e instanceof Error ? e.message : 'Failed to process reservation')
     } finally {
       setIsConfirming(false)
     }
@@ -415,7 +876,6 @@ export function ReservationCalendarPage_FIXED() {
         subtitle="Mobile-first reservation flow with live slot prevention."
       />
 
-      {/* Steps */}
       <div className="grid grid-cols-4 gap-3">
         {([1, 2, 3, 4] as const).map((s) => {
           const active = s === step
@@ -448,7 +908,6 @@ export function ReservationCalendarPage_FIXED() {
           )
         })}
       </div>
-
       {/* Step 1 */}
       {step === 1 && (
         <div className="grid gap-4 lg:grid-cols-3">
@@ -457,7 +916,7 @@ export function ReservationCalendarPage_FIXED() {
               <div className="flex items-center gap-2 text-sm font-bold">
                 <FiMapPin /> <span>Location</span>
               </div>
-              <p className="mt-1 text-xs text-muted">Choose the venue before selecting your field.</p>
+              <p className="mt-1 text-xs text-muted">Choose the venue. Each location has different capacity and field configurations.</p>
 
               <div className="mt-4 grid gap-3 md:grid-cols-3">
                 {locationOptions.map((loc) => {
@@ -477,6 +936,7 @@ export function ReservationCalendarPage_FIXED() {
                         {active ? <FiCheck className="text-gold" /> : null}
                       </div>
                       <div className="mt-1 text-xs text-muted">{loc.detail}</div>
+                      <div className="mt-1 text-xs text-accent/70">{loc.capacity}</div>
                     </button>
                   )
                 })}
@@ -489,116 +949,235 @@ export function ReservationCalendarPage_FIXED() {
               </div>
               <p className="mt-1 text-xs text-muted">Pick the specific field at the selected location.</p>
 
-              <div className="mt-4 grid gap-3 sm:grid-cols-3">
-                {fields.map((f) => {
-                  const active = selectedFieldIds.includes(f.id)
-                  const allowed = allowedFieldIds.includes(f.id)
-                  return (
-                    <label
-                      key={f.id}
-                      className={[
-                        'flex items-start gap-3 rounded-2xl border p-3 text-left transition',
-                        active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
-                        !allowed ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer',
-                      ].join(' ')}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={active}
-                        disabled={!allowed}
-                        onChange={() => {
-                          setSelectedFieldIds((prev) => {
-                            if (prev.includes(f.id)) return prev.filter((id) => id !== f.id)
-                            if (!allowedFieldIds.includes(f.id)) return prev
-                            return [...prev, f.id]
-                          })
-                        }}
-                        className="mt-1 h-4 w-4 rounded border-white/20 bg-transparent accent-accent"
-                      />
-                      <div className="flex-1">
-                        <div className="text-sm font-bold">{f.name}</div>
-                        <div className="mt-1 text-xs text-muted">{f.location}</div>
-                      </div>
-                    </label>
-                  )
-                })}
-              </div>
+              {loadingReservations ? (
+                <div className="mt-4 text-sm text-muted">Loading availability...</div>
+              ) : (
+                <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                  {availableFields.map((f) => {
+                    const active = selectedFieldIds.includes(f.id)
+                    const isFieldBooked = isWd && !isFieldSlotAvailable(f.id, slot)
+                    const isDisabled = isFieldBooked && !active
+                    
+                    return (
+                      <label
+                        key={f.id}
+                        className={[
+                          'flex items-start gap-3 rounded-2xl border p-3 text-left transition',
+                          active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
+                          isDisabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer',
+                          isFieldBooked && !active ? 'bg-danger/5 border-danger/20' : '',
+                        ].join(' ')}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={active}
+                          disabled={isDisabled}
+                          onChange={() => {
+                            if (isDisabled) {
+                              if (isFieldBooked) {
+                                toast.error(`${f.name} is already booked for ${slotLabels[slot]}`)
+                              }
+                              return
+                            }
+                            setSelectedFieldIds((prev) => {
+                              if (prev.includes(f.id)) return prev.filter((id) => id !== f.id)
+                              return [...prev, f.id]
+                            })
+                          }}
+                          className="mt-1 h-4 w-4 rounded border-white/20 bg-transparent accent-accent"
+                        />
+                        <div className="flex-1">
+                          <div className="flex items-center justify-between">
+                            <div className="text-sm font-bold">{f.name}</div>
+                            {sessionType === 'private' && (
+                              <div className="text-[10px] text-muted bg-black/30 px-2 py-0.5 rounded-full">
+                                Min {f.minPlayersPrivate} players
+                              </div>
+                            )}
+                            {isFieldBooked && !active && (
+                              <div className="text-[10px] text-danger bg-danger/10 px-2 py-0.5 rounded-full">
+                                BOOKED
+                              </div>
+                            )}
+                          </div>
+                          <div className="mt-1 text-xs text-muted">{f.location}</div>
+                          {isFieldBooked && !active && (
+                            <div className="mt-1 text-xs text-danger">Already reserved for this time slot</div>
+                          )}
+                        </div>
+                      </label>
+                    )
+                  })}
+                </div>
+              )}
+
+              {sessionType === 'private' && (
+                <div className="mt-4 rounded-2xl border border-accent/20 bg-accent/5 p-4">
+                  <div className="text-xs font-bold text-accent">Field Requirements</div>
+                  <div className="mt-2 space-y-1 text-xs text-muted">
+                    <div>• Upper Ground: Minimum 10 players</div>
+                    <div>• Lower Ground: Minimum 20 players</div>
+                    <div>• Forest: Minimum 50 players</div>
+                    <div className="mt-2 text-accent/80">
+                      Current selection requires at least {minPlayersForFields} players
+                      {players < minPlayersForFields && (
+                        <span className="text-danger ml-2">(Current: {players})</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
             </Card>
 
             <Card className="p-4 md:p-6">
               <div className="flex items-center gap-2 text-sm font-bold">
                 <FiCalendar /> <span>Date & Time</span>
               </div>
-              <p className="mt-1 text-xs text-muted">Select a date and time window.</p>
+              <p className="mt-1 text-xs text-muted">
+                {isWd 
+                  ? 'Weekdays: Private sessions only. One game per field per time slot. Minimum 10 players.'
+                  : 'Weekends: Public sessions only. Multiple time slots available.'}
+              </p>
 
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
                 <div>
                   <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Date</div>
-                  <div className="mt-2 grid grid-cols-4 gap-2">
-                    {Array.from({ length: 7 }).map((_, i) => {
-                      const d = addDays(today, i)
-                      const iso = toISODate(d)
-                      const active = iso === dateISO
-                      return (
-                        <button
-                          key={iso}
-                          type="button"
-                          onClick={() => setDateISO(iso)}
-                          className={[
-                            'rounded-2xl border px-2 py-2 text-xs transition',
-                            active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
-                          ].join(' ')}
-                        >
-                          <div className="font-bold">{d.getDate()}</div>
-                          <div className="text-[10px] text-muted">
-                            {d.toLocaleDateString(undefined, { weekday: 'short' })}
-                          </div>
-                        </button>
-                      )
-                    })}
+                  <div className="mt-2 space-y-4 max-h-96 overflow-y-auto pr-1">
+                    {monthCalendars.map((month) => (
+                      <div key={month.key} className="rounded-2xl border border-white/10 bg-black/20 p-3">
+                        <div className="text-sm font-bold text-white">{month.label}</div>
+                        <div className="mt-2 grid grid-cols-7 gap-1 text-[10px] uppercase tracking-[0.12em] text-muted">
+                          {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((weekday) => (
+                            <div key={weekday} className="py-1 text-center">{weekday}</div>
+                          ))}
+                        </div>
+                        <div className="mt-1 space-y-1">
+                          {month.weeks.map((week, weekIndex) => (
+                            <div key={`${month.key}-week-${weekIndex}`} className="grid grid-cols-7 gap-1">
+                              {week.map((iso, dayIndex) => {
+                                if (!iso) {
+                                  return <div key={`${month.key}-empty-${weekIndex}-${dayIndex}`} className="h-12 rounded-xl border border-transparent" />
+                                }
+
+                                const d = new Date(iso + 'T12:00:00')
+                                const active = iso === dateISO
+                                const isPastOrToday = iso <= todayDateISO
+                                const isWd = isWeekday(iso)
+
+                                return (
+                                  <button
+                                    key={iso}
+                                    type="button"
+                                    disabled={isPastOrToday}
+                                    onClick={() => {
+                                      if (isPastOrToday) return
+                                      setDateISO(iso)
+                                    }}
+                                    className={[
+                                      'h-12 rounded-xl border px-1 text-center text-[11px] transition',
+                                      active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
+                                      isPastOrToday ? 'cursor-not-allowed opacity-40 hover:bg-white/5' : 'cursor-pointer',
+                                    ].join(' ')}
+                                  >
+                                    <div className="font-bold leading-tight">{d.getDate()}</div>
+                                    <div className="text-[9px] leading-tight text-muted/70">{isWd ? 'PRIV' : 'PUB'}</div>
+                                  </button>
+                                )
+                              })}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
 
                 <div>
                   <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Time Window</div>
                   <div className="mt-2 grid grid-cols-1 gap-2">
-                    {timeSlots.sort(slotSort).map((s) => {
-                      const active = s === slot
-                      const cap = selectedFieldIds.reduce((sum, fieldId) => sum + capacityFor(fieldId, s), 0)
-                      const used = existingReservations
-                        .filter((r) => r.dateISO === dateISO && selectedFieldIds.includes(r.fieldId) && r.slot === s)
-                        .reduce((sum, r) => sum + r.players, 0)
-                      const remaining = cap - used
+                    {loadingReservations ? (
+                      <div className="text-sm text-muted py-4 text-center">Loading slots...</div>
+                    ) : (
+                      timeSlots.sort(slotSort).map((s) => {
+                        const isSlotFull = isSlotFullyBooked(s)
+                        const availableFields = getAvailableFieldsForSlot(s)
+                        const active = isWd ? s === slot : selectedSlots.includes(s)
 
-                      return (
-                        <button
-                          key={s}
-                          type="button"
-                          onClick={() => setSlot(s)}
-                          className={[
-                            'rounded-2xl border p-3 text-left transition',
-                            active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
-                          ].join(' ')}
-                        >
-                          <div className="flex items-center justify-between gap-3">
-                            <div>
-                              <div className="text-sm font-bold">{slotLabels[s]}</div>
-                              <div className="mt-1 text-xs text-muted flex items-center gap-2">
-                                <FiClock />
-                                <span>{remaining <= 0 ? 'No slots' : `${remaining} slots left`}</span>
+                        const handleSlotClick = () => {
+                          if (isSlotFull) {
+                            toast.error(`All fields are booked for ${slotLabels[s]}`)
+                            return
+                          }
+                          if (isWd) {
+                            setSlot(s)
+                            setSlotTouched(true)
+                          } else {
+                            setSelectedSlots((prev) =>
+                              prev.includes(s) ? prev.filter((sl) => sl !== s) : [...prev, s]
+                            )
+                            setSlot(s)
+                            setSlotTouched(true)
+                          }
+                        }
+
+                        return (
+                          <button
+                            key={s}
+                            type="button"
+                            onClick={handleSlotClick}
+                            disabled={isSlotFull}
+                            className={[
+                              'rounded-2xl border p-3 text-left transition',
+                              active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
+                              isSlotFull ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer',
+                            ].join(' ')}
+                          >
+                            <div className="flex items-center justify-between gap-3">
+                              <div>
+                                <div className="text-sm font-bold">{slotLabels[s]}</div>
+                                <div className="mt-1 text-xs text-muted flex items-center gap-2">
+                                  <FiClock />
+                                  {isSlotFull ? (
+                                    <span className="text-danger">Fully booked</span>
+                                  ) : isWd ? (
+                                    <span className="text-accent">
+                                      Available: {availableFields.map(f => f.name).join(', ')}
+                                    </span>
+                                  ) : (
+                                    <span>Available fields</span>
+                                  )}
+                                </div>
                               </div>
+                              {isSlotFull ? (
+                                <div className="rounded-2xl px-3 py-1 text-xs font-bold bg-danger/15 text-danger">FULL</div>
+                              ) : isWd ? (
+                                <div className="rounded-2xl px-3 py-1 text-xs font-bold bg-success/15 text-success">
+                                  {availableFields.length} field{availableFields.length > 1 ? 's' : ''} available
+                                </div>
+                              ) : (
+                                <div className="rounded-2xl px-3 py-1 text-xs font-bold bg-success/15 text-success">AVAILABLE</div>
+                              )}
                             </div>
-                            <div className={[
-                              'rounded-2xl px-3 py-1 text-xs font-bold',
-                              remaining <= 0 ? 'bg-danger/15 text-danger' : remaining <= 5 ? 'bg-accent/15 text-gold' : 'bg-success/15 text-success',
-                            ].join(' ')}>
-                              {remaining <= 0 ? 'FULL' : remaining}
-                            </div>
-                          </div>
-                        </button>
-                      )
-                    })}
+                          </button>
+                        )
+                      })
+                    )}
                   </div>
+                  {isWeekend(dateISO) && selectedSlots.length > 0 && (
+                    <div className="mt-3 text-xs text-muted">
+                      Selected slots: {selectedSlots.sort(slotSort).map((s) => slotLabels[s]).join(', ')}
+                    </div>
+                  )}
+                  {!hasRequiredSlotSelection && (
+                    <div className="mt-3 text-xs text-danger">
+                      Please select a time slot to continue.
+                    </div>
+                  )}
+                  {isWd && (
+                    <div className="mt-3 text-xs text-muted/60">
+                      One game per field per time slot on weekdays
+                    </div>
+                  )}
                 </div>
               </div>
             </Card>
@@ -609,7 +1188,7 @@ export function ReservationCalendarPage_FIXED() {
               <div className="flex items-center gap-2 text-sm font-bold">
                 <FiUsers /> <span>Players & Session</span>
               </div>
-              <p className="mt-1 text-xs text-muted">Reservation capacity is enforced for the selected date/field/slot.</p>
+              <p className="mt-1 text-xs text-muted">Reservation capacity is enforced for the selected location.</p>
 
               <div className="mt-4 grid gap-4">
                 <div>
@@ -617,12 +1196,14 @@ export function ReservationCalendarPage_FIXED() {
                   <div className="mt-2 grid grid-cols-2 gap-2">
                     {(['public', 'private'] as SessionType[]).map((t) => {
                       const active = t === sessionType
+                      const isDisabled = (isWd && t === 'public') || (!isWd && t === 'private')
                       return (
                         <button
                           key={t}
                           type="button"
+                          disabled={isDisabled}
                           onClick={() => {
-                            const requiredMin = Math.max(selectedPackage?.minPlayers || 1, t === 'private' ? 10 : 1)
+                            const requiredMin = t === 'private' ? minPlayersForFields : 1
                             setSessionType(t)
                             if (players < requiredMin) {
                               setPlayers(requiredMin)
@@ -632,10 +1213,14 @@ export function ReservationCalendarPage_FIXED() {
                           className={[
                             'rounded-2xl border p-3 text-left transition',
                             active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
+                            isDisabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer',
                           ].join(' ')}
                         >
                           <div className="text-sm font-bold">{t === 'private' ? 'Private' : 'Public'}</div>
                           <div className="mt-1 text-xs text-muted">{t === 'private' ? 'Team exclusive' : 'Open roster'}</div>
+                          {isDisabled && (
+                            <div className="mt-1 text-[10px] text-muted/60">Not available for this date</div>
+                          )}
                         </button>
                       )
                     })}
@@ -700,6 +1285,15 @@ export function ReservationCalendarPage_FIXED() {
                     </button>
                   </div>
 
+                  {sessionType === 'private' && !meetsFieldRequirements && (
+                    <div className="mt-2 flex items-start gap-2 rounded-xl bg-danger/10 p-3 ring-1 ring-danger/20">
+                      <FiAlertTriangle className="mt-0.5 h-4 w-4 text-danger flex-shrink-0" />
+                      <div className="text-xs text-danger">
+                        Need {minPlayersForFields} players for selected fields. Current: {players}
+                      </div>
+                    </div>
+                  )}
+
                   <div className="mt-3 rounded-2xl border border-white/10 bg-black/20 p-4">
                     <div className="flex items-center justify-between gap-3">
                       <div>
@@ -735,9 +1329,12 @@ export function ReservationCalendarPage_FIXED() {
                       <div className="mt-3 flex items-start gap-3 rounded-2xl bg-danger/10 p-3 ring-1 ring-danger/20">
                         <FiAlertTriangle className="mt-0.5 h-5 w-5 text-danger" />
                         <div>
-                          <div className="text-sm font-bold text-danger">Schedule overloaded</div>
+                          <div className="text-sm font-bold text-danger">Cannot proceed</div>
                           <div className="mt-1 text-xs text-muted">
-                            Reduce players to {Math.max(0, remainingSlots)} to proceed.
+                            {!meetsFieldRequirements 
+                              ? `Need ${minPlayersForFields} players for selected fields.`
+                              : `Reduce players to ${Math.max(0, remainingSlots)} to proceed.`
+                            }
                           </div>
                         </div>
                       </div>
@@ -751,12 +1348,17 @@ export function ReservationCalendarPage_FIXED() {
                   Continue <FiChevronRight />
                 </Button>
                 <Button variant="ghost" onClick={() => {
-                  setSelectedFieldIds([fields[0].id])
-                  setDateISO(toISODate(addDays(today, 1)))
-                  setSlot('evening')
-                  setSessionType('public')
-                  setPlayers(8)
-                  setPlayersInput('8')
+                  const newDateISO = toISODate(addDays(today, 1))
+                  const newIsWeekend = isWeekend(newDateISO)
+                  const newDefault = newIsWeekend ? 1 : 10
+                  const fields = getFieldsForLocation(selectedLocation)
+                  setSelectedFieldIds(fields.length > 0 ? [fields[0].id] : [])
+                  setDateISO(newDateISO)
+                  setSlot('morning')
+                  setSlotTouched(false)
+                  setSessionType(newIsWeekend ? 'public' : 'private')
+                  setPlayers(newDefault)
+                  setPlayersInput(String(newDefault))
                 }}>
                   Reset
                 </Button>
@@ -766,121 +1368,361 @@ export function ReservationCalendarPage_FIXED() {
         </div>
       )}
 
-      {/* Step 2 */}
+      {/* Step 2 - same as before */}
       {step === 2 && (
         <div className="grid gap-4 lg:grid-cols-3">
           <div className="lg:col-span-2 space-y-4">
             <Card className="p-4 md:p-6">
               <div className="flex items-center gap-2 text-sm font-bold">
-                <FiTag /> <span>Available Packages</span>
+                <FiSliders /> <span>Selection Mode</span>
               </div>
-              <p className="mt-1 text-xs text-muted">Select a rental package. These are managed by the admin.</p>
+              <p className="mt-1 text-xs text-muted">Choose a pre-set package or pick individual items.</p>
 
-              {loadingPackages ? (
-                <div className="mt-4 text-sm text-muted">Loading packages...</div>
-              ) : packages.length === 0 ? (
-                <div className="mt-4 text-sm text-muted">No packages available yet. Ask admin to create rental packages.</div>
-              ) : (
-                <div className="mt-4 grid gap-3 lg:grid-cols-2">
-                  {packages.map((pkg) => {
-                    const active = pkg.id === selectedPackageId
-                    return (
-                      <button
-                        key={pkg.id}
-                        type="button"
-                        onClick={() => setSelectedPackageId(pkg.id)}
-                        className={[
-                          'rounded-2xl border p-4 text-left transition',
-                          active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
-                        ].join(' ')}
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <div className="text-sm font-bold">{pkg.name}</div>
-                              <div className="rounded-xl border border-white/10 bg-black/20 px-2 py-1 text-[11px] font-bold text-muted">
-                                Min {pkg.minPlayers} players
+              <div className="mt-4 grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => setSelectionMode('package')}
+                  className={[
+                    'rounded-2xl border p-4 text-left transition',
+                    selectionMode === 'package'
+                      ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25'
+                      : 'border-white/10 bg-white/5 hover:bg-white/8',
+                  ].join(' ')}
+                >
+                  <div className="flex items-center gap-2">
+                    <FiPackage className="text-gold" />
+                    <div className="text-sm font-bold">Select Package</div>
+                  </div>
+                  <div className="mt-1 text-xs text-muted">Choose a curated rental package with discount.</div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectionMode('custom')
+                    setSelectedPackageId('')
+                  }}
+                  className={[
+                    'rounded-2xl border p-4 text-left transition',
+                    selectionMode === 'custom'
+                      ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25'
+                      : 'border-white/10 bg-white/5 hover:bg-white/8',
+                  ].join(' ')}
+                >
+                  <div className="flex items-center gap-2">
+                    <FiTool className="text-gold" />
+                    <div className="text-sm font-bold">Custom Selection</div>
+                  </div>
+                  <div className="mt-1 text-xs text-muted">Pick individual weapons/equipment + bring your own.</div>
+                </button>
+              </div>
+            </Card>
+
+            {selectionMode === 'package' ? (
+              <>
+                <Card className="p-4 md:p-6">
+                  <div className="flex items-center gap-2 text-sm font-bold">
+                    <FiTag /> <span>Available Packages</span>
+                  </div>
+                  <p className="mt-1 text-xs text-muted">Select a rental package. These are managed by the admin.</p>
+
+                  {loadingPackages ? (
+                    <div className="mt-4 text-sm text-muted">Loading packages...</div>
+                  ) : packages.length === 0 ? (
+                    <div className="mt-4 text-sm text-muted">No packages available yet. Ask admin to create rental packages.</div>
+                  ) : (
+                    <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                      {packages.map((pkg) => {
+                        const active = pkg.id === selectedPackageId
+                        return (
+                          <button
+                            key={pkg.id}
+                            type="button"
+                            onClick={() => setSelectedPackageId(pkg.id)}
+                            className={[
+                              'rounded-2xl border p-4 text-left transition',
+                              active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
+                            ].join(' ')}
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <div className="flex items-center gap-2">
+                                  <div className="text-sm font-bold">{pkg.name}</div>
+                                  <div className="rounded-xl border border-white/10 bg-black/20 px-2 py-1 text-[11px] font-bold text-muted">
+                                    Min {pkg.minPlayers} players
+                                  </div>
+                                </div>
+                                {pkg.description && (
+                                  <div className="mt-1 text-xs text-muted">{pkg.description}</div>
+                                )}
                               </div>
+                              {active && <FiCheck className="text-gold" />}
                             </div>
-                            {pkg.description && (
-                              <div className="mt-1 text-xs text-muted">{pkg.description}</div>
-                            )}
-                          </div>
-                          {active && <FiCheck className="text-gold" />}
-                        </div>
 
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          {pkg.weaponIds.length > 0 && (
-                            <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-muted">
-                              {pkg.weaponIds.length} weapon{pkg.weaponIds.length > 1 ? 's' : ''}
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              {pkg.weaponIds.length > 0 && (
+                                <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-muted">
+                                  {pkg.weaponIds.length} weapon{pkg.weaponIds.length > 1 ? 's' : ''}
+                                </div>
+                              )}
+                              {pkg.equipmentIds.length > 0 && (
+                                <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-muted">
+                                  {pkg.equipmentIds.length} equipment items
+                                </div>
+                              )}
+                              {pkg.discountPct > 0 && (
+                                <div className="rounded-xl border border-success/20 bg-success/10 px-3 py-2 text-xs font-semibold text-success">
+                                  {pkg.discountPct}% OFF
+                                </div>
+                              )}
                             </div>
-                          )}
-                          {pkg.equipmentIds.length > 0 && (
-                            <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-muted">
-                              {pkg.equipmentIds.length} equipment items
-                            </div>
-                          )}
-                          {pkg.discountPct > 0 && (
-                            <div className="rounded-xl border border-success/20 bg-success/10 px-3 py-2 text-xs font-semibold text-success">
-                              {pkg.discountPct}% OFF
-                            </div>
-                          )}
-                        </div>
 
-                        <div className="mt-3 flex items-center justify-between">
-                          <div className="text-xs text-muted">Base price (per player)</div>
-                          <div className="text-sm font-bold text-accent">₱{pkg.basePrice.toLocaleString()}</div>
+                            <div className="mt-3 flex items-center justify-between">
+                              <div className="text-xs text-muted">Base price (per player)</div>
+                              <div className="text-sm font-bold text-accent">₱{pkg.basePrice.toLocaleString()}</div>
+                            </div>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
+                </Card>
+
+                {/* Equipment Details */}
+                {selectedPackage && (packageWeapons.length > 0 || packageEquipment.length > 0) && (
+                  <Card className="p-4 md:p-6">
+                    <div className="flex items-center gap-2 text-sm font-bold">
+                      <FiShield /> <span>Included Weapons & Equipment</span>
+                    </div>
+                    <p className="mt-1 text-xs text-muted">From the admin inventory — prices are per item rental.</p>
+
+                    {packageWeapons.length > 0 && (
+                      <div className="mt-4">
+                        <div className="text-[11px] uppercase tracking-widest text-muted mb-2">Weapons</div>
+                        <div className="grid gap-2 md:grid-cols-2">
+                          {packageWeapons.map((w) => (
+                            <div key={w.id} className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+                              <div>
+                                <div className="text-sm font-bold">{w.name}</div>
+                                <div className="mt-1 text-xs text-muted">{w.category.toUpperCase()} • {w.status}</div>
+                              </div>
+                              <div className="text-xs font-semibold text-accent">₱{w.price}</div>
+                            </div>
+                          ))}
                         </div>
-                      </button>
-                    )
-                  })}
+                      </div>
+                    )}
+
+                    {packageEquipment.length > 0 && (
+                      <div className="mt-4">
+                        <div className="text-[11px] uppercase tracking-widest text-muted mb-2">Equipment</div>
+                        <div className="grid gap-2 md:grid-cols-2">
+                          {packageEquipment.map((e) => (
+                            <div key={e.id} className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+                              <div>
+                                <div className="text-sm font-bold">{e.name}</div>
+                                <div className="mt-1 text-xs text-muted">{e.category.toUpperCase()} • Qty: {e.qty}</div>
+                              </div>
+                              <div className="text-xs font-semibold text-accent">₱{e.price}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </Card>
+                )}
+              </>
+            ) : (
+              <>
+                {/* Custom mode - select weapons */}
+                <Card className="p-4 md:p-6">
+                  <div className="flex items-center gap-2 text-sm font-bold">
+                    <FiCrosshair /> <span>Select Weapons to Rent</span>
+                  </div>
+                  <p className="mt-1 text-xs text-muted">Choose from the admin inventory. Price is per item per player.</p>
+
+                  {weapons.length === 0 ? (
+                    <div className="mt-4 text-sm text-muted">No weapons available in inventory.</div>
+                  ) : (
+                    <div className="mt-4 grid gap-2 md:grid-cols-2">
+                      {weapons.map((w) => {
+                        const active = customWeaponIds.includes(w.id)
+                        return (
+                          <label
+                            key={w.id}
+                            className={[
+                              'flex items-start gap-3 rounded-2xl border p-3 cursor-pointer transition',
+                              active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
+                            ].join(' ')}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={active}
+                              onChange={() => {
+                                setCustomWeaponIds((prev) =>
+                                  prev.includes(w.id) ? prev.filter((id) => id !== w.id) : [...prev, w.id]
+                                )
+                              }}
+                              className="mt-1 h-4 w-4 accent-accent"
+                            />
+                            <div className="flex-1 min-w-0">
+                              <div className="text-sm font-bold truncate">{w.name}</div>
+                              <div className="text-xs text-muted">{w.category.toUpperCase()} • {w.status}</div>
+                            </div>
+                            <div className="text-xs font-semibold text-accent">₱{w.price}/player</div>
+                          </label>
+                        )
+                      })}
+                    </div>
+                  )}
+                </Card>
+
+                {/* Custom mode - select equipment */}
+                <Card className="p-4 md:p-6">
+                  <div className="flex items-center gap-2 text-sm font-bold">
+                    <FiShield /> <span>Select Equipment to Rent</span>
+                  </div>
+                  <p className="mt-1 text-xs text-muted">Choose from the admin inventory. Price is per item per player.</p>
+
+                  {equipment.length === 0 ? (
+                    <div className="mt-4 text-sm text-muted">No equipment available in inventory.</div>
+                  ) : (
+                    <div className="mt-4 grid gap-2 md:grid-cols-2">
+                      {equipment.map((e) => {
+                        const active = customEquipmentIds.includes(e.id)
+                        return (
+                          <label
+                            key={e.id}
+                            className={[
+                              'flex items-start gap-3 rounded-2xl border p-3 cursor-pointer transition',
+                              active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
+                            ].join(' ')}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={active}
+                              onChange={() => {
+                                setCustomEquipmentIds((prev) =>
+                                  prev.includes(e.id) ? prev.filter((id) => id !== e.id) : [...prev, e.id]
+                                )
+                              }}
+                              className="mt-1 h-4 w-4 accent-accent"
+                            />
+                            <div className="flex-1 min-w-0">
+                              <div className="text-sm font-bold truncate">{e.name}</div>
+                              <div className="text-xs text-muted">{e.category.toUpperCase()} • Qty: {e.qty}</div>
+                            </div>
+                            <div className="text-xs font-semibold text-accent">₱{e.price}/player</div>
+                          </label>
+                        )
+                      })}
+                    </div>
+                  )}
+                </Card>
+              </>
+            )}
+
+            {/* Bring Your Own */}
+            <Card className="p-4 md:p-6">
+              <div className="flex items-center gap-2 text-sm font-bold">
+                <FiTool /> <span>Bring Your Own (Free)</span>
+              </div>
+              <p className="mt-1 text-xs text-muted">Select from your admin-approved weapons and equipment. No charge — you can bring these alongside your package rental.</p>
+
+              {playerApprovedWeapons.length === 0 && playerApprovedEquipment.length === 0 ? (
+                <div className="mt-4 text-sm text-muted">
+                  No approved items yet. Go to{" "}
+                  <button
+                    type="button"
+                    className="text-gold underline"
+                    onClick={() => navigate('/app/players/' + user?.id + '/weapons-and-equipment')}
+                  >
+                    My Weapons & Equipment
+                  </button>{" "}
+                  to submit gear for admin approval.
+                </div>
+              ) : (
+                <div className="mt-4 grid gap-4">
+                  {playerApprovedWeapons.length > 0 && (
+                    <div>
+                      <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted mb-2">
+                        Approved Weapons ({playerApprovedWeapons.length})
+                      </div>
+                      <div className="grid gap-2 md:grid-cols-2">
+                        {playerApprovedWeapons.map((w: any) => {
+                          const active = selectedOwnWeaponIds.includes(w.id || w._id)
+                          return (
+                            <label
+                              key={w.id || w._id}
+                              className={[
+                                'flex items-start gap-3 rounded-2xl border p-3 cursor-pointer transition',
+                                active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
+                              ].join(' ')}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={active}
+                                onChange={() => {
+                                  const id = w.id || w._id
+                                  setSelectedOwnWeaponIds((prev) =>
+                                    prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]
+                                  )
+                                }}
+                                className="mt-1 h-4 w-4 accent-accent"
+                              />
+                              <div className="flex-1 min-w-0">
+                                <div className="text-sm font-bold truncate">{w.name}</div>
+                                <div className="text-xs text-muted">{w.category?.toUpperCase?.() || 'Weapon'}</div>
+                              </div>
+                              <div className="text-xs font-semibold text-success">FREE</div>
+                            </label>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {playerApprovedEquipment.length > 0 && (
+                    <div>
+                      <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted mb-2">
+                        Approved Equipment ({playerApprovedEquipment.length})
+                      </div>
+                      <div className="grid gap-2 md:grid-cols-2">
+                        {playerApprovedEquipment.map((e: any) => {
+                          const active = selectedOwnEquipmentIds.includes(e.id || e._id)
+                          return (
+                            <label
+                              key={e.id || e._id}
+                              className={[
+                                'flex items-start gap-3 rounded-2xl border p-3 cursor-pointer transition',
+                                active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
+                              ].join(' ')}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={active}
+                                onChange={() => {
+                                  const id = e.id || e._id
+                                  setSelectedOwnEquipmentIds((prev) =>
+                                    prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]
+                                  )
+                                }}
+                                className="mt-1 h-4 w-4 accent-accent"
+                              />
+                              <div className="flex-1 min-w-0">
+                                <div className="text-sm font-bold truncate">{e.name}</div>
+                                <div className="text-xs text-muted">{e.category?.toUpperCase?.() || 'Equipment'}</div>
+                              </div>
+                              <div className="text-xs font-semibold text-success">FREE</div>
+                            </label>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </Card>
-
-            {/* Equipment Details */}
-            {selectedPackage && (packageWeapons.length > 0 || packageEquipment.length > 0) && (
-              <Card className="p-4 md:p-6">
-                <div className="flex items-center gap-2 text-sm font-bold">
-                  <FiShield /> <span>Included Weapons & Equipment</span>
-                </div>
-                <p className="mt-1 text-xs text-muted">From the admin inventory — prices are per item rental.</p>
-
-                {packageWeapons.length > 0 && (
-                  <div className="mt-4">
-                    <div className="text-[11px] uppercase tracking-widest text-muted mb-2">Weapons</div>
-                    <div className="grid gap-2 md:grid-cols-2">
-                      {packageWeapons.map((w) => (
-                        <div key={w.id} className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
-                          <div>
-                            <div className="text-sm font-bold">{w.name}</div>
-                            <div className="mt-1 text-xs text-muted">{w.category.toUpperCase()} • {w.status}</div>
-                          </div>
-                          <div className="text-xs font-semibold text-accent">₱{w.price}</div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {packageEquipment.length > 0 && (
-                  <div className="mt-4">
-                    <div className="text-[11px] uppercase tracking-widest text-muted mb-2">Equipment</div>
-                    <div className="grid gap-2 md:grid-cols-2">
-                      {packageEquipment.map((e) => (
-                        <div key={e.id} className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
-                          <div>
-                            <div className="text-sm font-bold">{e.name}</div>
-                            <div className="mt-1 text-xs text-muted">{e.category.toUpperCase()} • Qty: {e.qty}</div>
-                          </div>
-                          <div className="text-xs font-semibold text-accent">₱{e.price}</div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </Card>
-            )}
           </div>
 
           <div className="space-y-4">
@@ -896,7 +1738,9 @@ export function ReservationCalendarPage_FIXED() {
                   players < effectiveMinPlayers ? 'border-danger/30 bg-danger/10' : 'border-white/10 bg-white/5',
                 ].join(' ')}>
                   <div className="text-sm font-bold">Minimum players</div>
-                  <div className="mt-1 text-xs text-muted">Package requires {selectedPackage?.minPlayers || '—'} players</div>
+                  <div className="mt-1 text-xs text-muted">
+                    {selectionMode === 'custom' ? 'No minimum (custom mode)' : `Package requires ${selectedPackage?.minPlayers || '—'} players`}
+                  </div>
                   {players < effectiveMinPlayers ? (
                     <div className="mt-2 text-xs font-semibold text-danger">Increase players to continue.</div>
                   ) : (
@@ -906,7 +1750,9 @@ export function ReservationCalendarPage_FIXED() {
 
                 <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
                   <div className="text-sm font-bold">Dynamic price</div>
-                  <div className="mt-1 text-xs text-muted">Calculated for your group and session type.</div>
+                  <div className="mt-1 text-xs text-muted">
+                    {selectionMode === 'custom' ? 'Custom items × players (no discount)' : 'Calculated for your group and session type.'}
+                  </div>
                   <div className="mt-3 flex items-end justify-between">
                     <div>
                       <div className="text-xs text-muted">Total</div>
@@ -918,7 +1764,7 @@ export function ReservationCalendarPage_FIXED() {
                     </div>
                   </div>
 
-                  {dynamicPricing.discountPct > 0 && (
+                  {selectionMode === 'package' && dynamicPricing.discountPct > 0 && (
                     <div className="mt-2 text-xs text-muted">
                       Discount applied: {dynamicPricing.discountLabel}
                       {dynamicPricing.savings > 0 && ` (save ₱${dynamicPricing.savings.toLocaleString()})`}
@@ -940,7 +1786,11 @@ export function ReservationCalendarPage_FIXED() {
                 <Button variant="ghost" onClick={() => setStep(1)}>Back</Button>
                 <Button
                   variant="primary"
-                  disabled={players < effectiveMinPlayers || !canProceed || !selectedPackage}
+                  disabled={
+                    players < effectiveMinPlayers ||
+                    !canProceed ||
+                    (selectionMode === 'package' && !selectedPackage)
+                  }
                   onClick={() => setStep(3)}
                 >
                   Continue <FiChevronRight />
@@ -951,7 +1801,7 @@ export function ReservationCalendarPage_FIXED() {
         </div>
       )}
 
-      {/* Step 3 */}
+      {/* Step 3 - same as before */}
       {step === 3 && (
         <div className="grid gap-4 lg:grid-cols-3">
           <div className="lg:col-span-2 space-y-4">
@@ -983,10 +1833,57 @@ export function ReservationCalendarPage_FIXED() {
                   <div className="mt-1 text-xs text-muted">{reservationSummary.players} players</div>
                 </div>
                 <div className="rounded-2xl border border-white/10 bg-white/5 p-4 md:col-span-2">
-                  <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Package</div>
+                  <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Selection Mode</div>
                   <div className="mt-2 text-sm font-bold">{reservationSummary.packageName}</div>
                 </div>
               </div>
+
+              {/* Custom mode items */}
+              {selectionMode === 'custom' && (
+                <div className="mt-4 space-y-3">
+                  {reservationSummary.customWeapons.length > 0 && (
+                    <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                      <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Rental Weapons</div>
+                      <div className="mt-2 space-y-2">
+                        {reservationSummary.customWeapons.map((w) => (
+                          <div key={w.id} className="flex items-center justify-between text-sm">
+                            <span>{w.name}</span>
+                            <span className="text-accent">₱{w.price}/player</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {reservationSummary.customEquipment.length > 0 && (
+                    <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                      <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Rental Equipment</div>
+                      <div className="mt-2 space-y-2">
+                        {reservationSummary.customEquipment.map((e) => (
+                          <div key={e.id} className="flex items-center justify-between text-sm">
+                            <span>{e.name}</span>
+                            <span className="text-accent">₱{e.price}/player</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {reservationSummary.ownWeapons && (
+                    <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                      <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Own Weapons (Free)</div>
+                      <div className="mt-2 text-sm">{reservationSummary.ownWeapons}</div>
+                    </div>
+                  )}
+
+                  {reservationSummary.ownEquipment && (
+                    <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                      <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Own Equipment (Free)</div>
+                      <div className="mt-2 text-sm">{reservationSummary.ownEquipment}</div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {reservationSummary.notes && (
                 <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4">
@@ -1001,24 +1898,51 @@ export function ReservationCalendarPage_FIXED() {
                 <FiTag /> <span>Pricing Breakdown</span>
               </div>
 
-              <div className="mt-4 grid gap-3 md:grid-cols-2">
-                <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                  <div className="text-xs text-muted">Base package (per player)</div>
-                  <div className="mt-2 text-sm font-bold">₱{selectedPackage?.basePrice.toLocaleString() || '0'}</div>
+              {selectionMode === 'package' ? (
+                <div className="mt-4 grid gap-3 md:grid-cols-2">
+                  <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                    <div className="text-xs text-muted">Base package (per player)</div>
+                    <div className="mt-2 text-sm font-bold">₱{selectedPackage?.basePrice.toLocaleString() || '0'}</div>
+                  </div>
+                  <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                    <div className="text-xs text-muted">Equipment add-ons (per player)</div>
+                    <div className="mt-2 text-sm font-bold">₱{equipmentTotalPerPlayer.toLocaleString()}</div>
+                  </div>
+                  <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                    <div className="text-xs text-muted">Session multiplier</div>
+                    <div className="mt-2 text-sm font-bold">{dynamicPricing.sessionMultiplier}×</div>
+                  </div>
+                  <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                    <div className="text-xs text-muted">Discount</div>
+                    <div className="mt-2 text-sm font-bold">{dynamicPricing.discountLabel}</div>
+                  </div>
                 </div>
-                <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                  <div className="text-xs text-muted">Equipment add-ons (per player)</div>
-                  <div className="mt-2 text-sm font-bold">₱{equipmentTotalPerPlayer.toLocaleString()}</div>
+              ) : (
+                <div className="mt-4 grid gap-3 md:grid-cols-2">
+                  <div className="rounded-2xl border border-white/10 bg-white/5 p-4 md:col-span-2">
+                    <div className="text-xs text-muted">Selected rental items (per player)</div>
+                    <div className="mt-2 text-sm font-bold">{customSelectedWeapons.length} weapons, {customSelectedEquipment.length} equipment</div>
+                  </div>
+                  <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                    <div className="text-xs text-muted">Per player total</div>
+                    <div className="mt-2 text-sm font-bold">₱{customPerPlayerTotal.toLocaleString()}</div>
+                  </div>
+                  <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                    <div className="text-xs text-muted">× Players</div>
+                    <div className="mt-2 text-sm font-bold">{players}</div>
+                  </div>
+                  {(reservationSummary.ownWeapons || reservationSummary.ownEquipment) && (
+                    <div className="rounded-2xl border border-white/10 bg-white/5 p-4 md:col-span-2">
+                      <div className="text-xs text-muted">Own items (free)</div>
+                      <div className="mt-2 text-sm font-bold text-success">₱0</div>
+                    </div>
+                  )}
+                  <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                    <div className="text-xs text-muted">No discount (custom mode)</div>
+                    <div className="mt-2 text-sm font-bold text-muted">—</div>
+                  </div>
                 </div>
-                <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                  <div className="text-xs text-muted">Session multiplier</div>
-                  <div className="mt-2 text-sm font-bold">{dynamicPricing.sessionMultiplier}×</div>
-                </div>
-                <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                  <div className="text-xs text-muted">Discount</div>
-                  <div className="mt-2 text-sm font-bold">{dynamicPricing.discountLabel}</div>
-                </div>
-              </div>
+              )}
 
               {dynamicPricing.savings > 0 && (
                 <div className="mt-3 text-xs text-muted">

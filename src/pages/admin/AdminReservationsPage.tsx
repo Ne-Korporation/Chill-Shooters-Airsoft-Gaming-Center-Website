@@ -7,6 +7,7 @@ import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { apiDelete, apiGet, apiPut } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
+import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
 
 type ReservationStatus = 'pending' | 'needs review' | 'confirmed'
 
@@ -296,6 +297,8 @@ export function AdminReservationsPage() {
     setSelectedId(reservationId)
   }
 
+  const { addNotification } = useNotifications()
+
   const updateReservation = async (nextStatus: ReservationStatus) => {
     if (!selectedReservation) return
     const reservationId = getId(selectedReservation)
@@ -321,6 +324,35 @@ export function AdminReservationsPage() {
       if (nextStatus === 'confirmed') setActive('confirmed')
       else if (nextStatus === 'needs review') setActive('needs review')
       else setActive('pending')
+
+      sendRoleNotifications(addNotification, {
+        roles: ['admin', 'registrar', 'marshal'],
+        type: 'reservation_status_update',
+        title: 'Reservation Update Received',
+        message: `Reservation ${reservationId} was moved to ${nextStatus}.`,
+        linkedResourceId: reservationId,
+      })
+
+      if (nextStatus === 'confirmed') {
+        sendRoleNotifications(addNotification, {
+          roles: ['admin', 'registrar', 'marshal'],
+          type: 'gameplay_created',
+          title: 'Gameplay Session Ready',
+          message: `Gameplay for reservation ${reservationId} is ready to be managed.`,
+          linkedResourceId: reservationId,
+        })
+      }
+
+      // Notify the customer if reservation was confirmed
+      if (nextStatus === 'confirmed' && selectedReservation.userId) {
+        addNotification({
+          userId: selectedReservation.userId,
+          type: 'reservation_confirmed',
+          title: 'Reservation Confirmed',
+          message: `Your reservation ${reservationId} has been confirmed. Payment has been verified.`,
+          linkedResourceId: reservationId,
+        })
+      }
 
       setSelectedId(null)
       toast.success(`Reservation marked as ${nextStatus}`)

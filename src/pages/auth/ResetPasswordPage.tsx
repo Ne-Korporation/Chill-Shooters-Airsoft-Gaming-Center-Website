@@ -3,6 +3,7 @@ import { useForm } from 'react-hook-form'
 import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { motion } from 'framer-motion'
+import { FiEye, FiEyeOff } from 'react-icons/fi'
 
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
@@ -23,6 +24,8 @@ export function ResetPasswordPage() {
   const navigate = useNavigate()
   const email = useMemo(() => readEmail(), [])
   const [busy, setBusy] = useState(false)
+  const [showPassword, setShowPassword] = useState(false)
+  const [showConfirm, setShowConfirm] = useState(false)
 
   const {
     register,
@@ -102,24 +105,58 @@ export function ResetPasswordPage() {
                 <h2 className="text-xl font-bold">Password</h2>
               </div>
 
-              <Input
-                label="New password"
-                type="password"
-                placeholder="Enter new password"
-                error={errors.password?.message}
-                {...register('password', { required: 'Password is required', minLength: 4 })}
-              />
+              <div>
+                <label className="mb-1.5 block text-xs font-bold uppercase tracking-[0.18em] text-muted">
+                  New password
+                </label>
+                <div className="relative">
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    placeholder="Enter new password"
+                    className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 pr-12 text-sm text-text placeholder-muted outline-none transition focus:border-accent/40 focus:ring-2 focus:ring-accent/25"
+                    {...register('password', { required: 'Password is required', minLength: 4 })}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((v) => !v)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted hover:text-text transition"
+                    tabIndex={-1}
+                  >
+                    {showPassword ? <FiEyeOff size={18} /> : <FiEye size={18} />}
+                  </button>
+                </div>
+                {errors.password?.message && (
+                  <p className="mt-1 text-xs text-danger">{errors.password.message}</p>
+                )}
+              </div>
 
-              <Input
-                label="Confirm password"
-                type="password"
-                placeholder="Re-enter password"
-                error={
-                  errors.confirmPassword?.message ||
-                  (watch('confirmPassword') && password !== watch('confirmPassword') ? 'Passwords do not match.' : undefined)
-                }
-                {...register('confirmPassword', { required: 'Confirmation is required' })}
-              />
+              <div>
+                <label className="mb-1.5 block text-xs font-bold uppercase tracking-[0.18em] text-muted">
+                  Confirm password
+                </label>
+                <div className="relative">
+                  <input
+                    type={showConfirm ? 'text' : 'password'}
+                    placeholder="Re-enter password"
+                    className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 pr-12 text-sm text-text placeholder-muted outline-none transition focus:border-accent/40 focus:ring-2 focus:ring-accent/25"
+                    {...register('confirmPassword', { required: 'Confirmation is required' })}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirm((v) => !v)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted hover:text-text transition"
+                    tabIndex={-1}
+                  >
+                    {showConfirm ? <FiEyeOff size={18} /> : <FiEye size={18} />}
+                  </button>
+                </div>
+                {errors.confirmPassword?.message && (
+                  <p className="mt-1 text-xs text-danger">{errors.confirmPassword.message}</p>
+                )}
+                {watch('confirmPassword') && password !== watch('confirmPassword') && (
+                  <p className="mt-1 text-xs text-danger">Passwords do not match.</p>
+                )}
+              </div>
 
               <Button type="submit" disabled={busy} className="w-full">
                 {busy ? 'Updating...' : 'Update Password'}

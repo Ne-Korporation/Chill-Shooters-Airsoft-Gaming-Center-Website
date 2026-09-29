@@ -190,21 +190,36 @@ export function PackageRecommendationPage() {
       .map((pkg) => {
         const pricing = computeTotal({ pkg, players: playerSafe, budgetModel, weapons, equipment })
         const affordable = pricing.total <= budgetSafe
-        const delta = Math.abs(pricing.total - budgetSafe)
         const minPenalty = Math.max(0, pkg.minPlayers - playerSafe) * 600
-        return { pkg, pricing, affordable, delta, minPenalty }
+        return { pkg, pricing, affordable, minPenalty }
       })
       .sort((a, b) => {
+        // First prioritize affordable packages
         if (a.affordable !== b.affordable) return a.affordable ? -1 : 1
-        if (a.delta !== b.delta) return a.delta - b.delta
+        // Then sort by cheapest total price ascending
+        if (a.pricing.total !== b.pricing.total) return a.pricing.total - b.pricing.total
         return a.minPenalty - b.minPenalty
       })
   }, [packages, budgetSafe, budgetModel, playerSafe, weapons, equipment])
 
   const best = scored[0]
   const top3 = scored.slice(0, 3)
+  const [selectedPackageId, setSelectedPackageId] = useState<string | undefined>(best?.pkg.id)
+
+  React.useEffect(() => {
+    if (!selectedPackageId && best?.pkg.id) {
+      setSelectedPackageId(best.pkg.id)
+    }
+    if (selectedPackageId && !scored.some((item) => item.pkg.id === selectedPackageId)) {
+      setSelectedPackageId(best?.pkg.id)
+    }
+  }, [best, scored, selectedPackageId])
+
+  const selectedPackage = packages.find((pkg) => pkg.id === selectedPackageId) || best?.pkg
+  const selectedItem = scored.find((item) => item.pkg.id === selectedPackageId) || best
+
   const canSubmit = Boolean(
-    best &&
+    selectedPackage &&
       budgetInput.trim() !== '' &&
       playersInput.trim() !== '' &&
       Number(budgetInput) >= 1000 &&
@@ -389,7 +404,7 @@ export function PackageRecommendationPage() {
             ) : (
               <div className="mt-4 grid gap-3 sm:grid-cols-3">
                 {top3.map((item) => {
-                  const active = best?.pkg.id === item.pkg.id
+                  const active = selectedPackageId === item.pkg.id
                   const remaining = budgetSafe - item.pricing.total
                   return (
                     <motion.div
@@ -397,9 +412,18 @@ export function PackageRecommendationPage() {
                       initial={{ opacity: 0, y: 8 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ duration: 0.35 }}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setSelectedPackageId(item.pkg.id)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault()
+                          setSelectedPackageId(item.pkg.id)
+                        }
+                      }}
                       className={[
-                        'rounded-2xl border p-4 transition',
-                        active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5',
+                        'rounded-2xl border p-4 transition focus:outline-none focus:ring-2 focus:ring-accent/40',
+                        active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
                       ].join(' ')}
                     >
                       <div className="flex items-start justify-between gap-3">
@@ -473,36 +497,36 @@ export function PackageRecommendationPage() {
 
             {loading ? (
               <div className="mt-4 text-sm text-muted">Loading...</div>
-            ) : best ? (
+            ) : selectedPackage ? (
               <div className="mt-4">
                 <div className="rounded-2xl border border-accent/40 bg-accent/10 p-4">
-                  <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Recommended</div>
-                  <div className="mt-2 text-lg font-black text-gold">{best.pkg.name}</div>
+                  <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Selected package</div>
+                  <div className="mt-2 text-lg font-black text-gold">{selectedPackage.name}</div>
                   <div className="mt-3 flex items-end justify-between gap-3">
                     <div>
                       <div className="text-xs text-muted">Total est.</div>
-                      <div className="mt-1 text-3xl font-black text-gold">₱{best.pricing.total.toLocaleString()}</div>
+                      <div className="mt-1 text-3xl font-black text-gold">₱{selectedItem?.pricing.total.toLocaleString() ?? 0}</div>
                     </div>
                     <div className="text-right">
                       <div className="text-xs text-muted">Per player</div>
-                      <div className="mt-1 text-sm font-bold">₱{best.pricing.perPlayer.toLocaleString()}</div>
+                      <div className="mt-1 text-sm font-bold">₱{selectedItem?.pricing.perPlayer.toLocaleString() ?? 0}</div>
                     </div>
                   </div>
 
-                  {best.pricing.discountPct > 0 ? (
+                  {selectedItem?.pricing.discountPct > 0 ? (
                     <div className="mt-3 space-y-1 pt-3 border-t border-accent/20">
                       <div className="flex items-center justify-between gap-3">
                         <div className="text-xs text-muted">Original price</div>
-                        <div className="text-xs text-muted line-through">₱{best.pricing.originalTotal.toLocaleString()}</div>
+                        <div className="text-xs text-muted line-through">₱{selectedItem.pricing.originalTotal.toLocaleString()}</div>
                       </div>
                       <div className="flex items-center justify-between gap-3">
                         <div className="text-xs text-muted">Discount</div>
-                        <div className="text-xs font-semibold text-success">{best.pricing.discountLabel}</div>
+                        <div className="text-xs font-semibold text-success">{selectedItem.pricing.discountLabel}</div>
                       </div>
                       <div className="flex items-center justify-between gap-3">
                         <div className="text-xs text-muted">Savings signal</div>
                         <div className="text-xs font-bold text-success">
-                          ₱{best.pricing.savings.toLocaleString()} value
+                          ₱{selectedItem.pricing.savings.toLocaleString()} value
                         </div>
                       </div>
                     </div>
@@ -522,8 +546,8 @@ export function PackageRecommendationPage() {
                     <div>
                       <div className="text-xs text-muted">Group fit</div>
                       <div className="mt-1 text-sm font-bold">
-                        {playerSafe < best.pkg.minPlayers
-                          ? `Increase players to minimum ${best.pkg.minPlayers}.`
+                        {playerSafe < selectedPackage.minPlayers
+                          ? `Increase players to minimum ${selectedPackage.minPlayers}.`
                           : 'Your group meets the minimum requirements.'}
                       </div>
                     </div>
@@ -536,13 +560,13 @@ export function PackageRecommendationPage() {
                     className="w-full"
                     disabled={!canSubmit}
                     onClick={() => {
-                      if (!best || !canSubmit) return
+                      if (!selectedPackage || !canSubmit) return
                       navigate('/app/reservations', {
                         state: {
                           fromPackageRecommendation: true,
                           players: playerSafe,
                           sessionType: budgetModel,
-                          selectedPackageId: best.pkg.id,
+                          selectedPackageId: selectedPackage.id,
                         },
                       })
                     }}

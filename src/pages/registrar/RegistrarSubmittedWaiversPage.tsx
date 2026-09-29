@@ -1,8 +1,10 @@
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
+import toast from 'react-hot-toast'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
-import { FiCheck, FiShield, FiClock, FiAlertTriangle, FiX, FiSearch } from 'react-icons/fi'
+import { FiCheck, FiShield, FiClock, FiAlertTriangle } from 'react-icons/fi'
+import { apiGet, apiPut } from '../../utils/apiClient'
 
 type WaiverStatus = 'pending' | 'accepted' | 'flagged'
 
@@ -24,38 +26,44 @@ function dateTime(iso: string) {
   }
 }
 
+function normalizeStatus(value?: string): WaiverStatus {
+  const raw = String(value || '').trim().toLowerCase()
+  if (raw === 'approved' || raw === 'accepted') return 'accepted'
+  if (raw === 'denied' || raw === 'flagged') return 'flagged'
+  return 'pending'
+}
+
 export function RegistrarSubmittedWaiversPage() {
   const [query, setQuery] = useState('')
+  const [rows, setRows] = useState<WaiverRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [savingId, setSavingId] = useState<string | null>(null)
 
-  const [rows, setRows] = useState<WaiverRow[]>(() => [
-    {
-      id: 'waiv-15001',
-      submittedAtISO: new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString(),
-      reservationId: 'res-12001',
-      participantSummary: 'Ramil Santos (Age 16)',
-      isMinor: true,
-      status: 'pending',
-      reviewerNote: '',
-    },
-    {
-      id: 'waiv-15002',
-      submittedAtISO: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
-      reservationId: 'res-12002',
-      participantSummary: 'Lina Cruz (Age 21)',
-      isMinor: false,
-      status: 'accepted',
-      reviewerNote: 'Guardian consent verified.',
-    },
-    {
-      id: 'waiv-15003',
-      submittedAtISO: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
-      reservationId: 'res-12004',
-      participantSummary: 'Mark Rivera (Age 15)',
-      isMinor: true,
-      status: 'flagged',
-      reviewerNote: 'Signature looks short; needs recheck.',
-    },
-  ])
+  const refresh = async () => {
+    setLoading(true)
+    try {
+      const res = await apiGet<{ ok: boolean; data: any[] }>('/api/waivers?limit=200')
+      const mapped = (Array.isArray(res?.data) ? res.data : []).map((item) => ({
+        id: String(item.id || item._id || ''),
+        submittedAtISO: item.submittedAtISO || item.createdAtISO || '',
+        reservationId: String(item.reservationId || ''),
+        participantSummary: item.fullName ? `${item.fullName}${item.age ? ` (Age ${item.age})` : ''}` : '—',
+        isMinor: Boolean(item.isMinor || Number(item.age) < 18),
+        status: normalizeStatus(item.status),
+        reviewerNote: item.reviewerNote || '',
+      }))
+      setRows(mapped)
+    } catch (e: any) {
+      toast.error(String(e?.message || e))
+      setRows([])
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    void refresh()
+  }, [])
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -73,13 +81,21 @@ export function RegistrarSubmittedWaiversPage() {
   const pendingCount = useMemo(() => rows.filter((r) => r.status === 'pending').length, [rows])
   const flaggedCount = useMemo(() => rows.filter((r) => r.status === 'flagged').length, [rows])
 
-  const accept = (id: string) => {
-    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, status: 'accepted', reviewerNote: 'Waiver accepted by registrar (prototype).' } : r)))
+  const updateStatus = async (id: string, nextStatus: WaiverStatus, reviewerNote: string) => {
+    setSavingId(id)
+    try {
+      await apiPut(`/api/waivers/${encodeURIComponent(id)}`, { status: nextStatus === 'accepted' ? 'approved' : 'denied', reviewerNote })
+      toast.success(`Waiver ${nextStatus === 'accepted' ? 'accepted' : 'flagged'}`)
+      await refresh()
+    } catch (e: any) {
+      toast.error(String(e?.message || e))
+    } finally {
+      setSavingId(null)
+    }
   }
 
-  const clearFlag = (id: string) => {
-    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, status: 'accepted', reviewerNote: 'Flag cleared after verification (prototype).' } : r)))
-  }
+  const accept = (id: string) => void updateStatus(id, 'accepted', 'Waiver accepted by registrar.')
+  const clearFlag = (id: string) => void updateStatus(id, 'accepted', 'Flag cleared after verification.')
 
   return (
     <div className="space-y-4">
@@ -136,7 +152,15 @@ export function RegistrarSubmittedWaiversPage() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((r) => (
+              {loading ? (
+                <tr>
+                  <td colSpan={6} className="py-10 text-center text-xs text-muted">
+                    Loading waivers…
+                  </td>
+                </tr>
+              ) : null}
+
+              {!loading && filtered.map((r) => (
                 <tr key={r.id} className="border-t border-white/5">
                   <td className="py-3 pr-3">
                     <div className="font-bold">{r.id}</div>
@@ -171,13 +195,13 @@ export function RegistrarSubmittedWaiversPage() {
                   <td className="py-3 pr-3">
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                       {r.status === 'pending' ? (
-                        <Button variant="primary" className="w-full sm:w-auto" onClick={() => accept(r.id)}>
-                          <FiCheck /> Accept
+                        <Button variant="primary" className="w-full sm:w-auto" onClick={() => accept(r.id)} disabled={savingId === r.id}>
+                          <FiCheck /> {savingId === r.id ? 'Saving…' : 'Accept'}
                         </Button>
                       ) : null}
                       {r.status === 'flagged' ? (
-                        <Button variant="ghost" className="w-full sm:w-auto" onClick={() => clearFlag(r.id)}>
-                          <FiAlertTriangle /> Re-verify
+                        <Button variant="ghost" className="w-full sm:w-auto" onClick={() => clearFlag(r.id)} disabled={savingId === r.id}>
+                          <FiAlertTriangle /> {savingId === r.id ? 'Saving…' : 'Re-verify'}
                         </Button>
                       ) : null}
                       {r.status === 'accepted' ? <div className="text-xs text-muted">No action</div> : null}
@@ -186,7 +210,7 @@ export function RegistrarSubmittedWaiversPage() {
                 </tr>
               ))}
 
-              {filtered.length === 0 ? (
+              {!loading && filtered.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="py-10 text-center text-xs text-muted">
                     No waivers match your search.

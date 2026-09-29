@@ -3,6 +3,7 @@ import toast from 'react-hot-toast'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { apiGet, apiPost, apiPut, apiDelete } from '../../utils/apiClient'
+import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
 
 type WeaponCategory = 'rifles' | 'pistols' | 'snipers' | 'mg' | 'shotguns'
 
@@ -136,7 +137,8 @@ export function AdminWeaponsPage() {
   })
 
   const activeCategoryMeta = category === 'all' ? null : categoryOptions.find((item) => item.key === category)
-  const maintenanceCount = weapons.filter((weapon) => weapon.status === 'needs-check').length
+  const maintenanceQueue = weapons.filter((weapon) => weapon.status === 'needs-check')
+  const maintenanceCount = maintenanceQueue.length
   const pendingPlayerWeapons = weapons.filter((weapon) => weapon.source === 'player' && weapon.approvalStatus === 'pending')
   const pendingPlayerWeaponsCount = pendingPlayerWeapons.length
 
@@ -282,12 +284,21 @@ export function AdminWeaponsPage() {
     }
   }
 
+  const { addNotification } = useNotifications()
+
   const handleApprovePlayerWeapon = async (id: string) => {
     try {
       await apiPut<any>(`/api/weapons/${encodeURIComponent(id)}`, {
         approvalStatus: 'approved',
         status: 'available',
         updatedAtISO: new Date().toISOString(),
+      })
+      sendRoleNotifications(addNotification, {
+        roles: ['admin', 'registrar', 'marshal'],
+        type: 'weapon_approved',
+        title: 'Weapon Approved',
+        message: `Weapon ${id} was approved for use.`,
+        linkedResourceId: id,
       })
       toast.success('Player weapon approved')
       await refresh()
@@ -311,6 +322,13 @@ export function AdminWeaponsPage() {
         approvalStatus: 'rejected',
         rejectionReason: rejectionReason.trim(),
         updatedAtISO: new Date().toISOString(),
+      })
+      sendRoleNotifications(addNotification, {
+        roles: ['admin', 'registrar', 'marshal'],
+        type: 'weapon_rejected',
+        title: 'Weapon Rejected',
+        message: `Weapon ${rejectionTargetId} was rejected.`,
+        linkedResourceId: rejectionTargetId,
       })
       toast.success('Player weapon rejected')
       setRejectionTargetId(null)
@@ -371,7 +389,7 @@ export function AdminWeaponsPage() {
           <div className="mt-2 text-2xl font-bold text-danger">{weapons.filter((weapon) => weapon.status === 'rented').length}</div>
         </Card>
         <Card className="p-4">
-          <div className="text-xs uppercase tracking-widest text-muted">Damage</div>
+          <div className="text-xs uppercase tracking-widest text-muted">Needs check</div>
           <div className="mt-2 text-2xl font-bold text-success">{maintenanceCount}</div>
         </Card>
       </div>
@@ -615,14 +633,18 @@ export function AdminWeaponsPage() {
             <div className="text-xs uppercase tracking-widest text-muted">Maintenance queue</div>
             <div className="mt-2 text-sm text-muted">Weapons that need servicing or re-inspection are surfaced here.</div>
             <div className="mt-4 space-y-2">
-              <div className="rounded-xl border border-white/5 bg-white/5 px-3 py-3">
-                <div className="text-sm font-semibold">Sniper Vanta</div>
-                <div className="mt-1 text-xs text-muted">Optics alignment and barrel check pending.</div>
-              </div>
-              <div className="rounded-xl border border-white/5 bg-white/5 px-3 py-3">
-                <div className="text-sm font-semibold">Rifle Delta</div>
-                <div className="mt-1 text-xs text-muted">New weapon entry awaiting first inspection.</div>
-              </div>
+              {maintenanceQueue.length === 0 ? (
+                <div className="rounded-xl border border-white/5 bg-white/5 px-3 py-3 text-sm text-muted">
+                  No weapons currently need inspection.
+                </div>
+              ) : (
+                maintenanceQueue.map((weapon) => (
+                  <div key={weapon.id} className="rounded-xl border border-white/5 bg-white/5 px-3 py-3">
+                    <div className="text-sm font-semibold">{weapon.name}</div>
+                    <div className="mt-1 text-xs text-muted">{weapon.description || weapon.note || 'Marked for inspection.'}</div>
+                  </div>
+                ))
+              )}
             </div>
           </Card>
         </div>

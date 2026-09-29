@@ -41,6 +41,16 @@ import { RegistrarSubmittedWaiversPage } from './pages/registrar/RegistrarSubmit
 import { RegistrarSubmittedPaymentsPage } from './pages/registrar/RegistrarSubmittedPaymentsPage'
 
 import { RequireRole } from './routes/RequireRole'
+import { NotificationProvider } from './context/NotificationContext'
+import { useAuth } from './context/AuthContext'
+
+function AppHomePage() {
+  const { user } = useAuth()
+  if (user?.role === 'admin') {
+    return <AdminDashboardPage />
+  }
+  return <DashboardHomePage />
+}
 
 function RegistrarReservationsPageWrapper() {
   return (
@@ -86,6 +96,7 @@ function RegistrarSubmittedPaymentsPageWrapper() {
 export default function App() {
 
   return (
+    <NotificationProvider>
     <Routes>
       <Route path="/" element={<LandingPage />} />
       <Route path="/login" element={<LoginPage />} />
@@ -102,7 +113,7 @@ export default function App() {
           </RequireAuth>
         }
       >
-        <Route index element={<DashboardHomePage />} />
+        <Route index element={<AppHomePage />} />
         <Route path="reservations" element={<RequireRole roles={['user', 'admin', 'registrar']}>{<ReservationCalendarPage />}</RequireRole>} />
         <Route path="packages" element={<RequireRole roles={['user', 'admin', 'registrar']}>{<PackageRecommendationPage />}</RequireRole>} />
         <Route path="waiver" element={<RequireRole roles={['user', 'admin', 'registrar']}>{<WaiverPage />}</RequireRole>} />
@@ -176,7 +187,7 @@ export default function App() {
         <Route path="admin/notifications" element={<AdminNotificationsPage />} />
         <Route path="admin/audit-logs" element={<AdminAuditLogsPage />} />
 
-        <Route index element={<RegistrarDashboardHomePage />} />
+        <Route path="registrar" element={<RegistrarDashboardHomePage />} />
         <Route path="registrar/reservations" element={<RegistrarReservationsPageWrapper />} />
         <Route path="registrar/games" element={<RegistrarOngoingGamesPageWrapper />} />
         <Route path="registrar/availed-packages" element={<RegistrarAvailedPackagesPageWrapper />} />
@@ -190,6 +201,7 @@ export default function App() {
 
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
+    </NotificationProvider>
   )
 }
 

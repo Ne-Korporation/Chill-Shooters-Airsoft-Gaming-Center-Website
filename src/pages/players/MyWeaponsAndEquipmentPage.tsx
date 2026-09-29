@@ -5,6 +5,7 @@ import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { apiGet, apiPost } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
+import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
 import toast from 'react-hot-toast'
 
 type UserEquipmentItem = {
@@ -24,6 +25,7 @@ type UserEquipmentItem = {
 export function MyWeaponsAndEquipmentPage() {
   const { playerId } = useParams()
   const { user } = useAuth()
+  const { addNotification } = useNotifications()
   const [equipment, setEquipment] = React.useState<UserEquipmentItem[]>([])
   const [weapons, setWeapons] = React.useState<UserEquipmentItem[]>([])
   const [loading, setLoading] = React.useState(true)
@@ -111,6 +113,14 @@ export function MyWeaponsAndEquipmentPage() {
         source: 'player',
         approvalStatus: 'pending',
       })
+      sendRoleNotifications(addNotification, {
+        roles: ['admin', 'registrar', 'marshal'],
+        type: 'equipment_rejected',
+        title: 'New Equipment Request',
+        message: `A player submitted equipment request "${equipmentForm.name.trim()}" for review.`,
+        linkedResourceId: created?.data?.id,
+      })
+
       setEquipment((current) => current.concat(created?.data ? [created.data] : []))
       toast.success('Equipment submitted for admin review.')
       setEquipmentForm({ name: '', category: 'gear', description: '' })
@@ -144,6 +154,14 @@ export function MyWeaponsAndEquipmentPage() {
         source: 'player',
         approvalStatus: 'pending',
       })
+      sendRoleNotifications(addNotification, {
+        roles: ['admin', 'registrar', 'marshal'],
+        type: 'weapon_rejected',
+        title: 'New Weapon Request',
+        message: `A player submitted weapon request "${weaponForm.name.trim()}" for review.`,
+        linkedResourceId: created?.data?.id,
+      })
+
       setWeapons((current) => current.concat(created?.data || []))
       toast.success('Weapon submitted for admin review.')
       setWeaponForm({ name: '', category: 'rifles', description: '' })

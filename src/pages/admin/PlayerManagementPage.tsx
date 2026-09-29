@@ -27,7 +27,7 @@ export function PlayerManagementPage() {
 
   const [playerSearch, setPlayerSearch] = React.useState('')
   const [playerLevelFilter, setPlayerLevelFilter] = React.useState<'all' | 'Beginner' | 'Experienced'>('all')
-  const [playerVerificationFilter, setPlayerVerificationFilter] = React.useState<'all' | 'verified' | 'pending_review' | 'not_submitted'>('all')
+  const [playerVerificationFilter, setPlayerVerificationFilter] = React.useState<'all' | 'verified' | 'pending_review' | 'not_submitted' | 'rejected'>('all')
   const [staffSearch, setStaffSearch] = React.useState('')
   const [staffFilter, setStaffFilter] = React.useState<'all' | 'Marshal' | 'Admin' | 'Registrar'>('all')
   const [verifyingId, setVerifyingId] = React.useState<string | null>(null)
@@ -149,7 +149,7 @@ export function PlayerManagementPage() {
     finally { setResettingId(null) }
   }
 
-  const handleSetPlayerVerification = async (playerId: string, status: 'verified' | 'pending_review') => {
+  const handleSetPlayerVerification = async (playerId: string, status: 'verified' | 'pending_review' | 'rejected') => {
     setVerifyingId(playerId)
     try {
       await apiPut<any>(`/api/user_accounts/${encodeURIComponent(playerId)}`, { identityVerificationStatus: status })
@@ -157,9 +157,17 @@ export function PlayerManagementPage() {
       setSelectedPlayer((current: any) => current && current.id === playerId ? {
         ...current,
         verificationStatus: status,
-        verificationLabel: status === 'verified' ? 'Verified' : 'Pending review',
+        verificationLabel: status === 'verified'
+          ? 'Verified'
+          : status === 'pending_review'
+            ? 'Pending review'
+            : 'Rejected',
       } : current)
-      toast.success(status === 'verified' ? 'Player identity verified' : 'Player marked pending review')
+      toast.success(status === 'verified'
+        ? 'Player identity verified'
+        : status === 'pending_review'
+          ? 'Player marked pending review'
+          : 'Player identity rejected')
     } catch (e: any) {
       toast.error(String(e?.message || e))
     } finally {
@@ -169,6 +177,10 @@ export function PlayerManagementPage() {
 
   const handleVerifyPlayer = async (playerId: string) => {
     await handleSetPlayerVerification(playerId, 'verified')
+  }
+
+  const handleRejectPlayer = async (playerId: string) => {
+    await handleSetPlayerVerification(playerId, 'rejected')
   }
 
   const playerList = loading ? (
@@ -194,9 +206,18 @@ export function PlayerManagementPage() {
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
-          {pl.identityDocumentUrl && pl.verificationStatus !== 'verified' ? (
-            <Button variant="secondary" size="sm" onClick={() => pl.id && handleVerifyPlayer(pl.id)} disabled={verifyingId === pl.id}>
-              {verifyingId === pl.id ? 'Verifying…' : 'Verify ID'}
+          {pl.identityDocumentUrl && pl.verificationStatus === 'pending_review' ? (
+            <>
+              <Button variant="secondary" size="sm" onClick={() => pl.id && handleVerifyPlayer(pl.id)} disabled={verifyingId === pl.id}>
+                {verifyingId === pl.id ? 'Verifying…' : 'Verify ID'}
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => pl.id && handleRejectPlayer(pl.id)} disabled={verifyingId === pl.id}>
+                {verifyingId === pl.id ? 'Rejecting…' : 'Reject ID'}
+              </Button>
+            </>
+          ) : pl.identityDocumentUrl && pl.verificationStatus === 'rejected' ? (
+            <Button variant="ghost" size="sm" onClick={() => pl.id && handleSetPlayerVerification(pl.id, 'pending_review')} disabled={verifyingId === pl.id}>
+              {verifyingId === pl.id ? 'Updating…' : 'Reopen review'}
             </Button>
           ) : null}
           <Button variant="ghost" size="sm" onClick={() => setSelectedPlayer(pl)}>View</Button>
@@ -334,6 +355,7 @@ export function PlayerManagementPage() {
                     <option value="all">All verification statuses</option>
                     <option value="verified">Verified</option>
                     <option value="pending_review">Pending review</option>
+                    <option value="rejected">Rejected</option>
                     <option value="not_submitted">Not submitted</option>
                   </select>
                 </div>
@@ -426,20 +448,46 @@ export function PlayerManagementPage() {
                 <div className="text-lg font-semibold">{selectedPlayer.name}</div>
                 <div className="mt-1 text-sm text-muted">Submitted ID preview</div>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 {selectedPlayer.identityDocumentUrl ? (
-                  <Button
-                    variant={selectedPlayer.verificationStatus === 'verified' ? 'ghost' : 'secondary'}
-                    size="sm"
-                    onClick={() => selectedPlayer.id && handleSetPlayerVerification(selectedPlayer.id, selectedPlayer.verificationStatus === 'verified' ? 'pending_review' : 'verified')}
-                    disabled={verifyingId === selectedPlayer.id}
-                  >
-                    {verifyingId === selectedPlayer.id
-                      ? selectedPlayer.verificationStatus === 'verified' ? 'Updating…' : 'Verifying…'
-                      : selectedPlayer.verificationStatus === 'verified'
-                        ? 'Mark Pending Review'
-                        : 'Verify ID'}
-                  </Button>
+                  selectedPlayer.verificationStatus === 'pending_review' ? (
+                    <>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => selectedPlayer.id && handleVerifyPlayer(selectedPlayer.id)}
+                        disabled={verifyingId === selectedPlayer.id}
+                      >
+                        {verifyingId === selectedPlayer.id ? 'Verifying…' : 'Verify ID'}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => selectedPlayer.id && handleRejectPlayer(selectedPlayer.id)}
+                        disabled={verifyingId === selectedPlayer.id}
+                      >
+                        {verifyingId === selectedPlayer.id ? 'Rejecting…' : 'Reject ID'}
+                      </Button>
+                    </>
+                  ) : selectedPlayer.verificationStatus === 'verified' ? (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => selectedPlayer.id && handleSetPlayerVerification(selectedPlayer.id, 'pending_review')}
+                      disabled={verifyingId === selectedPlayer.id}
+                    >
+                      {verifyingId === selectedPlayer.id ? 'Updating…' : 'Mark Pending Review'}
+                    </Button>
+                  ) : selectedPlayer.verificationStatus === 'rejected' ? (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => selectedPlayer.id && handleSetPlayerVerification(selectedPlayer.id, 'pending_review')}
+                      disabled={verifyingId === selectedPlayer.id}
+                    >
+                      {verifyingId === selectedPlayer.id ? 'Updating…' : 'Reopen review'}
+                    </Button>
+                  ) : null
                 ) : null}
                 <button type="button" onClick={() => setSelectedPlayer(null)} className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-sm transition hover:bg-white/10">Close</button>
               </div>

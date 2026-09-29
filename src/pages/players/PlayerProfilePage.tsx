@@ -161,16 +161,27 @@ export function PlayerProfilePage() {
 
       const scanSummary = uploadJson?.scan?.summary || 'ID captured successfully.'
       const cardDetected = Boolean(uploadJson?.scan?.cardDetected)
+      const serverUser = uploadJson?.user as PlayerProfileDoc | null
       setScanStatus('success')
-      setPlayer((current) => current ? {
-        ...current,
-        identityVerificationStatus: 'pending_review',
-        identityDocumentUrl: uploadJson.url,
-        identityScanStatus: cardDetected ? 'detected' : 'not_detected',
-        identityScanProvider: uploadJson?.scan?.provider,
-        identityScanSummary: scanSummary,
-        identityScanDetected: cardDetected,
-      } : current)
+      setPlayer((current) => {
+        if (serverUser) {
+          return serverUser
+        }
+        return current ? {
+          ...current,
+          identityVerificationStatus: cardDetected ? 'verified' : 'pending_review',
+          identityDocumentUrl: uploadJson.url,
+          identityScanStatus: cardDetected ? 'detected' : 'not_detected',
+          identityScanProvider: uploadJson?.scan?.provider,
+          identityScanSummary: scanSummary,
+          identityScanDetected: cardDetected,
+        } : null
+      })
+
+      if (cardDetected) {
+        toast.success('Identity verified successfully.')
+        stopCamera()
+      }
 
       return true
     } catch (e: any) {
@@ -182,7 +193,10 @@ export function PlayerProfilePage() {
     }
   }
 
+  const isVerified = player?.identityVerificationStatus === 'verified'
+
   const handleIdentityUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (isVerified) return
     const file = event.target.files?.[0]
     if (!file) return
     await uploadIdentityImage(file, file.name)
@@ -205,6 +219,7 @@ export function PlayerProfilePage() {
   }
 
   const openIdentityCapture = async () => {
+    if (isVerified) return
     if (!navigator.mediaDevices?.getUserMedia) {
       setError('Camera access is not supported in this browser.')
       return
@@ -254,6 +269,7 @@ export function PlayerProfilePage() {
   }
 
   const handleRetakeCapture = async () => {
+    if (isVerified) return
     setError(null)
     setScanStatus('idle')
     setPlayer((current) => current ? {
@@ -572,11 +588,11 @@ export function PlayerProfilePage() {
 
           <div className="mt-4 space-y-3">
             <div className="flex flex-col gap-2 sm:flex-row">
-              <Button type="button" className="flex-1" onClick={openIdentityCapture}>
-                {cameraActive ? 'Camera Open' : 'Scan ID Capture'}
+              <Button type="button" className="flex-1" onClick={openIdentityCapture} disabled={isVerified}>
+                {isVerified ? 'Verified' : cameraActive ? 'Camera Open' : 'Scan ID Capture'}
               </Button>
-              <Button type="button" variant="ghost" className="flex-1" onClick={() => fileInputRef.current?.click()}>
-                {player?.identityDocumentUrl ? 'Reupload Image' : 'Upload Image'}
+              <Button type="button" variant="ghost" className="flex-1" onClick={() => fileInputRef.current?.click()} disabled={isVerified}>
+                {isVerified ? 'Verified' : player?.identityDocumentUrl ? 'Reupload Image' : 'Upload Image'}
               </Button>
             </div>
 
@@ -589,7 +605,7 @@ export function PlayerProfilePage() {
                 <div className="overflow-hidden rounded-2xl border border-white/10">
                   <img src={player.identityDocumentUrl} alt="Uploaded ID" className="h-auto max-h-80 w-full object-contain" />
                 </div>
-                <Button type="button" variant="ghost" className="w-full" onClick={handleRetakeCapture}>
+                <Button type="button" variant="ghost" className="w-full" onClick={handleRetakeCapture} disabled={isVerified}>
                   Retake Capture
                 </Button>
               </>

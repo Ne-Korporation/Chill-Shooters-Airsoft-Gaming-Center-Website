@@ -4,6 +4,7 @@ import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { Input } from '../../components/ui/Input'
 import { apiGet, apiPost, apiPut, apiDelete } from '../../utils/apiClient'
+import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
 
 type EquipmentCategory = 'masks' | 'vests' | 'gloves' | 'gear'
 
@@ -209,12 +210,21 @@ export function AdminEquipmentPage() {
     }
   }
 
+  const { addNotification } = useNotifications()
+
   const handleApprovePlayerItem = async (id: string) => {
     try {
       await apiPut<any>(`/api/equipments/${encodeURIComponent(id)}`, {
         approvalStatus: 'approved',
         status: 'available',
         updatedAtISO: new Date().toISOString(),
+      })
+      sendRoleNotifications(addNotification, {
+        roles: ['admin', 'registrar', 'marshal'],
+        type: 'equipment_approved',
+        title: 'Equipment Approved',
+        message: `Equipment ${id} was approved and is available for use.`,
+        linkedResourceId: id,
       })
       toast.success('Player item approved')
       await refresh()
@@ -238,6 +248,13 @@ export function AdminEquipmentPage() {
         approvalStatus: 'rejected',
         rejectionReason: rejectionReason.trim(),
         updatedAtISO: new Date().toISOString(),
+      })
+      sendRoleNotifications(addNotification, {
+        roles: ['admin', 'registrar', 'marshal'],
+        type: 'equipment_rejected',
+        title: 'Equipment Rejected',
+        message: `Equipment ${rejectionTargetId} was rejected.`,
+        linkedResourceId: rejectionTargetId,
       })
       toast.success('Player item rejected')
       setRejectionTargetId(null)
