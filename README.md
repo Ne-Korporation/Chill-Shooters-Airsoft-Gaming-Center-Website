@@ -115,7 +115,7 @@ npm install
 
 Create a `.env` file and add your credentials for:
 
-- MongoDB
+- MongoDB (shared URI, not `mongodb://localhost:27017/`)
 - Email (SMTP)
 - Firebase
 - Stripe (Optional)
@@ -123,14 +123,12 @@ Create a `.env` file and add your credentials for:
 
 ## 4. Start MongoDB
 
-```bash
-mongod
-```
+Use a shared MongoDB instance such as MongoDB Atlas, then set `MONGODB_URI` in your `.env` file.
 
-or
+Example:
 
 ```bash
-net start MongoDB
+MONGODB_URI=mongodb+srv://<user>:<password>@<cluster>/<db>?retryWrites=true&w=majority
 ```
 
 ## 5. Seed Demo Data (Optional)
