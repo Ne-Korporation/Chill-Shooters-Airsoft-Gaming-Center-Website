@@ -11,6 +11,7 @@ type ActivityItem = {
   subtitle: string
   meta: string
   tone: ActivityTone
+  dateValue: number
 }
 
 type DashboardState = {
@@ -55,6 +56,12 @@ function formatReservationDate(value?: string) {
     day: 'numeric',
     year: 'numeric',
   })
+}
+
+function matchesUserRecord(record: unknown, userId?: string) {
+  if (!userId) return false
+  const rawValue = record == null ? '' : String(record)
+  return rawValue === String(userId)
 }
 
 export function DashboardHomePage() {
@@ -104,9 +111,24 @@ export function DashboardHomePage() {
           return Number.isNaN(timestamp) ? 0 : timestamp
         }
 
-        const myReservations = reservations.filter((reservation) => String(reservation?.userId) === String(user.id))
-        const myPayments = payments.filter((payment) => String(payment?.userId) === String(user.id))
-        const myWaivers = waivers.filter((waiver) => String(waiver?.userId) === String(user.id))
+        const myReservations = reservations.filter((reservation) =>
+          matchesUserRecord(reservation?.userId, user.id)
+          || matchesUserRecord(reservation?.playerId, user.id)
+          || matchesUserRecord(reservation?.accountId, user.id)
+          || matchesUserRecord(reservation?.submittedBy, user.id),
+        )
+
+        const myPayments = payments.filter((payment) =>
+          matchesUserRecord(payment?.userId, user.id)
+          || matchesUserRecord(payment?.playerId, user.id)
+          || matchesUserRecord(payment?.accountId, user.id),
+        )
+
+        const myWaivers = waivers.filter((waiver) =>
+          matchesUserRecord(waiver?.userId, user.id)
+          || matchesUserRecord(waiver?.playerId, user.id)
+          || matchesUserRecord(waiver?.accountId, user.id),
+        )
 
         const upcomingReservations = myReservations.filter((reservation) => {
           const status = normalize(reservation?.reservationStatus)
@@ -133,38 +155,44 @@ export function DashboardHomePage() {
         const activityRows: ActivityItem[] = []
         myReservations
           .slice()
-          .sort((a, b) => (b.updatedAtISO || b.createdAtISO || '').localeCompare(a.updatedAtISO || a.createdAtISO || ''))
+          .sort((a, b) => (parseDate(b.updatedAtISO || b.createdAtISO) - parseDate(a.updatedAtISO || a.createdAtISO)))
           .slice(0, 2)
           .forEach((reservation) => {
             const status = String(reservation?.reservationStatus || 'pending')
+            const eventTime = parseDate(reservation?.updatedAtISO || reservation?.createdAtISO)
             activityRows.push({
               title: `Reservation ${status}`,
               subtitle: reservation?.id || 'Reservation update',
               meta: formatRelativeTime(reservation?.updatedAtISO || reservation?.createdAtISO),
               tone: status === 'confirmed' || status === 'approved' ? 'success' : 'accent',
+              dateValue: eventTime,
             })
           })
 
         myPayments
           .slice()
-          .sort((a, b) => (b.updatedAtISO || b.createdAtISO || '').localeCompare(a.updatedAtISO || a.createdAtISO || ''))
+          .sort((a, b) => (parseDate(b.updatedAtISO || b.createdAtISO) - parseDate(a.updatedAtISO || a.createdAtISO)))
           .slice(0, 2)
           .forEach((payment) => {
             const paymentStatus = String(payment?.paymentStatus || payment?.status || 'pending')
+            const eventTime = parseDate(payment?.updatedAtISO || payment?.createdAtISO)
             activityRows.push({
               title: `Payment ${paymentStatus}`,
               subtitle: payment?.transactionReference || payment?.refNo || payment?.id || 'Receipt pending',
               meta: formatRelativeTime(payment?.updatedAtISO || payment?.createdAtISO),
               tone: paymentStatus === 'confirmed' || paymentStatus === 'paid' ? 'success' : 'danger',
+              dateValue: eventTime,
             })
           })
 
         if (waiverEntry) {
+          const eventTime = parseDate(waiverEntry.submittedAtISO || waiverEntry.createdAtISO)
           activityRows.push({
             title: `Waiver ${String(waiverEntry.status || 'pending')}`,
             subtitle: waiverEntry?.fullName || waiverEntry?.id || 'Waiver update',
             meta: formatRelativeTime(waiverEntry?.submittedAtISO || waiverEntry?.createdAtISO),
             tone: String(waiverEntry.status || '').toLowerCase() === 'approved' ? 'success' : 'accent',
+            dateValue: eventTime,
           })
         }
 
@@ -178,7 +206,9 @@ export function DashboardHomePage() {
           nextReservation: nextReservation
             ? `${formatReservationDate(nextReservation.reservationDate || nextReservation.date || nextReservation.createdAtISO)} • ${nextReservation.reservationTime || 'Time pending'}`
             : 'No confirmed bookings yet',
-          recentActivity: activityRows.slice(0, 4).sort((a, b) => b.meta.localeCompare(a.meta)),
+          recentActivity: activityRows
+            .sort((a, b) => b.dateValue - a.dateValue)
+            .slice(0, 4),
         }
 
         if (isMounted) setDashboard(nextState)

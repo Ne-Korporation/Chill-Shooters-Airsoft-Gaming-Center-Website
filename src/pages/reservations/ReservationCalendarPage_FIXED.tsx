@@ -676,6 +676,18 @@ export function ReservationCalendarPage_FIXED() {
     return equipment.filter((e) => customEquipmentIds.includes(e.id))
   }, [equipment, customEquipmentIds])
 
+  const equipmentStockCheck = useMemo(() => {
+    const selectedEquipment = selectionMode === 'package' ? packageEquipment : customSelectedEquipment
+    return selectedEquipment.map((item) => ({
+      name: item.name,
+      available: Math.max(0, Number(item.qty ?? 0)),
+      required: players,
+      ok: Math.max(0, Number(item.qty ?? 0)) >= players,
+    }))
+  }, [selectionMode, packageEquipment, customSelectedEquipment, players])
+
+  const hasInsufficientEquipmentStock = equipmentStockCheck.some((item) => !item.ok)
+
   const customPerPlayerTotal = useMemo(() => {
     const wp = customSelectedWeapons.reduce((sum, w) => sum + (w.price || 0), 0)
     const ep = customSelectedEquipment.reduce((sum, e) => sum + (e.price || 0), 0)
@@ -727,6 +739,70 @@ export function ReservationCalendarPage_FIXED() {
     }
   }, [players, selectedPackage, sessionType, equipmentTotalPerPlayer, selectionMode, customTotal, customPerPlayerTotal])
 
+  const paymentBreakdown = useMemo(() => {
+    const packageBase = selectionMode === 'package' && selectedPackage ? selectedPackage.basePrice * players : 0
+    const entranceFee = ENTRANCE_FEE_PER_PLAYER * players
+    const packageWeaponCharge = selectionMode === 'package'
+      ? packageWeapons.reduce((sum, weapon) => sum + (Number(weapon?.price || 0) * players), 0)
+      : 0
+    const packageEquipmentCharge = selectionMode === 'package'
+      ? packageEquipment.reduce((sum, item) => sum + (Number(item?.price || 0) * players), 0)
+      : 0
+    const customGearCharge = selectionMode === 'custom'
+      ? customSelectedWeapons.reduce((sum, weapon) => sum + (Number(weapon?.price || 0) * players), 0)
+      : 0
+    const customEquipmentCharge = selectionMode === 'custom'
+      ? customSelectedEquipment.reduce((sum, item) => sum + (Number(item?.price || 0) * players), 0)
+      : 0
+
+    const equipmentPrice = packageWeaponCharge + packageEquipmentCharge + customGearCharge + customEquipmentCharge
+    const fieldPrice = packageBase
+    const serviceFee = Math.max(0, dynamicPricing.total - fieldPrice - equipmentPrice - entranceFee)
+
+    const selectedGearItems = Array.isArray(selectionMode === 'package' ? packageWeapons : customSelectedWeapons)
+      ? (selectionMode === 'package' ? packageWeapons : customSelectedWeapons)
+      : []
+    const selectedEquipmentItems = Array.isArray(selectionMode === 'package' ? packageEquipment : customSelectedEquipment)
+      ? (selectionMode === 'package' ? packageEquipment : customSelectedEquipment)
+      : []
+
+    const toPositiveNumber = (value: unknown, fallback = 0) => {
+      const parsed = Number(value ?? fallback)
+      return Number.isFinite(parsed) ? parsed : fallback
+    }
+
+    const itemizedBreakdown = [
+      ...(fieldPrice > 0 ? [{ label: selectionMode === 'package' ? `${selectedPackage?.name || 'Package'} fee` : 'Field booking', amount: fieldPrice }] : []),
+      ...selectedGearItems
+        .filter((item) => item && typeof item === 'object' && typeof item.name === 'string')
+        .map((item) => ({
+          label: `${String(item.name)} (Qty: 1 per player)`,
+          amount: toPositiveNumber(item.price) * players,
+        })),
+      ...selectedEquipmentItems
+        .filter((item) => item && typeof item === 'object' && typeof item.name === 'string')
+        .map((item) => {
+          const unitPrice = toPositiveNumber(item.price)
+          const availableQty = Math.max(0, toPositiveNumber(item.qty, 0))
+          return {
+            label: `${String(item.name)} (Qty: 1 per player, available: ${availableQty})`,
+            amount: unitPrice * players,
+          }
+        }),
+      { label: `Player entrance fee (${players} × ₱${ENTRANCE_FEE_PER_PLAYER})`, amount: entranceFee },
+      ...(serviceFee > 0 ? [{ label: 'Service fee', amount: serviceFee }] : []),
+    ].filter((item) => item && typeof item.label === 'string' && Number.isFinite(Number(item.amount)))
+
+    return {
+      fieldPrice,
+      equipmentPrice,
+      entranceFee,
+      serviceFee,
+      total: dynamicPricing.total,
+      itemizedBreakdown,
+    }
+  }, [customSelectedEquipment, customSelectedWeapons, dynamicPricing.total, packageEquipment, packageWeapons, players, selectedPackage, selectionMode])
+
   const reservationSummary = useMemo(() => {
     const selectedFields = availableFields.filter((f) => selectedFieldIds.includes(f.id))
     const pkgName = selectionMode === 'custom'
@@ -748,6 +824,11 @@ export function ReservationCalendarPage_FIXED() {
       ownEquipment,
     }
   }, [dateISO, selectedFieldIds, selectedLocation, selectionMode, selectedPackage?.name, sessionType, slot, players, notes, customSelectedWeapons, customSelectedEquipment, ownWeapons, ownEquipment, availableFields])
+
+  const formatCurrency = (value: number | string | null | undefined) => {
+    const numeric = Number(value ?? 0)
+    return `₱${Number.isFinite(numeric) ? numeric.toLocaleString() : '0'}`
+  }
 
   const StepHeader = ({ title, subtitle }: { title: string; subtitle: string }) => (
     <div>
@@ -810,6 +891,8 @@ export function ReservationCalendarPage_FIXED() {
       return
     }
 
+    const { fieldPrice, equipmentPrice, serviceFee, entranceFee, itemizedBreakdown } = paymentBreakdown
+
     setIsConfirming(true)
 
     try {
@@ -827,6 +910,11 @@ export function ReservationCalendarPage_FIXED() {
         sessionType,
         numberOfPlayers: players,
         totalAmount: dynamicPricing.total,
+        fieldPrice,
+        equipmentPrice,
+        entranceFee,
+        serviceFee,
+        itemizedBreakdown,
         notes,
         reservationStatus: 'pending',
         packageName: pkgName,
@@ -880,6 +968,13 @@ export function ReservationCalendarPage_FIXED() {
         {([1, 2, 3, 4] as const).map((s) => {
           const active = s === step
           const done = s < step
+          const labels = {
+            1: 'Select field location',
+            2: 'Choose package',
+            3: 'Review details',
+            4: 'Confirm reservation',
+          }
+
           return (
             <button
               key={s}
@@ -899,9 +994,9 @@ export function ReservationCalendarPage_FIXED() {
                 ].join(' ')}>
                   {done ? <FiCheck /> : s}
                 </div>
-                <div>
-                  <div className="text-xs font-bold uppercase tracking-[0.12em] text-muted">Step</div>
-                  <div className="text-sm font-bold">{s}</div>
+                <div className="min-w-0">
+                  <div className="text-[10px] font-bold uppercase tracking-[0.12em] text-muted">Step {s}</div>
+                  <div className="text-sm font-bold leading-tight">{labels[s]}</div>
                 </div>
               </div>
             </button>
@@ -1331,9 +1426,9 @@ export function ReservationCalendarPage_FIXED() {
                         <div>
                           <div className="text-sm font-bold text-danger">Cannot proceed</div>
                           <div className="mt-1 text-xs text-muted">
-                            {!meetsFieldRequirements 
+                            {!meetsFieldRequirements
                               ? `Need ${minPlayersForFields} players for selected fields.`
-                              : `Reduce players to ${Math.max(0, remainingSlots)} to proceed.`
+                              : 'Cannot proceed.'
                             }
                           </div>
                         </div>
@@ -1479,7 +1574,7 @@ export function ReservationCalendarPage_FIXED() {
 
                             <div className="mt-3 flex items-center justify-between">
                               <div className="text-xs text-muted">Base price (per player)</div>
-                              <div className="text-sm font-bold text-accent">₱{pkg.basePrice.toLocaleString()}</div>
+                              <div className="text-sm font-bold text-accent">{formatCurrency(pkg.basePrice)}</div>
                             </div>
                           </button>
                         )
@@ -1504,9 +1599,9 @@ export function ReservationCalendarPage_FIXED() {
                             <div key={w.id} className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
                               <div>
                                 <div className="text-sm font-bold">{w.name}</div>
-                                <div className="mt-1 text-xs text-muted">{w.category.toUpperCase()} • {w.status}</div>
+                                <div className="mt-1 text-xs text-muted">{w.category.toUpperCase()} • Qty: 1 per player</div>
                               </div>
-                              <div className="text-xs font-semibold text-accent">₱{w.price}</div>
+                              <div className="text-xs font-semibold text-accent">₱{w.price}/player</div>
                             </div>
                           ))}
                         </div>
@@ -1521,9 +1616,9 @@ export function ReservationCalendarPage_FIXED() {
                             <div key={e.id} className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
                               <div>
                                 <div className="text-sm font-bold">{e.name}</div>
-                                <div className="mt-1 text-xs text-muted">{e.category.toUpperCase()} • Qty: {e.qty}</div>
+                                <div className="mt-1 text-xs text-muted">{e.category.toUpperCase()} • Stock: {e.qty} • Qty: 1 per player</div>
                               </div>
-                              <div className="text-xs font-semibold text-accent">₱{e.price}</div>
+                              <div className="text-xs font-semibold text-accent">₱{e.price}/player</div>
                             </div>
                           ))}
                         </div>
@@ -1567,7 +1662,7 @@ export function ReservationCalendarPage_FIXED() {
                             />
                             <div className="flex-1 min-w-0">
                               <div className="text-sm font-bold truncate">{w.name}</div>
-                              <div className="text-xs text-muted">{w.category.toUpperCase()} • {w.status}</div>
+                              <div className="text-xs text-muted">{w.category.toUpperCase()} • Qty: 1 per player</div>
                             </div>
                             <div className="text-xs font-semibold text-accent">₱{w.price}/player</div>
                           </label>
@@ -1596,12 +1691,18 @@ export function ReservationCalendarPage_FIXED() {
                             className={[
                               'flex items-start gap-3 rounded-2xl border p-3 cursor-pointer transition',
                               active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
+                              Number(e.qty ?? 0) < players ? 'opacity-60 cursor-not-allowed' : '',
                             ].join(' ')}
                           >
                             <input
                               type="checkbox"
                               checked={active}
+                              disabled={Number(e.qty ?? 0) < players}
                               onChange={() => {
+                                if (Number(e.qty ?? 0) < players) {
+                                  toast.error(`${e.name} has only ${e.qty} item(s) available, which is not enough for ${players} players.`)
+                                  return
+                                }
                                 setCustomEquipmentIds((prev) =>
                                   prev.includes(e.id) ? prev.filter((id) => id !== e.id) : [...prev, e.id]
                                 )
@@ -1610,7 +1711,7 @@ export function ReservationCalendarPage_FIXED() {
                             />
                             <div className="flex-1 min-w-0">
                               <div className="text-sm font-bold truncate">{e.name}</div>
-                              <div className="text-xs text-muted">{e.category.toUpperCase()} • Qty: {e.qty}</div>
+                              <div className="text-xs text-muted">{e.category.toUpperCase()} • Stock: {e.qty} • Qty: 1 per player</div>
                             </div>
                             <div className="text-xs font-semibold text-accent">₱{e.price}/player</div>
                           </label>
@@ -1748,6 +1849,17 @@ export function ReservationCalendarPage_FIXED() {
                   )}
                 </div>
 
+                {hasInsufficientEquipmentStock && (
+                  <div className="rounded-2xl border border-danger/30 bg-danger/10 p-4">
+                    <div className="text-sm font-bold text-danger">Insufficient equipment stock</div>
+                    <div className="mt-2 space-y-1 text-xs text-muted">
+                      {equipmentStockCheck.filter((item) => !item.ok).map((item) => (
+                        <div key={item.name}>• {item.name}: only {item.available} available, needs {item.required} for this group.</div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
                   <div className="text-sm font-bold">Dynamic price</div>
                   <div className="mt-1 text-xs text-muted">
@@ -1756,18 +1868,18 @@ export function ReservationCalendarPage_FIXED() {
                   <div className="mt-3 flex items-end justify-between">
                     <div>
                       <div className="text-xs text-muted">Total</div>
-                      <div className="text-2xl font-bold text-gold">₱{dynamicPricing.total.toLocaleString()}</div>
+                      <div className="text-2xl font-bold text-gold">{formatCurrency(dynamicPricing.total)}</div>
                     </div>
                     <div className="text-right">
                       <div className="text-xs text-muted">Per player</div>
-                      <div className="text-sm font-bold">₱{dynamicPricing.perPlayer.toLocaleString()}</div>
+                      <div className="text-sm font-bold">{formatCurrency(dynamicPricing.perPlayer)}</div>
                     </div>
                   </div>
 
                   {selectionMode === 'package' && dynamicPricing.discountPct > 0 && (
                     <div className="mt-2 text-xs text-muted">
                       Discount applied: {dynamicPricing.discountLabel}
-                      {dynamicPricing.savings > 0 && ` (save ₱${dynamicPricing.savings.toLocaleString()})`}
+                      {dynamicPricing.savings > 0 && ` (save ${formatCurrency(dynamicPricing.savings)})`}
                     </div>
                   )}
                 </div>
@@ -1789,9 +1901,17 @@ export function ReservationCalendarPage_FIXED() {
                   disabled={
                     players < effectiveMinPlayers ||
                     !canProceed ||
-                    (selectionMode === 'package' && !selectedPackage)
+                    (selectionMode === 'package' && !selectedPackage) ||
+                    hasInsufficientEquipmentStock
                   }
-                  onClick={() => setStep(3)}
+                  onClick={() => {
+                    if (hasInsufficientEquipmentStock) {
+                      const shortage = equipmentStockCheck.find((item) => !item.ok)
+                      toast.error(`${shortage?.name || 'Equipment'} stock is insufficient for ${players} players. Available: ${shortage?.available ?? 0}.`)
+                      return
+                    }
+                    setStep(3)
+                  }}
                 >
                   Continue <FiChevronRight />
                 </Button>
@@ -1891,6 +2011,23 @@ export function ReservationCalendarPage_FIXED() {
                   <div className="mt-2 text-sm text-text">{reservationSummary.notes}</div>
                 </div>
               )}
+
+              <div className="mt-4 rounded-2xl border border-accent/30 bg-accent/10 p-4">
+                <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Payment breakdown</div>
+                <div className="mt-3 space-y-2 text-sm">
+                  {paymentBreakdown.itemizedBreakdown.map((item) => (
+                    <div key={`${item.label}-${item.amount}`} className="flex items-center justify-between gap-3">
+                      <span className="text-muted">{item.label}</span>
+                      <span className="font-semibold">{formatCurrency(item.amount)}</span>
+                    </div>
+                  ))}
+                  <div className="h-px bg-white/10" />
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-muted">Total</span>
+                    <span className="text-base font-bold text-gold">{formatCurrency(dynamicPricing.total)}</span>
+                  </div>
+                </div>
+              </div>
             </Card>
 
             <Card className="p-4 md:p-6">
@@ -1902,11 +2039,11 @@ export function ReservationCalendarPage_FIXED() {
                 <div className="mt-4 grid gap-3 md:grid-cols-2">
                   <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
                     <div className="text-xs text-muted">Base package (per player)</div>
-                    <div className="mt-2 text-sm font-bold">₱{selectedPackage?.basePrice.toLocaleString() || '0'}</div>
+                    <div className="mt-2 text-sm font-bold">{formatCurrency(selectedPackage?.basePrice)}</div>
                   </div>
                   <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
                     <div className="text-xs text-muted">Equipment add-ons (per player)</div>
-                    <div className="mt-2 text-sm font-bold">₱{equipmentTotalPerPlayer.toLocaleString()}</div>
+                    <div className="mt-2 text-sm font-bold">{formatCurrency(equipmentTotalPerPlayer)}</div>
                   </div>
                   <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
                     <div className="text-xs text-muted">Session multiplier</div>
@@ -1925,7 +2062,7 @@ export function ReservationCalendarPage_FIXED() {
                   </div>
                   <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
                     <div className="text-xs text-muted">Per player total</div>
-                    <div className="mt-2 text-sm font-bold">₱{customPerPlayerTotal.toLocaleString()}</div>
+                    <div className="mt-2 text-sm font-bold">{formatCurrency(customPerPlayerTotal)}</div>
                   </div>
                   <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
                     <div className="text-xs text-muted">× Players</div>
@@ -1946,7 +2083,7 @@ export function ReservationCalendarPage_FIXED() {
 
               {dynamicPricing.savings > 0 && (
                 <div className="mt-3 text-xs text-muted">
-                  You save ₱{dynamicPricing.savings.toLocaleString()} compared to the original price
+                  You save {formatCurrency(dynamicPricing.savings)} compared to the original price
                 </div>
               )}
 
@@ -1954,11 +2091,11 @@ export function ReservationCalendarPage_FIXED() {
                 <div className="flex items-end justify-between gap-3">
                   <div>
                     <div className="text-xs text-muted">Total reservation</div>
-                    <div className="mt-1 text-3xl font-black text-gold">₱{dynamicPricing.total.toLocaleString()}</div>
+                    <div className="mt-1 text-3xl font-black text-gold">{formatCurrency(dynamicPricing.total)}</div>
                   </div>
                   <div className="text-right">
                     <div className="text-xs text-muted">Per player</div>
-                    <div className="mt-1 text-sm font-bold">₱{dynamicPricing.perPlayer.toLocaleString()}</div>
+                    <div className="mt-1 text-sm font-bold">{formatCurrency(dynamicPricing.perPlayer)}</div>
                   </div>
                 </div>
               </div>
@@ -1975,7 +2112,7 @@ export function ReservationCalendarPage_FIXED() {
               <div className="mt-4 space-y-3">
                 <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
                   <div className="text-xs text-muted">Total</div>
-                  <div className="text-2xl font-bold text-gold">₱{dynamicPricing.total.toLocaleString()}</div>
+                  <div className="text-2xl font-bold text-gold">{formatCurrency(dynamicPricing.total)}</div>
                   <div className="mt-1 text-xs text-muted">Including all fees and discounts</div>
                 </div>
 

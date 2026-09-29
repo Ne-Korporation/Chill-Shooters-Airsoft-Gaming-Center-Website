@@ -385,6 +385,9 @@ export function PackageRecommendationPage() {
                     )
                   })}
                 </div>
+                <div className="mt-3 rounded-2xl border border-accent/20 bg-accent/5 p-3 text-xs text-muted">
+                  <span className="font-semibold text-accent">Note:</span> Public sessions are only available on weekends.
+                </div>
               </div>
             </div>
           </Card>

@@ -3,6 +3,7 @@ export const ALLOWED_COLLECTIONS = new Set([
   'equipments',
   'gameplay',
   'packages',
+  'partnerships',
   'payments',
   'reservations',
   'user_accounts',

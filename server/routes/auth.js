@@ -2,6 +2,7 @@ import express from 'express'
 import bcrypt from 'bcrypt'
 import transporter from '../services/mailService.js'
 import { getDb, getUserAccountsCollection, USER_ACCOUNTS_COLLECTION } from '../db/mongo.js'
+import { createAuthToken, requireAuth, requireRole } from '../middleware/auth.js'
 
 const router = express.Router()
 
@@ -67,9 +68,20 @@ function generateDefaultPassword(name) {
   return initials + randomDigits
 }
 
+router.get('/me', requireAuth, async (req, res) => {
+  return res.json({
+    ok: true,
+    user: {
+      id: req.user?.id,
+      email: req.user?.email,
+      role: req.user?.role,
+    },
+  })
+})
+
 // --- Admin: Add Player (User) ---
 // POST /api/auth/admin/add-player
-router.post('/admin/add-player', async (req, res) => {
+router.post('/admin/add-player', requireAuth, requireRole('admin', 'marshal', 'registrar'), async (req, res) => {
   const body = req.body || {}
   const { name, email, skillLevel } = body
 
@@ -148,7 +160,7 @@ router.post('/admin/add-player', async (req, res) => {
 
 // --- Admin: Add Staff ---
 // POST /api/auth/admin/add-staff
-router.post('/admin/add-staff', async (req, res) => {
+router.post('/admin/add-staff', requireAuth, requireRole('admin'), async (req, res) => {
   const body = req.body || {}
   const { name, email, role } = body
 
@@ -231,7 +243,7 @@ router.post('/admin/add-staff', async (req, res) => {
 
 // --- Admin: Reset Staff Password to Default ---
 // POST /api/auth/admin/reset-password
-router.post('/admin/reset-password', async (req, res) => {
+router.post('/admin/reset-password', requireAuth, requireRole('admin', 'marshal', 'registrar'), async (req, res) => {
   const body = req.body || {}
   const { userId, email } = body
 
@@ -493,6 +505,10 @@ router.post('/login', async (req, res) => {
       return res.status(403).json({ ok: false, error: 'email not verified' })
     }
 
+    if (user.password === null || user.password === undefined) {
+      return res.status(409).json({ ok: false, error: 'This account uses Google sign-in. Please use the Google sign-in button.' })
+    }
+
     const stored = user.password
 
     const looksLikeBcrypt = typeof stored === 'string' && stored.startsWith('$2')
@@ -500,17 +516,18 @@ router.post('/login', async (req, res) => {
 
     if (!passwordOk) return res.status(401).json({ ok: false, error: 'invalid credentials' })
 
-    const payload = {
-      user: {
-        id: user.id ?? (user._id ? String(user._id) : undefined),
-        name: user.name ?? '',
-        email: user.email,
-        role: user.role ?? 'user',
-      },
-      token: null,
+    const authUser = {
+      id: user.id ?? (user._id ? String(user._id) : undefined),
+      name: user.name ?? '',
+      email: user.email,
+      role: user.role ?? 'user',
     }
 
-    return res.json({ ok: true, ...payload })
+    return res.json({
+      ok: true,
+      user: authUser,
+      token: createAuthToken(authUser),
+    })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
   }
@@ -531,13 +548,23 @@ router.post('/social-login', async (req, res) => {
     const userAccounts = await getUserAccountsCollection()
     let user = await userAccounts.findOne({ email: normalizedEmail })
 
-    if (!user) {
+    if (user) {
+      const hasPassword = typeof user.password === 'string' && user.password.length > 0
+      const isGoogleLinked = user.authProvider === 'google' || user.password === null
+      if (!isGoogleLinked && hasPassword) {
+        return res.status(409).json({
+          ok: false,
+          error: 'This Google account is already linked to a Chill Shooters account. Please sign in with your email/password account or contact support.',
+        })
+      }
+    } else {
       const nextId = await nextShortId(db, USER_ACCOUNTS_COLLECTION, 'P')
       const newDoc = {
         id: nextId,
         name: (name && typeof name === 'string' ? name.trim() : normalizedEmail.split('@')[0]),
         email: normalizedEmail,
         password: null,
+        authProvider: 'google',
         role: 'user',
         experience: 0,
         emailVerified: true,
@@ -548,17 +575,18 @@ router.post('/social-login', async (req, res) => {
       user = newDoc
     }
 
-    const payload = {
-      user: {
-        id: user.id ?? (user._id ? String(user._id) : undefined),
-        name: user.name ?? '',
-        email: user.email,
-        role: user.role ?? 'user',
-      },
-      token: null,
+    const authUser = {
+      id: user.id ?? (user._id ? String(user._id) : undefined),
+      name: user.name ?? '',
+      email: user.email,
+      role: user.role ?? 'user',
     }
 
-    return res.json({ ok: true, ...payload })
+    return res.json({
+      ok: true,
+      user: authUser,
+      token: createAuthToken(authUser),
+    })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
   }

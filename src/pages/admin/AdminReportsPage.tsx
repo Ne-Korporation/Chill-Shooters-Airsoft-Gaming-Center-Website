@@ -28,6 +28,12 @@ type EquipmentDoc = {
   status?: string
 }
 
+type WaiverDoc = {
+  status?: string
+  createdAtISO?: string
+  submittedAtISO?: string
+}
+
 function formatCurrency(value: number) {
   return `₱${value.toLocaleString('en-PH', { maximumFractionDigits: 0 })}`
 }
@@ -52,48 +58,47 @@ export function AdminReportsPage() {
       setError(null)
 
       try {
-        const [reservationsRes, paymentsRes, equipmentRes] = await Promise.all([
+        const [reservationsRes, paymentsRes, equipmentRes, waiversRes] = await Promise.all([
           apiGet<{ ok: boolean; data: ReservationDoc[] }>('/api/reservations?limit=200'),
           apiGet<{ ok: boolean; data: PaymentDoc[] }>('/api/payments?limit=200'),
           apiGet<{ ok: boolean; data: EquipmentDoc[] }>('/api/equipments?limit=200'),
+          apiGet<{ ok: boolean; data: WaiverDoc[] }>('/api/waivers?limit=200'),
         ])
 
         const reservations = Array.isArray(reservationsRes?.data) ? reservationsRes.data : []
         const payments = Array.isArray(paymentsRes?.data) ? paymentsRes.data : []
         const equipment = Array.isArray(equipmentRes?.data) ? equipmentRes.data : []
+        const waivers = Array.isArray(waiversRes?.data) ? waiversRes.data : []
 
         const revenue = payments.reduce((sum, payment) => {
           const amount = Number(payment.amount ?? payment.totalPHP ?? 0)
           return sum + (Number.isFinite(amount) ? amount : 0)
         }, 0)
 
-        const now = Date.now()
-        const recentWindowMs = 1000 * 60 * 60 * 24 * 7
-        const previousWindowMs = 1000 * 60 * 60 * 24 * 14
-
-        const currentWeek = reservations.filter((reservation) => {
-          const created = toDate(reservation.createdAtISO)
-          return created ? now - created.getTime() <= recentWindowMs : false
-        }).length
-
-        const previousWeek = reservations.filter((reservation) => {
-          const created = toDate(reservation.createdAtISO)
-          return created ? now - created.getTime() > recentWindowMs && now - created.getTime() <= previousWindowMs : false
-        }).length
-
-        const trend = previousWeek > 0 ? Math.round(((currentWeek - previousWeek) / previousWeek) * 100) : currentWeek > 0 ? 100 : 0
-
-        const noShows = reservations.filter((reservation) => {
-          const created = toDate(reservation.createdAtISO)
+        const pendingApprovals = reservations.filter((reservation) => {
           const status = String(reservation.reservationStatus || '').trim().toLowerCase()
-          return created ? now - created.getTime() > 1000 * 60 * 60 * 24 && (status === 'pending' || status === 'needs review' || status === 'needs_review') : false
+          return status === 'pending' || status === 'needs review' || status === 'needs_review'
         }).length
 
-        const weekendReservations = reservations.filter((reservation) => {
-          const created = toDate(reservation.createdAtISO)
-          return created ? [0, 6].includes(created.getDay()) : false
+        const paymentsToVerify = payments.filter((payment) => {
+          const status = String(payment.paymentStatus || payment.status || '').trim().toLowerCase()
+          return status === 'pending' || status === 'submitted' || status === 'review'
         }).length
-        const occupancyPercent = reservations.length > 0 ? Math.min(100, Math.round((weekendReservations / Math.max(1, reservations.length)) * 100)) : 0
+
+        const waiverBacklog = waivers.filter((waiver) => {
+          const status = String(waiver.status || '').trim().toLowerCase()
+          return status === 'pending' || status === 'review' || status === 'submitted'
+        }).length
+
+        const equipmentAlerts = equipment.filter((item) => {
+          const status = String(item.status || '').trim().toLowerCase()
+          return status === 'maintenance' || Number(item.qty ?? 0) <= 1
+        }).length
+
+        const confirmedReservations = reservations.filter((reservation) => {
+          const status = String(reservation.reservationStatus || '').trim().toLowerCase()
+          return status === 'confirmed' || status === 'approved'
+        }).length
 
         const highestValuePayment = payments
           .slice()
@@ -105,28 +110,43 @@ export function AdminReportsPage() {
 
         const nextHighlights: ReportHighlight[] = [
           {
-            title: 'Weekend occupancy',
-            detail: `${occupancyPercent}% of recent reservations were booked for weekend slots.`,
+            title: 'Approval queue',
+            detail: `${pendingApprovals} reservations still require admin or registrar review before activation.`,
           },
           {
-            title: 'High-value bookings',
+            title: 'Payment verification',
+            detail: `${paymentsToVerify} payment records are waiting for review or confirmation.`,
+          },
+          {
+            title: 'Waiver backlog',
+            detail: `${waiverBacklog} waiver records are still pending action.`,
+          },
+          {
+            title: 'Equipment risk',
+            detail: `${equipmentAlerts} equipment items are under maintenance or low stock and need attention.`,
+          },
+          {
+            title: 'Revenue snapshot',
             detail: highestValuePayment
-              ? `The largest payment was ${formatCurrency(Number(highestValuePayment.amount ?? highestValuePayment.totalPHP ?? 0))}.`
-              : 'No recent payment records were found.',
+              ? `Largest payment record is ${formatCurrency(Number(highestValuePayment.amount ?? highestValuePayment.totalPHP ?? 0))}.`
+              : 'No payment records are available yet.',
           },
           {
-            title: 'Equipment usage',
+            title: 'Inventory signal',
             detail: topEquipment
-              ? `${topEquipment.name || 'Inventory item'} is currently stocked at ${topEquipment.qty ?? 0} units.`
-              : 'Equipment inventory is empty or unavailable.',
+              ? `${topEquipment.name || 'Inventory item'} is the highest-stock item at ${topEquipment.qty ?? 0} units.`
+              : 'No inventory entries are available to summarize.',
           },
         ]
 
         if (mounted) {
           setMetrics([
             { label: 'Reservations', value: String(reservations.length), tone: 'accent' },
+            { label: 'Confirmed', value: String(confirmedReservations), tone: 'success' },
             { label: 'Revenue', value: formatCurrency(revenue), tone: 'success' },
-            { label: 'No-shows', value: String(noShows), tone: 'danger' },
+            { label: 'Pending approvals', value: String(pendingApprovals), tone: 'danger' },
+            { label: 'Waiver backlog', value: String(waiverBacklog), tone: 'accent' },
+            { label: 'Equipment alerts', value: String(equipmentAlerts), tone: 'danger' },
           ])
           setHighlights(nextHighlights)
         }
@@ -150,15 +170,14 @@ export function AdminReportsPage() {
   const trendLabel = useMemo(() => {
     if (loading) return 'Loading…'
     if (metrics.length === 0) return 'No data'
-    const trendValue = Number(String(metrics[0].value).replace(/[^0-9]/g, ''))
-    return trendValue > 0 ? 'Live report' : 'No data'
+    return 'Live admin report'
   }, [loading, metrics])
 
   return (
     <div className="space-y-4">
       <div>
         <h1 className="text-3xl font-bold">Reports</h1>
-        <p className="mt-1 text-sm text-muted">Review operational reports, usage spikes, and business performance indicators.</p>
+        <p className="mt-1 text-sm text-muted">Operational reporting for reservations, payments, waivers, inventory, and approval flow.</p>
       </div>
 
       {error ? (
@@ -167,7 +186,7 @@ export function AdminReportsPage() {
         </div>
       ) : null}
 
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {metrics.map((metric) => (
           <Card key={metric.label} className="p-4">
             <div className="text-xs uppercase tracking-widest text-muted">{metric.label}</div>
@@ -178,24 +197,28 @@ export function AdminReportsPage() {
         ))}
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+      <div className="grid gap-4 lg:grid-cols-[1.05fr_0.95fr]">
         <Card className="p-4">
-          <div className="text-xs uppercase tracking-widest text-muted">Performance snapshot</div>
-          <div className="mt-2 text-sm text-muted">A curated overview of the current reporting period.</div>
+          <div className="text-xs uppercase tracking-widest text-muted">Admin summary</div>
+          <div className="mt-2 text-sm text-muted">This report snapshot is designed for daily operational decisions.</div>
           <div className="mt-4 rounded-2xl border border-white/5 bg-white/5 p-4">
             <div className="flex items-center justify-between">
               <div>
-                <div className="text-sm font-semibold">Weekly trend</div>
-                <div className="mt-1 text-xs text-muted">Bookings are updated from recent reservation history.</div>
+                <div className="text-sm font-semibold">Current report view</div>
+                <div className="mt-1 text-xs text-muted">Across reservations, payments, waivers, and inventory.</div>
               </div>
-              <div className="rounded-full bg-success/20 px-3 py-1 text-sm font-semibold text-success">{loading ? '…' : `${metrics[0] ? 'Live' : 'No data'}`}</div>
+              <div className="rounded-full bg-success/20 px-3 py-1 text-sm font-semibold text-success">{loading ? '…' : trendLabel}</div>
             </div>
-            <div className="mt-3 text-sm text-muted">{loading ? 'Loading report metrics…' : `Current report window is based on ${metrics[0]?.value || 0} reservation records.`}</div>
+            <div className="mt-3 text-sm text-muted">
+              {loading
+                ? 'Loading admin report metrics…'
+                : 'Use this view to monitor approval bottlenecks, financial status, and item readiness before the next operating session.'}
+            </div>
           </div>
         </Card>
 
         <Card className="p-4">
-          <div className="text-xs uppercase tracking-widest text-muted">Recent report highlights</div>
+          <div className="text-xs uppercase tracking-widest text-muted">Operational highlights</div>
           <div className="mt-4 space-y-2">
             {highlights.map((report) => (
               <div key={report.title} className="rounded-xl border border-white/5 bg-white/5 px-3 py-3">
