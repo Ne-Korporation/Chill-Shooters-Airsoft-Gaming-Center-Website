@@ -604,11 +604,20 @@ export function AdminRentalPackagesPage() {
                                   return prev
                                 }
 
+                                const nextTargets = isCurrentlyChecked
+                                  ? prev.discountTargets.filter((target) => target !== option.value)
+                                  : [...prev.discountTargets, option.value]
+
+                                if (nextTargets.includes('weapons') && nextTargets.includes('equipment') && nextTargets.includes('entrance')) {
+                                  return {
+                                    ...prev,
+                                    discountTargets: ['package_total'],
+                                  }
+                                }
+
                                 return {
                                   ...prev,
-                                  discountTargets: isCurrentlyChecked
-                                    ? prev.discountTargets.filter((target) => target !== option.value)
-                                    : [...prev.discountTargets, option.value],
+                                  discountTargets: nextTargets,
                                 }
                               })}
                               className="h-4 w-4 rounded border-white/20 bg-transparent accent-accent"
