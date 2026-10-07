@@ -51,6 +51,7 @@ export function normalizeDiscountTargets(raw: unknown): PackageDiscountTarget[] 
   const next = Array.isArray(raw) ? raw.filter((item): item is PackageDiscountTarget => allowed.includes(item as PackageDiscountTarget)) : []
   const unique = Array.from(new Set(next))
   if (unique.includes('package_total')) return ['package_total']
+  if (unique.includes('weapons') && unique.includes('equipment') && unique.includes('entrance')) return ['package_total']
   return unique.length > 0 ? unique : DEFAULT_DISCOUNT_TARGETS
 }
 
