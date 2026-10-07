@@ -1,45 +1,149 @@
 # Project Backlog — Chill Shooters Airsoft Gaming Center
 
 ## Frontend Implementation Status
-- [x] Step 1: Reservation booking UI loads real data from the backend and saves reservations. Implemented in [src/pages/reservations/ReservationCalendarPage_FIXED.tsx](src/pages/reservations/ReservationCalendarPage_FIXED.tsx).
-- [x] Step 2: Payment proof upload and payment record submission in [src/pages/payments/PaymentPage.tsx](src/pages/payments/PaymentPage.tsx).
-- [x] Step 3: Waiver upload and waiver record submission in [src/pages/waiver/WaiverPage.tsx](src/pages/waiver/WaiverPage.tsx).
 - [x] Step 4: Admin CRUD wiring in the admin pages. Implemented across [src/pages/admin/AdminEquipmentPage.tsx](src/pages/admin/AdminEquipmentPage.tsx), [src/pages/admin/AdminRentalPackagesPage.tsx](src/pages/admin/AdminRentalPackagesPage.tsx), [src/pages/admin/AdminWeaponsPage.tsx](src/pages/admin/AdminWeaponsPage.tsx), [src/pages/admin/AdminPaymentsPage.tsx](src/pages/admin/AdminPaymentsPage.tsx), [src/pages/admin/AdminReservationsPage.tsx](src/pages/admin/AdminReservationsPage.tsx), and [src/pages/admin/AdminGameplayPage.tsx](src/pages/admin/AdminGameplayPage.tsx).
+
+## Frontend Detail Plan
+
+### 1. Shared design system and interaction patterns
+- Priority: P0
+- Effort: M
+- Acceptance criteria:
+  - Buttons, cards, inputs, modals, tables, tabs, and alert states use consistent styling and spacing.
+  - Loading, empty, success, and error states are implemented consistently across pages.
+  - The app remains readable and usable on mobile, tablet, and desktop.
+  - Accessibility basics are covered for forms, dialogs, focus states, and keyboard navigation.
+
+### 2. Authentication screens and session experience
+- Priority: P0
+- Effort: M
+- Acceptance criteria:
+  - Login, register, forgot password, OTP, and reset password screens have complete user feedback.
+  - Session state persists cleanly across refreshes without breaking role-based navigation.
+  - Errors explain what the user should do next instead of showing raw failures.
+  - Role-specific redirects land the user on the correct dashboard.
+
+### 3. Reservation booking UI and confirmation flow
+- Priority: P0
+- Effort: L
+- Acceptance criteria:
+  - Users can choose location, field, date, slot, session type, and player count in a guided flow.
+  - Availability, minimum players, and capacity warnings are visible before confirmation.
+  - Package selection, custom loadout selection, and summary review are all shown clearly.
+  - The final reservation confirmation screen reflects the exact booking state saved to the backend.
+
+### 4. Payment UI, proof upload, and payment choice
+- Priority: P0
+- Effort: M
+- Acceptance criteria:
+  - Users can review payment totals, payer share, and split-payment settings before submitting.
+  - GCash and card payment paths are visually distinct and fully guided.
+  - Payment proof upload, QR display, and receipt preview are easy to follow on mobile.
+  - The payment screen reflects reservation metadata and does not require manual data re-entry.
+
+### 5. Waiver UX and print flow
+- Priority: P0
+- Effort: M
+- Acceptance criteria:
+  - Waiver forms guide users through required fields with clear validation.
+  - Signature, proof, or uploaded assets are handled without breaking the form flow.
+  - Submitted waivers show status and allow printing or review where needed.
+  - Waiver state remains visible across user and admin pages.
+
+### 6. Player profile, skills, and progression UI
+- Priority: P1
+- Effort: M
+- Acceptance criteria:
+  - Player profiles display personal information, history, skills, and owned gear clearly.
+  - Skill or experience values refresh after completed games or admin-approved updates.
+  - Profile edits and image uploads have clear save states and error handling.
+  - Profile history shows the records that caused progression changes.
+
+### 7. Team generator and team review module
+- Priority: P1
+- Effort: L
+- Acceptance criteria:
+  - Admins or marshals can generate teams based on player skills, availability, and booking context.
+  - Generated teams can be reviewed, adjusted, and saved before gameplay starts.
+  - Team results remain linked to the reservation or gameplay record.
+  - The frontend clearly distinguishes recommended teams from manually edited teams.
+
+### 8. Admin analytics and printable reports
+- Priority: P1
+- Effort: M
+- Acceptance criteria:
+  - Admin reports include reservations, payments, waivers, gameplay, and operational totals.
+  - Print-friendly output works for browser print and PDF export.
+  - Report filters and summary cards help admins read the data quickly.
+  - The report page works well on common dashboard screen sizes.
+
+### 9. Admin operations dashboard and record review pages
+- Priority: P1
+- Effort: M
+- Acceptance criteria:
+  - Admin tables, filters, detail drawers, and action buttons follow a consistent pattern.
+  - Reservations, payments, weapons, equipment, and gameplay pages show related records together.
+  - Action feedback explains whether the record was approved, updated, or rejected.
+  - Print, inspect, and bulk-review actions are available where operationally useful.
+
+### 10. Notifications, activity states, and data refresh
+- Priority: P1
+- Effort: S
+- Acceptance criteria:
+  - Notification toasts, banners, and counters match the latest backend state.
+  - Pages refresh or invalidate stale data after reservation, payment, waiver, or gameplay changes.
+  - The user can tell when a record is still pending, confirmed, reviewed, or rejected.
+  - The UI avoids stale totals after save actions.
+
+### 11. Frontend validation and error handling
+- Priority: P0
+- Effort: M
+- Acceptance criteria:
+  - Required fields, numeric-only fields, file uploads, and date rules are validated before submit.
+  - Error messages are specific and actionable.
+  - The app blocks invalid workflow transitions before they hit the backend.
+  - Failed requests show recoverable UI states instead of silent failures.
+
+### 12. Responsive layout and mobile-first polish
+- Priority: P1
+- Effort: M
+- Acceptance criteria:
+  - Core flows remain usable on small screens without horizontal overflow.
+  - Tables collapse into mobile-friendly cards or stacked layouts where needed.
+  - Modals and sidebars remain usable on touch devices.
+  - Mobile users can complete booking, payment, and profile tasks without desktop-only controls.
+
+### 13. Frontend data binding for business rules
+- Priority: P1
+- Effort: M
+- Acceptance criteria:
+  - UI reflects pricing, discounts, minimum player rules, and availability from backend data.
+  - Player skill updates, team generation, and gameplay completion all show the latest saved state.
+  - Admin settings like GCash QR and payment instructions are displayed from persisted configuration.
+  - The frontend does not rely on hardcoded values for business-critical rules.
 
 ## Priority Legend
 - P0: Critical for working system and core business flow
 - P1: High value, required before launch or core operations
 - P2: Important but can be delivered after core flow is stable
-- P3: Nice-to-have enhancements and future improvements
-
-## Effort Legend
 - S: Small effort (1–2 days)
 - M: Medium effort (3–5 days)
 - L: Large effort (1–2 weeks)
 
 ---
 
-## Phase 1 — Foundation & System Stability
-
-### 1. Secure authentication and user-role access
 - Priority: P0
 - Effort: M
 - Acceptance criteria:
   - Users can log in with email/password and correct role is returned.
   - Admin, registrar, marshal, and player routes enforce access rules.
   - Invalid credentials return clear error messages.
-  - Session state persists across refreshes without breaking role-based access.
-
-### 2. MongoDB schema and data integrity
 - Priority: P0
 - Effort: M
 - Acceptance criteria:
   - Required collections exist for users, reservations, payments, waivers, gameplay, equipment, and reports.
   - Duplicate reservation submissions are prevented.
   - User records contain correct role and verification fields.
-  - Core entities include required identifiers and timestamps.
-
-### 3. API standardization and validation
 - Priority: P0
 - Effort: M
 - Acceptance criteria:
@@ -47,36 +151,24 @@
   - Validation prevents missing required fields and invalid role values.
   - Backend rejects malformed payment, waiver, and reservation requests.
   - Error messages are meaningful to the frontend and operators.
-
-### 4. Cloudinary media upload integration
-- Priority: P0
 - Effort: M
 - Acceptance criteria:
   - Payment proof uploads save to Cloudinary and return a valid public URL.
   - Waiver signature/upload images save and are accessible by URL.
   - Failed uploads return clear errors instead of creating broken records.
   - Uploaded assets are linked to the correct user or reservation record.
-
----
-
 ## Phase 2 — Core Customer Booking Flow
 
 ### 5. Reservation creation and booking rules
 - Priority: P0
 - Effort: L
 - Acceptance criteria:
-  - Players can choose field, date, time slot, and session type.
-  - Public and private reservations are stored with the correct pricing logic.
-  - Overcapacity and double-booking checks prevent invalid bookings.
   - Reservations include user linkage and status tracking.
 
 ### 6. Package recommendation and customization
 - Priority: P1
 - Effort: M
 - Acceptance criteria:
-  - Players can select a rental package based on group size and budget.
-  - Equipment and accessories can be customized before payment.
-  - Total price recalculates correctly after every selection change.
   - Final package selections are saved with reservation data.
 
 ### 7. Payment workflow with proof upload

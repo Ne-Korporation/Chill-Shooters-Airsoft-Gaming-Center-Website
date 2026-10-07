@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { createAuthToken, verifyAuthToken } from '../middleware/auth.js'
+import { validateGoogleLoginEligibility, validatePasswordRequirements } from '../routes/auth.js'
 
 const user = { id: 'P-000001', email: 'admin@chillshooters.test', role: 'admin' }
 const token = createAuthToken(user)
@@ -15,5 +16,13 @@ assert.equal(payload.sub, user.id)
 
 const invalid = verifyAuthToken('not-a-valid-token')
 assert.equal(invalid, null)
+
+assert.equal(validateGoogleLoginEligibility(null).allowed, false)
+assert.equal(validateGoogleLoginEligibility({ email: 'employee@chillshooters.test', password: 'hashedpw' }).allowed, false)
+assert.equal(validateGoogleLoginEligibility({ email: 'player@chillshooters.test', password: null, authProvider: 'google' }).allowed, true)
+
+assert.equal(validatePasswordRequirements('weak').valid, false)
+assert.equal(validatePasswordRequirements('StrongPass!').valid, true)
+assert.equal(validatePasswordRequirements('StrongPass!').errors.length, 0)
 
 console.log('auth token regression check passed')

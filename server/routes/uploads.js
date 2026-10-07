@@ -7,7 +7,17 @@ import { getUserAccountsCollection } from '../db/mongo.js'
 
 const router = express.Router()
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } })
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const isImage = file && file.mimetype && file.mimetype.startsWith('image/')
+    if (!isImage) {
+      return cb(new Error('Only image files are allowed for GCash proof uploads.'))
+    }
+    cb(null, true)
+  },
+})
 
 async function uploadToCloudinary(fileBuffer, filename) {
   // Use shared initializer which throws a clear error if env is missing.
@@ -33,7 +43,14 @@ async function uploadToCloudinary(fileBuffer, filename) {
   })
 }
 
-router.post('/upload-image', upload.single('file'), async (req, res) => {
+router.post('/upload-image', (req, res, next) => {
+  upload.single('file')(req, res, (err) => {
+    if (err) {
+      return res.status(400).json({ ok: false, error: err.message || 'Only image files are allowed for upload.' })
+    }
+    next()
+  })
+}, async (req, res) => {
   if (!req.file?.buffer) {
     return res.status(400).json({ ok: false, error: 'file is required' })
   }

@@ -8,6 +8,7 @@ import { ThemeToggle } from './ThemeToggle'
 import { useTheme } from '../../context/ThemeContext'
 import { useAuth } from '../../context/AuthContext'
 import { useNotifications } from '../../context/NotificationContext'
+import { resolveNotificationRoute } from '../../utils/notificationRoutes'
 
 function NotificationBell({ userId, role }: { userId: string; role?: string }) {
   const { notifications, unreadCount, markAsRead, markAllAsRead, getNotificationsForRole } = useNotifications()
@@ -81,9 +82,9 @@ function NotificationBell({ userId, role }: { userId: string; role?: string }) {
                     type="button"
                     onClick={() => {
                       markAsRead(n.id)
-                      if (n.linkedResourceId) {
-                        navigate(`/app/notifications`)
-                      }
+                      const destination = resolveNotificationRoute(n, role, userId)
+                      if (destination) navigate(destination)
+                      else navigate('/app/notifications')
                       setOpen(false)
                     }}
                     className={`w-full rounded-xl px-3 py-3 text-left transition hover:bg-white/5 ${

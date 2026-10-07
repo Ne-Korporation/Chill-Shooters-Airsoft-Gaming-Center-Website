@@ -1,9 +1,12 @@
 import React from 'react'
 import { createPortal } from 'react-dom'
-import { FiEye, FiShield, FiX } from 'react-icons/fi'
+import { FiEye, FiPrinter, FiRefreshCw, FiShield, FiTrash2, FiX } from 'react-icons/fi'
+import toast from 'react-hot-toast'
 import { Card } from '../../components/ui/Card'
 import { Input } from '../../components/ui/Input'
-import { apiGet, apiPut } from '../../utils/apiClient'
+import { apiDelete, apiGet, apiPut } from '../../utils/apiClient'
+import { OFFICIAL_WAIVER_TEXT } from '../../utils/waiverText'
+import { printWaiverDocument } from '../../utils/waiverPrint'
 import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
 
 type WaiverRecord = {
@@ -19,6 +22,10 @@ type WaiverRecord = {
   termsAccepted?: boolean
   isMinor?: boolean
   hasSignature?: boolean
+  signatureImage?: string
+  guardianPhone?: string
+  guardianIdImage?: string
+  guardianSignatureImage?: string
   status?: string
   submittedAtISO?: string
 }
@@ -29,26 +36,43 @@ function formatDate(value?: string) {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
 }
 
+const ADMIN_WAIVER_TEXT = OFFICIAL_WAIVER_TEXT
+const POLL_INTERVAL_MS = 15000
+
 export function AdminWaiversPage() {
   const [waivers, setWaivers] = React.useState<WaiverRecord[]>([])
   const [loading, setLoading] = React.useState(true)
+  const [refreshing, setRefreshing] = React.useState(false)
+  const [loadError, setLoadError] = React.useState<string | null>(null)
   const [query, setQuery] = React.useState('')
   const [selectedWaiver, setSelectedWaiver] = React.useState<WaiverRecord | null>(null)
   const [savingStatus, setSavingStatus] = React.useState(false)
 
-  const refresh = React.useCallback(async () => {
-    setLoading(true)
+  // silent = background poll: no loading flicker, and a failed poll keeps the current list
+  const refresh = React.useCallback(async (silent = false) => {
+    if (silent) setRefreshing(true)
+    else setLoading(true)
     try {
       const response = await apiGet<{ ok: boolean; data: WaiverRecord[] }>('/api/waivers?limit=200')
       setWaivers(Array.isArray(response?.data) ? response.data : [])
-    } catch {
-      setWaivers([])
+      setLoadError(null)
+    } catch (e: any) {
+      setLoadError(String(e?.message || 'Could not load waivers.'))
+      if (!silent) setWaivers([])
     } finally {
       setLoading(false)
+      setRefreshing(false)
     }
   }, [])
 
-  React.useEffect(() => { refresh() }, [refresh])
+  // Initial load + light polling so newly submitted waivers show up without a page reload
+  React.useEffect(() => {
+    refresh(false)
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'visible') refresh(true)
+    }, POLL_INTERVAL_MS)
+    return () => clearInterval(timer)
+  }, [refresh])
 
   const { addNotification } = useNotifications()
 
@@ -67,38 +91,76 @@ export function AdminWaiversPage() {
         setSelectedWaiver(response.data)
         setWaivers((current) => current.map((waiver) => (waiver.id === waiverId || waiver._id === waiverId ? response.data : waiver)))
 
-        sendRoleNotifications(addNotification, {
-          roles: ['admin', 'registrar', 'marshal'],
-          type: status === 'approved' ? 'waiver_approved' : 'waiver_denied',
-          title: status === 'approved' ? 'Waiver Approved' : 'Waiver Denied',
-          message: status === 'approved'
-            ? `Waiver ${waiverId} was approved.`
-            : `Waiver ${waiverId} was denied.`,
-          linkedResourceId: waiverId,
-        })
-
-        // Notify the player
-        if (selectedWaiver.userId) {
-          addNotification({
-            userId: selectedWaiver.userId,
+        try {
+          sendRoleNotifications(addNotification, {
+            roles: ['admin', 'registrar', 'marshal'],
             type: status === 'approved' ? 'waiver_approved' : 'waiver_denied',
             title: status === 'approved' ? 'Waiver Approved' : 'Waiver Denied',
             message: status === 'approved'
-              ? 'Your waiver has been approved. You can now proceed with your reservation.'
-              : 'Your waiver has been denied. Please check with the admin for more details.',
+              ? `Waiver ${waiverId} was approved.`
+              : `Waiver ${waiverId} was denied.`,
             linkedResourceId: waiverId,
           })
+
+          // Notify the player
+          if (selectedWaiver.userId) {
+            addNotification({
+              userId: selectedWaiver.userId,
+              type: status === 'approved' ? 'waiver_approved' : 'waiver_denied',
+              title: status === 'approved' ? 'Waiver Approved' : 'Waiver Denied',
+              message: status === 'approved'
+                ? 'Your waiver has been approved. You can now proceed with your reservation.'
+                : 'Your waiver has been denied. Please open the Waiver page, review it, and submit a new one.',
+              linkedResourceId: waiverId,
+            })
+          }
+        } catch (err) {
+          console.warn('Notification failed', err)
         }
+
+        toast.success(status === 'approved' ? 'Waiver approved' : 'Waiver denied')
       }
-    } catch {
-      // ignore for now
+    } catch (e: any) {
+      toast.error(String(e?.message || 'Could not update the waiver status.'))
     } finally {
       setSavingStatus(false)
     }
-  }, [selectedWaiver])
+  }, [selectedWaiver, addNotification])
 
   const approveWaiver = React.useCallback(() => updateWaiverStatus('approved'), [updateWaiverStatus])
   const denyWaiver = React.useCallback(() => updateWaiverStatus('denied'), [updateWaiverStatus])
+  const portalTarget = typeof window === 'undefined' ? null : document.body
+
+  // Deleting the record removes the player's copy too (the player page reads the same record).
+  const deleteWaiver = React.useCallback(async () => {
+    if (!selectedWaiver) return
+    const waiverId = selectedWaiver.id || selectedWaiver._id
+    if (!waiverId) return
+    if (!window.confirm(`Delete waiver ${waiverId}?\n\nThe player's copy will be deleted too. This cannot be undone.`)) return
+
+    setSavingStatus(true)
+    try {
+      await apiDelete(`/api/waivers/${encodeURIComponent(String(waiverId))}`)
+      setWaivers((current) => current.filter((waiver) => (waiver.id || waiver._id) !== waiverId))
+
+      if (selectedWaiver.userId) {
+        addNotification({
+          userId: selectedWaiver.userId,
+          type: 'waiver_deleted',
+          title: 'Waiver Removed',
+          message: 'Your waiver was removed by an admin. Please submit a new waiver.',
+          linkedResourceId: waiverId,
+        })
+      }
+
+      setSelectedWaiver(null)
+      toast.success('Waiver deleted')
+    } catch (e: any) {
+      toast.error(String(e?.message || e))
+    } finally {
+      setSavingStatus(false)
+    }
+  }, [selectedWaiver, addNotification])
 
   const filtered = waivers.filter((waiver) => {
     const term = query.trim().toLowerCase()
@@ -120,8 +182,20 @@ export function AdminWaiversPage() {
           <div>
             <div className="text-xs uppercase tracking-widest text-muted">Waiver table</div>
             <div className="mt-1 text-sm text-muted">{waivers.length} waiver records stored in MongoDB</div>
+            {loadError ? <div className="mt-1 text-xs font-semibold text-danger">Could not refresh: {loadError}</div> : null}
           </div>
-          <div className="md:w-96"><Input label="Search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Name, player ID, reservation, or status" /></div>
+          <div className="flex items-end gap-3">
+            <div className="md:w-96"><Input label="Search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Name, player ID, reservation, or status" /></div>
+            <button
+              type="button"
+              onClick={() => refresh(true)}
+              disabled={refreshing || loading}
+              className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-3 text-xs font-semibold text-muted hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+              aria-label="Refresh waivers"
+            >
+              <FiRefreshCw className={refreshing ? 'animate-spin' : ''} /> Refresh
+            </button>
+          </div>
         </div>
 
         <div className="mt-5 overflow-x-auto">
@@ -136,7 +210,7 @@ export function AdminWaiversPage() {
         </div>
       </Card>
 
-      {selectedWaiver ? createPortal(
+      {selectedWaiver && portalTarget ? createPortal(
         <div className="fixed inset-0 z-[9999] grid place-items-center bg-black/60 p-4" role="dialog" aria-modal="true" aria-labelledby="waiver-details-title">
           <article className="max-h-[90vh] w-full max-w-5xl overflow-y-auto bg-white text-slate-950 dark:bg-slate-950 dark:text-white p-6 shadow-none">
             <div className="flex items-start justify-between gap-4 border-b border-slate-200/70 pb-4">
@@ -178,6 +252,29 @@ export function AdminWaiversPage() {
                 <>
                   <p className="mt-3"><span className="font-semibold">Guardian name:</span> {selectedWaiver.guardianName || '-'}</p>
                   <p className="mt-2"><span className="font-semibold">Guardian consent:</span> {selectedWaiver.guardianConsent ? 'Yes' : 'No'}</p>
+                  <p className="mt-2"><span className="font-semibold">Guardian phone:</span> {selectedWaiver.guardianPhone || '-'}</p>
+                  <div className="mt-2 flex flex-wrap gap-4">
+                    <div>
+                      <span className="font-semibold">Guardian ID:</span>
+                      {selectedWaiver.guardianIdImage ? (
+                        <div className="mt-1 inline-block rounded-lg border border-slate-200 bg-white p-2">
+                          <img src={selectedWaiver.guardianIdImage} alt="Guardian ID" className="block h-32 object-contain" />
+                        </div>
+                      ) : (
+                        <div className="mt-1 text-xs text-slate-500">No ID photo submitted.</div>
+                      )}
+                    </div>
+                    <div>
+                      <span className="font-semibold">Guardian signature:</span>
+                      {selectedWaiver.guardianSignatureImage ? (
+                        <div className="mt-1 inline-block rounded-lg border border-slate-200 bg-white p-2">
+                          <img src={selectedWaiver.guardianSignatureImage} alt="Guardian signature" className="block h-24 object-contain" />
+                        </div>
+                      ) : (
+                        <div className="mt-1 text-xs text-slate-500">No signature submitted.</div>
+                      )}
+                    </div>
+                  </div>
                 </>
               ) : (
                 <p className="mt-3">Not required for participants 18 or older.</p>
@@ -190,12 +287,34 @@ export function AdminWaiversPage() {
                 <li>Signature captured: {selectedWaiver.hasSignature ? 'Yes' : 'No'}</li>
               </ul>
 
-              <p className="mt-6 uppercase tracking-widest text-[11px] text-slate-500">Waiver terms</p>
-              <div className="mt-3 space-y-3">
-                <p>I understand that airsoft activity involves risks including, but not limited to, injury and property damage.</p>
-                <p>I agree to follow marshals’ instructions, safety rules, and field procedures at all times.</p>
-                <p>I acknowledge that protective gear is mandatory and that non-compliance may result in removal from the field.</p>
-                {selectedWaiver.isMinor ? <p>As a parent/guardian, I provide consent for my minor to participate and agree to uphold compliance with safety requirements.</p> : null}
+              <p className="mt-6 uppercase tracking-widest text-[11px] text-slate-500">{ADMIN_WAIVER_TEXT.title}</p>
+              <div className="mt-3 space-y-3 text-xs leading-relaxed">
+                <p className="font-semibold">{ADMIN_WAIVER_TEXT.preamble}</p>
+                <p>{ADMIN_WAIVER_TEXT.intro}</p>
+                <ol className="list-decimal space-y-3 pl-5">
+                  {ADMIN_WAIVER_TEXT.clauses.map((clause, index) => (
+                    <li key={index}>{clause}</li>
+                  ))}
+                </ol>
+                <p className="font-semibold">{ADMIN_WAIVER_TEXT.closing}</p>
+                {selectedWaiver.isMinor ? (
+                  <>
+                    <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500">{ADMIN_WAIVER_TEXT.guardianTitle}</p>
+                    <p>{ADMIN_WAIVER_TEXT.guardianCertification}</p>
+                  </>
+                ) : null}
+
+                <div className="mt-6 border-t border-slate-200/70 pt-4">
+                  <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500">Signature</p>
+                  {selectedWaiver.signatureImage ? (
+                    <div className="mt-2 inline-block rounded-lg border border-slate-200 bg-white p-2">
+                      <img src={selectedWaiver.signatureImage} alt="Participant signature" className="h-20 object-contain" />
+                    </div>
+                  ) : (
+                    <div className="mt-2 text-xs text-slate-500">No signature image submitted.</div>
+                  )}
+                  <p className="mt-2 text-sm font-semibold text-slate-900 dark:text-slate-100">{selectedWaiver.fullName || '-'}</p>
+                </div>
               </div>
             </div>
 
@@ -206,6 +325,21 @@ export function AdminWaiversPage() {
                   <p className="mt-2"><span className="font-semibold text-slate-700 dark:text-slate-200">Displayed as:</span> waiver document view</p>
                 </div>
                 <div className="flex flex-col gap-2 sm:flex-row">
+                  <button
+                    type="button"
+                    onClick={() => printWaiverDocument(selectedWaiver)}
+                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-300 bg-transparent px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+                  >
+                    <FiPrinter /> Print waiver
+                  </button>
+                  <button
+                    type="button"
+                    onClick={deleteWaiver}
+                    disabled={savingStatus}
+                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-rose-300 bg-transparent px-4 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-rose-500/40 dark:text-rose-300 dark:hover:bg-rose-500/10"
+                  >
+                    <FiTrash2 /> Delete waiver
+                  </button>
                   <button
                     type="button"
                     onClick={denyWaiver}
@@ -227,7 +361,7 @@ export function AdminWaiversPage() {
             </div>
           </article>
         </div>,
-        typeof document !== 'undefined' ? document.body : document.createElement('div'),
+        portalTarget,
       ) : null}
     </div>
   )

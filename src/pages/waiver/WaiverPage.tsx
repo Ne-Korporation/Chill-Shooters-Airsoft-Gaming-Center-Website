@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { motion } from 'framer-motion'
+import toast from 'react-hot-toast'
 import {
   FiAlertTriangle,
   FiCheck,
@@ -11,13 +12,15 @@ import {
   FiX,
 } from 'react-icons/fi'
 
-
-
 import { Card } from '../../components/ui/Card'
 
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
+import { IdUpload } from './IdUpload'
+import { SignaturePad } from './SignaturePad'
 import { apiGet, apiPost } from '../../utils/apiClient'
+import { OFFICIAL_WAIVER_TEXT } from '../../utils/waiverText'
+import { printWaiverDocument } from '../../utils/waiverPrint'
 import { useAuth } from '../../context/AuthContext'
 import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
 
@@ -45,9 +48,59 @@ type SubmittedWaiver = {
   termsAccepted?: boolean
   isMinor?: boolean
   hasSignature?: boolean
+  signatureImage?: string
+  signatureMethod?: string
+  guardianPhone?: string
+  guardianIdImage?: string
+  guardianSignatureImage?: string
   status?: string
   submittedAtISO?: string
   createdAtISO?: string
+}
+
+// ---------------------------------------------------------------------
+// Official waiver text (Chill Shooters)
+// ---------------------------------------------------------------------
+const WAIVER_TEXT = OFFICIAL_WAIVER_TEXT
+
+function WaiverTermsBody({
+  isMinor,
+  textClass,
+  headingClass,
+}: {
+  isMinor: boolean
+  textClass: string
+  headingClass: string
+}) {
+  return (
+    <div className={['space-y-3 text-xs leading-relaxed', textClass].join(' ')}>
+      <p className="font-semibold">{WAIVER_TEXT.preamble}</p>
+      <p>{WAIVER_TEXT.intro}</p>
+
+      <ol className="list-decimal space-y-3 pl-5">
+        {WAIVER_TEXT.clauses.map((clause, index) => (
+          <li key={index}>{clause}</li>
+        ))}
+      </ol>
+
+      <p className="font-semibold">{WAIVER_TEXT.closing}</p>
+
+      {isMinor ? (
+        <div className="pt-1">
+          <div className={['text-[11px] font-bold uppercase tracking-[0.18em]', headingClass].join(' ')}>
+            {WAIVER_TEXT.guardianTitle}
+          </div>
+          <p className="mt-2">{WAIVER_TEXT.guardianCertification}</p>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+// 10 to 13 digits (e.g. 09171234567 or +63 917 123 4567)
+function isValidPhone(value: string) {
+  const digits = value.replace(/\D/g, '')
+  return digits.length >= 10 && digits.length <= 13
 }
 
 function clamp(n: number, min: number, max: number) {
@@ -60,6 +113,37 @@ function drawStroke(ctx: CanvasRenderingContext2D, pts: SignaturePoint[]) {
   ctx.moveTo(pts[0].x, pts[0].y)
   for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y)
   ctx.stroke()
+}
+
+// Shrinks a data-URL image so the submit payload stays small (prevents 413 errors on minors' waivers)
+function compressImage(dataUrl: string, maxW = 1000, quality = 0.75): Promise<string> {
+  return new Promise((resolve) => {
+    if (!dataUrl || !dataUrl.startsWith('data:image/')) {
+      resolve(dataUrl)
+      return
+    }
+    const img = new Image()
+    img.onload = () => {
+      const scale = Math.min(1, maxW / img.width)
+      const c = document.createElement('canvas')
+      c.width = Math.max(1, Math.round(img.width * scale))
+      c.height = Math.max(1, Math.round(img.height * scale))
+      const ctx = c.getContext('2d')
+      if (!ctx) {
+        resolve(dataUrl)
+        return
+      }
+      // White background so transparent PNGs don't turn black as JPEG
+      ctx.fillStyle = '#ffffff'
+      ctx.fillRect(0, 0, c.width, c.height)
+      ctx.drawImage(img, 0, 0, c.width, c.height)
+      const out = c.toDataURL('image/jpeg', quality)
+      // Only use the compressed version if it is actually smaller
+      resolve(out.length < dataUrl.length ? out : dataUrl)
+    }
+    img.onerror = () => resolve(dataUrl)
+    img.src = dataUrl
+  })
 }
 
 export function WaiverPage({
@@ -91,6 +175,13 @@ export function WaiverPage({
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const [hasSignature, setHasSignature] = useState(false)
+  const [signatureImage, setSignatureImage] = useState('')
+  const [guardianPhone, setGuardianPhone] = useState('')
+  const [guardianIdImage, setGuardianIdImage] = useState('')
+  const [guardianSignatureImage, setGuardianSignatureImage] = useState('')
+  const [signatureMethod, setSignatureMethod] = useState<'drawn' | 'uploaded'>('drawn')
+  const [signatureMode, setSignatureMode] = useState<'draw' | 'upload'>('draw')
+  const [signatureError, setSignatureError] = useState<string | null>(null)
   const { user } = useAuth()
   const { addNotification } = useNotifications()
 
@@ -118,9 +209,14 @@ export function WaiverPage({
       try {
         const candidates: SubmittedWaiver[] = []
 
+        // Each lookup is isolated: a deleted waiver (404) must not stop the other lookups.
         if (localWaiverId) {
-          const response = await apiGet<{ ok: boolean; data: SubmittedWaiver }>(`/api/waivers/${encodeURIComponent(localWaiverId)}`)
-          if (response?.data) candidates.push(response.data)
+          try {
+            const response = await apiGet<{ ok: boolean; data: SubmittedWaiver }>(`/api/waivers/${encodeURIComponent(localWaiverId)}`)
+            if (response?.data) candidates.push(response.data)
+          } catch {
+            // waiver was deleted or is unavailable
+          }
         }
 
         if (user?.id) {
@@ -131,10 +227,14 @@ export function WaiverPage({
         }
 
         if (reservationId) {
-          const response = await apiGet<{ ok: boolean; data: SubmittedWaiver[] }>(
-            `/api/waivers?q=${encodeURIComponent(JSON.stringify({ reservationId }))}&limit=200`,
-          )
-          if (Array.isArray(response?.data)) candidates.push(...response.data)
+          try {
+            const response = await apiGet<{ ok: boolean; data: SubmittedWaiver[] }>(
+              `/api/waivers?q=${encodeURIComponent(JSON.stringify({ reservationId }))}&limit=200`,
+            )
+            if (Array.isArray(response?.data)) candidates.push(...response.data)
+          } catch {
+            // ignore
+          }
         }
 
         const existingWaiver = candidates
@@ -147,7 +247,30 @@ export function WaiverPage({
           })[0] || null
 
         if (!cancelled) {
-          if (existingWaiver) {
+          if (existingWaiver && String(existingWaiver.status || '').trim().toLowerCase() === 'denied') {
+            // Denied: reopen the form so the player can fix it and resubmit.
+            // Name/age are prefilled; terms, consent and signature must be redone.
+            setState({
+              fullName: existingWaiver.fullName || '',
+              age: existingWaiver.age || 16,
+              guardianName: existingWaiver.guardianName || '',
+              guardianConsent: false,
+              consent: false,
+              termsAccepted: false,
+            })
+            setAgeInput(String(existingWaiver.age || 16))
+            strokesRef.current = []
+            setHasSignature(false)
+            setSignatureImage('')
+            // Guardian phone and ID photo are kept; signatures must be redone.
+            setGuardianPhone(existingWaiver.guardianPhone || '')
+            setGuardianIdImage(existingWaiver.guardianIdImage || '')
+            setGuardianSignatureImage('')
+            setWaiverStatus('denied')
+            setSubmittedWaiver(existingWaiver)
+            setSubmitted(false)
+            if (waiverStorageKey) localStorage.removeItem(waiverStorageKey)
+          } else if (existingWaiver) {
             setState((current) => ({
               ...current,
               fullName: existingWaiver.fullName || current.fullName,
@@ -159,15 +282,29 @@ export function WaiverPage({
             }))
             setAgeInput(String(existingWaiver.age || 16))
             setHasSignature(Boolean(existingWaiver.hasSignature))
+            setSignatureImage(existingWaiver.signatureImage || '')
+            setGuardianPhone(existingWaiver.guardianPhone || '')
+            setGuardianIdImage(existingWaiver.guardianIdImage || '')
+            setGuardianSignatureImage(existingWaiver.guardianSignatureImage || '')
             setWaiverStatus(existingWaiver.status)
             setSubmittedWaiver(existingWaiver)
             setSubmitted(true)
             if (waiverStorageKey) localStorage.setItem(waiverStorageKey, '1')
             if (waiverIdKey && existingWaiver.id) localStorage.setItem(waiverIdKey, existingWaiver.id)
           } else {
+            // No waiver on the server (never submitted, or an admin deleted it): clear the player's copy.
             setSubmitted(false)
             setWaiverStatus(undefined)
             setSubmittedWaiver(null)
+            setViewWaiverOpen(false)
+            setState({ fullName: '', age: 16, guardianName: '', guardianConsent: false, consent: false, termsAccepted: false })
+            setAgeInput('16')
+            strokesRef.current = []
+            setHasSignature(false)
+            setSignatureImage('')
+            setGuardianPhone('')
+            setGuardianIdImage('')
+            setGuardianSignatureImage('')
             if (waiverStorageKey) localStorage.removeItem(waiverStorageKey)
             if (waiverIdKey) localStorage.removeItem(waiverIdKey)
           }
@@ -196,6 +333,10 @@ export function WaiverPage({
     if (isMinor) {
       if (!state.guardianName.trim()) e.guardianName = 'Guardian name is required for minors.'
       if (!state.guardianConsent) e.guardianConsent = 'Guardian consent is required.'
+      if (!guardianPhone.trim()) e.guardianPhone = 'Guardian phone number is required.'
+      else if (!isValidPhone(guardianPhone)) e.guardianPhone = 'Enter a valid phone number.'
+      if (!guardianIdImage) e.guardianIdImage = 'A photo of the guardian\'s ID is required.'
+      if (!guardianSignatureImage) e.guardianSignature = 'Guardian signature is required.'
     }
 
     if (!state.termsAccepted) e.termsAccepted = 'You must accept the terms to continue.'
@@ -203,7 +344,7 @@ export function WaiverPage({
     if (!hasSignature) e.signature = 'Signature is required.'
 
     return e
-  }, [hasSignature, isMinor, state])
+  }, [hasSignature, isMinor, state, guardianPhone, guardianIdImage, guardianSignatureImage])
 
   const canSubmit = Object.keys(errors).length === 0 && !submitting
 
@@ -214,16 +355,25 @@ export function WaiverPage({
     }
   }
 
-  // signature capture
-  const strokeRef = useRef<SignaturePoint[]>([])
+  // ---------------------------------------------------------------------
+  // Signature: multi-stroke drawing OR uploaded image. Both end up as an image (data URL).
+  // ---------------------------------------------------------------------
+  const strokesRef = useRef<SignaturePoint[][]>([])
+  const currentStrokeRef = useRef<SignaturePoint[]>([])
   const drawingRef = useRef(false)
+  const sigSizeRef = useRef({ w: 320, h: 192 })
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+
+  const SIG_OUT_W = 600
+  const SIG_OUT_H = 200
+  const SIG_STROKE_COLOR = 'rgba(197,163,90,0.95)' // on-screen pad
+  const ALLOWED_SIGNATURE_TYPES = ['image/png', 'image/jpeg', 'image/webp']
+  const MAX_SIGNATURE_BYTES = 2 * 1024 * 1024
 
   const getCtx = () => {
     const canvas = canvasRef.current
     if (!canvas) return null
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return null
-    return ctx
+    return canvas.getContext('2d')
   }
 
   const setupCanvas = () => {
@@ -232,8 +382,9 @@ export function WaiverPage({
     // HiDPI scaling
     const dpr = window.devicePixelRatio || 1
     const rect = canvas.getBoundingClientRect()
-    const w = Math.max(320, rect.width)
-    const h = Math.max(160, rect.height)
+    const w = rect.width || 320
+    const h = rect.height || 192
+    sigSizeRef.current = { w, h }
 
     canvas.width = Math.floor(w * dpr)
     canvas.height = Math.floor(h * dpr)
@@ -242,19 +393,75 @@ export function WaiverPage({
     if (!ctx) return
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
 
-    // background
     ctx.clearRect(0, 0, w, h)
     ctx.fillStyle = 'rgba(255,255,255,0.03)'
     ctx.fillRect(0, 0, w, h)
 
-    ctx.strokeStyle = 'rgba(197,163,90,0.95)'
+    ctx.strokeStyle = SIG_STROKE_COLOR
     ctx.lineWidth = 2.4
     ctx.lineJoin = 'round'
     ctx.lineCap = 'round'
   }
 
+  const paintStroke = (ctx: CanvasRenderingContext2D, pts: SignaturePoint[], fill: string) => {
+    if (pts.length === 1) {
+      ctx.beginPath()
+      ctx.arc(pts[0].x, pts[0].y, 1.2, 0, Math.PI * 2)
+      ctx.fillStyle = fill
+      ctx.fill()
+      return
+    }
+    drawStroke(ctx, pts)
+  }
+
+  // Clears the pad and repaints every saved stroke (used by undo / mode switch)
+  const redrawCanvas = () => {
+    setupCanvas()
+    const ctx = getCtx()
+    if (!ctx) return
+    strokesRef.current.forEach((pts) => paintStroke(ctx, pts, SIG_STROKE_COLOR))
+  }
+
+  // Render all strokes to a clean dark-on-white PNG so it prints well
+  const exportDrawnSignature = (): string => {
+    const strokes = strokesRef.current
+    if (!strokes.length) return ''
+    const { w, h } = sigSizeRef.current
+    const scale = Math.min(SIG_OUT_W / w, SIG_OUT_H / h)
+
+    const out = document.createElement('canvas')
+    out.width = SIG_OUT_W
+    out.height = SIG_OUT_H
+    const ctx = out.getContext('2d')
+    if (!ctx) return ''
+
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, SIG_OUT_W, SIG_OUT_H)
+    ctx.translate((SIG_OUT_W - w * scale) / 2, (SIG_OUT_H - h * scale) / 2)
+    ctx.scale(scale, scale)
+    ctx.strokeStyle = '#111111'
+    ctx.lineWidth = 2.4
+    ctx.lineJoin = 'round'
+    ctx.lineCap = 'round'
+    strokes.forEach((pts) => paintStroke(ctx, pts, '#111111'))
+
+    return out.toDataURL('image/png')
+  }
+
+  const commitStrokes = () => {
+    const hasRealStroke = strokesRef.current.some((pts) => pts.length >= 2)
+    if (!hasRealStroke) {
+      setSignatureImage('')
+      setHasSignature(false)
+      return
+    }
+    setSignatureImage(exportDrawnSignature())
+    setSignatureMethod('drawn')
+    setHasSignature(true)
+  }
+
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (submitted) return
+    if (submitted || submitting) return
     const canvas = canvasRef.current
     if (!canvas) return
     const rect = canvas.getBoundingClientRect()
@@ -264,15 +471,15 @@ export function WaiverPage({
     const ctx = getCtx()
     if (!ctx) return
 
-    drawingRef.current = true
-    strokeRef.current = [{ x, y }]
-    setHasSignature(false)
+    try {
+      canvas.setPointerCapture(e.pointerId)
+    } catch {
+      // ignore
+    }
 
-    // Start path dot
-    ctx.beginPath()
-    ctx.arc(x, y, 0.8, 0, Math.PI * 2)
-    ctx.fillStyle = 'rgba(197,163,90,0.95)'
-    ctx.fill()
+    drawingRef.current = true
+    currentStrokeRef.current = [{ x, y }]
+    paintStroke(ctx, currentStrokeRef.current, SIG_STROKE_COLOR)
   }
 
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -284,55 +491,148 @@ export function WaiverPage({
     const x = clamp(e.clientX - rect.left, 0, rect.width)
     const y = clamp(e.clientY - rect.top, 0, rect.height)
 
-    strokeRef.current.push({ x, y })
+    currentStrokeRef.current.push({ x, y })
 
     const ctx = getCtx()
     if (!ctx) return
 
-    const pts = strokeRef.current
+    const pts = currentStrokeRef.current
     if (pts.length >= 2) {
-      // Incremental drawing
-      const lastTwo = pts.slice(-2)
-      drawStroke(ctx, lastTwo)
+      drawStroke(ctx, pts.slice(-2))
     }
   }
 
   const handlePointerUp = () => {
     if (!drawingRef.current) return
     drawingRef.current = false
-    setHasSignature(strokeRef.current.length >= 2)
+    if (currentStrokeRef.current.length > 0) {
+      strokesRef.current.push(currentStrokeRef.current)
+    }
+    currentStrokeRef.current = []
+    commitStrokes()
+  }
+
+  const undoStroke = () => {
+    if (submitted || submitting) return
+    strokesRef.current.pop()
+    redrawCanvas()
+    commitStrokes()
   }
 
   const clearSignature = () => {
-    setupCanvas()
-    strokeRef.current = []
+    strokesRef.current = []
+    currentStrokeRef.current = []
+    redrawCanvas()
+    setSignatureImage('')
     setHasSignature(false)
+    setSignatureError(null)
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
+
+  const changeSignatureMode = (mode: 'draw' | 'upload') => {
+    if (mode === signatureMode) return
+    // Switching method starts fresh so the saved image always matches what's on screen
+    clearSignature()
+    setSignatureMode(mode)
+  }
+
+  // Repaint the pad whenever it (re)appears
+  useEffect(() => {
+    if (submitted || signatureMode !== 'draw') return
+    redrawCanvas()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signatureMode, submitted])
+
+  const handleSignatureFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = '' // allow picking the same file again
+    if (!file) return
+    setSignatureError(null)
+
+    if (!ALLOWED_SIGNATURE_TYPES.includes(file.type)) {
+      setSignatureError('Only image files are allowed (PNG, JPG or WEBP).')
+      return
+    }
+    if (file.size > MAX_SIGNATURE_BYTES) {
+      setSignatureError('The image must be 2 MB or smaller.')
+      return
+    }
+
+    const reader = new FileReader()
+    reader.onerror = () => setSignatureError('That file could not be read. Please try another image.')
+    reader.onload = () => {
+      const img = new Image()
+      img.onerror = () => setSignatureError('That file is not a valid image.')
+      img.onload = () => {
+        // Normalize to a small white-background image (keeps the upload payload light)
+        const out = document.createElement('canvas')
+        out.width = SIG_OUT_W
+        out.height = SIG_OUT_H
+        const ctx = out.getContext('2d')
+        if (!ctx) {
+          setSignatureError('Could not process the image in this browser.')
+          return
+        }
+        ctx.fillStyle = '#ffffff'
+        ctx.fillRect(0, 0, SIG_OUT_W, SIG_OUT_H)
+        const scale = Math.min(SIG_OUT_W / img.width, SIG_OUT_H / img.height)
+        const dw = img.width * scale
+        const dh = img.height * scale
+        ctx.drawImage(img, (SIG_OUT_W - dw) / 2, (SIG_OUT_H - dh) / 2, dw, dh)
+
+        strokesRef.current = []
+        setSignatureImage(out.toDataURL('image/jpeg', 0.9))
+        setSignatureMethod('uploaded')
+        setHasSignature(true)
+      }
+      img.src = String(reader.result)
+    }
+    reader.readAsDataURL(file)
   }
 
   const [termsOpen, setTermsOpen] = useState(true)
 
-  const waiverText = useMemo(() => {
-    return {
-      general: [
-        'I understand that airsoft activity involves risks including, but not limited to, injury and property damage.',
-        'I agree to follow marshals’ instructions, safety rules, and field procedures at all times.',
-        'I acknowledge that protective gear is mandatory and that non-compliance may result in removal from the field.',
-      ],
-      minor: [
-        'As a parent/guardian, I provide consent for my minor to participate.',
-        'I understand the same safety requirements apply and agree to uphold compliance.',
-      ],
-      acknowledgment: [
-        'I acknowledge that I have read and understood the waiver terms above.',
-        'I confirm that my signature is voluntary and for the session I am reserving.',
-      ],
+  // Must scroll through the whole waiver before the checkboxes unlock
+  const [hasReadTerms, setHasReadTerms] = useState(false)
+  const termsScrollRef = useRef<HTMLDivElement | null>(null)
+
+  // Changing between minor/adult changes the waiver text (guardian certification), so require reading again
+  useEffect(() => {
+    if (submitted) return
+    setHasReadTerms(false)
+    setState((s) => ({ ...s, termsAccepted: false, consent: false }))
+  }, [isMinor])
+
+  // Unlock automatically if already submitted, or if the text fits without scrolling
+  useEffect(() => {
+    if (submitted) {
+      setHasReadTerms(true)
+      return
     }
-  }, [])
+    const el = termsScrollRef.current
+    if (!el) return
+    if (el.scrollHeight - el.clientHeight <= 8) setHasReadTerms(true)
+  }, [termsOpen, isMinor, submitted])
+
+  const handleTermsScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    if (hasReadTerms) return
+    const el = e.currentTarget
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 8) setHasReadTerms(true)
+  }
+
+  const checkboxesLocked = submitted || submitting || !hasReadTerms
 
   const onSubmit = async () => {
     if (submitted || submitting) return
     setSubmitting(true)
     try {
+      // Compress images first so the request body stays small (minors send an ID photo + 2 signatures)
+      const [compressedGuardianId, compressedGuardianSig, compressedPlayerSig] = await Promise.all([
+        isMinor ? compressImage(guardianIdImage, 1000, 0.75) : Promise.resolve(''),
+        isMinor ? compressImage(guardianSignatureImage, 600, 0.85) : Promise.resolve(''),
+        compressImage(signatureImage, 600, 0.85),
+      ])
+
       const response = await apiPost<{ ok: boolean; insertedId: string; data: SubmittedWaiver }>('/api/waivers', {
         id: `WAIV-${Date.now()}`,
         userId: user?.id || '',
@@ -345,34 +645,58 @@ export function WaiverPage({
         termsAccepted: state.termsAccepted,
         isMinor,
         hasSignature,
+        signatureImage: compressedPlayerSig,
+        signatureMethod,
+        guardianPhone: isMinor ? guardianPhone.trim() : '',
+        guardianIdImage: isMinor ? compressedGuardianId : '',
+        guardianSignatureImage: isMinor ? compressedGuardianSig : '',
         status: 'pending',
         submittedAtISO: new Date().toISOString(),
         createdAtISO: new Date().toISOString(),
       })
-      sendRoleNotifications(addNotification, {
-        roles: ['admin', 'registrar', 'marshal'],
-        type: 'waiver_submitted',
-        title: 'New Waiver Submitted',
-        message: `A new waiver was submitted by ${user?.name || user?.id || 'a player'}.`,
-        linkedResourceId: response?.data?.id,
-      })
+
+      if (!response?.ok) throw new Error('The server did not confirm the waiver was saved.')
 
       setSubmitted(true)
-      setWaiverStatus(response?.data?.status)
-      setSubmittedWaiver(response?.data || null)
+      setWaiverStatus(response.data?.status)
+      setSubmittedWaiver(response.data || null)
       try {
         if (waiverStorageKey) localStorage.setItem(waiverStorageKey, '1')
-        if (waiverIdKey && response?.data?.id) localStorage.setItem(waiverIdKey, response.data.id)
-      } catch (e) {
+        if (waiverIdKey && response.data?.id) localStorage.setItem(waiverIdKey, response.data.id)
+      } catch {
         // ignore
       }
-      if (onSubmitted) onSubmitted()
+
+      // Notifications must never block or undo a successful submit
+      try {
+        sendRoleNotifications(addNotification, {
+          roles: ['admin', 'registrar', 'marshal'],
+          type: 'waiver_submitted',
+          title: 'New Waiver Submitted',
+          message: `A new waiver was submitted by ${user?.name || user?.id || 'a player'}.`,
+          linkedResourceId: response.data?.id,
+        })
+      } catch (err) {
+        console.warn('Notification failed', err)
+      }
+
+      toast.success('Waiver submitted')
+      onSubmitted?.()
+    } catch (err: any) {
+      console.error('Waiver submit failed:', err)
+      toast.error(String(err?.message || 'Could not submit the waiver. Please try again.'))
     } finally {
       setSubmitting(false)
     }
   }
 
   const isEmbedded = variant === 'embedded'
+
+  const handlePlayerSignatureChange = (dataUrl: string) => {
+    setSignatureImage(dataUrl)
+    setHasSignature(Boolean(dataUrl))
+    setSignatureMethod(dataUrl.startsWith('data:image/jpeg') ? 'uploaded' : dataUrl ? 'drawn' : 'drawn')
+  }
 
   const loadSubmittedWaiver = async () => {
     if (submittedWaiver) return submittedWaiver
@@ -426,7 +750,6 @@ export function WaiverPage({
 
   const handleViewWaiver = async () => {
     if (viewWaiverLoading) return
-    console.log('handleViewWaiver clicked', { submitted, submittedWaiver, checkingSubmission, viewWaiverLoading })
     setViewWaiverError(null)
     setViewWaiverInfo('Clicked — loading your waiver...')
     setViewWaiverLoading(true)
@@ -444,12 +767,10 @@ export function WaiverPage({
     }
   }
 
+  // Prints the saved record as its own one-page A4 document (same output as the admin print)
   const printWaiver = () => {
-    if (!submitted || checkingSubmission) return
-    const clearPrintState = () => document.body.classList.remove('printing-waiver')
-    document.body.classList.add('printing-waiver')
-    window.addEventListener('afterprint', clearPrintState, { once: true })
-    window.print()
+    if (!submittedWaiver) return
+    printWaiverDocument(submittedWaiver)
   }
 
   return (
@@ -505,6 +826,13 @@ export function WaiverPage({
         </>
       ) : null}
 
+      {!submitted && String(waiverStatus || '').trim().toLowerCase() === 'denied' ? (
+        <div className="rounded-2xl border border-danger/25 bg-danger/10 p-4 text-sm text-danger">
+          <div className="flex items-center gap-2 font-bold"><FiAlertTriangle /> <span>Your waiver was denied</span></div>
+          <div className="mt-1 text-xs">Please review the waiver, then fill it out and sign it again to resubmit.</div>
+        </div>
+      ) : null}
+
       {submitted && !isEmbedded ? (
         <div className="rounded-2xl border border-success/25 bg-success/10 p-4 text-sm text-success">
           {String(waiverStatus || '').trim().toLowerCase() === 'approved'
@@ -514,15 +842,15 @@ export function WaiverPage({
       ) : null}
 
       {viewWaiverOpen && submittedWaiver ? createPortal(
-        <div className="fixed inset-0 z-[9999] grid place-items-center bg-black/60 p-4">
-          <div className="max-h-[90vh] w-full max-w-5xl overflow-y-auto bg-white text-slate-950 dark:bg-slate-950 dark:text-white p-6 shadow-2xl">
+        <div className="waiver-print-overlay fixed inset-0 z-[9999] grid place-items-center bg-black/60 p-4">
+          <div className="waiver-print-sheet max-h-[90vh] w-full max-w-5xl overflow-y-auto bg-white text-slate-950 dark:bg-slate-950 dark:text-white p-6 shadow-2xl">
             <div className="flex flex-col gap-4 border-b border-slate-200/70 pb-4 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <div className="text-xs uppercase tracking-widest text-slate-500">Waiver document</div>
                 <h2 id="waiver-details-title" className="mt-1 text-2xl font-semibold">{submittedWaiver.fullName || 'Unnamed player'}</h2>
                 <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">This is your submitted waiver record.</p>
               </div>
-              <div className="flex items-center gap-2 self-start sm:self-auto">
+              <div className="waiver-print-controls flex items-center gap-2 self-start sm:self-auto">
                 <Button variant="secondary" onClick={printWaiver}>
                   <FiPrinter />
                   Print waiver
@@ -557,7 +885,7 @@ export function WaiverPage({
               </div>
             </div>
 
-            <div className="pt-6 text-sm leading-relaxed text-slate-700 dark:text-slate-300">
+            <div className="waiver-print-body pt-6 text-sm leading-relaxed text-slate-700 dark:text-slate-300">
               <p className="uppercase tracking-widest text-[11px] text-slate-500">Participant details</p>
               <p className="mt-3"><span className="font-semibold">Name:</span> {submittedWaiver.fullName || '-'}</p>
               <p className="mt-2"><span className="font-semibold">Age:</span> {submittedWaiver.age ?? '-'}</p>
@@ -568,6 +896,25 @@ export function WaiverPage({
                 <>
                   <p className="mt-3"><span className="font-semibold">Guardian name:</span> {submittedWaiver.guardianName || '-'}</p>
                   <p className="mt-2"><span className="font-semibold">Guardian consent:</span> {submittedWaiver.guardianConsent ? 'Yes' : 'No'}</p>
+                  <p className="mt-2"><span className="font-semibold">Guardian phone:</span> {submittedWaiver.guardianPhone || '-'}</p>
+                  <div className="mt-2 flex flex-wrap gap-4">
+                    {submittedWaiver.guardianIdImage ? (
+                      <div>
+                        <span className="font-semibold">Guardian ID:</span>
+                        <div className="mt-1 inline-block rounded-lg border border-slate-200 bg-white p-2">
+                          <img src={submittedWaiver.guardianIdImage} alt="Guardian ID" className="block h-24 object-contain" />
+                        </div>
+                      </div>
+                    ) : null}
+                    {submittedWaiver.guardianSignatureImage ? (
+                      <div>
+                        <span className="font-semibold">Guardian signature:</span>
+                        <div className="mt-1 inline-block rounded-lg border border-slate-200 bg-white p-2">
+                          <img src={submittedWaiver.guardianSignatureImage} alt="Guardian signature" className="block h-24 object-contain" />
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
                 </>
               ) : (
                 <p className="mt-3">Not required for participants 18 or older.</p>
@@ -580,12 +927,25 @@ export function WaiverPage({
                 <li>Signature captured: {submittedWaiver.hasSignature ? 'Yes' : 'No'}</li>
               </ul>
 
-              <p className="mt-6 uppercase tracking-widest text-[11px] text-slate-500">Waiver terms</p>
-              <div className="mt-3 space-y-3">
-                <p>I understand that airsoft activity involves risks including, but not limited to, injury and property damage.</p>
-                <p>I agree to follow marshals’ instructions, safety rules, and field procedures at all times.</p>
-                <p>I acknowledge that protective gear is mandatory and that non-compliance may result in removal from the field.</p>
-                {submittedWaiver.isMinor ? <p>As a parent/guardian, I provide consent for my minor to participate and agree to uphold compliance with safety requirements.</p> : null}
+              <p className="mt-6 uppercase tracking-widest text-[11px] text-slate-500">{WAIVER_TEXT.title}</p>
+              <div className="waiver-print-terms mt-3">
+                <WaiverTermsBody
+                  isMinor={Boolean(submittedWaiver.isMinor)}
+                  textClass="text-slate-700 dark:text-slate-300"
+                  headingClass="text-slate-500"
+                />
+              </div>
+
+              <div className="mt-6 border-t border-slate-200/70 pt-4">
+                <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500">Signature</p>
+                {submittedWaiver.signatureImage ? (
+                  <div className="mt-2 inline-block rounded-lg border border-slate-200 bg-white p-2">
+                    <img src={submittedWaiver.signatureImage} alt="Participant signature" className="h-20 object-contain" />
+                  </div>
+                ) : (
+                  <div className="mt-2 text-xs text-slate-500">No signature image submitted.</div>
+                )}
+                <p className="mt-2 text-sm font-semibold text-slate-900 dark:text-slate-100">{submittedWaiver.fullName || '-'}</p>
               </div>
             </div>
 
@@ -702,6 +1062,35 @@ export function WaiverPage({
                     </label>
                   </div>
                 </div>
+                <div className="mt-4 grid gap-4 md:grid-cols-2">
+                  <Input
+                    label="Guardian Phone Number"
+                    type="tel"
+                    inputMode="tel"
+                    placeholder="e.g., 0917 123 4567"
+                    value={guardianPhone}
+                    disabled={submitted || submitting}
+                    onChange={(e) => setGuardianPhone(e.target.value)}
+                    error={errors.guardianPhone}
+                  />
+                  <IdUpload
+                    label="Guardian ID"
+                    value={guardianIdImage}
+                    onChange={setGuardianIdImage}
+                    disabled={submitted || submitting}
+                    error={errors.guardianIdImage}
+                  />
+                </div>
+
+                <div className="mt-4">
+                  <SignaturePad
+                    title="Guardian Signature"
+                    value={guardianSignatureImage}
+                    onChange={setGuardianSignatureImage}
+                    disabled={submitted || submitting}
+                    error={errors.guardianSignature}
+                  />
+                </div>
               </motion.div>
             ) : null}
 
@@ -709,9 +1098,9 @@ export function WaiverPage({
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="text-sm font-bold flex items-center gap-2">
-                    <FiUser /> <span>Consent Acknowledgements</span>
+                    <FiUser /> <span>{WAIVER_TEXT.title}</span>
                   </div>
-                  <div className="mt-1 text-xs text-muted">Required confirmations before signature submission.</div>
+                  <div className="mt-1 text-xs text-muted">Read the full waiver below before confirming. Required before signature submission.</div>
                 </div>
                 <button
                   type="button"
@@ -724,65 +1113,59 @@ export function WaiverPage({
               </div>
 
               {termsOpen ? (
-                <div className="mt-4 grid gap-3">
-                  <div>
-                    <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">General Terms</div>
-                    <ul className="mt-2 list-disc space-y-2 pl-5 text-xs text-muted">
-                      {waiverText.general.map((t) => (
-                        <li key={t}>{t}</li>
-                      ))}
-                    </ul>
-                  </div>
+                <div
+                  ref={termsScrollRef}
+                  onScroll={handleTermsScroll}
+                  className="mt-4 max-h-80 overflow-y-auto rounded-2xl border border-white/10 bg-white/5 p-4 pr-3"
+                >
+                  <WaiverTermsBody
+                    isMinor={isMinor}
+                    textClass="text-muted"
+                    headingClass="text-muted"
+                  />
+                </div>
+              ) : null}
 
-                  {isMinor ? (
-                    <div>
-                      <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Guardian Consent</div>
-                      <ul className="mt-2 list-disc space-y-2 pl-5 text-xs text-muted">
-                        {waiverText.minor.map((t) => (
-                          <li key={t}>{t}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  ) : null}
-
-                  <div>
-                    <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Acknowledgement</div>
-                    <ul className="mt-2 list-disc space-y-2 pl-5 text-xs text-muted">
-                      {waiverText.acknowledgment.map((t) => (
-                        <li key={t}>{t}</li>
-                      ))}
-                    </ul>
-                  </div>
+              {!submitted ? (
+                <div className={['mt-3 flex items-center gap-2 text-xs font-semibold', hasReadTerms ? 'text-success' : 'text-muted'].join(' ')}>
+                  {hasReadTerms ? <FiCheck /> : <FiChevronRight />}
+                  <span>
+                    {hasReadTerms
+                      ? 'You have read the full waiver. The checkboxes are unlocked.'
+                      : termsOpen
+                        ? 'Scroll to the end of the waiver to unlock the checkboxes.'
+                        : 'Show the terms and scroll to the end to unlock the checkboxes.'}
+                  </span>
                 </div>
               ) : null}
 
               <div className="mt-4 grid gap-3 md:grid-cols-2">
-                <label className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                <label className={['rounded-2xl border border-white/10 bg-white/5 p-4', checkboxesLocked ? 'cursor-not-allowed opacity-60' : ''].join(' ')}>
                   <div className="flex items-start gap-3">
                     <input
                       type="checkbox"
                       checked={state.termsAccepted}
-                      disabled={submitted || submitting}
+                      disabled={checkboxesLocked}
                       onChange={(e) => setState((s) => ({ ...s, termsAccepted: e.target.checked }))}
                       className="mt-1 h-4 w-4"
                     />
                     <div>
-                      <div className="text-sm font-bold">Accept terms & safety rules</div>
+                      <div className="text-sm font-bold">Accept terms & release of liability</div>
                       {errors.termsAccepted ? (
                         <div className="mt-1 text-xs font-semibold text-danger">{errors.termsAccepted}</div>
                       ) : (
-                        <div className="mt-1 text-xs text-muted">Required.</div>
+                        <div className="mt-1 text-xs text-muted">I have read and agree to the waiver above. Required.</div>
                       )}
                     </div>
                   </div>
                 </label>
 
-                <label className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                <label className={['rounded-2xl border border-white/10 bg-white/5 p-4', checkboxesLocked ? 'cursor-not-allowed opacity-60' : ''].join(' ')}>
                   <div className="flex items-start gap-3">
                     <input
                       type="checkbox"
                       checked={state.consent}
-                      disabled={submitted || submitting}
+                      disabled={checkboxesLocked}
                       onChange={(e) => setState((s) => ({ ...s, consent: e.target.checked }))}
                       className="mt-1 h-4 w-4"
                     />
@@ -791,7 +1174,7 @@ export function WaiverPage({
                       {errors.consent ? (
                         <div className="mt-1 text-xs font-semibold text-danger">{errors.consent}</div>
                       ) : (
-                        <div className="mt-1 text-xs text-muted">Required.</div>
+                        <div className="mt-1 text-xs text-muted">I understand I have given up substantial rights and sign freely and voluntarily. Required.</div>
                       )}
                     </div>
                   </div>
@@ -801,53 +1184,13 @@ export function WaiverPage({
           </Card>
 
           <Card className="p-4 md:p-6">
-            <div className="flex items-center gap-2 text-sm font-bold">
-              <span className="grid h-10 w-10 place-items-center rounded-2xl bg-accent/10 ring-1 ring-accent/25">
-                <FiUser className="text-gold" />
-              </span>
-              <span>Digital Signature</span>
-            </div>
-
-            <p className="mt-1 text-xs text-muted">Draw inside the box. This is a prototype signature pad using canvas.</p>
-
-            <div className="mt-4">
-              <div className="rounded-2xl border border-white/10 bg-black/20 p-3">
-                <div className="overflow-hidden rounded-xl border border-white/10 bg-white/5">
-                  <canvas
-                    ref={canvasRef}
-                    className="h-48 w-full touch-none"
-                    onPointerDown={(e) => {
-                      setupCanvas()
-                      handlePointerDown(e)
-                    }}
-                    onPointerMove={handlePointerMove}
-                    onPointerUp={handlePointerUp}
-                    onPointerCancel={handlePointerUp}
-                    onPointerLeave={handlePointerUp}
-                  />
-                </div>
-
-                {errors.signature ? (
-                  <div className="mt-2 text-xs font-semibold text-danger flex items-center gap-2">
-                    <FiAlertTriangle /> <span>{errors.signature}</span>
-                  </div>
-                ) : (
-                  <div className="mt-2 text-xs text-muted flex items-center gap-2">
-                    {hasSignature ? <FiCheck className="text-success" /> : <FiChevronRight className="text-muted" />}
-                    <span>{hasSignature ? 'Signature captured.' : 'Waiting for signature input.'}</span>
-                  </div>
-                )}
-
-                <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                  <Button variant="ghost" onClick={clearSignature} disabled={submitting || submitted}>
-                    Clear
-                  </Button>
-                  <div className="text-[11px] text-muted">
-                    TIP: Use finger on mobile or mouse on desktop.
-                  </div>
-                </div>
-              </div>
-            </div>
+            <SignaturePad
+              title="Digital Signature"
+              value={signatureImage}
+              onChange={handlePlayerSignatureChange}
+              disabled={submitted || submitting}
+              error={errors.signature}
+            />
 
             <div className="mt-5 flex flex-col gap-2 sm:flex-row">
               <Button
@@ -855,7 +1198,13 @@ export function WaiverPage({
                 disabled={!canSubmit || submitted}
                 onClick={onSubmit}
               >
-                {submitting ? 'Submitting…' : submitted ? 'Submitted' : 'Submit Waiver'}
+                {submitting
+                  ? 'Submitting…'
+                  : submitted
+                    ? 'Submitted'
+                    : String(waiverStatus || '').trim().toLowerCase() === 'denied'
+                      ? 'Resubmit Waiver'
+                      : 'Submit Waiver'}
                 <FiChevronRight />
               </Button>
 
@@ -900,7 +1249,14 @@ export function WaiverPage({
                 { label: 'Terms accepted', ok: state.termsAccepted },
                 { label: 'Consent acknowledged', ok: state.consent },
                 { label: 'Signature captured', ok: hasSignature },
-                ...(isMinor ? [{ label: 'Guardian consent', ok: state.guardianConsent }] : []),
+                ...(isMinor
+                  ? [
+                      { label: 'Guardian consent', ok: state.guardianConsent },
+                      { label: 'Guardian phone', ok: !errors.guardianPhone },
+                      { label: 'Guardian ID photo', ok: !!guardianIdImage },
+                      { label: 'Guardian signature', ok: !!guardianSignatureImage },
+                    ]
+                  : []),
               ].map((item) => (
                 <div key={item.label} className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 p-3">
                   <div className="text-xs font-bold text-muted">{item.label}</div>
@@ -934,9 +1290,7 @@ export function WaiverPage({
             </div>
           </Card>
         </div>
-        </div>
       </div>
+    </div>
   )
 }
-
-

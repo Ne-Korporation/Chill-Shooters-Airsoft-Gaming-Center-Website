@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import toast from 'react-hot-toast'
-import { apiDelete, apiGet, apiPut } from '../../utils/apiClient'
+import { apiBase, apiDelete, apiGet, apiPut } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
 import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
 
@@ -17,6 +17,13 @@ type PaymentItem = {
   status: PaymentStatus
   date: string
   note: string
+}
+
+type GcashQrSettings = {
+  imageUrl: string
+  phoneNumber?: string
+  updatedAtISO?: string | null
+  updatedBy?: string | null
 }
 
 const statusBadge = (status: PaymentStatus) => {
@@ -47,6 +54,13 @@ export function AdminPaymentsPage() {
   const [active, setActive] = React.useState<PaymentStatus | 'all'>('all')
   const [payments, setPayments] = React.useState<PaymentItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [qrSettings, setQrSettings] = useState<GcashQrSettings>({ imageUrl: '' })
+  const [qrPreview, setQrPreview] = useState('')
+  const [phoneNumber, setPhoneNumber] = useState('')
+  const [qrSaving, setQrSaving] = useState(false)
+  const [qrLoading, setQrLoading] = useState(true)
+  const [qrFile, setQrFile] = useState<File | null>(null)
+  const [qrModalOpen, setQrModalOpen] = useState(false)
   const { addNotification } = useNotifications()
 
   const load = async () => {
@@ -77,6 +91,89 @@ export function AdminPaymentsPage() {
     load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const loadQr = async () => {
+      try {
+        setQrLoading(true)
+        const res = await apiGet<{ ok: boolean; data: GcashQrSettings }>('/api/payments/gcash-qr')
+        if (!cancelled) {
+          setQrSettings(res?.data || { imageUrl: '' })
+          setQrPreview(res?.data?.imageUrl || '')
+          setPhoneNumber(res?.data?.phoneNumber || '')
+        }
+      } catch (e: any) {
+        if (!cancelled) {
+          toast.error(String(e?.message || e))
+        }
+      } finally {
+        if (!cancelled) setQrLoading(false)
+      }
+    }
+
+    loadQr()
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const saveQrImage = async () => {
+    if (!qrFile) {
+      toast.error('Please choose a QR image.')
+      return
+    }
+    if (!phoneNumber.trim()) {
+      toast.error('GCash phone number is required.')
+      return
+    }
+    if (!qrFile.type.startsWith('image/')) {
+      toast.error('Please upload an image file for the GCash QR.')
+      return
+    }
+
+    setQrSaving(true)
+    try {
+      const formData = new FormData()
+      formData.append('file', qrFile)
+
+      const uploadRes = await fetch(`${apiBase}/api/upload-image`, {
+        method: 'POST',
+        body: formData,
+      })
+      const uploadJson = await uploadRes.json().catch(() => null)
+      if (!uploadRes.ok) {
+        throw new Error(uploadJson?.error || uploadJson?.message || 'QR upload failed')
+      }
+
+      const imageUrl = String(uploadJson?.url || '').trim()
+      if (!imageUrl) throw new Error('Upload returned no image URL')
+
+      const saved = await apiPut<{ ok: boolean; data: GcashQrSettings }>('/api/payments/gcash-qr', { imageUrl, phoneNumber: phoneNumber.trim() })
+      setQrSettings(saved?.data || { imageUrl })
+      setQrPreview(imageUrl)
+      setQrFile(null)
+      setQrModalOpen(false)
+      toast.success('GCash QR updated')
+    } catch (e: any) {
+      toast.error(String(e?.message || e))
+    } finally {
+      setQrSaving(false)
+    }
+  }
+
+  const openQrModal = () => {
+    setQrModalOpen(true)
+  }
+
+  const closeQrModal = () => {
+    if (qrSaving) return
+    setQrModalOpen(false)
+  }
+
+  const qrUploadReady = Boolean(qrFile && phoneNumber.trim())
 
 
 
@@ -144,6 +241,143 @@ export function AdminPaymentsPage() {
           <div className="mt-2 text-2xl font-bold text-success">2</div>
         </Card>
       </div>
+
+      <Card className="p-4">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div className="max-w-2xl">
+            <div className="text-xs uppercase tracking-widest text-muted">GCash QR</div>
+            <div className="mt-2 text-sm text-muted">
+              Upload the GCash QR that players should scan on the payment page. The latest image is stored centrally and shown to all players.
+            </div>
+            <div className="mt-3 text-xs text-muted">
+              {qrSettings.updatedAtISO ? `Last updated ${qrSettings.updatedAtISO}` : 'No QR uploaded yet.'}
+            </div>
+          </div>
+
+          <Button variant="primary" onClick={openQrModal}>
+            Upload GCash QR
+          </Button>
+        </div>
+
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          <div>
+            <div className="text-xs uppercase tracking-widest text-muted">GCash phone number</div>
+            <input
+              value={phoneNumber}
+              onChange={(e) => setPhoneNumber(e.target.value.replace(/\D/g, ''))}
+              placeholder="e.g. 09171234567"
+              className="mt-2 w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-white placeholder:text-white/40 focus:outline-none"
+              inputMode="numeric"
+              pattern="[0-9]*"
+            />
+          </div>
+          <div className="rounded-2xl border border-white/10 bg-black/20 p-4 text-sm text-muted">
+            GCash phone number is required to make sure both the number and QR image are uploaded.
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-4 lg:grid-cols-[240px_1fr]">
+          <div className="flex items-center justify-center rounded-2xl border border-white/10 bg-black/20 p-4">
+            {qrLoading ? (
+              <div className="text-sm text-muted">Loading QR…</div>
+            ) : qrPreview ? (
+              <img src={qrPreview} alt="GCash QR preview" className="max-h-56 w-full rounded-xl object-contain" />
+            ) : (
+              <div className="text-center text-sm text-muted">No QR image configured.</div>
+            )}
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-black/20 p-4 text-sm text-muted">
+            <div className="font-semibold text-white">How it works</div>
+            <div className="mt-2 space-y-2">
+              <div>1. Upload the GCash QR image here.</div>
+              <div>2. The payment page will fetch and display the latest QR automatically.</div>
+              <div>3. Players can scan it when submitting GCash proof.</div>
+            </div>
+          </div>
+        </div>
+      </Card>
+
+      {qrModalOpen && (
+        <div className="fixed inset-0 z-[99999] grid place-items-center bg-black/70 px-4 py-6 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="gcash-qr-upload-title">
+          <div className="w-full max-w-2xl rounded-[1.5rem] border border-white/10 bg-[#111214] p-4 shadow-2xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div id="gcash-qr-upload-title" className="text-lg font-bold text-white">Upload GCash QR</div>
+                <div className="mt-1 text-sm text-muted">Add the GCash phone number and QR image before saving.</div>
+              </div>
+              <button
+                type="button"
+                onClick={closeQrModal}
+                className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-muted transition hover:bg-white/8"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="mt-4 grid gap-4 md:grid-cols-2">
+              <div>
+                <div className="text-xs uppercase tracking-widest text-muted">GCash phone number</div>
+                <input
+                  value={phoneNumber}
+                  onChange={(e) => setPhoneNumber(e.target.value.replace(/\D/g, ''))}
+                  placeholder="e.g. 09171234567"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  className="mt-2 w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-white placeholder:text-white/40 focus:outline-none"
+                />
+                <div className="mt-2 text-xs text-warning">GCash phone number is required.</div>
+              </div>
+
+              <div>
+                <div className="text-xs uppercase tracking-widest text-muted">GCash QR</div>
+                <label className="mt-2 flex min-h-28 cursor-pointer items-center justify-center rounded-2xl border border-dashed border-white/15 bg-white/5 px-4 py-4 text-sm text-muted transition hover:bg-white/8">
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    disabled={qrSaving}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0] ?? null
+                      setQrFile(file)
+                      if (file) setQrPreview(URL.createObjectURL(file))
+                      e.currentTarget.value = ''
+                    }}
+                  />
+                  Upload GCash QR
+                </label>
+              </div>
+            </div>
+
+            <div className="mt-4 grid gap-4 lg:grid-cols-[240px_1fr]">
+              <div className="flex items-center justify-center rounded-2xl border border-white/10 bg-black/20 p-4">
+                {qrPreview ? (
+                  <img src={qrPreview} alt="GCash QR preview" className="max-h-56 w-full rounded-xl object-contain" />
+                ) : (
+                  <div className="text-center text-sm text-muted">QR preview will appear here after upload.</div>
+                )}
+              </div>
+
+              <div className="rounded-2xl border border-white/10 bg-black/20 p-4 text-sm text-muted">
+                <div className="font-semibold text-white">Upload warning</div>
+                <div className="mt-2">GCash phone number is required before saving the QR setup.</div>
+                <div className="mt-2">The save button will appear only after both the phone number and QR image are provided.</div>
+              </div>
+            </div>
+
+            {qrUploadReady ? (
+              <div className="mt-4 flex justify-end gap-2">
+                <Button variant="ghost" disabled={qrSaving} onClick={closeQrModal}>
+                  Cancel
+                </Button>
+                <Button variant="primary" disabled={qrSaving} onClick={() => void saveQrImage()}>
+                  {qrSaving ? 'Saving…' : 'Save GCash QR'}
+                </Button>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      )}
 
       <Card className="p-4">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">

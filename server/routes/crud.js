@@ -7,9 +7,15 @@ import { ALLOWED_COLLECTIONS } from './collections.js'
 const router = express.Router()
 
 function shortIdPrefixForCollection(collection) {
+  if (collection === 'dashboard_posts') return 'D'
+  if (collection === 'notifications') return 'N'
   if (collection === 'reservations') return 'R'
   if (collection === 'user_accounts') return 'P'
   return null
+}
+
+function isDashboardPostCollection(collection) {
+  return collection === 'dashboard_posts'
 }
 
 function formatShortId(prefix, value) {
@@ -207,10 +213,21 @@ router.post('/:collection', requireAuth, async (req, res) => {
     return res.status(400).json({ ok: false, error: 'collection not allowed', collectionReceived: collection, allowed: Array.from(ALLOWED_COLLECTIONS) })
   }
 
+  if (isDashboardPostCollection(collection) && req.user?.role !== 'admin') {
+    return res.status(403).json({ ok: false, error: 'Forbidden: insufficient role permissions' })
+  }
+
   const payload = req.body || {}
 
   try {
     const db = await getDb()
+
+    if (isDashboardPostCollection(collection)) {
+      const message = String(payload.message || '').trim()
+      if (!message) {
+        return res.status(400).json({ ok: false, error: 'message is required' })
+      }
+    }
 
     if (collection === 'waivers' && payload.userId) {
       const existingWaiver = await db.collection(collection).findOne({ userId: String(payload.userId) })
@@ -298,6 +315,7 @@ router.post('/:collection', requireAuth, async (req, res) => {
     }
 
     const prefix = shortIdPrefixForCollection(collection)
+    const nowISO = new Date().toISOString()
     const doc = { ...payload }
 
     if (collection === 'reservations') {
@@ -310,6 +328,17 @@ router.post('/:collection', requireAuth, async (req, res) => {
       if (!doc.fieldId && doc.fieldIds.length > 0) {
         doc.fieldId = doc.fieldIds[0]
       }
+    }
+
+    if (isDashboardPostCollection(collection)) {
+      doc.message = String(payload.message || '').trim()
+      doc.imageUrl = String(payload.imageUrl || '').trim() || undefined
+      doc.postedAtISO = nowISO
+      doc.createdAtISO = nowISO
+      doc.updatedAtISO = nowISO
+      doc.createdByUserId = req.user?.id || ''
+      doc.createdByEmail = req.user?.email || ''
+      doc.createdByRole = req.user?.role || ''
     }
 
     if (prefix && !doc.id) {
@@ -332,6 +361,10 @@ router.put('/:collection/:id', requireAuth, async (req, res) => {
     return res.status(400).json({ ok: false, error: 'collection not allowed' })
   }
 
+  if (isDashboardPostCollection(collection) && req.user?.role !== 'admin') {
+    return res.status(403).json({ ok: false, error: 'Forbidden: insufficient role permissions' })
+  }
+
   const payload = req.body
   if (!payload || typeof payload !== 'object') {
     return res.status(400).json({ ok: false, error: 'body must be an object' })
@@ -342,10 +375,27 @@ router.put('/:collection/:id', requireAuth, async (req, res) => {
     const existing = await findDocumentById(db, collection, id)
     if (!existing) return res.status(404).json({ ok: false, error: 'not found' })
 
+    if (isDashboardPostCollection(collection)) {
+      const nextMessage = String(payload.message ?? existing.message ?? '').trim()
+      if (!nextMessage) {
+        return res.status(400).json({ ok: false, error: 'message is required' })
+      }
+    }
+
     // Build the update operation
     const update = payload.$set || payload.$inc || payload.$push || payload.$addToSet || payload.$unset
       ? payload
       : { $set: payload }
+
+    if (isDashboardPostCollection(collection)) {
+      update.$set = { ...(update.$set || {}), updatedAtISO: new Date().toISOString() }
+      if (typeof update.$set.message === 'string') {
+        update.$set.message = update.$set.message.trim()
+      }
+      if (typeof update.$set.imageUrl === 'string') {
+        update.$set.imageUrl = update.$set.imageUrl.trim()
+      }
+    }
 
     // Prefer the public `id` field for updates to avoid ObjectId type mismatch
     const filter = existing.id
@@ -372,6 +422,10 @@ router.delete('/:collection/:id', requireAuth, async (req, res) => {
   const { collection, id } = req.params
   if (!ALLOWED_COLLECTIONS.has(collection)) {
     return res.status(400).json({ ok: false, error: 'collection not allowed' })
+  }
+
+  if (isDashboardPostCollection(collection) && req.user?.role !== 'admin') {
+    return res.status(403).json({ ok: false, error: 'Forbidden: insufficient role permissions' })
   }
 
   try {

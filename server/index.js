@@ -6,6 +6,7 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 // Routers are dynamically imported after loading environment variables
 import { getDb } from './db/mongo.js'
+import { requireAuth, requireRole } from './middleware/auth.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -22,7 +23,7 @@ const { default: paymentsWorkflowsRouter } = await import('./routes/paymentsWork
 
 const app = express()
 app.use(cors())
-app.use(express.json())
+app.use(express.json({ limit: '10mb' }))
 
 const PORT = Number(process.env.PORT) || 3001
 
@@ -46,10 +47,21 @@ if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
 }
 
 app.use('/api', uploadRouter)
+app.use('/api/uploads', uploadRouter)
 app.use('/api', reservationWorkflowsRouter)
 app.use('/api', paymentsWorkflowsRouter)
 app.use('/api/auth', authRouter)
 app.use('/api', crudRouter)
+
+app.delete('/api/notifications', requireAuth, requireRole('admin'), async (req, res) => {
+  try {
+    const db = await getDb()
+    const result = await db.collection('notifications').deleteMany({})
+    return res.json({ ok: true, deletedCount: result.deletedCount || 0 })
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: String(err) })
+  }
+})
 
 app.post('/api/contact', async (req, res) => {
   const { name, email, message } = req.body || {}
