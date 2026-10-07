@@ -3,6 +3,7 @@ import toast from 'react-hot-toast'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { apiGet, apiPost, apiPut, apiDelete } from '../../utils/apiClient'
+import { formatDiscountTargetLabel, resolvePackageDiscountConfig, type PackageDiscountMode, type PackageDiscountTarget } from '../../utils/packagePricing'
 
 type PackageStatus = 'active' | 'draft' | 'archived'
 
@@ -11,6 +12,8 @@ type RentalPackage = {
   _id?: any
   name: string
   discountPct: number
+  discountMode?: PackageDiscountMode
+  discountValue?: number
   equipmentCount: number
   status: PackageStatus
   description: string
@@ -63,6 +66,13 @@ const StatusPill = ({ status }: { status: PackageStatus }) => {
   return <span className={`inline-flex items-center rounded-full border px-3 py-1 text-[11px] font-semibold ${cls}`}>{status.toUpperCase()}</span>
 }
 
+const DISCOUNT_TARGET_OPTIONS: Array<{ value: PackageDiscountTarget; label: string }> = [
+  { value: 'package_total', label: 'Package total' },
+  { value: 'weapons', label: 'Weapons' },
+  { value: 'equipment', label: 'Equipment' },
+  { value: 'entrance', label: 'Entrance fee' },
+]
+
 export function AdminRentalPackagesPage() {
   const [status, setStatus] = React.useState<PackageStatus | 'all'>('all')
   const [packages, setPackages] = React.useState<RentalPackage[]>([])
@@ -77,7 +87,9 @@ export function AdminRentalPackagesPage() {
   const [selectedPackageId, setSelectedPackageId] = React.useState<string | null>(null)
   const [form, setForm] = React.useState({
     name: '',
-    discountPct: '0',
+    discountMode: 'percent' as PackageDiscountMode,
+    discountValue: '0',
+    discountTargets: ['package_total'] as PackageDiscountTarget[],
     description: '',
     basePrice: '0',
     minPlayers: '1',
@@ -85,7 +97,7 @@ export function AdminRentalPackagesPage() {
     equipmentIds: [] as string[],
   })
   const [isAdding, setIsAdding] = React.useState(false)
-  const [errors, setErrors] = React.useState<{ name?: string; discountPct?: string }>({})
+  const [errors, setErrors] = React.useState<{ name?: string; discountValue?: string }>({})
 
   // Fetch packages, weapons, and equipment
   const refresh = React.useCallback(async () => {
@@ -117,6 +129,9 @@ export function AdminRentalPackagesPage() {
           _id: d._id,
           name: d.name || 'Unnamed package',
           discountPct: typeof d.discountPct === 'number' ? d.discountPct : 0,
+          discountMode: d.discountMode === 'amount' ? 'amount' : d.discountMode === 'percent' ? 'percent' : undefined as PackageDiscountMode | undefined,
+          discountValue: typeof d.discountValue === 'number' ? d.discountValue : undefined,
+          discountTargets: Array.isArray(d.discountTargets) ? d.discountTargets : undefined,
           equipmentCount: (d.weaponIds?.length || 0) + (d.equipmentIds?.length || 0),
           status: (d.status || 'draft') as PackageStatus,
           description: d.description || '',
@@ -173,12 +188,19 @@ export function AdminRentalPackagesPage() {
   })
 
   const selectedPackage = selectedPackageId ? packages.find((pkg) => pkg.id === selectedPackageId) : undefined
+  const selectedDiscount = selectedPackage ? resolvePackageDiscountConfig(selectedPackage) : null
+  const selectedDiscountTargets = form.discountTargets
+  const showWeaponInventory = selectedDiscountTargets.includes('weapons') && !selectedDiscountTargets.includes('package_total')
+  const showEquipmentInventory = selectedDiscountTargets.includes('equipment') && !selectedDiscountTargets.includes('package_total')
 
   React.useEffect(() => {
     if (!isAdding && selectedPackage) {
+      const discount = resolvePackageDiscountConfig(selectedPackage)
       setForm({
         name: selectedPackage.name,
-        discountPct: String(selectedPackage.discountPct),
+        discountMode: discount.mode,
+        discountValue: String(discount.value),
+        discountTargets: discount.targets,
         description: selectedPackage.description,
         basePrice: String(selectedPackage.basePrice),
         minPlayers: String(selectedPackage.minPlayers),
@@ -201,8 +223,9 @@ export function AdminRentalPackagesPage() {
 
     const newErrors: typeof errors = {}
     if (!form.name || form.name.trim().length === 0) newErrors.name = 'Package name is required.'
-    const pct = Number(form.discountPct)
-    if (Number.isNaN(pct) || pct < 0 || pct > 100) newErrors.discountPct = 'Enter a valid discount (0-100).'
+    const discountValue = Number(form.discountValue)
+    if (Number.isNaN(discountValue) || discountValue < 0) newErrors.discountValue = 'Enter a valid discount value.'
+    if (form.discountTargets.length === 0) newErrors.discountValue = 'Pick at least one discount target.'
 
     if (Object.keys(newErrors).length > 0) {
       setErrors(newErrors)
@@ -214,7 +237,10 @@ export function AdminRentalPackagesPage() {
       const totalItems = form.weaponIds.length + form.equipmentIds.length
       const payload = {
         name: form.name.trim(),
-        discountPct: Math.round(pct) || 0,
+        discountPct: form.discountMode === 'percent' && form.discountTargets.includes('package_total') ? Math.round(discountValue) || 0 : 0,
+        discountMode: form.discountMode,
+        discountValue: form.discountMode === 'amount' ? Math.round(discountValue) || 0 : Math.round(discountValue * 100) / 100,
+        discountTargets: form.discountTargets,
         description: form.description.trim(),
         basePrice: Number(form.basePrice) || 0,
         minPlayers: Number(form.minPlayers) || 1,
@@ -239,7 +265,7 @@ export function AdminRentalPackagesPage() {
   const handleAddPackage = () => {
     setIsAdding(true)
     setSelectedPackageId(null)
-    setForm({ name: '', discountPct: '0', description: '', basePrice: '0', minPlayers: '1', weaponIds: [], equipmentIds: [] })
+    setForm({ name: '', discountMode: 'percent', discountValue: '0', discountTargets: ['package_total'], description: '', basePrice: '0', minPlayers: '1', weaponIds: [], equipmentIds: [] })
     setErrors({})
     setTimeout(() => {
       try {
@@ -253,8 +279,9 @@ export function AdminRentalPackagesPage() {
   const handleCreatePackage = async () => {
     const newErrors: typeof errors = {}
     if (!form.name || form.name.trim().length === 0) newErrors.name = 'Package name is required.'
-    const pct = Number(form.discountPct)
-    if (Number.isNaN(pct) || pct < 0 || pct > 100) newErrors.discountPct = 'Enter a valid discount (0-100).'
+    const discountValue = Number(form.discountValue)
+    if (Number.isNaN(discountValue) || discountValue < 0) newErrors.discountValue = 'Enter a valid discount value.'
+    if (form.discountTargets.length === 0) newErrors.discountValue = 'Pick at least one discount target.'
 
     if (Object.keys(newErrors).length > 0) {
       setErrors(newErrors)
@@ -277,7 +304,10 @@ export function AdminRentalPackagesPage() {
       const payload = {
         id: newId,
         name: form.name.trim(),
-        discountPct: Math.round(pct) || 0,
+        discountPct: form.discountMode === 'percent' && form.discountTargets.includes('package_total') ? Math.round(discountValue) || 0 : 0,
+        discountMode: form.discountMode,
+        discountValue: form.discountMode === 'amount' ? Math.round(discountValue) || 0 : Math.round(discountValue * 100) / 100,
+        discountTargets: form.discountTargets,
         description: form.description.trim(),
         basePrice: Number(form.basePrice) || 0,
         minPlayers: Number(form.minPlayers) || 1,
@@ -383,7 +413,7 @@ export function AdminRentalPackagesPage() {
     <div className="space-y-4">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="text-3xl font-bold">Rental Packages</h1>
+          <h1 className="text-3xl font-bold">Package Recommendation</h1>
           <p className="mt-1 text-sm text-muted">Review package offerings, manage pricing, and align included equipment with booking tiers.</p>
         </div>
 
@@ -426,7 +456,7 @@ export function AdminRentalPackagesPage() {
           <div className="grid grid-cols-12 bg-white/5 px-3 py-2 text-xs uppercase tracking-widest text-muted">
             <div className="col-span-2">ID</div>
             <div className="col-span-3">Package</div>
-            <div className="col-span-2 text-right">Discount</div>
+            <div className="col-span-2 text-right">Discount rule</div>
             <div className="col-span-2 text-right">Players</div>
             <div className="col-span-2 text-right">Includes</div>
             <div className="col-span-1 text-right">Status</div>
@@ -438,57 +468,66 @@ export function AdminRentalPackagesPage() {
             ) : filtered.length === 0 ? (
               <div className="p-6 text-sm text-muted">No packages found for selected filters.</div>
             ) : (
-              filtered.map((pkg) => (
-                <div
-                  key={pkg.id}
-                  onClick={() => {
-                    setIsAdding(false)
-                    setSelectedPackageId(pkg.id)
-                    setForm({
-                      name: pkg.name,
-                      discountPct: String(pkg.discountPct),
-                      description: pkg.description,
-                      basePrice: String(pkg.basePrice),
-                      minPlayers: String(pkg.minPlayers),
-                      weaponIds: [...pkg.weaponIds],
-                      equipmentIds: [...pkg.equipmentIds],
-                    })
-                  }}
-                  className={`grid grid-cols-12 items-center px-3 py-3 cursor-pointer ${pkg.id === selectedPackageId ? 'bg-white/3' : ''}`}
-                >
-                  <div className="col-span-2 text-sm font-semibold">{pkg.id}</div>
-                  <div className="col-span-3">
-                    <div className="text-sm font-semibold">{pkg.name}</div>
-                  </div>
-                  <div className="col-span-2 text-right text-sm text-muted">{pkg.discountPct}%</div>
-                  <div className="col-span-2 text-right text-sm text-muted">{pkg.minPlayers} min</div>
-                  <div className="col-span-2 text-right text-sm text-muted">{pkg.equipmentCount} items</div>
-                  <div className="col-span-1 text-right">
-                    <StatusPill status={pkg.status} />
-                    <div className="mt-2 flex justify-end gap-1">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          setIsAdding(false)
-                          setSelectedPackageId(pkg.id)
-                          setForm({
-                            name: pkg.name,
-                            discountPct: String(pkg.discountPct),
-                            description: pkg.description,
-                            basePrice: String(pkg.basePrice),
-                            minPlayers: String(pkg.minPlayers),
-                            weaponIds: [...pkg.weaponIds],
-                            equipmentIds: [...pkg.equipmentIds],
-                          })
-                        }}
-                        className="rounded-xl border border-white/5 bg-white/5 px-2 py-1 text-[10px] text-muted transition hover:bg-white/6"
-                      >
-                        Manage
-                      </button>
+              filtered.map((pkg) => {
+                const pkgDiscount = resolvePackageDiscountConfig(pkg)
+                const discountSummary = `${pkgDiscount.mode === 'percent' ? `${pkgDiscount.value}%` : `₱${Math.round(pkgDiscount.value).toLocaleString()}`} off ${formatDiscountTargetLabel(pkgDiscount.targets)}`
+
+                return (
+                  <div
+                    key={pkg.id}
+                    onClick={() => {
+                      setIsAdding(false)
+                      setSelectedPackageId(pkg.id)
+                      setForm({
+                        name: pkg.name,
+                        discountMode: pkgDiscount.mode,
+                        discountValue: String(pkgDiscount.value),
+                        discountTargets: pkgDiscount.targets,
+                        description: pkg.description,
+                        basePrice: String(pkg.basePrice),
+                        minPlayers: String(pkg.minPlayers),
+                        weaponIds: [...pkg.weaponIds],
+                        equipmentIds: [...pkg.equipmentIds],
+                      })
+                    }}
+                    className={`grid grid-cols-12 items-center px-3 py-3 cursor-pointer ${pkg.id === selectedPackageId ? 'bg-white/3' : ''}`}
+                  >
+                    <div className="col-span-2 text-sm font-semibold">{pkg.id}</div>
+                    <div className="col-span-3">
+                      <div className="text-sm font-semibold">{pkg.name}</div>
+                    </div>
+                    <div className="col-span-2 text-right text-xs text-muted">{discountSummary}</div>
+                    <div className="col-span-2 text-right text-sm text-muted">{pkg.minPlayers} min</div>
+                    <div className="col-span-2 text-right text-sm text-muted">{pkg.equipmentCount} items</div>
+                    <div className="col-span-1 text-right">
+                      <StatusPill status={pkg.status} />
+                      <div className="mt-2 flex justify-end gap-1">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setIsAdding(false)
+                            setSelectedPackageId(pkg.id)
+                            setForm({
+                              name: pkg.name,
+                              discountMode: pkgDiscount.mode,
+                              discountValue: String(pkgDiscount.value),
+                              discountTargets: pkgDiscount.targets,
+                              description: pkg.description,
+                              basePrice: String(pkg.basePrice),
+                              minPlayers: String(pkg.minPlayers),
+                              weaponIds: [...pkg.weaponIds],
+                              equipmentIds: [...pkg.equipmentIds],
+                            })
+                          }}
+                          className="rounded-xl border border-white/5 bg-white/5 px-2 py-1 text-[10px] text-muted transition hover:bg-white/6"
+                        >
+                          Manage
+                        </button>
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))
+                )
+              })
             )}
           </div>
         </div>
@@ -511,14 +550,80 @@ export function AdminRentalPackagesPage() {
                   {errors.name ? <div className="mt-2 text-xs text-danger">{errors.name}</div> : null}
                 </label>
                 <label className="block">
-                  <div className="mb-2 text-sm font-semibold text-text">Discount %</div>
-                  <input
-                    type="number"
-                    value={form.discountPct}
-                    onChange={(event) => setForm((prev) => ({ ...prev, discountPct: event.target.value }))}
-                    className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-text"
-                  />
-                  {errors.discountPct ? <div className="mt-2 text-xs text-danger">{errors.discountPct}</div> : null}
+                  <div className="mb-2 text-sm font-semibold text-text">Discount rule</div>
+                  <p className="mb-3 text-xs text-muted">
+                    Percent off reduces the selected target by a percentage. Fixed amount off subtracts a set peso value from the selected target.
+                  </p>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <label className="block">
+                      <div className="mb-2 text-[11px] uppercase tracking-widest text-muted">Mode</div>
+                      <select
+                        value={form.discountMode}
+                        onChange={(event) => setForm((prev) => ({ ...prev, discountMode: event.target.value as PackageDiscountMode }))}
+                        className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-text"
+                      >
+                        <option value="percent">Percent off</option>
+                        <option value="amount">Fixed amount off</option>
+                      </select>
+                    </label>
+                    <label className="block">
+                      <div className="mb-2 text-[11px] uppercase tracking-widest text-muted">Value</div>
+                      <input
+                        type="number"
+                        min="0"
+                        value={form.discountValue}
+                        onChange={(event) => setForm((prev) => ({ ...prev, discountValue: event.target.value }))}
+                        className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-text"
+                      />
+                    </label>
+                  </div>
+
+                  <div className="mt-3">
+                    <div className="mb-2 text-[11px] uppercase tracking-widest text-muted">Applies to</div>
+                    <div className="grid gap-2 md:grid-cols-2">
+                      {DISCOUNT_TARGET_OPTIONS.map((option) => {
+                        const checked = form.discountTargets.includes(option.value)
+                        const packageTotalSelected = form.discountTargets.includes('package_total')
+                        const disabled = option.value !== 'package_total' && packageTotalSelected
+                        return (
+                          <label key={option.value} className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-sm ${checked ? 'border-accent/40 bg-accent/10' : 'border-white/10 bg-white/5'} ${disabled ? 'cursor-not-allowed opacity-50' : ''}`}>
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              disabled={disabled}
+                              onChange={() => setForm((prev) => {
+                                const isCurrentlyChecked = prev.discountTargets.includes(option.value)
+                                if (option.value === 'package_total') {
+                                  return {
+                                    ...prev,
+                                    discountTargets: isCurrentlyChecked ? [] : ['package_total'],
+                                  }
+                                }
+
+                                if (prev.discountTargets.includes('package_total')) {
+                                  return prev
+                                }
+
+                                return {
+                                  ...prev,
+                                  discountTargets: isCurrentlyChecked
+                                    ? prev.discountTargets.filter((target) => target !== option.value)
+                                    : [...prev.discountTargets, option.value],
+                                }
+                              })}
+                              className="h-4 w-4 rounded border-white/20 bg-transparent accent-accent"
+                            />
+                            <span>{option.label}</span>
+                          </label>
+                        )
+                      })}
+                    </div>
+                    <div className="mt-2 text-[11px] text-muted">
+                      Package total applies to the full reservation total. When it is selected, the other targets stay visible but cannot be changed.
+                    </div>
+                  </div>
+
+                  {errors.discountValue ? <div className="mt-2 text-xs text-danger">{errors.discountValue}</div> : null}
                 </label>
                 <label className="block">
                   <div className="mb-2 text-sm font-semibold text-text">Min players</div>
@@ -541,87 +646,95 @@ export function AdminRentalPackagesPage() {
                 </label>
               </div>
 
-              {/* Weapons Multi-Select */}
-              <div className="mt-4">
-                <div className="mb-2 text-sm font-semibold text-text">Weapons ({form.weaponIds.length} selected)</div>
-                {inventoryLoading ? (
-                  <div className="text-xs text-muted">Loading weapons inventory...</div>
-                ) : weapons.length === 0 ? (
-                  <div className="text-xs text-muted">No weapons available. Add weapons first in the Weapons module.</div>
-                ) : (
-                  <div className="max-h-48 overflow-y-auto rounded-xl border border-white/10 bg-white/5 p-2 space-y-1">
-                    {weapons.map((weapon) => {
-                      const isSelected = form.weaponIds.includes(weapon.id)
-                      return (
-                        <label
-                          key={weapon.id}
-                          className={`flex items-center gap-3 rounded-xl px-3 py-2 cursor-pointer transition ${
-                            isSelected ? 'bg-accent/15 ring-1 ring-accent/30' : 'hover:bg-white/5'
-                          }`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={isSelected}
-                            onChange={() => toggleWeapon(weapon.id)}
-                            className="h-4 w-4 rounded border-white/20 bg-transparent accent-accent"
-                          />
-                          <div className="flex-1 flex items-center justify-between">
-                            <div>
-                              <div className="text-sm font-semibold text-text">{weapon.name}</div>
-                              <div className="text-[11px] text-muted">{weapon.category.toUpperCase()} • {weapon.status}</div>
+              {showWeaponInventory && (
+                <div className="mt-4">
+                  <div className="mb-2 text-sm font-semibold text-text">Weapons ({form.weaponIds.length} selected)</div>
+                  {inventoryLoading ? (
+                    <div className="text-xs text-muted">Loading weapons inventory...</div>
+                  ) : weapons.length === 0 ? (
+                    <div className="text-xs text-muted">No weapons available. Add weapons first in the Weapons module.</div>
+                  ) : (
+                    <div className="max-h-48 overflow-y-auto rounded-xl border border-white/10 bg-white/5 p-2 space-y-1">
+                      {weapons.map((weapon) => {
+                        const isSelected = form.weaponIds.includes(weapon.id)
+                        return (
+                          <label
+                            key={weapon.id}
+                            className={`flex items-center gap-3 rounded-xl px-3 py-2 cursor-pointer transition ${
+                              isSelected ? 'bg-accent/15 ring-1 ring-accent/30' : 'hover:bg-white/5'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => toggleWeapon(weapon.id)}
+                              className="h-4 w-4 rounded border-white/20 bg-transparent accent-accent"
+                            />
+                            <div className="flex-1 flex items-center justify-between">
+                              <div>
+                                <div className="text-sm font-semibold text-text">{weapon.name}</div>
+                                <div className="text-[11px] text-muted">{weapon.category.toUpperCase()} • {weapon.status}</div>
+                              </div>
+                              <div className="text-right">
+                                <div className="text-[11px] text-muted">{weapon.id}</div>
+                                <div className="text-[11px] font-semibold text-accent">₱{weapon.price}</div>
+                              </div>
                             </div>
-                            <div className="text-right">
-                              <div className="text-[11px] text-muted">{weapon.id}</div>
-                              <div className="text-[11px] font-semibold text-accent">₱{weapon.price}</div>
-                            </div>
-                          </div>
-                        </label>
-                      )
-                    })}
-                  </div>
-                )}
-              </div>
+                          </label>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
 
-              {/* Equipment Multi-Select */}
-              <div className="mt-4">
-                <div className="mb-2 text-sm font-semibold text-text">Equipment ({form.equipmentIds.length} selected)</div>
-                {inventoryLoading ? (
-                  <div className="text-xs text-muted">Loading equipment inventory...</div>
-                ) : equipment.length === 0 ? (
-                  <div className="text-xs text-muted">No equipment available. Add equipment first in the Equipment module.</div>
-                ) : (
-                  <div className="max-h-48 overflow-y-auto rounded-xl border border-white/10 bg-white/5 p-2 space-y-1">
-                    {equipment.map((eq) => {
-                      const isSelected = form.equipmentIds.includes(eq.id)
-                      return (
-                        <label
-                          key={eq.id}
-                          className={`flex items-center gap-3 rounded-xl px-3 py-2 cursor-pointer transition ${
-                            isSelected ? 'bg-accent/15 ring-1 ring-accent/30' : 'hover:bg-white/5'
-                          }`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={isSelected}
-                            onChange={() => toggleEquipment(eq.id)}
-                            className="h-4 w-4 rounded border-white/20 bg-transparent accent-accent"
-                          />
-                          <div className="flex-1 flex items-center justify-between">
-                            <div>
-                              <div className="text-sm font-semibold text-text">{eq.name}</div>
-                              <div className="text-[11px] text-muted">{eq.category.toUpperCase()} • Qty: {eq.qty}</div>
+              {showEquipmentInventory && (
+                <div className="mt-4">
+                  <div className="mb-2 text-sm font-semibold text-text">Equipment ({form.equipmentIds.length} selected)</div>
+                  {inventoryLoading ? (
+                    <div className="text-xs text-muted">Loading equipment inventory...</div>
+                  ) : equipment.length === 0 ? (
+                    <div className="text-xs text-muted">No equipment available. Add equipment first in the Equipment module.</div>
+                  ) : (
+                    <div className="max-h-48 overflow-y-auto rounded-xl border border-white/10 bg-white/5 p-2 space-y-1">
+                      {equipment.map((eq) => {
+                        const isSelected = form.equipmentIds.includes(eq.id)
+                        return (
+                          <label
+                            key={eq.id}
+                            className={`flex items-center gap-3 rounded-xl px-3 py-2 cursor-pointer transition ${
+                              isSelected ? 'bg-accent/15 ring-1 ring-accent/30' : 'hover:bg-white/5'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => toggleEquipment(eq.id)}
+                              className="h-4 w-4 rounded border-white/20 bg-transparent accent-accent"
+                            />
+                            <div className="flex-1 flex items-center justify-between">
+                              <div>
+                                <div className="text-sm font-semibold text-text">{eq.name}</div>
+                                <div className="text-[11px] text-muted">{eq.category.toUpperCase()} • Qty: {eq.qty}</div>
+                              </div>
+                              <div className="text-right">
+                                <div className="text-[11px] text-muted">{eq.id}</div>
+                                <div className="text-[11px] font-semibold text-accent">₱{eq.price}</div>
+                              </div>
                             </div>
-                            <div className="text-right">
-                              <div className="text-[11px] text-muted">{eq.id}</div>
-                              <div className="text-[11px] font-semibold text-accent">₱{eq.price}</div>
-                            </div>
-                          </div>
-                        </label>
-                      )
-                    })}
-                  </div>
-                )}
-              </div>
+                          </label>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {!showWeaponInventory && !showEquipmentInventory && (
+                <div className="mt-4 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-xs text-muted">
+                  No inventory list is shown for this discount target. Package total and entrance fee discounts apply without selecting specific weapons or equipment.
+                </div>
+              )}
 
               <div className="mt-4">
                 {isAdding ? (

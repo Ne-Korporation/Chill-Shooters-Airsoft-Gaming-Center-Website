@@ -1,8 +1,11 @@
 import express from 'express'
 import { getDb, toObjectId } from '../db/mongo.js'
 import Stripe from 'stripe'
+import { requireAuth, requireRole } from '../middleware/auth.js'
 
 const router = express.Router()
+const SETTINGS_COLLECTION = 'site_settings'
+const GCASH_QR_KEY = 'gcash_qr'
 
 const stripeSecretKey = process.env.STRIPE_SECRET_KEY
 let stripe = null
@@ -67,6 +70,67 @@ function parseStatus(body) {
   if (lower === 'confirmed') return 'confirmed'
   return s
 }
+
+async function readGcashQrSettings() {
+  const db = await getDb()
+  return db.collection(SETTINGS_COLLECTION).findOne({ key: GCASH_QR_KEY })
+}
+
+router.get('/payments/gcash-qr', async (_req, res) => {
+  try {
+    const settings = await readGcashQrSettings()
+    return res.json({
+      ok: true,
+      data: {
+        key: GCASH_QR_KEY,
+        imageUrl: settings?.imageUrl || '',
+        phoneNumber: settings?.phoneNumber || '',
+        updatedAtISO: settings?.updatedAtISO || null,
+        updatedBy: settings?.updatedBy || null,
+      },
+    })
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: String(err) })
+  }
+})
+
+router.put('/payments/gcash-qr', requireAuth, requireRole('admin'), async (req, res) => {
+  const imageUrl = String(req.body?.imageUrl || '').trim()
+  const phoneNumber = String(req.body?.phoneNumber || '').trim()
+  if (!imageUrl) return res.status(400).json({ ok: false, error: 'imageUrl is required' })
+  if (!phoneNumber) return res.status(400).json({ ok: false, error: 'phoneNumber is required' })
+
+  try {
+    const db = await getDb()
+    const updatedAtISO = new Date().toISOString()
+    await db.collection(SETTINGS_COLLECTION).updateOne(
+      { key: GCASH_QR_KEY },
+      {
+        $set: {
+          key: GCASH_QR_KEY,
+          imageUrl,
+          phoneNumber,
+          updatedAtISO,
+          updatedBy: req.user?.id || req.user?.email || 'admin',
+        },
+      },
+      { upsert: true },
+    )
+
+    return res.json({
+      ok: true,
+      data: {
+        key: GCASH_QR_KEY,
+        imageUrl,
+        phoneNumber,
+        updatedAtISO,
+        updatedBy: req.user?.id || req.user?.email || 'admin',
+      },
+    })
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: String(err) })
+  }
+})
 
 router.put('/payments/:id/verify', async (req, res) => {
   const { id } = req.params

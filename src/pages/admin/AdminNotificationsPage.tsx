@@ -1,7 +1,9 @@
 import React, { useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Button } from '../../components/ui/Button'
 import { useAuth } from '../../context/AuthContext'
 import { useNotifications } from '../../context/NotificationContext'
+import { resolveNotificationRoute } from '../../utils/notificationRoutes'
 import toast from 'react-hot-toast'
 
 type NotifChannel = 'system' | 'email'
@@ -10,8 +12,9 @@ type Audience = 'all' | 'users' | 'admins' | 'registrars' | 'marshals'
 
 export function AdminNotificationsPage() {
   const { user } = useAuth()
+  const navigate = useNavigate()
   const isAdmin = user?.role === 'admin'
-  const { addNotification, deleteNotification, getNotificationsForRole, getAllNotifications, markAllAsRead } = useNotifications()
+  const { addNotification, deleteNotification, getNotificationsForRole, getAllNotifications, markAsRead, markAllAsRead, clearAllNotifications, clearNotificationsByIds } = useNotifications()
   const [channel, setChannel] = useState<NotifChannel>('system')
   const [title, setTitle] = useState('Weekend package reminder')
   const [body, setBody] = useState('Please confirm the equipment checklist for the Saturday booking before 5:00 PM.')
@@ -102,6 +105,16 @@ export function AdminNotificationsPage() {
     toast.success('Notification deleted.')
   }
 
+  const handleNotificationClick = (item: ReturnType<typeof getAllNotifications>[number]) => {
+    const destination = resolveNotificationRoute(item, user?.role, user?.id)
+    markAsRead(item.id)
+    if (destination) {
+      navigate(destination)
+      return
+    }
+    toast.error('No destination is assigned to this notification yet.')
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
@@ -112,11 +125,45 @@ export function AdminNotificationsPage() {
 
         <div className="flex items-center gap-2 self-end">
           {!isAdmin ? (
-            <Button variant="ghost" onClick={() => user?.id ? markAllAsRead(user.id, user.role) : null}>Mark all as read</Button>
+            <>
+              <Button variant="ghost" onClick={() => user?.id ? markAllAsRead(user.id, user.role) : null}>Mark all as read</Button>
+              <Button
+                type="button"
+                variant="danger"
+                onClick={async () => {
+                  if (!window.confirm('Clear all notifications visible to you? This cannot be undone.')) return
+
+                  try {
+                    await clearNotificationsByIds(roleNotifications.map((notification) => notification.id))
+                    toast.success('Your notifications were cleared.')
+                  } catch (error: any) {
+                    toast.error(error?.message || 'Unable to clear your notifications')
+                  }
+                }}
+              >
+                Clear all
+              </Button>
+            </>
           ) : null}
 
           {isAdmin ? (
             <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                variant="danger"
+                onClick={async () => {
+                  if (window.confirm('Clear all notifications from the database? This cannot be undone.')) {
+                    try {
+                      await clearAllNotifications()
+                      toast.success('All notifications cleared.')
+                    } catch (error: any) {
+                      toast.error(error?.message || 'Unable to clear notifications')
+                    }
+                  }
+                }}
+              >
+                Clear all
+              </Button>
               {(['all', 'users', 'admins', 'registrars', 'marshals'] as Audience[]).map((item) => (
                 <button
                   key={item}
@@ -244,7 +291,19 @@ export function AdminNotificationsPage() {
 
             <div className="mt-4 space-y-2">
               {visibleNotifications.map((draft) => (
-                <div key={draft.id} className="rounded-xl border border-white/5 bg-white/5/60 px-3 py-2">
+                <div
+                  key={draft.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => handleNotificationClick(draft)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault()
+                      handleNotificationClick(draft)
+                    }
+                  }}
+                  className="cursor-pointer rounded-xl border border-white/5 bg-white/5/60 px-3 py-2 transition hover:bg-white/10"
+                >
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
                       <div className="truncate text-sm font-semibold">{draft.title}</div>
@@ -265,7 +324,10 @@ export function AdminNotificationsPage() {
                   <div className="mt-2 flex justify-end">
                     {isAdmin ? (
                       <button
-                        onClick={() => handleDeleteNotification(draft.id)}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          handleDeleteNotification(draft.id)
+                        }}
                         className="rounded-xl border border-danger/20 bg-danger/10 px-3 py-2 text-xs text-danger transition hover:bg-danger/20"
                       >
                         Delete

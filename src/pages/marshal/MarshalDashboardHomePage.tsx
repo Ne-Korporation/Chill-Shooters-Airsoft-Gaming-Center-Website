@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
+import { DashboardPostsPanel } from '../../components/dashboard/DashboardPostsPanel'
 import { Card } from '../../components/ui/Card'
 import { apiGet } from '../../utils/apiClient'
 import { FiClipboard, FiShield, FiTool, FiTruck, FiZap } from 'react-icons/fi'
@@ -185,6 +186,11 @@ export function MarshalDashboardHomePage() {
           </div>
         </Card>
       </div>
+
+      <DashboardPostsPanel
+        title="Dashboard posts"
+        subtitle="Official updates, reminders, and notices shared by admin across the whole team."
+      />
     </div>
   )
 }

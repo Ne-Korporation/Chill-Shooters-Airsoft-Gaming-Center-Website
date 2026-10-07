@@ -1,13 +1,16 @@
 import React, { useMemo, useState, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { motion } from 'framer-motion'
 import { useNavigate } from 'react-router-dom'
 import {
   FiCheck,
   FiChevronRight,
   FiInfo,
+  FiPackage,
   FiTag,
   FiUsers,
   FiDollarSign,
+  FiX,
 } from 'react-icons/fi'
 import toast from 'react-hot-toast'
 
@@ -15,6 +18,7 @@ import { Card } from '../../components/ui/Card'
 import { Input } from '../../components/ui/Input'
 import { Button } from '../../components/ui/Button'
 import { apiGet } from '../../utils/apiClient'
+import { calculatePackagePricing } from '../../utils/packagePricing'
 
 const ENTRANCE_FEE_PER_PLAYER = 150
 
@@ -22,6 +26,9 @@ type RentalPackage = {
   id: string
   name: string
   discountPct: number
+  discountMode?: 'percent' | 'amount'
+  discountValue?: number
+  discountTargets?: Array<'package_total' | 'weapons' | 'equipment' | 'entrance'>
   description: string
   basePrice: number
   minPlayers: number
@@ -74,35 +81,80 @@ function computeTotal({
   equipment: EquipmentItem[]
 }) {
   const sessionMultiplier = budgetModel === 'private' ? 1.25 : 1.0
-
-  // Per player: basePrice + weapons + equipment + entrance fee
-  const equipmentCost = calculateEquipmentTotal(pkg, weapons, equipment)
-  const perPlayerBeforeDiscount = pkg.basePrice + equipmentCost + ENTRANCE_FEE_PER_PLAYER
-
-  // Apply package discountPct
-  const discountedPerPlayer = perPlayerBeforeDiscount * (1 - pkg.discountPct / 100)
-
-  const total = Math.round(discountedPerPlayer * players * sessionMultiplier)
-  const perPlayer = Math.round(total / Math.max(1, players))
-  const originalTotal = Math.round(perPlayerBeforeDiscount * players * sessionMultiplier)
-  const savings = Math.max(0, originalTotal - total)
+  const pricing = calculatePackagePricing({
+    pkg,
+    players,
+    sessionMultiplier,
+    weapons,
+    equipment,
+    entranceFeePerPlayer: ENTRANCE_FEE_PER_PLAYER,
+  })
 
   return {
-    total,
-    perPlayer,
-    equipmentCost,
+    total: pricing.total,
+    perPlayer: pricing.perPlayer,
+    equipmentCost: pricing.weaponsTotal + pricing.equipmentTotal,
     entranceFee: ENTRANCE_FEE_PER_PLAYER,
-    discountPct: pkg.discountPct,
-    discountLabel: pkg.discountPct > 0 ? `${pkg.discountPct}%` : '—',
+    discountPct: pricing.isLegacyPct ? pkg.discountPct : (pricing.discountMode === 'percent' && pricing.discountTargets.includes('package_total') ? pricing.discountValue : 0),
+    discountLabel: pricing.discountLabel,
     sessionMultiplier,
-    savings,
-    originalTotal,
-    perPlayerBeforeDiscount,
+    savings: Math.max(0, pricing.preDiscountTotal - pricing.discountAmount),
+    originalTotal: pricing.preDiscountTotal,
+    perPlayerBeforeDiscount: Math.round((pricing.basePriceTotal + pricing.weaponsTotal + pricing.equipmentTotal + pricing.entranceFeeTotal) / Math.max(1, players)),
+    subtotal: pricing.preDiscountTotal,
+    discountAmount: pricing.discountAmount,
+    discountSummary: pricing.discountSummary,
   }
 }
 
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n))
+}
+
+type IncludedRow = {
+  item: { id: string; name: string; category: string; price: number }
+  qty: number
+}
+
+// Turns a list of ids into rows, merging duplicates into a quantity
+function buildRows<T extends { id: string; name: string; category: string; price: number }>(ids: string[], list: T[]): IncludedRow[] {
+  const map = new Map<string, IncludedRow>()
+  for (const id of ids || []) {
+    const found = list.find((entry) => entry.id === id)
+    if (!found) continue
+    const existing = map.get(id)
+    if (existing) existing.qty += 1
+    else map.set(id, { item: found, qty: 1 })
+  }
+  return Array.from(map.values())
+}
+
+function getIncludedItems(pkg: RentalPackage, weapons: WeaponItem[], equipment: EquipmentItem[]) {
+  const weaponRows = buildRows(pkg.weaponIds, weapons)
+  const equipmentRows = buildRows(pkg.equipmentIds, equipment)
+  return {
+    weaponRows,
+    equipmentRows,
+    count: weaponRows.reduce((n, r) => n + r.qty, 0) + equipmentRows.reduce((n, r) => n + r.qty, 0),
+  }
+}
+
+function IncludedRows({ rows }: { rows: IncludedRow[] }) {
+  return (
+    <div className="space-y-2">
+      {rows.map(({ item, qty }) => (
+        <div key={item.id} className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2">
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold">{qty > 1 ? `${qty} × ` : ''}{item.name}</div>
+            <div className="text-[11px] uppercase tracking-widest text-muted">{item.category}</div>
+          </div>
+          <div className="flex-none text-xs font-semibold text-muted">
+            {item.price > 0 ? `₱${(item.price * qty).toLocaleString()}` : 'Included'}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
 }
 
 export function PackageRecommendationPage() {
@@ -118,6 +170,22 @@ export function PackageRecommendationPage() {
   const [weapons, setWeapons] = useState<WeaponItem[]>([])
   const [equipment, setEquipment] = useState<EquipmentItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [detailsPackageId, setDetailsPackageId] = useState<string | null>(null)
+
+  // Esc closes the details window, and the page behind it stops scrolling
+  useEffect(() => {
+    if (!detailsPackageId) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setDetailsPackageId(null)
+    }
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      document.body.style.overflow = previousOverflow
+    }
+  }, [detailsPackageId])
 
   // Fetch real packages, weapons, and equipment from API
   useEffect(() => {
@@ -140,6 +208,9 @@ export function PackageRecommendationPage() {
             id: d.id ?? (d._id ? String(d._id) : undefined),
             name: d.name || 'Unnamed package',
             discountPct: typeof d.discountPct === 'number' ? d.discountPct : 0,
+            discountMode: d.discountMode === 'amount' ? 'amount' : d.discountMode === 'percent' ? 'percent' : undefined as 'percent' | 'amount' | undefined,
+            discountValue: typeof d.discountValue === 'number' ? d.discountValue : undefined,
+            discountTargets: Array.isArray(d.discountTargets) ? d.discountTargets : undefined,
             description: d.description || '',
             basePrice: typeof d.basePrice === 'number' ? d.basePrice : 0,
             minPlayers: typeof d.minPlayers === 'number' ? d.minPlayers : 1,
@@ -217,6 +288,10 @@ export function PackageRecommendationPage() {
 
   const selectedPackage = packages.find((pkg) => pkg.id === selectedPackageId) || best?.pkg
   const selectedItem = scored.find((item) => item.pkg.id === selectedPackageId) || best
+
+  const selectedIncluded = selectedPackage ? getIncludedItems(selectedPackage, weapons, equipment) : null
+  const detailsItem = detailsPackageId ? scored.find((item) => item.pkg.id === detailsPackageId) : undefined
+  const detailsIncluded = detailsItem ? getIncludedItems(detailsItem.pkg, weapons, equipment) : null
 
   const canSubmit = Boolean(
     selectedPackage &&
@@ -450,11 +525,11 @@ export function PackageRecommendationPage() {
                           </div>
                         </div>
 
-                        {item.pricing.discountPct > 0 && (
+                        {item.pricing.discountAmount > 0 && (
                           <div className="mt-2 space-y-1">
                             <div className="flex items-center justify-between text-[11px]">
                               <span className="text-muted">Discount</span>
-                              <span className="font-semibold text-success">{item.pricing.discountLabel}</span>
+                              <span className="font-semibold text-success">{item.pricing.discountSummary}</span>
                             </div>
                             <div className="flex items-center justify-between text-[11px]">
                               <span className="text-muted">You save</span>
@@ -475,6 +550,18 @@ export function PackageRecommendationPage() {
                           {item.pkg.description}
                         </div>
                       )}
+
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          setDetailsPackageId(item.pkg.id)
+                        }}
+                        onKeyDown={(event) => event.stopPropagation()}
+                        className="mt-3 inline-flex items-center gap-2 text-[11px] font-semibold text-accent hover:underline"
+                      >
+                        <FiPackage /> See included items
+                      </button>
                     </motion.div>
                   )
                 })}
@@ -516,7 +603,7 @@ export function PackageRecommendationPage() {
                     </div>
                   </div>
 
-                  {selectedItem?.pricing.discountPct > 0 ? (
+                  {selectedItem?.pricing.discountAmount > 0 ? (
                     <div className="mt-3 space-y-1 pt-3 border-t border-accent/20">
                       <div className="flex items-center justify-between gap-3">
                         <div className="text-xs text-muted">Original price</div>
@@ -524,7 +611,7 @@ export function PackageRecommendationPage() {
                       </div>
                       <div className="flex items-center justify-between gap-3">
                         <div className="text-xs text-muted">Discount</div>
-                        <div className="text-xs font-semibold text-success">{selectedItem.pricing.discountLabel}</div>
+                        <div className="text-xs font-semibold text-success">{selectedItem.pricing.discountSummary}</div>
                       </div>
                       <div className="flex items-center justify-between gap-3">
                         <div className="text-xs text-muted">Savings signal</div>
@@ -557,6 +644,41 @@ export function PackageRecommendationPage() {
                   </div>
                 </div>
 
+                {selectedIncluded ? (
+                  <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-2 text-sm font-bold">
+                        <FiPackage /> <span>What's included</span>
+                      </div>
+                      <div className="text-xs text-muted">{selectedIncluded.count} item{selectedIncluded.count === 1 ? '' : 's'}</div>
+                    </div>
+
+                    {selectedIncluded.count === 0 ? (
+                      <div className="mt-3 text-xs text-muted">No rental items are attached to this package.</div>
+                    ) : (
+                      <ul className="mt-3 space-y-1 text-xs text-muted">
+                        {[...selectedIncluded.weaponRows, ...selectedIncluded.equipmentRows].slice(0, 5).map(({ item, qty }) => (
+                          <li key={item.id} className="flex items-center gap-2">
+                            <FiCheck className="flex-none text-success" />
+                            <span className="truncate">{qty > 1 ? `${qty} × ` : ''}{item.name}</span>
+                          </li>
+                        ))}
+                        {selectedIncluded.weaponRows.length + selectedIncluded.equipmentRows.length > 5 ? (
+                          <li className="pl-6">+ {selectedIncluded.weaponRows.length + selectedIncluded.equipmentRows.length - 5} more</li>
+                        ) : null}
+                      </ul>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => setDetailsPackageId(selectedPackage.id)}
+                      className="mt-3 inline-flex items-center gap-2 text-xs font-semibold text-accent hover:underline"
+                    >
+                      See all included items <FiChevronRight />
+                    </button>
+                  </div>
+                ) : null}
+
                 <div className="mt-4">
                   <Button
                     variant="primary"
@@ -588,6 +710,101 @@ export function PackageRecommendationPage() {
           </Card>
         </div>
       </div>
+
+      {detailsItem && detailsIncluded
+        ? createPortal(
+            <div
+              className="fixed inset-0 z-[9999] grid place-items-center bg-black/70 p-4"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="package-details-title"
+              onClick={() => setDetailsPackageId(null)}
+            >
+              <div
+                className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-[1.75rem] border border-white/10 bg-background p-4 shadow-2xl md:p-6"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="text-xs uppercase tracking-widest text-muted">Package details</div>
+                    <h2 id="package-details-title" className="mt-1 text-2xl font-bold">{detailsItem.pkg.name}</h2>
+                    {detailsItem.pkg.description ? (
+                      <p className="mt-2 text-sm text-muted">{detailsItem.pkg.description}</p>
+                    ) : null}
+                    <div className="mt-2 text-xs text-muted">Min {detailsItem.pkg.minPlayers} players</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setDetailsPackageId(null)}
+                    aria-label="Close package details"
+                    className="rounded-lg p-2 text-muted transition hover:bg-white/10"
+                  >
+                    <FiX />
+                  </button>
+                </div>
+
+                <div className="mt-5 space-y-5">
+                  <div>
+                    <div className="mb-2 text-xs font-bold uppercase tracking-[0.18em] text-muted">
+                      Weapons ({detailsIncluded.weaponRows.reduce((n, r) => n + r.qty, 0)})
+                    </div>
+                    {detailsIncluded.weaponRows.length ? (
+                      <IncludedRows rows={detailsIncluded.weaponRows} />
+                    ) : (
+                      <div className="text-xs text-muted">No weapons in this package.</div>
+                    )}
+                  </div>
+
+                  <div>
+                    <div className="mb-2 text-xs font-bold uppercase tracking-[0.18em] text-muted">
+                      Equipment ({detailsIncluded.equipmentRows.reduce((n, r) => n + r.qty, 0)})
+                    </div>
+                    {detailsIncluded.equipmentRows.length ? (
+                      <IncludedRows rows={detailsIncluded.equipmentRows} />
+                    ) : (
+                      <div className="text-xs text-muted">No equipment in this package.</div>
+                    )}
+                  </div>
+
+                  <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                    <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Price per player</div>
+                    <div className="mt-3 space-y-2 text-sm">
+                      <div className="flex items-center justify-between"><span className="text-muted">Package base</span><span>₱{detailsItem.pkg.basePrice.toLocaleString()}</span></div>
+                      <div className="flex items-center justify-between"><span className="text-muted">Weapons &amp; equipment</span><span>₱{detailsItem.pricing.equipmentCost.toLocaleString()}</span></div>
+                      <div className="flex items-center justify-between"><span className="text-muted">Entrance fee</span><span>₱{detailsItem.pricing.entranceFee.toLocaleString()}</span></div>
+                      <div className="flex items-center justify-between border-t border-white/10 pt-2 font-semibold"><span>Subtotal</span><span>₱{detailsItem.pricing.perPlayerBeforeDiscount.toLocaleString()}</span></div>
+                      {detailsItem.pricing.discountAmount > 0 ? (
+                        <div className="flex items-center justify-between text-success"><span>Discount ({detailsItem.pricing.discountSummary})</span><span>− ₱{detailsItem.pricing.discountAmount.toLocaleString()}</span></div>
+                      ) : null}
+                      {detailsItem.pricing.sessionMultiplier !== 1 ? (
+                        <div className="flex items-center justify-between"><span className="text-muted">Private session</span><span>× {detailsItem.pricing.sessionMultiplier}</span></div>
+                      ) : null}
+                      <div className="flex items-center justify-between border-t border-white/10 pt-2 text-base font-black text-gold">
+                        <span>Total for {playerSafe} player{playerSafe === 1 ? '' : 's'}</span>
+                        <span>₱{detailsItem.pricing.total.toLocaleString()}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-5 flex flex-wrap items-center justify-end gap-3">
+                  <Button variant="ghost" onClick={() => setDetailsPackageId(null)}>Close</Button>
+                  <Button
+                    variant="primary"
+                    onClick={() => {
+                      setSelectedPackageId(detailsItem.pkg.id)
+                      setDetailsPackageId(null)
+                    }}
+                  >
+                    Choose this package
+                    <FiChevronRight />
+                  </Button>
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   )
 }

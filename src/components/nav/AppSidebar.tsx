@@ -61,7 +61,7 @@ const adminItems: Item[] = [
   { label: 'Equipment', to: '/app/admin/equipment', icon: FiTool, roles: ['admin'] },
   { label: 'Weapons', to: '/app/admin/weapons', icon: FiTruck, roles: ['admin'] },
   { label: 'Waivers', to: '/app/admin/waivers', icon: FiShield, roles: ['admin'] },
-  { label: 'Rental Packages', to: '/app/admin/rental-packages', icon: FiPackage, roles: ['admin'] },
+  { label: 'Package Recommendation', to: '/app/admin/rental-packages', icon: FiPackage, roles: ['admin'] },
   { label: 'Payments', to: '/app/admin/payments', icon: FiCreditCard, roles: ['admin'] },
   { label: 'Partnerships', to: '/app/admin/partnerships', icon: FiBriefcase, roles: ['admin'] },
   { label: 'Audit Logs', to: '/app/admin/audit-logs', icon: FiFileText, roles: ['admin'] },

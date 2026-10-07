@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { DashboardPostsPanel } from '../../components/dashboard/DashboardPostsPanel'
 import { Card } from '../../components/ui/Card'
 import { apiGet } from '../../utils/apiClient'
 
@@ -222,6 +223,7 @@ export function AdminDashboardPage() {
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="text-xs uppercase tracking-widest text-muted">Operational Snapshot</div>
+
                 <div className="mt-2 text-lg font-semibold">Live workflow status</div>
               </div>
               <div className="rounded-xl border border-white/5 bg-white/5 px-3 py-2">
@@ -306,6 +308,12 @@ export function AdminDashboardPage() {
           </div>
         </div>
       </div>
+
+      <DashboardPostsPanel
+        canManage
+        title="Dashboard posts"
+        subtitle="Publish updates, reminders, and image posts that appear across every dashboard page."
+      />
     </div>
   )
 }

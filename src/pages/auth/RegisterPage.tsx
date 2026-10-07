@@ -10,6 +10,8 @@ import { Input } from '../../components/ui/Input'
 import { Card } from '../../components/ui/Card'
 import { uid } from '../../utils/id'
 import { apiPost } from '../../utils/apiClient'
+import { useAuth } from '../../context/AuthContext'
+import { signInWithGoogle } from '../../utils/firebase'
 
 type FormValues = {
   name: string
@@ -20,6 +22,7 @@ type FormValues = {
 export function RegisterPage() {
   const navigate = useNavigate()
   const [showPassword, setShowPassword] = useState(false)
+  const { registerWithGoogle } = useAuth()
 
   const {
     register,
@@ -62,6 +65,29 @@ export function RegisterPage() {
       navigate(`/otp?email=${encodeURIComponent(payload.email)}&flow=register&t=${uid('otp')}`)
     } catch (err: any) {
       toast.error(err?.message || 'Registration failed')
+    }
+  }
+
+  const getRedirectRoute = (role?: string) => {
+    if (String(role || '').trim().toLowerCase() === 'admin') return '/app/admin'
+    if (String(role || '').trim().toLowerCase() === 'registrar') return '/app'
+    if (String(role || '').trim().toLowerCase() === 'marshal') return '/app'
+    return '/app'
+  }
+
+  async function handleGoogleRegister() {
+    try {
+      const profile = await signInWithGoogle()
+      if (!profile.email) {
+        throw new Error('Google did not return an email address.')
+      }
+
+      const user = await registerWithGoogle({ name: profile.name || 'Google User', email: profile.email })
+      toast.success('Account created with Google.')
+      navigate(getRedirectRoute(user.role))
+    } catch (err: any) {
+      console.error('Google registration error', err)
+      toast.error(err?.message || 'Google registration failed.')
     }
   }
 
@@ -183,6 +209,10 @@ export function RegisterPage() {
 
               <Button type="submit" disabled={isSubmitting} className="w-full">
                 {isSubmitting ? 'Creating...' : 'Create account'}
+              </Button>
+
+              <Button type="button" onClick={handleGoogleRegister} className="w-full">
+                Sign up with Google
               </Button>
 
               <div className="flex items-center justify-between pt-2 text-xs">

@@ -22,6 +22,7 @@ type AuthContextValue = {
   isAuthenticated: boolean
   login: (payload: { email: string; password: string }) => Promise<AuthUser>
   loginWithGoogle: (payload: { name: string; email: string }) => Promise<AuthUser>
+  registerWithGoogle: (payload: { name: string; email: string }) => Promise<AuthUser>
   register: (payload: { name: string; email: string; password: string }) => Promise<void>
   updateUser: (updates: Partial<AuthUser>) => void
   logout: () => void
@@ -78,6 +79,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const res = await apiPost<any>('/api/auth/social-login', { name, email })
         if (!res?.ok || !res?.user || !res?.token) {
           throw new Error('Social login failed')
+        }
+        const nextSession = { user: res.user, token: res.token }
+        setSession(nextSession)
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(nextSession))
+        return res.user
+      },
+      registerWithGoogle: async ({ name, email }) => {
+        const res = await apiPost<any>('/api/auth/social-register', { name, email })
+        if (!res?.ok || !res?.user || !res?.token) {
+          throw new Error(res?.error || 'Google registration failed')
         }
         const nextSession = { user: res.user, token: res.token }
         setSession(nextSession)

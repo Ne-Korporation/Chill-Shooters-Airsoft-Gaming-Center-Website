@@ -1,4 +1,5 @@
-import React, { createContext, useCallback, useContext, useMemo, useState } from 'react'
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import { apiDelete, apiGet, apiPost, apiPut } from '../utils/apiClient'
 
 export type NotificationType =
   | 'reservation_confirmed'
@@ -12,6 +13,7 @@ export type NotificationType =
   | 'equipment_rejected'
   | 'waiver_approved'
   | 'waiver_denied'
+  | 'waiver_deleted' 
   | 'waiver_submitted'
   | 'payment_submitted'
   | 'payment_verified'
@@ -69,6 +71,8 @@ type NotificationContextValue = {
   addNotification: (item: Omit<NotificationItem, 'id' | 'read' | 'createdAtISO'>) => void
   markAsRead: (id: string) => void
   markAllAsRead: (userId: string, role?: string) => void
+  clearAllNotifications: () => Promise<void>
+  clearNotificationsByIds: (ids: string[]) => Promise<void>
   unreadCount: (userId: string) => number
   getNotificationsForUser: (userId: string) => NotificationItem[]
   getNotificationsForRole: (role: string, userId?: string) => NotificationItem[]
@@ -77,20 +81,26 @@ type NotificationContextValue = {
 }
 
 const STORAGE_KEY = 'chillshooters_notifications'
+const NOTIFICATIONS_ENDPOINT = '/api/notifications?limit=500'
 
-function loadNotifications(): NotificationItem[] {
+function sortNotifications(items: NotificationItem[]) {
+  return [...items].sort((a, b) => new Date(b.createdAtISO).getTime() - new Date(a.createdAtISO).getTime())
+}
+
+function loadLegacyNotifications(): NotificationItem[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return []
-    return JSON.parse(raw) as NotificationItem[]
+    const parsed = JSON.parse(raw) as NotificationItem[]
+    return Array.isArray(parsed) ? parsed : []
   } catch {
     return []
   }
 }
 
-function saveNotifications(items: NotificationItem[]) {
+function clearLegacyNotifications() {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(items))
+    localStorage.removeItem(STORAGE_KEY)
   } catch {
     // ignore storage errors
   }
@@ -105,12 +115,49 @@ function generateId(): string {
 const NotificationContext = createContext<NotificationContextValue | null>(null)
 
 export function NotificationProvider({ children }: { children: React.ReactNode }) {
-  const [notifications, setNotifications] = useState<NotificationItem[]>(() => loadNotifications())
+  const [notifications, setNotifications] = useState<NotificationItem[]>([])
+  const [loaded, setLoaded] = useState(false)
 
-  const persist = useCallback((items: NotificationItem[]) => {
-    setNotifications(items)
-    saveNotifications(items)
+  const syncNotifications = useCallback((items: NotificationItem[]) => {
+    setNotifications(sortNotifications(items))
   }, [])
+
+  useEffect(() => {
+    let active = true
+
+    const load = async () => {
+      try {
+        const response = await apiGet<{ ok: boolean; data: NotificationItem[] }>(NOTIFICATIONS_ENDPOINT)
+        const remoteNotifications = Array.isArray(response?.data) ? sortNotifications(response.data) : []
+
+        if (remoteNotifications.length === 0) {
+          const legacyNotifications = sortNotifications(loadLegacyNotifications())
+          if (legacyNotifications.length > 0) {
+            await Promise.all(legacyNotifications.map((item) => apiPost('/api/notifications', item)))
+            clearLegacyNotifications()
+
+            const migrated = await apiGet<{ ok: boolean; data: NotificationItem[] }>(NOTIFICATIONS_ENDPOINT)
+            const migratedNotifications = Array.isArray(migrated?.data) ? sortNotifications(migrated.data) : []
+            if (active) syncNotifications(migratedNotifications)
+            return
+          }
+        }
+
+        if (active) syncNotifications(remoteNotifications)
+      } catch {
+        const legacyNotifications = sortNotifications(loadLegacyNotifications())
+        if (active) syncNotifications(legacyNotifications)
+      } finally {
+        if (active) setLoaded(true)
+      }
+    }
+
+    void load()
+
+    return () => {
+      active = false
+    }
+  }, [syncNotifications])
 
   const addNotification = useCallback(
     (item: Omit<NotificationItem, 'id' | 'read' | 'createdAtISO'>) => {
@@ -120,10 +167,9 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         read: false,
         createdAtISO: new Date().toISOString(),
       }
-      setNotifications((prev) => {
-        const updated = [newItem, ...prev]
-        saveNotifications(updated)
-        return updated
+      setNotifications((prev) => sortNotifications([newItem, ...prev]))
+      void apiPost('/api/notifications', newItem).catch((error) => {
+        console.warn('Failed to persist notification', error)
       })
     },
     [],
@@ -132,8 +178,10 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   const markAsRead = useCallback(
     (id: string) => {
       setNotifications((prev) => {
-        const updated = prev.map((n) => (n.id === id ? { ...n, read: true } : n))
-        saveNotifications(updated)
+        const updated = sortNotifications(prev.map((n) => (n.id === id ? { ...n, read: true } : n)))
+        void apiPut(`/api/notifications/${encodeURIComponent(id)}`, { read: true }).catch((error) => {
+          console.warn('Failed to update notification', error)
+        })
         return updated
       })
     },
@@ -146,14 +194,35 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         const updated = prev.map((n) => {
           const matchesDirectUser = n.userId === userId
           const matchesRole = role ? n.targetRole === 'all' || n.targetRole === role : false
-          return matchesDirectUser || matchesRole ? { ...n, read: true } : n
+          const shouldMark = matchesDirectUser || matchesRole
+          if (shouldMark) {
+            void apiPut(`/api/notifications/${encodeURIComponent(n.id)}`, { read: true }).catch((error) => {
+              console.warn('Failed to update notification', error)
+            })
+          }
+          return shouldMark ? { ...n, read: true } : n
         })
-        saveNotifications(updated)
-        return updated
+        return sortNotifications(updated)
       })
     },
     [],
   )
+
+  const clearAllNotifications = useCallback(async () => {
+    setNotifications([])
+    await apiDelete('/api/notifications')
+  }, [])
+
+  const clearNotificationsByIds = useCallback(async (ids: string[]) => {
+    const uniqueIds = Array.from(new Set(ids.map((id) => String(id)).filter(Boolean)))
+    if (uniqueIds.length === 0) return
+
+    setNotifications((prev) => prev.filter((notification) => !uniqueIds.includes(notification.id)))
+
+    await Promise.all(
+      uniqueIds.map((id) => apiDelete(`/api/notifications/${encodeURIComponent(id)}`)),
+    )
+  }, [])
 
   const unreadCount = useCallback(
     (userId: string) => {
@@ -195,8 +264,10 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   const deleteNotification = useCallback(
     (id: string) => {
       setNotifications((prev) => {
-        const updated = prev.filter((n) => n.id !== id)
-        saveNotifications(updated)
+        const updated = sortNotifications(prev.filter((n) => n.id !== id))
+        void apiDelete(`/api/notifications/${encodeURIComponent(id)}`).catch((error) => {
+          console.warn('Failed to delete notification', error)
+        })
         return updated
       })
     },
@@ -211,14 +282,20 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       addNotification,
       markAsRead,
       markAllAsRead,
+      clearAllNotifications,
+      clearNotificationsByIds,
       unreadCount,
       getNotificationsForUser,
       getNotificationsForRole,
       deleteNotification,
       getAllNotifications,
     }),
-    [notifications, addNotification, markAsRead, markAllAsRead, unreadCount, getNotificationsForUser, getNotificationsForRole, deleteNotification, getAllNotifications],
+    [notifications, addNotification, markAsRead, markAllAsRead, clearAllNotifications, clearNotificationsByIds, unreadCount, getNotificationsForUser, getNotificationsForRole, deleteNotification, getAllNotifications],
   )
+
+  if (!loaded) {
+    // Keep the provider mounted while we hydrate notifications from MongoDB.
+  }
 
   return <NotificationContext.Provider value={value}>{children}</NotificationContext.Provider>
 }

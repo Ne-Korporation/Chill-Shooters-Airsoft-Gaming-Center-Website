@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
+import { DashboardPostsPanel } from '../../components/dashboard/DashboardPostsPanel'
 import { Card } from '../../components/ui/Card'
 import { apiGet } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
@@ -300,6 +301,11 @@ export function DashboardHomePage() {
           </div>
         </Card>
       </div>
+
+      <DashboardPostsPanel
+        title="Dashboard posts"
+        subtitle="Admin updates, reminders, and photo posts that appear on every dashboard page."
+      />
     </div>
   )
 }

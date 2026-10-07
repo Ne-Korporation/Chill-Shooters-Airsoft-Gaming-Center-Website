@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
+import { DashboardPostsPanel } from '../../components/dashboard/DashboardPostsPanel'
 import { Card } from '../../components/ui/Card'
 import { FiCalendar, FiShield, FiPackage, FiCreditCard, FiCheckCircle, FiZap } from 'react-icons/fi'
 import { apiGet } from '../../utils/apiClient'
@@ -136,6 +137,11 @@ export function RegistrarDashboardHomePage() {
           </div>
         </Card>
       </div>
+
+      <DashboardPostsPanel
+        title="Dashboard posts"
+        subtitle="Stay aligned with admin updates, schedule reminders, and attached visuals."
+      />
     </div>
   )
 }

@@ -3,7 +3,7 @@ import { useForm } from 'react-hook-form'
 import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { motion } from 'framer-motion'
-import { FiEye, FiEyeOff } from 'react-icons/fi'
+import { FiCheck, FiEye, FiEyeOff } from 'react-icons/fi'
 
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
@@ -36,9 +36,29 @@ export function ResetPasswordPage() {
 
   const password = watch('password')
 
+  const passwordChecks = useMemo(() => ({
+    hasMinLength: password ? password.length >= 8 : false,
+    hasUppercase: password ? /[A-Z]/.test(password) : false,
+    hasLowercase: password ? /[a-z]/.test(password) : false,
+    hasSpecial: password ? /[!@#$%^&*(),.?":{}|<>_\-\[\]`~;'\/]/.test(password) : false,
+  }), [password])
+
+  const allRequirementsMet = useMemo(
+    () =>
+      passwordChecks.hasMinLength &&
+      passwordChecks.hasUppercase &&
+      passwordChecks.hasLowercase &&
+      passwordChecks.hasSpecial,
+    [passwordChecks],
+  )
+
   async function onSubmit(values: FormValues) {
     setBusy(true)
     try {
+      if (!allRequirementsMet) {
+        toast.error('Please meet all password requirements.')
+        return
+      }
       if (values.password !== values.confirmPassword) {
         toast.error('Passwords do not match.')
         return
@@ -83,19 +103,6 @@ export function ResetPasswordPage() {
               Updating password for <span className="text-text font-semibold">{email || 'account'}</span>.
             </p>
 
-            <Card className="p-4">
-              <div className="text-sm font-semibold">Password requirements</div>
-              <ul className="mt-2 space-y-2 text-xs text-muted">
-                <li className="flex items-start gap-2">
-                  <span className="mt-1 h-1.5 w-1.5 rounded-full bg-success" />
-                  Minimum 4 characters
-                </li>
-                <li className="flex items-start gap-2">
-                  <span className="mt-1 h-1.5 w-1.5 rounded-full bg-success" />
-                  Must match confirmation
-                </li>
-              </ul>
-            </Card>
           </div>
 
           <Card className="p-4 md:p-6">
@@ -114,7 +121,15 @@ export function ResetPasswordPage() {
                     type={showPassword ? 'text' : 'password'}
                     placeholder="Enter new password"
                     className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 pr-12 text-sm text-text placeholder-muted outline-none transition focus:border-accent/40 focus:ring-2 focus:ring-accent/25"
-                    {...register('password', { required: 'Password is required', minLength: 4 })}
+                    {...register('password', {
+                      required: 'Password is required',
+                      minLength: { value: 8, message: 'At least 8 characters' },
+                      validate: {
+                        hasUppercase: (v) => /[A-Z]/.test(v) || 'Need 1 uppercase',
+                        hasLowercase: (v) => /[a-z]/.test(v) || 'Need 1 lowercase',
+                        hasSpecial: (v) => /[!@#$%^&*(),.?":{}|<>_\-\[\]`~;'\/]/.test(v) || 'Need 1 special symbol',
+                      },
+                    })}
                   />
                   <button
                     type="button"
@@ -157,7 +172,27 @@ export function ResetPasswordPage() {
                   <p className="mt-1 text-xs text-danger">Passwords do not match.</p>
                 )}
               </div>
-
+<div className="mt-3 space-y-2">
+                {[
+                  { label: '8+ characters', met: passwordChecks.hasMinLength },
+                  { label: '1 uppercase letter', met: passwordChecks.hasUppercase },
+                  { label: '1 lowercase letter', met: passwordChecks.hasLowercase },
+                  { label: '1 special symbol', met: passwordChecks.hasSpecial },
+                ].map((req) => (
+                  <div key={req.label} className="flex items-center gap-2 text-xs">
+                    <span
+                      className={`grid h-5 w-5 place-items-center rounded-full border-2 transition ${
+                        req.met
+                          ? 'border-success bg-success/20 text-success'
+                          : 'border-white/20 text-muted'
+                      }`}
+                    >
+                      {req.met && <FiCheck size={12} />}
+                    </span>
+                    <span className={req.met ? 'text-success' : 'text-muted'}>{req.label}</span>
+                  </div>
+                ))}
+              </div>
               <Button type="submit" disabled={busy} className="w-full">
                 {busy ? 'Updating...' : 'Update Password'}
               </Button>

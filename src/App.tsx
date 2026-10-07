@@ -9,7 +9,7 @@ import { OtpVerificationPage } from './pages/auth/OtpVerificationPage'
 import { ResetPasswordPage } from './pages/auth/ResetPasswordPage'
 
 import { DashboardHomePage } from './pages/dashboard/DashboardHomePage'
-import { ReservationCalendarPage_FIXED as ReservationCalendarPage } from './pages/reservations/ReservationCalendarPage_FIXED'
+import { ReservationCalendarPage } from './pages/reservations/ReservationCalendarPage'
 
 import { PackageRecommendationPage } from './pages/packages/PackageRecommendationPage'
 import { WaiverPage } from './pages/waiver/WaiverPage'

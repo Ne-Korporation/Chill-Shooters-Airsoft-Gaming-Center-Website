@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { apiPost } from '../../utils/apiClient'
+import { apiGet, apiPost } from '../../utils/apiClient'
 import toast from 'react-hot-toast'
 import { useAuth } from '../../context/AuthContext'
 
@@ -13,6 +13,20 @@ import { Input } from '../../components/ui/Input'
 import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
 
 type PaymentMethod = 'gcash' | 'card'
+
+type PaymentMode = 'self' | 'split'
+
+type TeamMember = {
+  id: string
+  name: string
+  email: string
+}
+
+type GcashQrSettings = {
+  imageUrl: string
+  phoneNumber?: string
+  updatedAtISO?: string | null
+}
 
 type CardType = 'visa' | 'mastercard' | 'amex' | 'discover'
 
@@ -187,6 +201,14 @@ function PaymentPageContent() {
   const [submitting, setSubmitting] = useState(false)
   const [success, setSuccess] = useState(false)
   const [breakdown, setBreakdown] = useState({ field: 0, equipment: 0, entranceFee: 0, service: 0, total: 0, itemized: [] as Array<{ label: string; amount: number }> })
+  const [paymentMode, setPaymentMode] = useState<PaymentMode>('self')
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([])
+  const [teamSize, setTeamSize] = useState(1)
+  const [payerShareAmount, setPayerShareAmount] = useState(0)
+  const [amountDue, setAmountDue] = useState(0)
+  const [gcashQrUrl, setGcashQrUrl] = useState('')
+  const [gcashPhoneNumber, setGcashPhoneNumber] = useState('')
+  const [gcashQrLoading, setGcashQrLoading] = useState(true)
   const cardDigits = cardDetails.number.replace(/\D/g, '')
 
   const validateExpiry = (value: string) => {
@@ -226,6 +248,19 @@ function PaymentPageContent() {
       const entranceFee = Number(pendingReservation?.entranceFee || 0)
       const service = Number(pendingReservation?.serviceFee || pendingReservation?.servicePrice || 0)
       const total = Number(pendingReservation?.totalAmount || field + equipment + entranceFee + service || 0)
+      const nextPaymentMode: PaymentMode = String(pendingReservation?.paymentMode || 'self').toLowerCase() === 'split' ? 'split' : 'self'
+      const nextTeamMembers: TeamMember[] = Array.isArray(pendingReservation?.teamMembers)
+        ? pendingReservation.teamMembers.map((member: any) => ({
+            id: String(member?.id || ''),
+            name: String(member?.name || 'Unnamed player'),
+            email: String(member?.email || ''),
+          })).filter((member: TeamMember) => !!member.id)
+        : []
+      const nextTeamSize = Math.max(1, Number(pendingReservation?.teamSize || nextTeamMembers.length + 1 || 1))
+      const nextPayerShareAmount = Number(
+        pendingReservation?.payerShareAmount || (nextPaymentMode === 'split' ? total / nextTeamSize : total),
+      )
+      const nextAmountDue = nextPaymentMode === 'split' ? nextPayerShareAmount : total
       const itemized = Array.isArray(pendingReservation?.itemizedBreakdown)
         ? pendingReservation.itemizedBreakdown.map((item: any) => ({
             label: String(item?.label || 'Charge'),
@@ -238,8 +273,43 @@ function PaymentPageContent() {
             { label: 'Service fee', amount: service },
           ]
       setBreakdown({ field, equipment, entranceFee, service, total, itemized })
+      setPaymentMode(nextPaymentMode)
+      setTeamMembers(nextTeamMembers)
+      setTeamSize(nextTeamSize)
+      setPayerShareAmount(nextPayerShareAmount)
+      setAmountDue(nextAmountDue)
     } catch {
       setBreakdown({ field: 0, equipment: 0, entranceFee: 0, service: 0, total: 0, itemized: [] })
+      setPaymentMode('self')
+      setTeamMembers([])
+      setTeamSize(1)
+      setPayerShareAmount(0)
+      setAmountDue(0)
+    }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const loadQr = async () => {
+      try {
+        setGcashQrLoading(true)
+        const res = await apiGet<{ ok: boolean; data: GcashQrSettings }>('/api/payments/gcash-qr')
+        if (!cancelled) {
+          setGcashQrUrl(res?.data?.imageUrl || '')
+          setGcashPhoneNumber(res?.data?.phoneNumber || '')
+        }
+      } catch {
+        if (!cancelled) setGcashQrUrl('')
+      } finally {
+        if (!cancelled) setGcashQrLoading(false)
+      }
+    }
+
+    loadQr()
+
+    return () => {
+      cancelled = true
     }
   }, [])
 
@@ -257,6 +327,12 @@ function PaymentPageContent() {
 
   const onPickFile = (f: File | null) => {
     if (!f) return
+    if (!f.type.startsWith('image/')) {
+      setUpload({ fileName: '', fileSize: 0 })
+      if (proofInputRef.current) proofInputRef.current.value = ''
+      toast.error('Only image files are allowed for GCash proof.')
+      return
+    }
     setUpload({ fileName: f.name, fileSize: f.size })
   }
 
@@ -275,7 +351,11 @@ function PaymentPageContent() {
         throw new Error('Invalid pending reservation data.')
       }
 
-      const amount = Number(pendingReservation?.totalAmount || breakdown.total || 0)
+      const amount = Number(
+        paymentMode === 'split'
+          ? pendingReservation?.payerShareAmount || amountDue || payerShareAmount || breakdown.total || 0
+          : pendingReservation?.totalAmount || breakdown.total || 0,
+      )
       if (!amount || amount <= 0) throw new Error('Payment amount is missing')
 
       if (method === 'gcash') {
@@ -293,7 +373,7 @@ function PaymentPageContent() {
       let gcashImageUrl: string | undefined
       if (method === 'gcash') {
         const file = proofInputRef.current?.files?.[0]
-        if (!file) throw new Error('Proof image is required')
+        if (!file || !file.type.startsWith('image/')) throw new Error('Only image files are allowed for GCash proof.')
 
         const formData = new FormData()
         formData.append('file', file)
@@ -435,28 +515,50 @@ function PaymentPageContent() {
             )}
           </div>
 
+          {(teamMembers.length > 0 || paymentMode === 'split') && (
+            <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-xs uppercase tracking-widest text-muted">Team payment</div>
+                <div className="text-[11px] uppercase tracking-[0.18em] text-muted">
+                  {paymentMode === 'split' ? `Split among ${teamSize}` : 'One payer'}
+                </div>
+              </div>
+              {teamMembers.length > 0 ? (
+                <div className="mt-2 text-sm font-semibold text-white">
+                  {teamMembers.map((member) => member.name).join(', ')}
+                </div>
+              ) : null}
+              <div className="mt-2 flex items-center justify-between gap-3 text-xs text-muted">
+                <span>Your share</span>
+                <span className="font-bold text-gold">{formatPHP(amountDue || payerShareAmount || breakdown.total)}</span>
+              </div>
+            </div>
+          )}
+
           <div className="mt-5 space-y-5">
             <div className="space-y-4">
               {method === 'gcash' ? (
                 <>
                   <Input
                     label="Phone Number"
-                    value={phoneNumber}
+                    value={phoneNumber || gcashPhoneNumber}
                     onChange={(e) => setPhoneNumber(e.target.value.replace(/\D/g, ''))}
                     inputMode="numeric"
                     pattern="[0-9]*"
-                    placeholder="e.g., 0917 123 4567"
+                    placeholder={gcashPhoneNumber || 'e.g., 0917 123 4567'}
                   />
 
                   <div className="rounded-2xl border border-dashed border-accent/30 bg-accent/5 p-4">
-                    <div className="text-xs uppercase tracking-widest text-muted">GCash details</div>
-                    <div className="mt-3 rounded-2xl border border-white/10 bg-black/20 p-4 text-center">
-                      <div className="text-[11px] uppercase tracking-[0.2em] text-muted">GCash QR</div>
-                      <div className="mx-auto mt-3 flex h-24 w-24 items-center justify-center rounded-2xl border border-dashed border-accent/30 bg-white/5 text-[10px] text-muted">
-                        Scan to pay
+                    <div className="text-xs uppercase tracking-widest text-muted">GCash QR</div>
+                    <div className="mx-auto mt-3 flex min-h-32 items-center justify-center rounded-2xl border border-dashed border-accent/30 bg-white/5 p-3 text-[10px] text-muted">
+                        {gcashQrLoading ? (
+                          <span>Loading QR…</span>
+                        ) : gcashQrUrl ? (
+                          <img src={gcashQrUrl} alt="GCash QR" className="max-h-56 w-full rounded-xl object-contain" />
+                        ) : (
+                          <span>Admin has not uploaded a QR yet.</span>
+                        )}
                       </div>
-                      <div className="mt-3 text-[11px] text-muted">Scan QR or enter phone number above</div>
-                    </div>
                   </div>
 
                   <Input
@@ -517,7 +619,7 @@ function PaymentPageContent() {
                       ref={proofInputRef}
                       id="payment-proof-upload"
                       type="file"
-                      accept="image/*,.pdf"
+                      accept="image/*"
                       className="hidden"
                       onChange={(e) => onPickFile(e.target.files?.[0] ?? null)}
                     />
@@ -526,7 +628,7 @@ function PaymentPageContent() {
                       <Button type="button" variant="ghost" disabled={submitting} onClick={() => proofInputRef.current?.click()}>
                         Choose file
                       </Button>
-                      <div className="text-[11px] text-muted">Accepted: images or PDF</div>
+                      <div className="text-[11px] text-muted">Accepted: image files only</div>
                     </div>
                   </div>
                 </div>
@@ -575,8 +677,8 @@ function PaymentPageContent() {
                 ))}
                 <div className="mt-3 h-px bg-white/10" />
                 <div className="mt-3 flex items-center justify-between gap-3">
-                  <div className="text-xs text-muted">Total</div>
-                  <div className="text-sm font-black text-gold">{formatPHP(breakdown.total)}</div>
+                  <div className="text-xs text-muted">Amount due</div>
+                  <div className="text-sm font-black text-gold">{formatPHP(amountDue || payerShareAmount || breakdown.total)}</div>
                 </div>
               </div>
             </div>
@@ -652,8 +754,12 @@ function PaymentPageContent() {
             ))}
             <div className="h-px bg-white/10" />
             <div className="flex items-center justify-between">
-              <span className="text-muted">Total</span>
+              <span className="text-muted">Reservation total</span>
               <span className="font-bold text-accent">{formatPHP(breakdown.total)}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-muted">Amount due</span>
+              <span className="font-bold text-accent">{formatPHP(amountDue || payerShareAmount || breakdown.total)}</span>
             </div>
           </div>
 

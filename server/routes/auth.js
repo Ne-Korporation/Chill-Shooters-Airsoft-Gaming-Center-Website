@@ -19,6 +19,55 @@ function normalizeEmail(email) {
   return String(email || '').trim().toLowerCase()
 }
 
+export function validatePasswordRequirements(password) {
+  const value = typeof password === 'string' ? password : ''
+  const checks = {
+    hasMinLength: value.length >= 8,
+    hasUppercase: /[A-Z]/.test(value),
+    hasLowercase: /[a-z]/.test(value),
+    hasSpecial: /[!@#$%^&*(),.?":{}|<>_\-\[\]`~;'\/]/.test(value),
+  }
+
+  const errors = []
+  if (!checks.hasMinLength) errors.push('At least 8 characters')
+  if (!checks.hasUppercase) errors.push('At least 1 uppercase letter')
+  if (!checks.hasLowercase) errors.push('At least 1 lowercase letter')
+  if (!checks.hasSpecial) errors.push('At least 1 special symbol')
+
+  return {
+    checks,
+    errors,
+    valid: Object.values(checks).every(Boolean),
+  }
+}
+
+export function validateGoogleLoginEligibility(user) {
+  if (!user) {
+    return {
+      allowed: false,
+      error: 'This email is not registered. Please sign in with a registered account or contact support.',
+    }
+  }
+
+  const hasPassword = typeof user.password === 'string' && user.password.length > 0
+
+  if (user.authProvider === 'google' || user.password === null || user.password === undefined) {
+    return { allowed: true }
+  }
+
+  if (hasPassword) {
+    return {
+      allowed: false,
+      error: 'This email is registered with a password. Please use the email/password sign-in option.',
+    }
+  }
+
+  return {
+    allowed: false,
+    error: 'This email is not registered for Google sign-in. Please use a registered account or contact support.',
+  }
+}
+
 function generateOtp() {
   return String(Math.floor(100000 + Math.random() * 900000))
 }
@@ -321,8 +370,13 @@ router.post('/register', async (req, res) => {
     return res.status(400).json({ ok: false, error: 'email is required' })
   }
 
-  if (!password || typeof password !== 'string' || password.length < 4) {
-    return res.status(400).json({ ok: false, error: 'password must be at least 4 characters' })
+  if (!password || typeof password !== 'string') {
+    return res.status(400).json({ ok: false, error: 'password is required' })
+  }
+
+  const passwordValidation = validatePasswordRequirements(password)
+  if (!passwordValidation.valid) {
+    return res.status(400).json({ ok: false, error: passwordValidation.errors[0] })
   }
 
   const normalizedEmail = normalizeEmail(email)
@@ -413,8 +467,9 @@ router.post('/reset-password', async (req, res) => {
     return res.status(400).json({ ok: false, error: 'email is required' })
   }
 
-  if (!password || password.length < 4) {
-    return res.status(400).json({ ok: false, error: 'password must be at least 4 characters' })
+  const passwordValidation = validatePasswordRequirements(password)
+  if (!passwordValidation.valid) {
+    return res.status(400).json({ ok: false, error: passwordValidation.errors[0] })
   }
 
   try {
@@ -544,40 +599,24 @@ router.post('/social-login', async (req, res) => {
   const normalizedEmail = normalizeEmail(email)
 
   try {
-    const db = await getDb()
     const userAccounts = await getUserAccountsCollection()
-    let user = await userAccounts.findOne({ email: normalizedEmail })
+    const user = await userAccounts.findOne({ email: normalizedEmail })
 
-    if (user) {
-      const hasPassword = typeof user.password === 'string' && user.password.length > 0
-      const isGoogleLinked = user.authProvider === 'google' || user.password === null
-      if (!isGoogleLinked && hasPassword) {
-        return res.status(409).json({
-          ok: false,
-          error: 'This Google account is already linked to a Chill Shooters account. Please sign in with your email/password account or contact support.',
-        })
-      }
-    } else {
-      const nextId = await nextShortId(db, USER_ACCOUNTS_COLLECTION, 'P')
-      const newDoc = {
-        id: nextId,
-        name: (name && typeof name === 'string' ? name.trim() : normalizedEmail.split('@')[0]),
-        email: normalizedEmail,
-        password: null,
-        authProvider: 'google',
-        role: 'user',
-        experience: 0,
-        emailVerified: true,
-        identityVerificationStatus: 'not_submitted',
-        createdAtISO: new Date().toISOString(),
-      }
-      await userAccounts.insertOne(newDoc)
-      user = newDoc
+    if (!user) {
+      return res.status(403).json({
+        ok: false,
+        error: 'This email is not registered. Please sign in with a registered account or contact support.',
+      })
+    }
+
+    const eligibility = validateGoogleLoginEligibility(user)
+    if (!eligibility.allowed) {
+      return res.status(403).json({ ok: false, error: eligibility.error })
     }
 
     const authUser = {
       id: user.id ?? (user._id ? String(user._id) : undefined),
-      name: user.name ?? '',
+      name: user.name ?? (name && typeof name === 'string' ? name.trim() : ''),
       email: user.email,
       role: user.role ?? 'user',
     }
@@ -586,6 +625,82 @@ router.post('/social-login', async (req, res) => {
       ok: true,
       user: authUser,
       token: createAuthToken(authUser),
+    })
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: String(err) })
+  }
+})
+
+router.post('/social-register', async (req, res) => {
+  const body = req.body || {}
+  const { name, email } = body
+
+  if (!email || typeof email !== 'string' || !email.trim()) {
+    return res.status(400).json({ ok: false, error: 'email is required' })
+  }
+
+  const normalizedEmail = normalizeEmail(email)
+  const trimmedName = typeof name === 'string' ? name.trim() : ''
+
+  try {
+    const userAccounts = await getUserAccountsCollection()
+    const existing = await userAccounts.findOne({ email: normalizedEmail })
+
+    if (existing) {
+      if (existing.password !== null && existing.password !== undefined && existing.authProvider !== 'google') {
+        return res.status(409).json({ ok: false, error: 'This email is registered with a password. Please use the email/password sign-in option.' })
+      }
+
+      const eligibility = validateGoogleLoginEligibility(existing)
+      if (!eligibility.allowed) {
+        return res.status(409).json({ ok: false, error: eligibility.error })
+      }
+
+      const authUser = {
+        id: existing.id ?? (existing._id ? String(existing._id) : undefined),
+        name: existing.name ?? trimmedName,
+        email: existing.email,
+        role: existing.role ?? 'user',
+      }
+
+      return res.json({
+        ok: true,
+        user: authUser,
+        token: createAuthToken(authUser),
+        existing: true,
+      })
+    }
+
+    const db = await getDb()
+    const nextId = await nextShortId(db, 'user_accounts', 'P')
+
+    const newDoc = {
+      id: nextId,
+      name: trimmedName || normalizedEmail.split('@')[0],
+      email: normalizedEmail,
+      password: null,
+      authProvider: 'google',
+      role: 'user',
+      experience: 0,
+      emailVerified: true,
+      identityVerificationStatus: 'not_submitted',
+      createdAtISO: new Date().toISOString(),
+    }
+
+    const result = await userAccounts.insertOne(newDoc)
+    const authUser = {
+      id: newDoc.id,
+      name: newDoc.name,
+      email: newDoc.email,
+      role: newDoc.role,
+    }
+
+    return res.status(201).json({
+      ok: true,
+      insertedId: result.insertedId,
+      user: authUser,
+      token: createAuthToken(authUser),
+      created: true,
     })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
