@@ -1,5 +1,5 @@
 export type PackageDiscountTarget = 'package_total' | 'weapons' | 'equipment' | 'entrance'
-export type PackageDiscountMode = 'percent' | 'amount'
+export type PackageDiscountMode = 'percent' | 'amount' | 'settled'
 
 export type PackageDiscountConfig = {
   mode: PackageDiscountMode
@@ -15,6 +15,12 @@ export type PackageLike = {
   discountTargets?: PackageDiscountTarget[]
   weaponIds?: string[]
   equipmentIds?: string[]
+  // Number of players the package is priced for (0 / undefined = not fixed to a headcount)
+  players?: number
+  // Fixed total (before discount) for `players` players (0 / undefined = computed pricing)
+  settledAmount?: number
+  // Number of weapons the package gives (0 / undefined = count of weaponIds)
+  weaponCount?: number
 }
 
 export type PricedItem = {
@@ -74,9 +80,9 @@ export function resolvePackageDiscountConfig(pkg: PackageLike): PackageDiscountC
   const hasStructuredRule = typeof pkg.discountMode === 'string' && typeof pkg.discountValue === 'number'
   if (hasStructuredRule) {
     return {
-      mode: pkg.discountMode === 'amount' ? 'amount' : 'percent',
+      mode: pkg.discountMode === 'amount' ? 'amount' : pkg.discountMode === 'settled' ? 'settled' : 'percent',
       value: Math.max(0, Number(pkg.discountValue) || 0),
-      targets,
+      targets: pkg.discountMode === 'settled' ? ['package_total'] : targets,
     }
   }
 
@@ -87,9 +93,47 @@ export function resolvePackageDiscountConfig(pkg: PackageLike): PackageDiscountC
   }
 }
 
+/** Number of weapons a package offers: the typed weaponCount, else the count of picked weapons. */
+export function getPackageWeaponCount(pkg: PackageLike): number {
+  const typed = Math.round(Number(pkg.weaponCount ?? 0))
+  if (Number.isFinite(typed) && typed > 0) return typed
+  return (pkg.weaponIds || []).length
+}
+
+/** True when the package has a settled (fixed) amount that is set for a number of players. */
+export function hasSettledAmount(pkg: PackageLike): boolean {
+  return Number(pkg.settledAmount ?? 0) > 0
+}
+
+/**
+ * Whether the package's settled price is valid for this headcount.
+ * A package set for N players only applies to exactly N players.
+ */
+export function settledAmountApplies(pkg: PackageLike, players: number): boolean {
+  if (!hasSettledAmount(pkg)) return false
+  const fixedPlayers = Math.round(Number(pkg.players ?? 0))
+  return fixedPlayers > 0 ? fixedPlayers === players : true
+}
+
+function buildDiscountTexts(discountRule: PackageDiscountConfig) {
+  if (discountRule.mode === 'settled') {
+    return {
+      label: `Settled amount ₱${Math.round(discountRule.value).toLocaleString()}`,
+      summary: 'Settled amount',
+    }
+  }
+
+  const valueText = discountRule.mode === 'percent'
+    ? `${clampPct(discountRule.value)}%`
+    : `₱${Math.round(discountRule.value).toLocaleString()}`
+  const label = `${valueText} off ${formatDiscountTargetLabel(discountRule.targets)}`
+  return { label, summary: label }
+}
+
 export function calculatePackagePricing({
   pkg,
   players,
+  ownWeapons = 0,
   sessionMultiplier,
   weapons,
   equipment,
@@ -97,15 +141,63 @@ export function calculatePackagePricing({
 }: {
   pkg: PackageLike
   players: number
+  ownWeapons?: number
   sessionMultiplier: number
   weapons: PricedItem[]
   equipment: PricedItem[]
   entranceFeePerPlayer: number
 }) {
-  const weaponUnitTotal = (pkg.weaponIds || [])
+  const discountRule = resolvePackageDiscountConfig(pkg)
+
+  // ---------------------------------------------------------------------
+  // Settled amount: fixed price for the package's set number of players.
+  // Discount (percent or fixed amount) comes off the settled amount, and the
+  // session multiplier is not applied so the price stays fixed.
+  // ---------------------------------------------------------------------
+  if (settledAmountApplies(pkg, players)) {
+    const settled = discountRule.mode === 'settled'
+      ? Math.max(0, Math.round(discountRule.value))
+      : Math.max(0, Math.round(Number(pkg.settledAmount || 0)))
+    const isSettledPrice = discountRule.mode === 'settled'
+    const rawDiscount = discountRule.mode === 'amount'
+      ? Math.round(discountRule.value)
+      : Math.round(settled * clampPct(discountRule.value) / 100)
+    const settledDiscount = isSettledPrice ? 0 : Math.min(Math.max(0, rawDiscount), settled)
+    const settledTotal = Math.max(0, settled - settledDiscount)
+    const texts = buildDiscountTexts({ ...discountRule, targets: ['package_total'] })
+
+    return {
+      basePriceTotal: settled,
+      weaponsTotal: 0,
+      equipmentTotal: 0,
+      entranceFeeTotal: 0,
+      preDiscountTotal: settled,
+      discountAmount: settledDiscount,
+      total: settledTotal,
+      perPlayer: Math.round(settledTotal / Math.max(1, players)),
+      discountMode: discountRule.mode,
+      discountValue: discountRule.value,
+      discountTargets: ['package_total'] as PackageDiscountTarget[],
+      discountLabel: texts.label,
+      discountSummary: texts.summary,
+      isLegacyPct: false,
+      isSettled: true,
+      settledAmount: settled,
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Computed pricing (per-player base + gear + entrance)
+  // ---------------------------------------------------------------------
+  const selectedWeaponPrices = (pkg.weaponIds || [])
     .map((weaponId) => weapons.find((weapon) => weapon.id === weaponId))
     .filter(Boolean)
-    .reduce((sum, weapon) => sum + Number(weapon?.price || 0), 0)
+    .map((weapon) => Number(weapon?.price || 0))
+
+  const packageWeaponCount = getPackageWeaponCount(pkg)
+  const weaponUnitTotal = selectedWeaponPrices.reduce((sum, price) => sum + price, 0)
+  const averageWeaponPrice = selectedWeaponPrices.length > 0 ? weaponUnitTotal / selectedWeaponPrices.length : 0
+  const rentedWeaponCount = Math.max(0, packageWeaponCount * players - Math.max(0, Math.round(ownWeapons)))
 
   const equipmentUnitTotal = (pkg.equipmentIds || [])
     .map((equipmentId) => equipment.find((item) => item.id === equipmentId))
@@ -113,12 +205,11 @@ export function calculatePackagePricing({
     .reduce((sum, item) => sum + Number(item?.price || 0), 0)
 
   const basePriceTotal = Number(pkg.basePrice || 0) * players * sessionMultiplier
-  const weaponsTotal = weaponUnitTotal * players * sessionMultiplier
+  const weaponsTotal = averageWeaponPrice * rentedWeaponCount * sessionMultiplier
   const equipmentTotal = equipmentUnitTotal * players * sessionMultiplier
   const entranceFeeTotal = entranceFeePerPlayer * players * sessionMultiplier
   const preDiscountTotal = Math.round(basePriceTotal + weaponsTotal + equipmentTotal + entranceFeeTotal)
 
-  const discountRule = resolvePackageDiscountConfig(pkg)
   const componentTotals: Record<PackageDiscountTarget, number> = {
     package_total: preDiscountTotal,
     weapons: Math.round(weaponsTotal),
@@ -134,6 +225,7 @@ export function calculatePackagePricing({
   const total = Math.max(0, preDiscountTotal - discountAmount)
   const perPlayer = Math.round(total / Math.max(1, players))
   const isLegacyPct = Number(pkg.discountPct ?? 0) > 0 && !pkg.discountMode && !pkg.discountValue && (!pkg.discountTargets || pkg.discountTargets.length === 0)
+  const texts = buildDiscountTexts(discountRule)
 
   return {
     basePriceTotal: Math.round(basePriceTotal),
@@ -147,10 +239,10 @@ export function calculatePackagePricing({
     discountMode: discountRule.mode,
     discountValue: discountRule.value,
     discountTargets: discountRule.targets,
-    discountLabel: discountRule.mode === 'percent'
-      ? `${clampPct(discountRule.value)}% off ${formatDiscountTargetLabel(discountRule.targets)}`
-      : `₱${Math.round(discountRule.value).toLocaleString()} off ${formatDiscountTargetLabel(discountRule.targets)}`,
-    discountSummary: `${discountRule.mode === 'percent' ? `${clampPct(discountRule.value)}%` : `₱${Math.round(discountRule.value).toLocaleString()}`} off ${formatDiscountTargetLabel(discountRule.targets)}`,
+    discountLabel: texts.label,
+    discountSummary: texts.summary,
     isLegacyPct,
+    isSettled: false,
+    settledAmount: 0,
   }
 }
