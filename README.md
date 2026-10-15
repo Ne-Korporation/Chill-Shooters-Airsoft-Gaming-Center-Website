@@ -240,6 +240,25 @@ public/
 
 ---
 
+# Deployment
+
+The repository includes deployment configuration for a Vite frontend on Vercel and
+an Express API on Render:
+
+- Import the repository into Render. The `render.yaml` Blueprint installs
+  dependencies, starts the API, and checks `/api/health`. Set the prompted
+  `MONGODB_URI`; `AUTH_SECRET` is generated automatically. Add optional email,
+  Cloudinary, Stripe, or Azure credentials in the Render service environment if
+  those features are needed.
+- Import the repository into Vercel with the project root as the root directory,
+  `npm run build` as the build command, and `dist` as the output directory.
+  Configure `VITE_API_URL` to the Render service's base URL, without a trailing
+  slash or `/api`, then redeploy. `vercel.json` supplies the SPA route fallback.
+- Use `.env.example` as the local environment-variable template. Do not commit
+  populated `.env` files or deploy credentials in frontend variables.
+
+---
+
 # API Overview
 
 ## Authentication
