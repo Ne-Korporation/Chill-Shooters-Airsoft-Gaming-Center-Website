@@ -14,6 +14,7 @@ type RentalPackage = {
   discountPct: number
   discountMode?: PackageDiscountMode
   discountValue?: number
+  discountTargets?: PackageDiscountTarget[]
   equipmentCount: number
   status: PackageStatus
   description: string
@@ -21,6 +22,12 @@ type RentalPackage = {
   equipmentIds: string[]
   basePrice: number
   minPlayers: number
+  // Number of players this package is priced for (0 = not fixed)
+  players: number
+  // Fixed total (before discount) for `players` players (0 = computed pricing)
+  settledAmount: number
+  // Number of weapons the package gives
+  weaponCount: number
 }
 
 type WeaponItem = {
@@ -44,6 +51,14 @@ type EquipmentItem = {
   price: number
   note: string
   description?: string
+}
+
+type FormErrors = {
+  name?: string
+  discountValue?: string
+  players?: string
+  settledAmount?: string
+  weaponCount?: string
 }
 
 const statusTone: Record<PackageStatus, 'accent' | 'success' | 'danger' | 'muted'> = {
@@ -73,6 +88,62 @@ const DISCOUNT_TARGET_OPTIONS: Array<{ value: PackageDiscountTarget; label: stri
   { value: 'entrance', label: 'Entrance fee' },
 ]
 
+// Preview a legacy settled package that still stores a percent or fixed discount.
+function settledAfterDiscount(settled: number, mode: PackageDiscountMode, value: number) {
+  const raw = mode === 'percent' ? (settled * value) / 100 : value
+  const discount = Math.round(Math.max(0, Math.min(settled, raw)))
+  return { discount, total: Math.max(0, settled - discount) }
+}
+
+type FormState = {
+  name: string
+  discountMode: PackageDiscountMode
+  discountValue: string
+  discountTargets: PackageDiscountTarget[]
+  description: string
+  basePrice: string
+  minPlayers: string
+  players: string
+  settledAmount: string
+  weaponCount: string
+  weaponIds: string[]
+  equipmentIds: string[]
+}
+
+const EMPTY_FORM: FormState = {
+  name: '',
+  discountMode: 'percent',
+  discountValue: '0',
+  discountTargets: ['package_total'],
+  description: '',
+  basePrice: '0',
+  minPlayers: '1',
+  players: '0',
+  settledAmount: '0',
+  weaponCount: '0',
+  weaponIds: [],
+  equipmentIds: [],
+}
+
+function formFromPackage(pkg: RentalPackage): FormState {
+  const discount = resolvePackageDiscountConfig(pkg)
+  const isSettled = pkg.settledAmount > 0
+  return {
+    name: pkg.name,
+    discountMode: isSettled ? 'settled' : discount.mode,
+    discountValue: isSettled ? String(pkg.settledAmount) : String(discount.value),
+    discountTargets: isSettled ? ['package_total'] : discount.targets,
+    description: pkg.description,
+    basePrice: String(pkg.basePrice),
+    minPlayers: String(pkg.minPlayers),
+    players: String(pkg.players),
+    settledAmount: String(pkg.settledAmount),
+    weaponCount: String(pkg.weaponCount),
+    weaponIds: [...pkg.weaponIds],
+    equipmentIds: [...pkg.equipmentIds],
+  }
+}
+
 export function AdminRentalPackagesPage() {
   const [status, setStatus] = React.useState<PackageStatus | 'all'>('all')
   const [packages, setPackages] = React.useState<RentalPackage[]>([])
@@ -85,19 +156,9 @@ export function AdminRentalPackagesPage() {
   const [inventoryLoading, setInventoryLoading] = React.useState(true)
 
   const [selectedPackageId, setSelectedPackageId] = React.useState<string | null>(null)
-  const [form, setForm] = React.useState({
-    name: '',
-    discountMode: 'percent' as PackageDiscountMode,
-    discountValue: '0',
-    discountTargets: ['package_total'] as PackageDiscountTarget[],
-    description: '',
-    basePrice: '0',
-    minPlayers: '1',
-    weaponIds: [] as string[],
-    equipmentIds: [] as string[],
-  })
+  const [form, setForm] = React.useState<FormState>(EMPTY_FORM)
   const [isAdding, setIsAdding] = React.useState(false)
-  const [errors, setErrors] = React.useState<{ name?: string; discountValue?: string }>({})
+  const [errors, setErrors] = React.useState<FormErrors>({})
 
   // Fetch packages, weapons, and equipment
   const refresh = React.useCallback(async () => {
@@ -112,7 +173,7 @@ export function AdminRentalPackagesPage() {
 
       // Normalize packages
       const pkgDocs = Array.isArray(pkgRes?.data) ? pkgRes.data : []
-      const normalized = pkgDocs.map((d: any) => {
+      const normalized: RentalPackage[] = pkgDocs.map((d: any) => {
         const customId = d.id || null
         const objectId = d._id ? String(d._id) : undefined
         let displayId = customId
@@ -124,21 +185,25 @@ export function AdminRentalPackagesPage() {
         } else {
           displayId = objectId || undefined
         }
+        const weaponIds = Array.isArray(d.weaponIds) ? d.weaponIds : []
         return {
           id: displayId,
           _id: d._id,
           name: d.name || 'Unnamed package',
           discountPct: typeof d.discountPct === 'number' ? d.discountPct : 0,
-          discountMode: d.discountMode === 'amount' ? 'amount' : d.discountMode === 'percent' ? 'percent' : undefined as PackageDiscountMode | undefined,
+          discountMode: d.discountMode === 'amount' ? 'amount' : d.discountMode === 'settled' ? 'settled' : d.discountMode === 'percent' ? 'percent' : undefined,
           discountValue: typeof d.discountValue === 'number' ? d.discountValue : undefined,
           discountTargets: Array.isArray(d.discountTargets) ? d.discountTargets : undefined,
           equipmentCount: (d.weaponIds?.length || 0) + (d.equipmentIds?.length || 0),
           status: (d.status || 'draft') as PackageStatus,
           description: d.description || '',
-          weaponIds: Array.isArray(d.weaponIds) ? d.weaponIds : [],
+          weaponIds,
           equipmentIds: Array.isArray(d.equipmentIds) ? d.equipmentIds : [],
           basePrice: typeof d.basePrice === 'number' ? d.basePrice : 0,
           minPlayers: typeof d.minPlayers === 'number' ? d.minPlayers : 1,
+          players: typeof d.players === 'number' ? d.players : 0,
+          settledAmount: typeof d.settledAmount === 'number' ? d.settledAmount : 0,
+          weaponCount: typeof d.weaponCount === 'number' && d.weaponCount > 0 ? d.weaponCount : weaponIds.length,
         }
       })
       setPackages(normalized)
@@ -188,25 +253,10 @@ export function AdminRentalPackagesPage() {
   })
 
   const selectedPackage = selectedPackageId ? packages.find((pkg) => pkg.id === selectedPackageId) : undefined
-  const selectedDiscount = selectedPackage ? resolvePackageDiscountConfig(selectedPackage) : null
-  const selectedDiscountTargets = form.discountTargets
-  const showWeaponInventory = selectedDiscountTargets.includes('weapons') && !selectedDiscountTargets.includes('package_total')
-  const showEquipmentInventory = selectedDiscountTargets.includes('equipment') && !selectedDiscountTargets.includes('package_total')
 
   React.useEffect(() => {
     if (!isAdding && selectedPackage) {
-      const discount = resolvePackageDiscountConfig(selectedPackage)
-      setForm({
-        name: selectedPackage.name,
-        discountMode: discount.mode,
-        discountValue: String(discount.value),
-        discountTargets: discount.targets,
-        description: selectedPackage.description,
-        basePrice: String(selectedPackage.basePrice),
-        minPlayers: String(selectedPackage.minPlayers),
-        weaponIds: [...selectedPackage.weaponIds],
-        equipmentIds: [...selectedPackage.equipmentIds],
-      })
+      setForm(formFromPackage(selectedPackage))
       setErrors({})
     }
   }, [selectedPackageId, isAdding])
@@ -218,15 +268,68 @@ export function AdminRentalPackagesPage() {
     return pkg._id ? String(pkg._id) : encodeURIComponent(pkg.id)
   }
 
+  const validateForm = (): FormErrors => {
+    const newErrors: FormErrors = {}
+    if (!form.name || form.name.trim().length === 0) newErrors.name = 'Package name is required.'
+
+    const discountValue = Number(form.discountValue)
+    if (Number.isNaN(discountValue) || discountValue < 0) newErrors.discountValue = 'Enter a valid discount value.'
+    else if (form.discountMode === 'percent' && discountValue > 100) newErrors.discountValue = 'Percent discount cannot exceed 100.'
+    if (form.discountTargets.length === 0) newErrors.discountValue = 'Pick at least one discount target.'
+
+    const players = Number(form.players)
+    if (!Number.isInteger(players) || players < 0) newErrors.players = 'Enter a whole number (0 = not fixed).'
+
+    const settled = Number(form.settledAmount)
+    if (Number.isNaN(settled) || settled < 0) newErrors.settledAmount = 'Enter a valid amount.'
+    else if (settled > 0 && (!Number.isInteger(players) || players < 1)) {
+      newErrors.players = 'Set the number of players this settled amount is for.'
+    }
+    if (form.discountMode === 'settled' && (!Number.isInteger(discountValue) || discountValue <= 0)) {
+      newErrors.discountValue = 'Enter the entire package price.'
+    }
+    if (!newErrors.settledAmount && form.discountMode !== 'settled' && settled > 0 && form.discountMode === 'amount' && discountValue > settled) {
+      newErrors.discountValue = 'Fixed discount cannot be more than the settled amount.'
+    }
+
+    const weaponCount = Number(form.weaponCount)
+    if (!Number.isInteger(weaponCount) || weaponCount < 0) newErrors.weaponCount = 'Enter a whole number.'
+
+    return newErrors
+  }
+
+  // Shared payload for create + save
+  const buildPayload = () => {
+    const discountValue = Number(form.discountValue)
+    const totalItems = form.weaponIds.length + form.equipmentIds.length
+    const typedWeaponCount = Math.round(Number(form.weaponCount)) || 0
+    return {
+      name: form.name.trim(),
+      discountPct: form.discountMode === 'percent' && form.discountTargets.includes('package_total') ? Math.round(discountValue) || 0 : 0,
+      discountMode: form.discountMode,
+      discountValue: form.discountMode === 'settled'
+        ? Math.round(discountValue) || 0
+        : form.discountMode === 'amount'
+          ? Math.round(discountValue) || 0
+          : Math.round(discountValue * 100) / 100,
+      discountTargets: form.discountMode === 'settled' ? ['package_total'] : form.discountTargets,
+      description: form.description.trim(),
+      basePrice: Number(form.basePrice) || 0,
+      minPlayers: Number(form.minPlayers) || 1,
+      players: Math.round(Number(form.players)) || 0,
+      settledAmount: form.discountMode === 'settled' ? Math.round(discountValue) || 0 : 0,
+      // If left at 0, fall back to the number of weapons picked from inventory
+      weaponCount: typedWeaponCount > 0 ? typedWeaponCount : form.weaponIds.length,
+      weaponIds: form.weaponIds,
+      equipmentIds: form.equipmentIds,
+      equipmentCount: totalItems,
+    }
+  }
+
   const handleSave = async () => {
     if (!selectedPackage) return
 
-    const newErrors: typeof errors = {}
-    if (!form.name || form.name.trim().length === 0) newErrors.name = 'Package name is required.'
-    const discountValue = Number(form.discountValue)
-    if (Number.isNaN(discountValue) || discountValue < 0) newErrors.discountValue = 'Enter a valid discount value.'
-    if (form.discountTargets.length === 0) newErrors.discountValue = 'Pick at least one discount target.'
-
+    const newErrors = validateForm()
     if (Object.keys(newErrors).length > 0) {
       setErrors(newErrors)
       return
@@ -234,21 +337,7 @@ export function AdminRentalPackagesPage() {
 
     setSaving(true)
     try {
-      const totalItems = form.weaponIds.length + form.equipmentIds.length
-      const payload = {
-        name: form.name.trim(),
-        discountPct: form.discountMode === 'percent' && form.discountTargets.includes('package_total') ? Math.round(discountValue) || 0 : 0,
-        discountMode: form.discountMode,
-        discountValue: form.discountMode === 'amount' ? Math.round(discountValue) || 0 : Math.round(discountValue * 100) / 100,
-        discountTargets: form.discountTargets,
-        description: form.description.trim(),
-        basePrice: Number(form.basePrice) || 0,
-        minPlayers: Number(form.minPlayers) || 1,
-        weaponIds: form.weaponIds,
-        equipmentIds: form.equipmentIds,
-        equipmentCount: totalItems,
-        updatedAtISO: new Date().toISOString(),
-      }
+      const payload = { ...buildPayload(), updatedAtISO: new Date().toISOString() }
 
       await apiPut<any>(`/api/packages/${getApiId(selectedPackage)}`, payload)
 
@@ -265,7 +354,7 @@ export function AdminRentalPackagesPage() {
   const handleAddPackage = () => {
     setIsAdding(true)
     setSelectedPackageId(null)
-    setForm({ name: '', discountMode: 'percent', discountValue: '0', discountTargets: ['package_total'], description: '', basePrice: '0', minPlayers: '1', weaponIds: [], equipmentIds: [] })
+    setForm({ ...EMPTY_FORM, discountTargets: ['package_total'], weaponIds: [], equipmentIds: [] })
     setErrors({})
     setTimeout(() => {
       try {
@@ -277,12 +366,7 @@ export function AdminRentalPackagesPage() {
   }
 
   const handleCreatePackage = async () => {
-    const newErrors: typeof errors = {}
-    if (!form.name || form.name.trim().length === 0) newErrors.name = 'Package name is required.'
-    const discountValue = Number(form.discountValue)
-    if (Number.isNaN(discountValue) || discountValue < 0) newErrors.discountValue = 'Enter a valid discount value.'
-    if (form.discountTargets.length === 0) newErrors.discountValue = 'Pick at least one discount target.'
-
+    const newErrors = validateForm()
     if (Object.keys(newErrors).length > 0) {
       setErrors(newErrors)
       return
@@ -300,20 +384,9 @@ export function AdminRentalPackagesPage() {
       }
       const newId = `PKG-${String(maxSeq + 1).padStart(4, '0')}`
 
-      const totalItems = form.weaponIds.length + form.equipmentIds.length
       const payload = {
         id: newId,
-        name: form.name.trim(),
-        discountPct: form.discountMode === 'percent' && form.discountTargets.includes('package_total') ? Math.round(discountValue) || 0 : 0,
-        discountMode: form.discountMode,
-        discountValue: form.discountMode === 'amount' ? Math.round(discountValue) || 0 : Math.round(discountValue * 100) / 100,
-        discountTargets: form.discountTargets,
-        description: form.description.trim(),
-        basePrice: Number(form.basePrice) || 0,
-        minPlayers: Number(form.minPlayers) || 1,
-        weaponIds: form.weaponIds,
-        equipmentIds: form.equipmentIds,
-        equipmentCount: totalItems,
+        ...buildPayload(),
         status: 'active',
         createdAtISO: new Date().toISOString(),
       }
@@ -396,18 +469,34 @@ export function AdminRentalPackagesPage() {
   // Get equipment details from the equipment array
   const getEquipmentById = (id: string) => equipment.find((e) => e.id === id)
 
+  const pickedWeaponCount = form.weaponIds.length
+  const typedWeaponCount = Math.round(Number(form.weaponCount)) || 0
+  const effectiveWeaponCount = typedWeaponCount > 0 ? typedWeaponCount : pickedWeaponCount
+
   // Calculate total price from selected inventory items (prices come from weapons/equipment modules)
   const totalItemPrice = React.useMemo(() => {
-    const weaponTotal = form.weaponIds.reduce((sum, wid) => {
+    const selectedWeaponTotal = form.weaponIds.reduce((sum, wid) => {
       const weapon = getWeaponById(wid)
       return sum + (weapon?.price || 0)
     }, 0)
+    const averageWeaponPrice = pickedWeaponCount > 0 ? selectedWeaponTotal / pickedWeaponCount : 0
+    const weaponTotal = averageWeaponPrice * effectiveWeaponCount
     const equipmentTotal = form.equipmentIds.reduce((sum, eid) => {
       const eq = getEquipmentById(eid)
       return sum + (eq?.price || 0)
     }, 0)
     return weaponTotal + equipmentTotal
-  }, [form.weaponIds, form.equipmentIds, weapons, equipment])
+  }, [form.weaponIds, form.equipmentIds, weapons, equipment, pickedWeaponCount, effectiveWeaponCount])
+
+  // Live preview of what a player would spend with the settled amount
+  const settledPreview = React.useMemo(() => {
+    const settled = Math.max(0, Math.round(Number(form.settledAmount) || 0))
+    const players = Math.max(0, Math.round(Number(form.players) || 0))
+    const discountValue = Math.max(0, Number(form.discountValue) || 0)
+    if (form.discountMode !== 'settled' || settled <= 0 || players <= 0) return null
+    const { discount, total } = settledAfterDiscount(settled, form.discountMode, discountValue)
+    return { settled, players, discount: 0, total: settled, perPlayer: Math.round(settled / players) }
+  }, [form.settledAmount, form.players, form.discountMode, form.discountValue])
 
   return (
     <div className="space-y-4">
@@ -452,83 +541,86 @@ export function AdminRentalPackagesPage() {
             </div>
         </div>
 
-        <div className="mt-4 overflow-hidden rounded-2xl border border-white/5">
-          <div className="grid grid-cols-12 bg-white/5 px-3 py-2 text-xs uppercase tracking-widest text-muted">
-            <div className="col-span-2">ID</div>
-            <div className="col-span-3">Package</div>
-            <div className="col-span-2 text-right">Discount rule</div>
-            <div className="col-span-2 text-right">Players</div>
-            <div className="col-span-2 text-right">Includes</div>
-            <div className="col-span-1 text-right">Status</div>
-          </div>
+        <div className="mt-4 overflow-x-auto rounded-2xl border border-white/5">
+          <div className="min-w-[860px]">
+            <div className="grid grid-cols-12 bg-white/5 px-3 py-2 text-xs uppercase tracking-widest text-muted">
+              <div className="col-span-1">ID</div>
+              <div className="col-span-2">Package</div>
+              <div className="col-span-2 text-right">Discount rule</div>
+              <div className="col-span-1 text-right">Players</div>
+              <div className="col-span-2 text-right">Settled amount</div>
+              <div className="col-span-2 text-right">Includes</div>
+              <div className="col-span-2 text-right">Status</div>
+            </div>
 
-          <div className="divide-y divide-white/5">
-            {loading ? (
-              <div className="p-6 text-sm text-muted">Loading packages...</div>
-            ) : filtered.length === 0 ? (
-              <div className="p-6 text-sm text-muted">No packages found for selected filters.</div>
-            ) : (
-              filtered.map((pkg) => {
-                const pkgDiscount = resolvePackageDiscountConfig(pkg)
-                const discountSummary = `${pkgDiscount.mode === 'percent' ? `${pkgDiscount.value}%` : `₱${Math.round(pkgDiscount.value).toLocaleString()}`} off ${formatDiscountTargetLabel(pkgDiscount.targets)}`
+            <div className="divide-y divide-white/5">
+              {loading ? (
+                <div className="p-6 text-sm text-muted">Loading packages...</div>
+              ) : filtered.length === 0 ? (
+                <div className="p-6 text-sm text-muted">No packages found for selected filters.</div>
+              ) : (
+                filtered.map((pkg) => {
+                  const pkgDiscount = resolvePackageDiscountConfig(pkg)
+                  const discountSummary = `${pkgDiscount.mode === 'percent' ? `${pkgDiscount.value}%` : `₱${Math.round(pkgDiscount.value).toLocaleString()}`} off ${formatDiscountTargetLabel(pkgDiscount.targets)}`
+                  const rowSettled = pkg.settledAmount > 0
+                    ? settledAfterDiscount(pkg.settledAmount, pkgDiscount.mode, pkgDiscount.value)
+                    : null
 
-                return (
-                  <div
-                    key={pkg.id}
-                    onClick={() => {
-                      setIsAdding(false)
-                      setSelectedPackageId(pkg.id)
-                      setForm({
-                        name: pkg.name,
-                        discountMode: pkgDiscount.mode,
-                        discountValue: String(pkgDiscount.value),
-                        discountTargets: pkgDiscount.targets,
-                        description: pkg.description,
-                        basePrice: String(pkg.basePrice),
-                        minPlayers: String(pkg.minPlayers),
-                        weaponIds: [...pkg.weaponIds],
-                        equipmentIds: [...pkg.equipmentIds],
-                      })
-                    }}
-                    className={`grid grid-cols-12 items-center px-3 py-3 cursor-pointer ${pkg.id === selectedPackageId ? 'bg-white/3' : ''}`}
-                  >
-                    <div className="col-span-2 text-sm font-semibold">{pkg.id}</div>
-                    <div className="col-span-3">
-                      <div className="text-sm font-semibold">{pkg.name}</div>
-                    </div>
-                    <div className="col-span-2 text-right text-xs text-muted">{discountSummary}</div>
-                    <div className="col-span-2 text-right text-sm text-muted">{pkg.minPlayers} min</div>
-                    <div className="col-span-2 text-right text-sm text-muted">{pkg.equipmentCount} items</div>
-                    <div className="col-span-1 text-right">
-                      <StatusPill status={pkg.status} />
-                      <div className="mt-2 flex justify-end gap-1">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setIsAdding(false)
-                            setSelectedPackageId(pkg.id)
-                            setForm({
-                              name: pkg.name,
-                              discountMode: pkgDiscount.mode,
-                              discountValue: String(pkgDiscount.value),
-                              discountTargets: pkgDiscount.targets,
-                              description: pkg.description,
-                              basePrice: String(pkg.basePrice),
-                              minPlayers: String(pkg.minPlayers),
-                              weaponIds: [...pkg.weaponIds],
-                              equipmentIds: [...pkg.equipmentIds],
-                            })
-                          }}
-                          className="rounded-xl border border-white/5 bg-white/5 px-2 py-1 text-[10px] text-muted transition hover:bg-white/6"
-                        >
-                          Manage
-                        </button>
+                  return (
+                    <div
+                      key={pkg.id}
+                      onClick={() => {
+                        setIsAdding(false)
+                        setSelectedPackageId(pkg.id)
+                        setForm(formFromPackage(pkg))
+                      }}
+                      className={`grid grid-cols-12 items-center px-3 py-3 cursor-pointer ${pkg.id === selectedPackageId ? 'bg-white/3' : ''}`}
+                    >
+                      <div className="col-span-1 text-sm font-semibold">{pkg.id}</div>
+                      <div className="col-span-2">
+                        <div className="text-sm font-semibold">{pkg.name}</div>
+                      </div>
+                      <div className="col-span-2 text-right text-xs text-muted">{discountSummary}</div>
+                      <div className="col-span-1 text-right text-sm text-muted">
+                        {pkg.players > 0 ? `${pkg.players}` : `${pkg.minPlayers} min`}
+                      </div>
+                      <div className="col-span-2 text-right">
+                        {rowSettled ? (
+                          <>
+                            <div className="text-sm font-semibold text-accent">₱{rowSettled.total.toLocaleString()}</div>
+                            {rowSettled.discount > 0 ? (
+                              <div className="text-[10px] text-muted line-through">₱{pkg.settledAmount.toLocaleString()}</div>
+                            ) : null}
+                          </>
+                        ) : (
+                          <div className="text-xs text-muted">Computed</div>
+                        )}
+                      </div>
+                      <div className="col-span-2 text-right text-sm text-muted">
+                        <div>{pkg.weaponCount} weapon{pkg.weaponCount === 1 ? '' : 's'}</div>
+                        <div className="text-[11px]">{pkg.equipmentCount} items</div>
+                      </div>
+                      <div className="col-span-2 text-right">
+                        <StatusPill status={pkg.status} />
+                        <div className="mt-2 flex justify-end gap-1">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setIsAdding(false)
+                              setSelectedPackageId(pkg.id)
+                              setForm(formFromPackage(pkg))
+                            }}
+                            className="rounded-xl border border-white/5 bg-white/5 px-2 py-1 text-[10px] text-muted transition hover:bg-white/6"
+                          >
+                            Manage
+                          </button>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                )
-              })
-            )}
+                  )
+                })
+              )}
+            </div>
           </div>
         </div>
 
@@ -537,7 +629,7 @@ export function AdminRentalPackagesPage() {
           <div ref={editorRef}>
             <Card className="p-4 bg-white/5/60">
               <div className="text-xs uppercase tracking-widest text-muted">{isAdding ? 'Adding' : 'Package details editor'}</div>
-              <div className="mt-2 text-sm text-muted">{isAdding ? 'Adding' : 'Fine-tune the selected package name, price discount, and description.'}</div>
+              <div className="mt-2 text-sm text-muted">{isAdding ? 'Set up the new package, its players, settled amount and weapons.' : 'Fine-tune the selected package name, players, settled amount, discount, and weapons.'}</div>
 
               <div className="mt-4 grid gap-3">
                 <label className="block">
@@ -552,30 +644,60 @@ export function AdminRentalPackagesPage() {
                 <label className="block">
                   <div className="mb-2 text-sm font-semibold text-text">Discount rule</div>
                   <p className="mb-3 text-xs text-muted">
-                    Percent off reduces the selected target by a percentage. Fixed amount off subtracts a set peso value from the selected target.
+                    Percent off reduces the selected target by a percentage. Fixed amount off subtracts the peso value entered below from the selected target.
+                    Settled amount sets the entire package price.
                   </p>
                   <div className="grid gap-3 md:grid-cols-2">
                     <label className="block">
                       <div className="mb-2 text-[11px] uppercase tracking-widest text-muted">Mode</div>
                       <select
                         value={form.discountMode}
-                        onChange={(event) => setForm((prev) => ({ ...prev, discountMode: event.target.value as PackageDiscountMode }))}
+                        onChange={(event) => {
+                          const nextMode = event.target.value as PackageDiscountMode
+                          setForm((prev) => ({
+                            ...prev,
+                            discountMode: nextMode,
+                            discountValue: nextMode === 'settled'
+                              ? (prev.settledAmount !== '0' ? prev.settledAmount : '0')
+                              : prev.discountMode === 'settled' ? '0' : prev.discountValue,
+                            settledAmount: nextMode === 'settled' ? prev.settledAmount : '0',
+                            discountTargets: nextMode === 'settled' ? ['package_total'] : prev.discountTargets,
+                          }))
+                        }}
                         className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-text"
                       >
                         <option value="percent">Percent off</option>
                         <option value="amount">Fixed amount off</option>
+                        <option value="settled">Settled amount</option>
                       </select>
                     </label>
                     <label className="block">
-                      <div className="mb-2 text-[11px] uppercase tracking-widest text-muted">Value</div>
+                      <div className="mb-2 text-[11px] uppercase tracking-widest text-muted">
+                        {form.discountMode === 'percent' ? 'Percentage to take off (%)' : form.discountMode === 'amount' ? 'Fixed amount to take off (₱)' : 'Entire package price (₱)'}
+                      </div>
                       <input
                         type="number"
                         min="0"
                         value={form.discountValue}
-                        onChange={(event) => setForm((prev) => ({ ...prev, discountValue: event.target.value }))}
+                        onChange={(event) => setForm((prev) => ({
+                          ...prev,
+                          discountValue: event.target.value,
+                          settledAmount: prev.discountMode === 'settled' ? event.target.value : prev.settledAmount,
+                        }))}
                         className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-text"
                       />
                     </label>
+                  </div>
+                  <div className="mt-4">
+                    <div className="mb-2 text-[11px] uppercase tracking-widest text-muted">Number of players</div>
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={form.players}
+                      onChange={(event) => setForm((prev) => ({ ...prev, players: event.target.value }))}
+                      className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-text"
+                    />
                   </div>
 
                   <div className="mt-3">
@@ -584,7 +706,7 @@ export function AdminRentalPackagesPage() {
                       {DISCOUNT_TARGET_OPTIONS.map((option) => {
                         const checked = form.discountTargets.includes(option.value)
                         const packageTotalSelected = form.discountTargets.includes('package_total')
-                        const disabled = option.value !== 'package_total' && packageTotalSelected
+                        const disabled = form.discountMode === 'settled' || (option.value !== 'package_total' && packageTotalSelected)
                         return (
                           <label key={option.value} className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-sm ${checked ? 'border-accent/40 bg-accent/10' : 'border-white/10 bg-white/5'} ${disabled ? 'cursor-not-allowed opacity-50' : ''}`}>
                             <input
@@ -628,22 +750,43 @@ export function AdminRentalPackagesPage() {
                       })}
                     </div>
                     <div className="mt-2 text-[11px] text-muted">
-                      Package total applies to the full reservation total. When it is selected, the other targets stay visible but cannot be changed.
+                      {form.discountMode === 'settled'
+                        ? 'Settled amount is the entire package price. Discount targets are disabled, while selected weapons and equipment remain included in the package.'
+                        : 'Package total applies to the full reservation total. When it is selected, the other targets stay visible but cannot be changed.'}
                     </div>
                   </div>
 
                   {errors.discountValue ? <div className="mt-2 text-xs text-danger">{errors.discountValue}</div> : null}
                 </label>
-                <label className="block">
-                  <div className="mb-2 text-sm font-semibold text-text">Min players</div>
-                  <input
-                    type="number"
-                    min="1"
-                    value={form.minPlayers}
-                    onChange={(event) => setForm((prev) => ({ ...prev, minPlayers: event.target.value }))}
-                    className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-text"
-                  />
-                </label>
+
+                <div className="grid gap-3 md:grid-cols-2">
+                  <label className="block">
+                    <div className="mb-2 text-sm font-semibold text-text">Min players</div>
+                    <input
+                      type="number"
+                      min="1"
+                      value={form.minPlayers}
+                      onChange={(event) => setForm((prev) => ({ ...prev, minPlayers: event.target.value }))}
+                      className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-text"
+                    />
+                  </label>
+                  <label className="block">
+                    <div className="mb-2 text-sm font-semibold text-text">Number of weapons</div>
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={form.weaponCount}
+                      onChange={(event) => setForm((prev) => ({ ...prev, weaponCount: event.target.value }))}
+                      className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-text"
+                    />
+                    <div className="mt-1 text-[11px] text-muted">
+                      Leave at 0 to use the {pickedWeaponCount} weapon{pickedWeaponCount === 1 ? '' : 's'} picked below.
+                    </div>
+                    {errors.weaponCount ? <div className="mt-1 text-xs text-danger">{errors.weaponCount}</div> : null}
+                  </label>
+                </div>
+
                 <label className="block">
                   <div className="mb-2 text-sm font-semibold text-text">Description</div>
                   <textarea
@@ -655,95 +798,85 @@ export function AdminRentalPackagesPage() {
                 </label>
               </div>
 
-              {showWeaponInventory && (
-                <div className="mt-4">
-                  <div className="mb-2 text-sm font-semibold text-text">Weapons ({form.weaponIds.length} selected)</div>
-                  {inventoryLoading ? (
-                    <div className="text-xs text-muted">Loading weapons inventory...</div>
-                  ) : weapons.length === 0 ? (
-                    <div className="text-xs text-muted">No weapons available. Add weapons first in the Weapons module.</div>
-                  ) : (
-                    <div className="max-h-48 overflow-y-auto rounded-xl border border-white/10 bg-white/5 p-2 space-y-1">
-                      {weapons.map((weapon) => {
-                        const isSelected = form.weaponIds.includes(weapon.id)
-                        return (
-                          <label
-                            key={weapon.id}
-                            className={`flex items-center gap-3 rounded-xl px-3 py-2 cursor-pointer transition ${
-                              isSelected ? 'bg-accent/15 ring-1 ring-accent/30' : 'hover:bg-white/5'
-                            }`}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={isSelected}
-                              onChange={() => toggleWeapon(weapon.id)}
-                              className="h-4 w-4 rounded border-white/20 bg-transparent accent-accent"
-                            />
-                            <div className="flex-1 flex items-center justify-between">
-                              <div>
-                                <div className="text-sm font-semibold text-text">{weapon.name}</div>
-                                <div className="text-[11px] text-muted">{weapon.category.toUpperCase()} • {weapon.status}</div>
-                              </div>
-                              <div className="text-right">
-                                <div className="text-[11px] text-muted">{weapon.id}</div>
-                                <div className="text-[11px] font-semibold text-accent">₱{weapon.price}</div>
-                              </div>
+              <div className="mt-4">
+                <div className="mb-2 text-sm font-semibold text-text">Weapons ({form.weaponIds.length} selected)</div>
+                {inventoryLoading ? (
+                  <div className="text-xs text-muted">Loading weapons inventory...</div>
+                ) : weapons.length === 0 ? (
+                  <div className="text-xs text-muted">No weapons available. Add weapons first in the Weapons module.</div>
+                ) : (
+                  <div className="max-h-48 overflow-y-auto rounded-xl border border-white/10 bg-white/5 p-2 space-y-1">
+                    {weapons.map((weapon) => {
+                      const isSelected = form.weaponIds.includes(weapon.id)
+                      return (
+                        <label
+                          key={weapon.id}
+                          className={`flex items-center gap-3 rounded-xl px-3 py-2 cursor-pointer transition ${
+                            isSelected ? 'bg-accent/15 ring-1 ring-accent/30' : 'hover:bg-white/5'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => toggleWeapon(weapon.id)}
+                            className="h-4 w-4 rounded border-white/20 bg-transparent accent-accent"
+                          />
+                          <div className="flex-1 flex items-center justify-between">
+                            <div>
+                              <div className="text-sm font-semibold text-text">{weapon.name}</div>
+                              <div className="text-[11px] text-muted">{weapon.category.toUpperCase()} • {weapon.status}</div>
                             </div>
-                          </label>
-                        )
-                      })}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {showEquipmentInventory && (
-                <div className="mt-4">
-                  <div className="mb-2 text-sm font-semibold text-text">Equipment ({form.equipmentIds.length} selected)</div>
-                  {inventoryLoading ? (
-                    <div className="text-xs text-muted">Loading equipment inventory...</div>
-                  ) : equipment.length === 0 ? (
-                    <div className="text-xs text-muted">No equipment available. Add equipment first in the Equipment module.</div>
-                  ) : (
-                    <div className="max-h-48 overflow-y-auto rounded-xl border border-white/10 bg-white/5 p-2 space-y-1">
-                      {equipment.map((eq) => {
-                        const isSelected = form.equipmentIds.includes(eq.id)
-                        return (
-                          <label
-                            key={eq.id}
-                            className={`flex items-center gap-3 rounded-xl px-3 py-2 cursor-pointer transition ${
-                              isSelected ? 'bg-accent/15 ring-1 ring-accent/30' : 'hover:bg-white/5'
-                            }`}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={isSelected}
-                              onChange={() => toggleEquipment(eq.id)}
-                              className="h-4 w-4 rounded border-white/20 bg-transparent accent-accent"
-                            />
-                            <div className="flex-1 flex items-center justify-between">
-                              <div>
-                                <div className="text-sm font-semibold text-text">{eq.name}</div>
-                                <div className="text-[11px] text-muted">{eq.category.toUpperCase()} • Qty: {eq.qty}</div>
-                              </div>
-                              <div className="text-right">
-                                <div className="text-[11px] text-muted">{eq.id}</div>
-                                <div className="text-[11px] font-semibold text-accent">₱{eq.price}</div>
-                              </div>
+                            <div className="text-right">
+                              <div className="text-[11px] text-muted">{weapon.id}</div>
+                              <div className="text-[11px] font-semibold text-accent">₱{weapon.price}</div>
                             </div>
-                          </label>
-                        )
-                      })}
-                    </div>
-                  )}
-                </div>
-              )}
+                          </div>
+                        </label>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
 
-              {!showWeaponInventory && !showEquipmentInventory && (
-                <div className="mt-4 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-xs text-muted">
-                  No inventory list is shown for this discount target. Package total and entrance fee discounts apply without selecting specific weapons or equipment.
-                </div>
-              )}
+              <div className="mt-4">
+                <div className="mb-2 text-sm font-semibold text-text">Equipment ({form.equipmentIds.length} selected)</div>
+                {inventoryLoading ? (
+                  <div className="text-xs text-muted">Loading equipment inventory...</div>
+                ) : equipment.length === 0 ? (
+                  <div className="text-xs text-muted">No equipment available. Add equipment first in the Equipment module.</div>
+                ) : (
+                  <div className="max-h-48 overflow-y-auto rounded-xl border border-white/10 bg-white/5 p-2 space-y-1">
+                    {equipment.map((eq) => {
+                      const isSelected = form.equipmentIds.includes(eq.id)
+                      return (
+                        <label
+                          key={eq.id}
+                          className={`flex items-center gap-3 rounded-xl px-3 py-2 cursor-pointer transition ${
+                            isSelected ? 'bg-accent/15 ring-1 ring-accent/30' : 'hover:bg-white/5'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => toggleEquipment(eq.id)}
+                            className="h-4 w-4 rounded border-white/20 bg-transparent accent-accent"
+                          />
+                          <div className="flex-1 flex items-center justify-between">
+                            <div>
+                              <div className="text-sm font-semibold text-text">{eq.name}</div>
+                              <div className="text-[11px] text-muted">{eq.category.toUpperCase()} • Qty: {eq.qty}</div>
+                            </div>
+                            <div className="text-right">
+                              <div className="text-[11px] text-muted">{eq.id}</div>
+                              <div className="text-[11px] font-semibold text-accent">₱{eq.price}</div>
+                            </div>
+                          </div>
+                        </label>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
 
               <div className="mt-4">
                 {isAdding ? (
@@ -788,18 +921,55 @@ export function AdminRentalPackagesPage() {
             <div className="mt-2 text-sm text-muted">This bundle includes the following weapons and equipment from inventory.</div>
             <div className="mt-4 rounded-xl border border-white/5 bg-white/5 p-3">
               <div className="text-[11px] uppercase tracking-widest text-muted">Selected package</div>
-              <div className="mt-1 text-sm font-semibold">{selectedPackage?.name || (isAdding ? '(New package)' : '—')}</div>
+              <div className="mt-1 text-sm font-semibold">{form.name.trim() || selectedPackage?.name || (isAdding ? '(New package)' : '—')}</div>
+
+              {/* Player-facing price preview */}
+              <div className="mt-3 rounded-lg border border-accent/20 bg-accent/5 px-3 py-3">
+                <div className="text-[11px] uppercase tracking-widest text-muted">What players will spend</div>
+                {settledPreview ? (
+                  <div className="mt-2 space-y-1 text-xs">
+                    <div className="flex items-center justify-between text-muted">
+                      <span>Settled amount ({settledPreview.players} players)</span>
+                      <span>₱{settledPreview.settled.toLocaleString()}</span>
+                    </div>
+                    {settledPreview.discount > 0 ? (
+                      <div className="flex items-center justify-between text-success">
+                        <span>
+                          Discount ({form.discountMode === 'percent' ? `${Number(form.discountValue) || 0}%` : `₱${Math.round(Number(form.discountValue) || 0).toLocaleString()}`})
+                        </span>
+                        <span>− ₱{settledPreview.discount.toLocaleString()}</span>
+                      </div>
+                    ) : null}
+                    <div className="flex items-center justify-between text-muted">
+                      <span>Per player</span>
+                      <span>₱{settledPreview.perPlayer.toLocaleString()}</span>
+                    </div>
+                    <div className="flex items-center justify-between border-t border-white/10 pt-2 text-sm font-bold text-accent">
+                      <span>Total</span>
+                      <span>₱{settledPreview.total.toLocaleString()}</span>
+                    </div>
+                    <div className="pt-1 text-[11px] text-muted">Holds as long as the player count stays at {settledPreview.players}.</div>
+                  </div>
+                ) : (
+                  <div className="mt-2 text-xs text-muted">
+                    No settled amount yet. Enter a number of players and a settled amount to preview the total, or leave it at 0 to use computed per-player pricing.
+                  </div>
+                )}
+              </div>
 
               {/* Weapons section */}
               <div className="mt-4">
-                <div className="text-[11px] uppercase tracking-widest text-muted">Weapons</div>
+                <div className="flex items-center justify-between">
+                  <div className="text-[11px] uppercase tracking-widest text-muted">Weapons</div>
+                  <div className="text-[11px] font-semibold text-text">{effectiveWeaponCount} weapon{effectiveWeaponCount === 1 ? '' : 's'} offered</div>
+                </div>
                 <div className="mt-2 space-y-2">
-                  {(selectedPackage?.weaponIds ?? form.weaponIds).length === 0 ? (
+                  {form.weaponIds.length === 0 ? (
                     <div className="rounded-lg border border-white/5 bg-white/5 px-3 py-2 text-sm text-muted">
                       No weapons selected
                     </div>
                   ) : (
-                    (selectedPackage?.weaponIds ?? form.weaponIds).map((wid) => {
+                    form.weaponIds.map((wid) => {
                       const weapon = getWeaponById(wid)
                       return (
                         <div key={wid} className="rounded-lg border border-white/5 bg-white/5 px-3 py-2">
@@ -824,12 +994,12 @@ export function AdminRentalPackagesPage() {
               <div className="mt-4">
                 <div className="text-[11px] uppercase tracking-widest text-muted">Equipment</div>
                 <div className="mt-2 space-y-2">
-                  {(selectedPackage?.equipmentIds ?? form.equipmentIds).length === 0 ? (
+                  {form.equipmentIds.length === 0 ? (
                     <div className="rounded-lg border border-white/5 bg-white/5 px-3 py-2 text-sm text-muted">
                       No equipment selected
                     </div>
                   ) : (
-                    (selectedPackage?.equipmentIds ?? form.equipmentIds).map((eid) => {
+                    form.equipmentIds.map((eid) => {
                       const eq = getEquipmentById(eid)
                       return (
                         <div key={eid} className="rounded-lg border border-white/5 bg-white/5 px-3 py-2">
@@ -855,11 +1025,11 @@ export function AdminRentalPackagesPage() {
                 <div className="flex items-center justify-between text-xs text-muted">
                   <span>Total items</span>
                   <span className="font-semibold text-text">
-                    {(selectedPackage?.weaponIds ?? form.weaponIds).length + (selectedPackage?.equipmentIds ?? form.equipmentIds).length} items
+                    {form.weaponIds.length + form.equipmentIds.length} items
                   </span>
                 </div>
                 <div className="flex items-center justify-between text-xs text-muted mt-2">
-                  <span>Total equipment value</span>
+                  <span>Total included item value</span>
                   <span className="font-semibold text-accent">₱{totalItemPrice.toLocaleString()}</span>
                 </div>
               </div>
@@ -871,4 +1041,3 @@ export function AdminRentalPackagesPage() {
     </div>
   )
 }
-
