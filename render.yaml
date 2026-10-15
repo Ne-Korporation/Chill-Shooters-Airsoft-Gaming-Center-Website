@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: chill-shooters-api
+    runtime: node
+    plan: free
+    region: singapore
+    buildCommand: npm ci
+    startCommand: npm run server
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: 22.14.0
+      - key: MONGODB_URI
+        sync: false
+      - key: AUTH_SECRET
+        generateValue: true
+      - key: DB_NAME
+        value: chillshootersgamecenter
