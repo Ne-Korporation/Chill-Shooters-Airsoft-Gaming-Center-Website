@@ -6,8 +6,7 @@
   "scripts": {
     "dev": "vite",
     "server": "node server/index.js",
-    
-    "build": "vite build",
+    "build": "node ./node_modules/vite/bin/vite.js build",
     "dev:all": "concurrently \"npm run server\" \"npm run dev\"",
     "preview": "vite preview",
     "lint": "echo \"(no lint configured)\""
@@ -46,5 +45,11 @@
     "tailwindcss": "^3.4.10",
     "typescript": "^5.6.3",
     "vite": "^5.4.10"
+  },
+  "allowScripts": {
+    "@firebase/util@1.15.1": true,
+    "bcrypt@6.0.0": true,
+    "esbuild@0.21.5": true,
+    "protobufjs@7.6.5": true
   }
 }
