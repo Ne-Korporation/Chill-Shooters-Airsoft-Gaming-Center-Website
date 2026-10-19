@@ -45,12 +45,15 @@ type RentalPackage = {
   _id?: any
   name: string
   discountPct: number
-  discountMode?: 'percent' | 'amount'
+  discountMode?: 'percent' | 'amount' | 'settled'
   discountValue?: number
   discountTargets?: Array<'package_total' | 'weapons' | 'equipment' | 'entrance'>
   description: string
   basePrice: number
   minPlayers: number
+  players: number
+  settledAmount: number
+  weaponCount: number
   weaponIds: string[]
   equipmentIds: string[]
   equipmentCount: number
@@ -550,12 +553,15 @@ export function ReservationCalendarPage() {
             _id: d._id,
             name: d.name || 'Unnamed package',
             discountPct: typeof d.discountPct === 'number' ? d.discountPct : 0,
-            discountMode: d.discountMode === 'amount' ? 'amount' : d.discountMode === 'percent' ? 'percent' : undefined,
+            discountMode: d.discountMode === 'amount' ? 'amount' : d.discountMode === 'settled' ? 'settled' : d.discountMode === 'percent' ? 'percent' : undefined,
             discountValue: typeof d.discountValue === 'number' ? d.discountValue : undefined,
             discountTargets: Array.isArray(d.discountTargets) ? d.discountTargets : undefined,
             description: d.description || '',
             basePrice: typeof d.basePrice === 'number' ? d.basePrice : 0,
             minPlayers: typeof d.minPlayers === 'number' ? d.minPlayers : 1,
+            players: typeof d.players === 'number' ? d.players : 0,
+            settledAmount: typeof d.settledAmount === 'number' ? d.settledAmount : 0,
+            weaponCount: typeof d.weaponCount === 'number' && d.weaponCount > 0 ? d.weaponCount : (Array.isArray(d.weaponIds) ? d.weaponIds.length : 0),
             weaponIds: Array.isArray(d.weaponIds) ? d.weaponIds : [],
             equipmentIds: Array.isArray(d.equipmentIds) ? d.equipmentIds : [],
             equipmentCount: (d.weaponIds?.length || 0) + (d.equipmentIds?.length || 0),
@@ -633,6 +639,7 @@ export function ReservationCalendarPage() {
       const prefillId = packagePrefill?.selectedPackageId
       if (prefillId && packages.find((p) => p.id === prefillId)) {
         setSelectedPackageId(prefillId)
+        setSelectionMode('package')
       } else if (cheapestPackage) {
         setSelectedPackageId(cheapestPackage.id)
       }

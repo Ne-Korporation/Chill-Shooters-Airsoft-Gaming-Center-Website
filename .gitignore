@@ -1,1 +1,24 @@
-**/.env
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Deployment
+.vercel/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Server environment variables
+server/.env
+server/.env.*
+!server/.env.example
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
