@@ -4,14 +4,14 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "server": "node server/index.js",
-    
-    "build": "vite build",
-    "dev:all": "concurrently \"npm run server\" \"npm run dev\"",
-    "preview": "vite preview",
-    "lint": "echo \"(no lint configured)\""
-  },
+  "dev": "vite",
+  "start": "node server/index.js",
+  "server": "node server/index.js",
+  "build": "vite build",
+  "dev:all": "concurrently \"npm run server\" \"npm run dev\"",
+  "preview": "vite preview",
+  "lint": "echo \"(no lint configured)\""
+},
   "dependencies": {
     "@stripe/react-stripe-js": "^6.8.0",
     "@stripe/stripe-js": "^9.12.0",
