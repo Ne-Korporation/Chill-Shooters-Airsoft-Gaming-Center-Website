@@ -1,6 +1,12 @@
 import crypto from 'crypto'
 
-const AUTH_SECRET = process.env.AUTH_SECRET || 'chill-shooters-dev-secret-change-me'
+const AUTH_SECRET =
+  process.env.AUTH_SECRET ||
+  (process.env.NODE_ENV === 'production' ? '' : crypto.randomBytes(32).toString('hex'))
+
+if (!AUTH_SECRET) {
+  throw new Error('AUTH_SECRET must be configured in production')
+}
 
 export function createAuthToken(user) {
   const payload = {
