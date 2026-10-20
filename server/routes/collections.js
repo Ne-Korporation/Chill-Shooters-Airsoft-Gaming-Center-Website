@@ -2,6 +2,7 @@ export const ALLOWED_COLLECTIONS = new Set([
   'dashboard_posts',
   'equipment',
   'equipments',
+  'feedback',
   'gameplay',
   'packages',
   'notifications',
@@ -12,5 +13,4 @@ export const ALLOWED_COLLECTIONS = new Set([
   'waivers',
   'weapons',
 ])
-
 

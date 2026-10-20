@@ -27,6 +27,22 @@ app.use(express.json({ limit: '10mb' }))
 
 const PORT = Number(process.env.PORT) || 3001
 
+app.get('/api/public/metrics', async (_req, res) => {
+  try {
+    const db = await getDb()
+    const [reservations, pendingReservations, pendingPayments, pendingWaivers, activeGames] = await Promise.all([
+      db.collection('reservations').countDocuments({}),
+      db.collection('reservations').countDocuments({ reservationStatus: { $in: ['pending', 'needs review', 'review'] } }),
+      db.collection('payments').countDocuments({ paymentStatus: { $in: ['pending', 'submitted', 'review'] } }),
+      db.collection('waivers').countDocuments({ status: { $in: ['pending', 'review', 'submitted'] } }),
+      db.collection('gameplay').countDocuments({ Status: { $in: ['Scheduled', 'Ongoing', 'Completed'] } }),
+    ])
+    return res.json({ ok: true, data: { reservations, pendingReservations, pendingPayments, pendingWaivers, activeGames } })
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: String(err) })
+  }
+})
+
 getDb()
   .then(() => console.log('MongoDB connected'))
   .catch((err) => console.warn('MongoDB not connected yet:', String(err)))

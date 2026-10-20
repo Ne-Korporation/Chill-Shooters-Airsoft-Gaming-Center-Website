@@ -4,6 +4,7 @@ import { Readable } from 'stream'
 import axios from 'axios'
 import { requireCloudinary } from './cloudinary.js'
 import { getUserAccountsCollection } from '../db/mongo.js'
+import { requireAuth } from '../middleware/auth.js'
 
 const router = express.Router()
 
@@ -63,12 +64,20 @@ router.post('/upload-image', (req, res, next) => {
   }
 })
 
-router.post('/scan-id', upload.single('file'), async (req, res) => {
+router.post('/scan-id', requireAuth, upload.single('file'), async (req, res) => {
   if (!req.file?.buffer) {
     return res.status(400).json({ ok: false, error: 'file is required' })
   }
 
-  const userId = String(req.body?.userId || '').trim()
+  const requestedUserId = String(req.body?.userId || '').trim()
+  if (req.user.role === 'user' && requestedUserId && requestedUserId !== String(req.user.id)) {
+    return res.status(403).json({ ok: false, error: 'You can only submit your own identity document.' })
+  }
+  if (!['user', 'admin', 'registrar'].includes(req.user.role)) {
+    return res.status(403).json({ ok: false, error: 'Forbidden: insufficient role permissions' })
+  }
+  const userId = req.user.role === 'user' ? String(req.user.id) : requestedUserId
+  if (!userId) return res.status(400).json({ ok: false, error: 'userId is required' })
 
   try {
     const imageUrl = await uploadToCloudinary(req.file.buffer, req.file.originalname || 'id-scan')
@@ -131,7 +140,7 @@ router.post('/scan-id', upload.single('file'), async (req, res) => {
     let updatedUser = null
     if (userId) {
       const collection = await getUserAccountsCollection()
-      updatedUser = await collection.findOneAndUpdate(
+      const updateResult = await collection.findOneAndUpdate(
         { id: userId },
         {
           $set: {
@@ -147,7 +156,7 @@ router.post('/scan-id', upload.single('file'), async (req, res) => {
         },
         { returnDocument: 'after' },
       )
-      updatedUser = updatedUser?.value || null
+      updatedUser = updateResult?.value ?? updateResult ?? null
     }
 
     return res.json({ ok: true, url: imageUrl, scan: scanResult, user: updatedUser })
@@ -157,5 +166,3 @@ router.post('/scan-id', upload.single('file'), async (req, res) => {
 })
 
 export default router
-
-
