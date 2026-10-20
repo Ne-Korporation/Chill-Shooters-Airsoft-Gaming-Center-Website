@@ -55,8 +55,8 @@ export function LoginPage() {
       const user = await login(values)
       toast.success('Authentication accepted.')
       navigate(getRedirectRoute(user.role))
-    } catch {
-      toast.error('Authentication failed. Try again.')
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'Unable to sign in. Please try again.')
     }
   }
 
@@ -187,4 +187,3 @@ export function LoginPage() {
     </div>
   )
 }
-

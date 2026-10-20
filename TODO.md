@@ -378,3 +378,149 @@ A feature is considered done when:
 - Admin or staff can complete the workflow without manual workarounds.
 - Data is visible and consistent across related pages.
 - The functionality is tested with realistic reservations, payments, and waiver scenarios.
+
+---
+
+## Core System Requirements Gap Checklist
+
+Review baseline: 2026-10-20. Statuses below describe the implementation observed during the review; a UI screen or placeholder alone does not count as a complete workflow.
+
+### 1. Reservation scheduler and rescheduling
+- Status: Partial
+- Existing: Customer booking supports Salawag, Langkaan, and Biñan, with dates, morning/afternoon/evening slots, public/private sessions, and availability indicators.
+- Remaining:
+  - Enforce public capacity and all field/slot conflicts on the server, including simultaneous booking attempts.
+  - Make backend availability authoritative and keep UI availability in sync.
+  - Add rescheduling requests by reservation ID, requested date/slot, and reason.
+  - Enforce the three-day rescheduling deadline and apply eligible deposit credits to the replacement slot.
+  - Confirm and configure capacity limits by location and slot; do not rely on UI-only hardcoded values.
+
+### 2. Budget and rental recommendations
+- Status: Partial
+- Existing: The recommendation page filters configured packages by group size and budget.
+- Remaining:
+  - Use current inventory availability and persisted pricing in recommendations.
+  - Explain why each recommendation fits and display total and per-player costs.
+  - Do not recommend unavailable or unaffordable combinations.
+
+### 3. Custom equipment selection
+- Status: Partial
+- Existing: Customers can select custom weapons and equipment, with some stock checks.
+- Remaining:
+  - Enforce equipment and weapon stock on the server at reservation creation.
+  - Configure and price extra ammunition reloads.
+  - Define and enforce allowed optics/scope classifications.
+  - Confirm that selected equipment is held for the booking and released if it is cancelled.
+
+### 4. Billing and pricing rules
+- Status: Partial
+- Existing: Shared package pricing supports entrance fees and configurable package discounts.
+- Remaining:
+  - Verify the ₱150 entrance fee and configure the ₱750 rental package with the required included items.
+  - Add configurable prices for ammo reloads, late cancellations, field modifications, and damage.
+  - Configure approved CvSU and other partnership discounts, with eligibility and calculations recorded.
+  - Ensure the same authoritative pricing calculation is used at recommendation, reservation, and payment.
+
+### 5. Registration, identity, and digital waivers
+- Status: Partial
+- Existing: Accounts, identity uploads, waiver forms, signatures, and waiver records are present.
+- Remaining:
+  - Ensure waiver data is securely linked to the verified user and relevant reservation.
+  - Add appropriate duplicate, renewal, and review rules.
+  - Restrict sensitive ID and waiver data to authorized roles.
+  - Do not claim cryptographic binding unless an actual verifiable integrity mechanism is implemented and tested.
+
+### 6. Player profiles and team balancing
+- Status: Partial
+- Existing: Profiles include experience and identity verification; waiver submissions capture age.
+- Remaining:
+  - Track validated age, experience/skill tier, ID status, and rental history for team recommendations.
+  - Implement and test a documented balancing algorithm for public sessions.
+  - Let marshals override assignments while preserving both the recommendation and final teams.
+  - Link saved team assignments to the relevant gameplay/reservation.
+
+### 7. Payment verification and receipts
+- Status: Partial
+- Existing: GCash proof upload, transaction references, payment records, and staff payment screens exist.
+- Remaining:
+  - Confirm and implement the approved ₱350 fixed deposit or 50% rental-package deposit rules.
+  - Support the approved payment methods, including bank transfer and cash settlement where required.
+  - Connect card payments to the configured payment provider and verify payment state server-side; never treat frontend-submitted status as proof of payment.
+  - Provide registrar verification/rejection with an audit trail.
+  - Generate printable receipts only for verified payments and record them in the financial ledger.
+
+### 8. Rental inventory, chronograph, maintenance, and repairs
+- Status: Partial
+- Existing: Admin weapon/equipment inventory and basic maintenance statuses exist.
+- Remaining:
+  - Track the center's individual assets and partner-borrowed equipment.
+  - Record the player assigned each asset and its return/condition state.
+  - Record pre-game chronograph results and configurable FPS limits by weapon class.
+  - Track damage, repair parts/costs, and approved penalties linked to the responsible player and bill.
+  - Prevent maintained, damaged, or already-assigned assets from being issued.
+
+### 9. Game preferences and field layout requests
+- Status: Partial
+- Existing: Reservation notes are available.
+- Remaining:
+  - Capture game modes and tactical layout/setup requests as structured reservation data.
+  - Provide marshals with an advance view of requests and a preparation status.
+
+### 10. Status notifications and email
+- Status: Partial
+- Existing: In-app notifications and email infrastructure for contact/auth workflows exist.
+- Remaining:
+  - Trigger in-app and email notifications from persisted reservation, payment, waiver, and booking-change workflows.
+  - Add configured weather updates and pre-game reminders.
+  - Log delivery failures and avoid reporting failed email as successfully sent.
+
+### 11. Financial, operational, and audit reports
+- Status: Partial
+- Existing: Admin dashboard provides basic operational and revenue snapshots.
+- Remaining:
+  - Add date filters and daily, weekly, monthly, and yearly reports.
+  - Include reservation, revenue, player, rental, penalty, and compliance metrics supported by persisted data.
+  - Add print/export functionality and traceable calculations.
+  - Ensure reports use complete filtered data rather than a fixed recent-record limit.
+
+### 12. REACH outreach fund
+- Status: Not implemented
+- Acceptance criteria:
+  - Configure the approved percentage/rules for qualifying net revenue; do not invent or hardcode an unapproved rate.
+  - Record allocations and outreach spending in a separate, auditable ledger.
+  - Include fund totals and transactions in admin reporting.
+
+### 13. Customer feedback and evaluation
+- Status: Not implemented
+- Acceptance criteria:
+  - Allow players to submit post-game ratings for reservation, cleanliness, equipment, field layout, and staff/marshal performance.
+  - Link feedback to the player and completed gameplay/reservation.
+  - Aggregate results for authorized admin review.
+
+### 14. Recruitment and applications
+- Status: Not implemented
+- Acceptance criteria:
+  - Publish open roles, job descriptions, and application requirements publicly.
+  - Allow candidates to submit applications online.
+  - Provide a protected staff review/status workflow for applicant records.
+
+### 15. RBAC and responsive security
+- Status: Partial
+- Existing: Frontend role-based routes and server authentication/role middleware exist.
+- Remaining:
+  - Enforce permissions on every relevant API read and write; never trust a role or user ID supplied by the client.
+  - Define and test least-privilege permissions for Super Admin, Registrar, Marshal, and Player.
+  - Protect financial, identity, waiver, and audit data from unauthorized access.
+  - Verify booking, payment, waiver, inventory, and admin workflows on mobile, tablet, and desktop.
+
+## AI Implementation Prompt
+
+Copy this prompt into an AI coding agent working in this repository:
+
+> Inspect the existing Chill Shooters Airsoft Gaming Center codebase and `TODO.md`. Implement the remaining requirements in the “Core System Requirements Gap Checklist” section, reusing existing components, API patterns, and data models where appropriate. Do not replace the application or claim a feature is complete based only on a UI placeholder.
+>
+> First identify the relevant existing code and any business decisions that need confirmation. Do not invent business values such as capacities, deposit rules, penalty amounts, discount eligibility, FPS limits, or the REACH allocation rate; make them configurable and clearly report any value that requires owner approval.
+>
+> Implement in small, coherent phases, prioritizing server-side authorization, concurrency-safe booking and inventory validation, payment verification, and auditable data handling. Enforce permissions on the backend and never trust client-supplied roles or user IDs. Do not store card numbers or CVVs; use the configured payment provider and verify payment status server-side. Keep changes focused, type-safe, and consistent with the repository.
+>
+> Add or update tests for every implemented workflow, run relevant tests and the production build, and update this checklist's status only when the feature works end-to-end and has been verified. At the end, report changed files, tests/build results, required configuration or business decisions, and any remaining partial or blocked requirements. Do not create commits.
