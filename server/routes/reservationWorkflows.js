@@ -1,6 +1,8 @@
 import express from 'express'
 import { ObjectId } from 'mongodb'
-import { getDb, toObjectId } from '../db/mongo.js'
+import { getDb, startDbSession, toObjectId } from '../db/mongo.js'
+import { requireAuth, requireRole } from '../middleware/auth.js'
+import { updateReservationStatusAtomically } from '../utils/reservationStatus.js'
 
 const router = express.Router()
 
@@ -31,11 +33,8 @@ function parseStatus(body) {
   if (lower === 'pending') return 'pending'
   if (lower === 'needs review' || lower === 'needs_review' || lower === 'review' || lower === 'rejected') return 'needs review'
   if (lower === 'confirmed' || lower === 'approved') return 'confirmed'
+  if (lower === 'cancelled' || lower === 'canceled') return 'cancelled'
   return null
-}
-
-function isAdminRole(role) {
-  return role === 'admin' || role === 'marshal' || role === 'registrar'
 }
 
 function mapReservationToGameplay({ reservation }) {
@@ -81,32 +80,14 @@ async function updateReservationStatus(req, res) {
   const nextStatus = parseStatus({ reservationStatus })
   if (!nextStatus) return res.status(400).json({ ok: false, error: 'reservationStatus is required' })
 
-  // Scoping: since current app doesn't send auth token, we accept:
-  // - req.body.userId (frontend) and verify it matches reservation.userId OR
-  // - req.body.role to allow admin workflows.
-  // This is a minimal fix without changing auth architecture.
-  const actorUserId = req.body?.userId
-  const actorRole = req.body?.role
-
   try {
     const db = await getDb()
 
     const reservation = await findReservation(db, id)
     if (!reservation) return res.status(404).json({ ok: false, error: 'reservation not found' })
-
-    const isActorAdmin = isAdminRole(actorRole)
-    if (!isActorAdmin) {
-      if (!actorUserId || String(actorUserId) !== String(reservation.userId)) {
-        return res.status(403).json({ ok: false, error: 'forbidden' })
-      }
+    if (String(reservation.reservationStatus || '').toLowerCase() === 'cancelled' && nextStatus !== 'cancelled') {
+      return res.status(409).json({ ok: false, error: 'Cancelled reservations cannot be reopened. Create a new reservation instead.' })
     }
-
-    const paymentStatus =
-      nextStatus === 'confirmed'
-        ? 'confirmed'
-        : nextStatus === 'needs review'
-          ? 'review'
-          : 'pending'
 
     // Update reservation status using the stable string id first, and only use ObjectId lookup when the value is truly valid.
     const reservationFilter = {
@@ -118,40 +99,18 @@ async function updateReservationStatus(req, res) {
       ],
     }
 
-    const updateRes = await db.collection('reservations').findOneAndUpdate(
+    const updatedReservation = await updateReservationStatusAtomically({
+      db,
+      startSession: startDbSession,
       reservationFilter,
-      { $set: { reservationStatus: nextStatus, updatedAtISO: new Date().toISOString() } },
-      { returnDocument: 'after', upsert: false },
-    )
-
-    const updatedReservation = updateRes?.value ?? (await db.collection('reservations').findOne(reservationFilter))
-    if (!updatedReservation) return res.status(404).json({ ok: false, error: 'reservation not found after update' })
+      reservationId: reservationKey(reservation),
+      nextStatus,
+      actor: req.user,
+    })
 
     const payment = await db.collection('payments').findOne({
       reservationId: reservationKey(updatedReservation),
     })
-
-    if (payment) {
-      const paymentFilter = {
-        $or: [
-          { reservationId: reservationKey(updatedReservation) },
-          ...(payment?._id && ObjectId.isValid(String(payment._id))
-            ? [{ _id: new ObjectId(String(payment._id)) }]
-            : []),
-        ],
-      }
-
-      await db.collection('payments').findOneAndUpdate(
-        paymentFilter,
-        {
-          $set: {
-            paymentStatus,
-            updatedAtISO: new Date().toISOString(),
-          },
-        },
-        { returnDocument: 'after', upsert: false },
-      )
-    }
 
     let gameplayCreated = false
     let gameplay = null
@@ -193,21 +152,26 @@ async function updateReservationStatus(req, res) {
       }
     }
 
-    return res.json({ ok: true, data: updatedReservation, gameplayCreated, gameplay, paymentStatus })
+    return res.json({
+      ok: true,
+      data: updatedReservation,
+      gameplayCreated,
+      gameplay,
+      paymentStatus: payment?.paymentStatus || payment?.status || null,
+    })
   } catch (err) {
+    if (err?.statusCode) return res.status(err.statusCode).json({ ok: false, error: err.message })
     return res.status(500).json({ ok: false, error: String(err) })
   }
 }
 
-router.put('/reservations/:id/status', updateReservationStatus)
-router.put('/reservations/:id/confirm', updateReservationStatus)
+router.put('/reservations/:id/status', requireAuth, requireRole('admin', 'registrar'), updateReservationStatus)
+router.put('/reservations/:id/confirm', requireAuth, requireRole('admin', 'registrar'), updateReservationStatus)
 
-// DELETE reservation (admin/marshal only, cascades to payments + gameplay)
-router.delete('/reservations/:id', async (req, res) => {
+// Keep reservations and financial/gameplay history; cancellation releases active inventory holds.
+router.delete('/reservations/:id', requireAuth, requireRole('admin'), async (req, res) => {
   const { id } = req.params
   if (!id) return res.status(400).json({ ok: false, error: 'invalid id' })
-
-  const actorRole = req.body?.role || req.query?.role
 
   try {
     const db = await getDb()
@@ -215,35 +179,25 @@ router.delete('/reservations/:id', async (req, res) => {
     const reservation = await findReservation(db, id)
     if (!reservation) return res.status(404).json({ ok: false, error: 'reservation not found' })
 
-    if (!isAdminRole(actorRole)) {
-      return res.status(403).json({ ok: false, error: 'forbidden — admin or marshal role required' })
-    }
-
-    const reservationKeyValue = reservationKey(reservation)
-
-    // Delete linked payment records
-    await db.collection('payments').deleteMany({
-      reservationId: reservationKeyValue,
-    })
-
-    // Delete linked gameplay records
-    await db.collection('gameplay').deleteMany({
-      reservationId: reservationKeyValue,
-    })
-
-    // Delete the reservation itself
     const reservationFilter = reservation._id ? { _id: reservation._id } : { id: String(reservation.id || id) }
-    await db.collection('reservations').deleteOne(reservationFilter)
+    await updateReservationStatusAtomically({
+      db,
+      startSession: startDbSession,
+      reservationFilter,
+      reservationId: reservationKey(reservation),
+      nextStatus: 'cancelled',
+      actor: req.user,
+    })
 
     return res.json({
       ok: true,
-      message: 'Reservation and related records deleted successfully',
-      deletedReservationId: id,
+      message: 'Reservation cancelled; linked payment and gameplay history was retained.',
+      cancelledReservationId: id,
     })
   } catch (err) {
+    if (err?.statusCode) return res.status(err.statusCode).json({ ok: false, error: err.message })
     return res.status(500).json({ ok: false, error: String(err) })
   }
 })
 
 export default router
-

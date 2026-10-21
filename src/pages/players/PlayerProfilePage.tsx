@@ -5,7 +5,7 @@ import toast from 'react-hot-toast'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
-import { apiBase, apiGet, apiPost, apiPut } from '../../utils/apiClient'
+import { apiBase, apiGet, apiPost, apiPut, getApiAuthHeaders } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
 
 type PlayerProfileDoc = {
@@ -152,6 +152,7 @@ export function PlayerProfilePage() {
 
       const uploadRes = await fetch(`${apiBase}/api/scan-id`, {
         method: 'POST',
+        headers: getApiAuthHeaders(),
         body: formData,
       })
       const uploadJson = await uploadRes.json().catch(() => null)
@@ -613,4 +614,3 @@ export function PlayerProfilePage() {
     </div>
   )
 }
-

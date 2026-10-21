@@ -22,6 +22,7 @@ import {
   FiCreditCard,
   FiTarget,
   FiBriefcase,
+  FiMessageSquare,
 } from 'react-icons/fi'
 
 type Role = 'user' | 'admin' | 'marshal' | 'registrar'
@@ -39,6 +40,7 @@ const baseItems: Item[] = [
   { label: 'Reservations', to: '/app/reservations', icon: FiCalendar, roles: ['user'] },
   { label: 'Recommended Packages', to: '/app/packages', icon: FiPackage, roles: ['user'] },
   { label: 'Online Waiver', to: '/app/waiver', icon: FiShield, roles: ['user'] },
+  { label: 'Game Feedback', to: '/app/feedback', icon: FiMessageSquare, roles: ['user'] },
 ]
 
 
@@ -63,6 +65,7 @@ const adminItems: Item[] = [
   { label: 'Package Recommendation', to: '/app/admin/rental-packages', icon: FiPackage, roles: ['admin'] },
   { label: 'Payments', to: '/app/admin/payments', icon: FiCreditCard, roles: ['admin'] },
   { label: 'Partnerships', to: '/app/admin/partnerships', icon: FiBriefcase, roles: ['admin'] },
+  { label: 'Player Feedback', to: '/app/admin/feedback', icon: FiMessageSquare, roles: ['admin'] },
   { label: 'Audit Logs', to: '/app/admin/audit-logs', icon: FiFileText, roles: ['admin'] },
 ]
 

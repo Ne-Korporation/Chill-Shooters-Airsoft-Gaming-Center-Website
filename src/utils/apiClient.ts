@@ -1,4 +1,15 @@
-export const apiBase = (import.meta as any).env?.VITE_API_URL || 'http://localhost:3001'
+function normalizeApiBase(value?: string) {
+  return value?.trim().replace(/\/+$/, '') || ''
+}
+
+export function getApiBase() {
+  const configured = normalizeApiBase((import.meta as any).env?.VITE_API_URL)
+  if (configured) return configured
+  if (import.meta.env.DEV) return 'http://localhost:3001'
+  return ''
+}
+
+export const apiBase = getApiBase()
 
 function readAuthToken() {
   try {
@@ -21,6 +32,10 @@ function buildHeaders(includeJsonBody = false) {
     headers['Content-Type'] = 'application/json'
   }
   return headers
+}
+
+export function getApiAuthHeaders() {
+  return buildHeaders()
 }
 
 export async function apiGet<T>(path: string) {
@@ -69,4 +84,3 @@ export async function apiDelete<T>(path: string) {
   }
   return json as T
 }
-

@@ -120,18 +120,18 @@ type WaiverRecord = {
 const locationFields: Record<LocationOption, Field[]> = {
   salawag: [
     { id: 'salawag-field-1', name: 'Upper Ground', location: 'Delta Stronghold Salawag', minPlayersPrivate: 10, locationId: 'salawag' },
-    { id: 'salawag-field-2', name: 'Lower Ground', location: 'Delta Stronghold Salawag', minPlayersPrivate: 20, locationId: 'salawag' },
-    { id: 'salawag-field-3', name: 'Forest', location: 'Delta Stronghold Salawag', minPlayersPrivate: 50, locationId: 'salawag' },
+    { id: 'salawag-field-2', name: 'Lower Ground', location: 'Delta Stronghold Salawag', minPlayersPrivate: 10, locationId: 'salawag' },
+    { id: 'salawag-field-3', name: 'Forest', location: 'Delta Stronghold Salawag', minPlayersPrivate: 10, locationId: 'salawag' },
   ],
   langkaan: [
     { id: 'langkaan-field-1', name: 'Upper Ground', location: 'Delta Stronghold Langkaan', minPlayersPrivate: 10, locationId: 'langkaan' },
-    { id: 'langkaan-field-2', name: 'Lower Ground', location: 'Delta Stronghold Langkaan', minPlayersPrivate: 20, locationId: 'langkaan' },
-    { id: 'langkaan-field-3', name: 'Forest', location: 'Delta Stronghold Langkaan', minPlayersPrivate: 50, locationId: 'langkaan' },
+    { id: 'langkaan-field-2', name: 'Lower Ground', location: 'Delta Stronghold Langkaan', minPlayersPrivate: 10, locationId: 'langkaan' },
+    { id: 'langkaan-field-3', name: 'Forest', location: 'Delta Stronghold Langkaan', minPlayersPrivate: 10, locationId: 'langkaan' },
   ],
   binan: [
     { id: 'binan-field-1', name: 'Upper Ground', location: 'LOMA Binan Laguna', minPlayersPrivate: 10, locationId: 'binan' },
-    { id: 'binan-field-2', name: 'Lower Ground', location: 'LOMA Binan Laguna', minPlayersPrivate: 20, locationId: 'binan' },
-    { id: 'binan-field-3', name: 'Forest', location: 'LOMA Binan Laguna', minPlayersPrivate: 50, locationId: 'binan' },
+    { id: 'binan-field-2', name: 'Lower Ground', location: 'LOMA Binan Laguna', minPlayersPrivate: 10, locationId: 'binan' },
+    { id: 'binan-field-3', name: 'Forest', location: 'LOMA Binan Laguna', minPlayersPrivate: 10, locationId: 'binan' },
   ],
 }
 
@@ -147,6 +147,8 @@ function locationCapacityPerSlot(location: LocationOption, slot: TimeSlot): numb
   const mult = slot === 'morning' ? 1.0 : slot === 'afternoon' ? 0.95 : 0.9
   return Math.floor(hectares * basePerHectare * mult)
 }
+
+type SlotCapacities = Record<LocationOption, Record<TimeSlot, number>>
 
 function getFieldsForLocation(location: LocationOption): Field[] {
   return locationFields[location] || []
@@ -270,6 +272,7 @@ export function ReservationCalendarPage() {
 
   const [reservations, setReservations] = useState<ReservationRecord[]>([])
   const [loadingReservations, setLoadingReservations] = useState(true)
+  const [serverCapacities, setServerCapacities] = useState<SlotCapacities | null>(null)
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([])
   const [loadingTeamMembers, setLoadingTeamMembers] = useState(true)
   const [loadingWaiverEligibility, setLoadingWaiverEligibility] = useState(true)
@@ -350,24 +353,21 @@ export function ReservationCalendarPage() {
     }
   }, [selectedLocation])
 
-  // Fetch reservations from API with proper status filtering
+  // Fetch only the minimal future slot data used for availability indicators.
   const fetchReservations = useCallback(async () => {
     let cancelled = false
     try {
       setLoadingReservations(true)
-      const res = await apiGet<{ ok: boolean; data: any[] }>('/api/reservations?limit=200')
+      const res = await apiGet<{ ok: boolean; data: any[]; capacities?: SlotCapacities }>('/api/reservation-availability')
       if (cancelled) return
 
+      if (res.capacities) setServerCapacities(res.capacities)
       const data = Array.isArray(res?.data) ? res.data : []
       // Include PENDING, CONFIRMED, and APPROVED reservations
       // so slots are blocked as soon as someone books
       const mappedReservations: ReservationRecord[] = data
-        .filter((item: any) => {
-          const status = String(item.reservationStatus || '').toLowerCase()
-          return status === 'pending' || status === 'confirmed' || status === 'approved'
-        })
         .map((item: any) => ({
-          id: String(item.id || item._id || ''),
+          id: `${item.locationId || ''}:${item.reservationDate || item.dateISO || ''}:${item.reservationTime || item.slot || ''}`,
           dateISO: item.reservationDate || item.dateISO || '',
           fieldIds: Array.isArray(item.fieldIds)
             ? item.fieldIds.map((id: any) => String(id)).filter(Boolean)
@@ -453,7 +453,7 @@ export function ReservationCalendarPage() {
     const fetchTeamMembers = async () => {
       try {
         setLoadingTeamMembers(true)
-        const res = await apiGet<{ ok: boolean; data: any[] }>('/api/user_accounts?limit=500')
+        const res = await apiGet<{ ok: boolean; data: any[] }>('/api/team-directory')
         if (cancelled) return
 
         const docs = Array.isArray(res?.data) ? res.data : []
@@ -801,7 +801,7 @@ export function ReservationCalendarPage() {
       return freeFields.length === 0
     }
     // For weekends: slots have capacity limits
-    const cap = capacityFor(selectedLocation, slotToCheck)
+    const cap = serverCapacities?.[selectedLocation]?.[slotToCheck] ?? capacityFor(selectedLocation, slotToCheck)
     const used = reservations
       .filter((r) => r.dateISO === dateISO &&
                      r.slot === slotToCheck &&
@@ -824,14 +824,14 @@ export function ReservationCalendarPage() {
     return reservations
       .filter((r) => r.dateISO === dateISO &&
                      r.slot === slot &&
-                     selectedFieldIds.some((fieldId) => r.fieldIds.includes(fieldId)) &&
+                     (sessionType === 'public' || selectedFieldIds.some((fieldId) => r.fieldIds.includes(fieldId))) &&
                      r.locationId === selectedLocation)
       .reduce((sum, r) => sum + r.players, 0)
-  }, [dateISO, slot, selectedFieldIds, reservations, selectedLocation])
+  }, [dateISO, slot, selectedFieldIds, reservations, selectedLocation, sessionType])
 
   const maxCapacity = useMemo(() => {
-    return capacityFor(selectedLocation, slot)
-  }, [selectedLocation, slot])
+    return serverCapacities?.[selectedLocation]?.[slot] ?? capacityFor(selectedLocation, slot)
+  }, [selectedLocation, serverCapacities, slot])
 
   const remainingSlots = maxCapacity - usedPlayers
   const hasRequiredSlotSelection = isWd ? slotTouched : selectedSlots.length > 0
@@ -914,7 +914,7 @@ export function ReservationCalendarPage() {
     if (!selectedPackage) {
       return { total: 0, perPlayer: 0, discountPct: 0, discountLabel: '—', discountSummary: '—', discountAmount: 0, equipmentTotalPerPlayer: 0, sessionMultiplier: 1, savings: 0, originalTotal: 0, mode: 'package' as const, entranceFeeTotal: 0, totalBeforeOverall: 0 }
     }
-    const sessionMultiplier = sessionType === 'private' ? 1.25 : 1.0
+    const sessionMultiplier = 1.0
     const packagePricing = calculatePackagePricing({
       pkg: selectedPackage,
       players,
@@ -1118,7 +1118,7 @@ export function ReservationCalendarPage() {
                      selectedFieldIds.some((fieldId) => r.fieldIds.includes(fieldId)) &&
                      r.locationId === selectedLocation)
       .reduce((sum, r) => sum + r.players, 0)
-    const currentCapacity = capacityFor(selectedLocation, slot)
+    const currentCapacity = serverCapacities?.[selectedLocation]?.[slot] ?? capacityFor(selectedLocation, slot)
     const currentRemaining = currentCapacity - currentUsed
 
     if (players > currentRemaining) {

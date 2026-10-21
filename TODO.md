@@ -1,380 +1,213 @@
-# Project Backlog — Chill Shooters Airsoft Gaming Center
+# Chill Shooters System — Core Features TODO
 
-## Frontend Implementation Status
-- [x] Step 4: Admin CRUD wiring in the admin pages. Implemented across [src/pages/admin/AdminEquipmentPage.tsx](src/pages/admin/AdminEquipmentPage.tsx), [src/pages/admin/AdminRentalPackagesPage.tsx](src/pages/admin/AdminRentalPackagesPage.tsx), [src/pages/admin/AdminWeaponsPage.tsx](src/pages/admin/AdminWeaponsPage.tsx), [src/pages/admin/AdminPaymentsPage.tsx](src/pages/admin/AdminPaymentsPage.tsx), [src/pages/admin/AdminReservationsPage.tsx](src/pages/admin/AdminReservationsPage.tsx), and [src/pages/admin/AdminGameplayPage.tsx](src/pages/admin/AdminGameplayPage.tsx).
+This checklist tracks the requested scope and what remains to make each workflow usable end-to-end. A screen or placeholder does not count as implemented. Keep items unchecked until their backend behavior, authorization, persistence, and tests are verified.
 
-## Frontend Detail Plan
+## Business rules and owner decisions
 
-### 1. Shared design system and interaction patterns
-- Priority: P0
-- Effort: M
-- Acceptance criteria:
-  - Buttons, cards, inputs, modals, tables, tabs, and alert states use consistent styling and spacing.
-  - Loading, empty, success, and error states are implemented consistently across pages.
-  - The app remains readable and usable on mobile, tablet, and desktop.
-  - Accessibility basics are covered for forms, dialogs, focus states, and keyboard navigation.
+- [x] Reservation deposits: standard/package and custom rental bookings use 50% of the server-calculated total; own-gear bookings use a fixed ₱350 deposit, capped at the booking total.
+- [x] Approved full rental package price: ₱750 total (₱150 entrance, ₱500 rifle rental, ₱50 vest, ₱50 mask, two magazines / 600 BBs), pending validation that the live package and inventory records match.
+- [x] Approved entrance fee: ₱150 per player.
+- [x] Approved field capacity settings are configurable: Salawag and Langkaan at 200/190/180, Biñan at 400/380/360 for morning/afternoon/evening. Confirm these remain current operating limits before launch.
+- [x] Private booking minimum: 10 players.
+- [x] Approved FPS ceilings: AEG 450 FPS; sniper/VSR 550 FPS.
+- [x] Cancellation penalty: none. Do not charge a cancellation fee unless the owner changes this policy.
+- [ ] Owner: confirm physical counts, serial/asset identifiers, and categories for center-owned and partner equipment. The supplied approximate counts are planning data, not verified inventory.
+- [ ] Owner: set reload, field-modification, damage/loss, and any future cancellation fee amounts before enabling those charges.
+- [ ] Owner: define CvSU/partner discount eligibility evidence, review authority, rate, and audit policy. The current configured 10% CvSU rate requires owner confirmation and eligibility must be verified by staff.
+- [ ] Owner: approve the REACH allocation percentage, qualifying net-revenue definition, and whether allocations are calculated before or after refunds/fees.
+- [ ] Owner: confirm partner-equipment 50/50 income-sharing calculation and settlement/reporting rules.
+- [ ] Owner: define waiver renewal/expiry rules, minimum player age policy, and retention period for identity and liability records.
+- [ ] Owner: confirm payment-provider deployment settings, supported currencies/payment methods, and receipt/legal invoice fields.
 
-### 2. Authentication screens and session experience
-- Priority: P0
-- Effort: M
-- Acceptance criteria:
-  - Login, register, forgot password, OTP, and reset password screens have complete user feedback.
-  - Session state persists cleanly across refreshes without breaking role-based navigation.
-  - Errors explain what the user should do next instead of showing raw failures.
-  - Role-specific redirects land the user on the correct dashboard.
+## 1. Interactive time-slot reservation and conflict validation
 
-### 3. Reservation booking UI and confirmation flow
-- Priority: P0
-- Effort: L
-- Acceptance criteria:
-  - Users can choose location, field, date, slot, session type, and player count in a guided flow.
-  - Availability, minimum players, and capacity warnings are visible before confirmation.
-  - Package selection, custom loadout selection, and summary review are all shown clearly.
-  - The final reservation confirmation screen reflects the exact booking state saved to the backend.
+**Goal:** Players book Salawag, Langkaan, or Biñan by date, morning/afternoon/evening slot, public/open game or private rental. Prevent capacity, field, and equipment overbooking. Support rescheduling at least three days before the original reservation, crediting eligible non-refundable deposits to the new slot.
 
-### 4. Payment UI, proof upload, and payment choice
-- Priority: P0
-- Effort: M
-- Acceptance criteria:
-  - Users can review payment totals, payer share, and split-payment settings before submitting.
-  - GCash and card payment paths are visually distinct and fully guided.
-  - Payment proof upload, QR display, and receipt preview are easy to follow on mobile.
-  - The payment screen reflects reservation metadata and does not require manual data re-entry.
+- [x] Validate booking date, slot, location, session type, player count, and selected fields on the server.
+- [x] Recheck field conflicts and capacity inside a transaction with a per-slot lock.
+- [x] Calculate reservation price and deposit on the server; ignore client totals and client-supplied own-gear counts.
+- [x] Configurable per-location/slot capacity values are served to the booking calendar.
+- [x] Atomically mark a reservation cancelled, append status history, and release its inventory holds.
+- [ ] Add periodic/on-focus availability refresh and clear UI for unavailable/full slots.
+- [ ] Add end-to-end MongoDB replica-set tests for two simultaneous bookings competing for the same field/capacity.
+- [ ] Add a rescheduling request workflow: authenticated reservation owner, reservation ID, new date/slot, and reason.
+- [ ] Enforce the three-day cutoff using server time and the original reservation date.
+- [ ] Revalidate new-slot capacity, field availability, and inventory in a transaction.
+- [ ] Transfer the eligible deposit credit without duplicating or losing payment history; audit request, approval, credit, and denial.
+- [ ] Test rescheduling deadline boundaries, concurrent claims, denial, and deposit-credit ledger behavior.
 
-### 5. Waiver UX and print flow
-- Priority: P0
-- Effort: M
-- Acceptance criteria:
-  - Waiver forms guide users through required fields with clear validation.
-  - Signature, proof, or uploaded assets are handled without breaking the form flow.
-  - Submitted waivers show status and allow printing or review where needed.
-  - Waiver state remains visible across user and admin pages.
+## 2. Budget and rental recommendation engine
 
-### 6. Player profile, skills, and progression UI
-- Priority: P1
-- Effort: M
-- Acceptance criteria:
-  - Player profiles display personal information, history, skills, and owned gear clearly.
-  - Skill or experience values refresh after completed games or admin-approved updates.
-  - Profile edits and image uploads have clear save states and error handling.
-  - Profile history shows the records that caused progression changes.
+**Goal:** Given budget and group size, recommend available packages or combinations, with transparent total and per-player prices.
 
-### 7. Team generator and team review module
-- Priority: P1
-- Effort: L
-- Acceptance criteria:
-  - Admins or marshals can generate teams based on player skills, availability, and booking context.
-  - Generated teams can be reviewed, adjusted, and saved before gameplay starts.
-  - Team results remain linked to the reservation or gameplay record.
-  - The frontend clearly distinguishes recommended teams from manually edited teams.
+- [ ] Use server-calculated pricing from persisted package/item records rather than a client-only quote.
+- [ ] Filter out unavailable, inactive, or under-stocked packages and equipment using current holds.
+- [ ] Show why each suggestion fits the budget and group size, including itemized total/per-player costs.
+- [ ] Test exact-budget, under-budget, no-match, and limited-stock cases.
 
-### 8. Admin analytics and printable reports
-- Priority: P1
-- Effort: M
-- Acceptance criteria:
-  - Admin reports include reservations, payments, waivers, gameplay, and operational totals.
-  - Print-friendly output works for browser print and PDF export.
-  - Report filters and summary cards help admins read the data quickly.
-  - The report page works well on common dashboard screen sizes.
+## 3. Custom equipment package and gear customization
 
-### 9. Admin operations dashboard and record review pages
-- Priority: P1
-- Effort: M
-- Acceptance criteria:
-  - Admin tables, filters, detail drawers, and action buttons follow a consistent pattern.
-  - Reservations, payments, weapons, equipment, and gameplay pages show related records together.
-  - Action feedback explains whether the record was approved, updated, or rejected.
-  - Print, inspect, and bulk-review actions are available where operationally useful.
+**Goal:** Let players choose AEGs, vests, masks, approved optics/scopes, and extra ammunition while repricing and enforcing inventory.
 
-### 10. Notifications, activity states, and data refresh
-- Priority: P1
-- Effort: S
-- Acceptance criteria:
-  - Notification toasts, banners, and counters match the latest backend state.
-  - Pages refresh or invalidate stale data after reservation, payment, waiver, or gameplay changes.
-  - The user can tell when a record is still pending, confirmed, reviewed, or rejected.
-  - The UI avoids stale totals after save actions.
+- [x] Validate selected catalog item status and reserve package/custom weapon/equipment stock transactionally.
+- [x] Release held stock atomically when a reservation is cancelled.
+- [ ] Normalize inventory to explicit quantities or individually tracked assets; validate current collection semantics and migrate inconsistent records.
+- [ ] Confirm the package includes the correct per-player quantities and that pricing matches those included items.
+- [ ] Configure reload options and prices after owner approval; add them to server pricing and inventory holds.
+- [ ] Define allowed optic/scope classifications with the owner and enforce them on the server.
+- [ ] Add replica-set integration tests for competing reservations against the same item stock and cancellation release.
 
-### 11. Frontend validation and error handling
-- Priority: P0
-- Effort: M
-- Acceptance criteria:
-  - Required fields, numeric-only fields, file uploads, and date rules are validated before submit.
-  - Error messages are specific and actionable.
-  - The app blocks invalid workflow transitions before they hit the backend.
-  - Failed requests show recoverable UI states instead of silent failures.
+## 4. Automated billing and pricing
 
-### 12. Responsive layout and mobile-first polish
-- Priority: P1
-- Effort: M
-- Acceptance criteria:
-  - Core flows remain usable on small screens without horizontal overflow.
-  - Tables collapse into mobile-friendly cards or stacked layouts where needed.
-  - Modals and sidebars remain usable on touch devices.
-  - Mobile users can complete booking, payment, and profile tasks without desktop-only controls.
+**Goal:** Calculate entrance, rental, add-on, discount, and approved penalty totals on the server.
 
-### 13. Frontend data binding for business rules
-- Priority: P1
-- Effort: M
-- Acceptance criteria:
-  - UI reflects pricing, discounts, minimum player rules, and availability from backend data.
-  - Player skill updates, team generation, and gameplay completion all show the latest saved state.
-  - Admin settings like GCash QR and payment instructions are displayed from persisted configuration.
-  - The frontend does not rely on hardcoded values for business-critical rules.
+- [x] Calculate base entrance fee and standard/custom/own-gear deposits on the server.
+- [x] Use persisted package and item prices; compute configured package discounts and verified-profile CvSU discount.
+- [x] Ignore client-submitted price, deposit, and own-weapon count fields.
+- [ ] Validate the live ₱750 full-rental package record, its included inventory, and itemized breakdown against the approved ₱150/₱500/₱50/₱50/600-BB composition.
+- [ ] Make reload, field modification, damage/loss, and future penalties configurable; do not activate a fee before owner approval.
+- [ ] Implement audited registrar review of CvSU/partner proof before enabling a discount for a player.
+- [ ] Use the same server pricing calculator for recommendation quotes and show the saved server total before payment.
+- [ ] Add tests for every enabled discount, add-on, pricing configuration boundary, and rounding rule.
 
-## Priority Legend
-- P0: Critical for working system and core business flow
-- P1: High value, required before launch or core operations
-- P2: Important but can be delivered after core flow is stable
-- S: Small effort (1–2 days)
-- M: Medium effort (3–5 days)
-- L: Large effort (1–2 weeks)
+## 5. Online registration and digital liability waiver
 
----
+**Goal:** Secure player profiles, ID submissions, and signed waivers linked to the correct identity/reservation.
 
-- Priority: P0
-- Effort: M
-- Acceptance criteria:
-  - Users can log in with email/password and correct role is returned.
-  - Admin, registrar, marshal, and player routes enforce access rules.
-  - Invalid credentials return clear error messages.
-- Priority: P0
-- Effort: M
-- Acceptance criteria:
-  - Required collections exist for users, reservations, payments, waivers, gameplay, equipment, and reports.
-  - Duplicate reservation submissions are prevented.
-  - User records contain correct role and verification fields.
-- Priority: P0
-- Effort: M
-- Acceptance criteria:
-  - All routes return consistent success/error payloads.
-  - Validation prevents missing required fields and invalid role values.
-  - Backend rejects malformed payment, waiver, and reservation requests.
-  - Error messages are meaningful to the frontend and operators.
-- Effort: M
-- Acceptance criteria:
-  - Payment proof uploads save to Cloudinary and return a valid public URL.
-  - Waiver signature/upload images save and are accessible by URL.
-  - Failed uploads return clear errors instead of creating broken records.
-  - Uploaded assets are linked to the correct user or reservation record.
-## Phase 2 — Core Customer Booking Flow
+- [x] Require authentication for identity uploads and restrict player uploads to the authenticated account.
+- [x] Restrict player profile updates from changing protected role/identity fields.
+- [ ] Bind waiver records to the verified account and relevant reservation/game session.
+- [ ] Define and implement duplicate, renewal, expiry, and staff-review workflows.
+- [ ] Review and test access controls for identity documents and waiver contents for every role.
+- [ ] Add a verifiable integrity mechanism for signed waiver data if cryptographic binding is required; do not describe data as cryptographically bound until implemented and tested.
+- [ ] Define owner-approved age policy, privacy/retention period, and secure deletion/export process.
 
-### 5. Reservation creation and booking rules
-- Priority: P0
-- Effort: L
-- Acceptance criteria:
-  - Reservations include user linkage and status tracking.
+## 6. Dynamic player profiles and skill-based team balancing
 
-### 6. Package recommendation and customization
-- Priority: P1
-- Effort: M
-- Acceptance criteria:
-  - Final package selections are saved with reservation data.
+**Goal:** Track validated age, experience/skill, ID status, and rental history; recommend balanced public-game teams while allowing marshals to override.
 
-### 7. Payment workflow with proof upload
-- Priority: P0
-- Effort: M
-- Acceptance criteria:
-  - Players can submit GCash or bank transfer proof.
-  - Payment proof is uploaded, stored, and linked to reservation.
-  - Transaction reference and amount are captured correctly.
-  - Registrar verification marks the payment as confirmed or rejected.
+- [ ] Define trusted profile fields and staff validation for age, experience, skill tier, ID status, and rental history.
+- [ ] Document and implement a deterministic age/experience weighting and team-balancing algorithm.
+- [ ] Generate recommendations from confirmed attendance, not just booking headcount.
+- [ ] Let marshals override recommendations and preserve both original recommendation and final assignment with actor/time audit history.
+- [ ] Link saved assignments to gameplay and reservation.
+- [ ] Test fairness/consistency, odd player counts, missing skill data, and marshal edits.
 
-### 8. Waiver submission and tracking
-- Priority: P0
-- Effort: M
-- Acceptance criteria:
-  - Users can complete a digital waiver before or during reservation flow.
-  - Waiver records connect to user and reservation profile.
-  - Waiver status is visible to admins and registrars.
-  - Duplicate or outdated waiver submissions are handled gracefully.
+## 7. Payment verification and receipt generation
 
----
+**Goal:** Accept approved deposits and remaining balances through GCash, bank transfer, cash, or configured card provider; staff verify proof and issue auditable receipts.
 
-## Phase 3 — Operations, Admin, and Game Management
+- [x] Enforce server-calculated deposit amounts and authenticated reservation ownership for player GCash submissions.
+- [x] Serialize competing GCash submissions, reject reused transaction references, and support configured split shares.
+- [x] Use Stripe Elements; verify succeeded PaymentIntents server-side against amount, currency, reservation, and owner.
+- [x] Serialize Stripe confirmation with GCash submissions and record verified Stripe payments idempotently by PaymentIntent.
+- [x] Audit staff payment status changes with actor, role, timestamp, and reason; prevent staff from changing Stripe-provider status manually.
+- [ ] Run live Stripe test-mode end-to-end checks and configure deployment publishable/secret keys and webhook/reconciliation policy.
+- [ ] Add audited registrar verification/rejection UX for GCash proof/reference and document approved bank-transfer proof handling.
+- [ ] Add registrar cash and bank-transfer balance settlement with actor, amount, method, timestamp, and reason.
+- [ ] Prevent overpayment/duplicate settlement across all payment methods and reconcile partial/split shares with the remaining balance.
+- [ ] Generate printable/downloadable receipts only for verified payments; persist receipt number and link it to the financial ledger.
+- [ ] Test live MongoDB transaction races and provider retry/idempotency behavior.
+- [ ] Never store card numbers or CVVs.
 
-### 9. Reservation confirmation and gameplay auto-creation
-- Priority: P0
-- Effort: L
-- Acceptance criteria:
-  - Approved reservations automatically create gameplay records when required.
-  - Duplicate gameplay records are not created for the same reservation.
-  - Gameplay status transitions are tracked from pending to active to completed.
-  - Admin can update gameplay status and view linked reservation details.
+## 8. Equipment rental inventory, chronograph, maintenance, and repairs
 
-### 10. Equipment inventory and maintenance tracking
-- Priority: P1
-- Effort: L
-- Acceptance criteria:
-  - Equipment stock and statuses are visible in admin pages.
-  - Equipment can be marked available, rented, or under maintenance.
-  - Maintenance records include issue date, repair status, and cost.
-  - Damaged equipment adds penalty tracking to billing records.
+**Goal:** Track center-owned and partner assets, player assignments, FPS readings, condition, maintenance, repairs, and approved charges.
 
-### 11. Weapon and rental package admin management
-- Priority: P1
-- Effort: M
-- Acceptance criteria:
-  - Admins can create, update, and deactivate equipment and weapons.
-  - Rental package values reflect current equipment and pricing.
-  - Inventory constraints are visible and enforced in the UI.
-  - Data is saved to MongoDB and reflected in user-facing flows.
+- [ ] Verify and enter actual quantities/assets for the approximate categories provided: M4 rifles, gel blasters, pistols, sniper rifles, machine gun, shotgun, pyrotechnics/bombs, and photoshoot weapons.
+- [ ] Assign individual asset IDs/serials; distinguish center-owned, partner-borrowed, consumable, and photoshoot-only equipment.
+- [ ] Record checkout to player/gameplay, return time, condition, missing/damaged status, and responsible staff.
+- [ ] Prevent issuance of maintained, damaged, unavailable, or already-assigned assets.
+- [ ] Record chronograph reading, test timestamp, weapon/asset, marshal, and pass/fail against configurable approved limits (AEG 450 FPS; sniper/VSR 550 FPS).
+- [ ] Record damage report, evidence, repair parts, gunsmith cost, status, and auditable responsible-player linkage.
+- [ ] Attach a damage/repair charge only after authorized review and owner-approved pricing; add it to the correct bill.
+- [ ] Track partner center, borrowed/returned state, revenue share, and 50/50 settlement only after owner confirms calculation rules.
+- [ ] Test concurrent asset assignment, return, maintenance hold, chronograph limits, and repair billing.
 
-### 12. Player management and profile records
-- Priority: P1
-- Effort: M
-- Acceptance criteria:
-  - Players have profile records with personal info, age, ID, reservation history, and ownership details.
-  - Admin can view and update player data.
-  - Experience and team grouping metadata are stored for marshal review.
-  - Historical records remain accessible for audit.
+## 9. Game preferences and tactical field layout requests
 
-### 13. Marshal and registrar workflows
-- Priority: P1
-- Effort: M
-- Acceptance criteria:
-  - Registrar can review reservations, payments, and waivers.
-  - Marshal can review games, assignments, and equipment readiness.
-  - Role-specific dashboards show only relevant operational records.
-  - Final operational decisions can be approved or rejected.
+**Goal:** Capture structured game modes and setup requests during booking and dispatch them to marshals before game day.
 
----
+- [ ] Add structured game-mode preference and obstacle/objective layout fields to the reservation request.
+- [ ] Validate allowed options and safely bound free-text details.
+- [ ] Provide marshals a role-protected advance preparation view with reservation schedule and request details.
+- [ ] Add preparation status, assigned marshal, update timestamp, and audit history.
+- [ ] Test player ownership and marshal/admin authorization.
 
-## Phase 4 — Analytics, Reporting, and Compliance
+## 10. Automated status notifications and email
 
-### 14. Financial and operational reporting
-- Priority: P1
-- Effort: M
-- Acceptance criteria:
-  - Admin can generate daily, weekly, monthly, and yearly reports.
-  - Reports include reservations, payments, equipment, penalties, and sales totals.
-  - Output can be viewed in the dashboard and exported for documentation.
-  - Reports are based on persisted MongoDB records, not stale UI state.
+**Goal:** Send persisted, event-triggered updates for reservations, payments, waivers, booking changes, weather, and game reminders.
 
-### 15. Notifications and reminders
-- Priority: P1
-- Effort: M
-- Acceptance criteria:
-  - Users receive reservation confirmation, waiver reminder, and payment verification notifications.
-  - Admin and registrar role notifications are triggered for relevant updates.
-  - Unread notification counts reflect real state.
-  - Notification records are stored and queryable.
+- [ ] Trigger in-app and email notifications only after the related database change succeeds.
+- [ ] Cover confirmation, payment verification/rejection, waiver reminders, booking changes, weather updates, and pre-game reminders.
+- [ ] Add configurable email/weather provider settings and scheduled reminder execution.
+- [ ] Record delivery status/failure and retry policy; do not report a failed send as successful.
+- [ ] Prevent duplicate notifications on transaction retries and repeated provider callbacks.
+- [ ] Test event-to-notification behavior and delivery failure handling.
 
-### 16. Feedback and satisfaction tracking
-- Priority: P2
-- Effort: S
-- Acceptance criteria:
-  - Players can submit session feedback after gameplay.
-  - Feedback records include service, equipment, facility, and overall satisfaction.
-  - Admin can review feedback trends and flag issues.
-  - Feedback is stored with the relevant reservation or user reference.
+## 11. Financial, operational, and audit report generator
 
-### 17. REACH and donation monitoring
-- Priority: P2
-- Effort: M
-- Acceptance criteria:
-  - Community outreach activities and donation data are tracked.
-  - Financial calculations are based on defined percentage or threshold rules.
-  - Donation status appears in admin financial reports.
-  - Records are attributable to qualifying sessions or events.
+**Goal:** Produce date-filtered, printable/exportable administrative reports with traceable calculations.
 
----
+- [ ] Add daily, weekly, monthly, yearly, and custom date-range filters.
+- [ ] Report reservations, gross/net revenue, players, equipment rentals, approved damage/penalty fees, and compliance data that is actually stored.
+- [ ] Include payment/refund/reconciliation and audit history with clear calculation definitions.
+- [ ] Ensure queries use the full date-filtered dataset, not a fixed recent-record limit.
+- [ ] Add print/PDF and export output with access restricted to authorized roles.
+- [ ] Test date boundaries, timezone handling, aggregation totals, and role permissions.
 
-## Phase 5 — Advanced Business Rules & Future Growth
+## 12. REACH community outreach fund tracker
 
-### 18. Discount and partnership rules
-- Priority: P1
-- Effort: M
-- Acceptance criteria:
-  - Admin can configure approved partner and institutional discounts.
-  - Eligible discounts apply automatically based on configured rules.
-  - Discount amounts appear in reservation totals and final billing.
-  - Exceptions are visible and auditable.
+**Goal:** Maintain a separate audit ledger for approved allocations from qualifying net revenue and outreach spending.
 
-### 19. Team recommendation engine
-- Priority: P2
-- Effort: L
-- Acceptance criteria:
-  - System recommends groups using age and experience data.
-  - Marshals can override recommendations without losing source data.
-  - Recommended teams are stored and reviewable by admins.
-  - Data supports current operational needs without full automation.
+- [ ] Obtain owner approval for allocation rate, qualifying revenue basis, timing, and refund/fee treatment.
+- [ ] Add configurable rules; no default/hardcoded allocation percentage.
+- [ ] Record allocation entries and outreach expenditures as separate auditable transactions.
+- [ ] Prevent duplicate allocation for the same qualifying payment/revenue event.
+- [ ] Display balances and transaction history in admin reports with restricted access.
+- [ ] Test allocation, reversal/refund adjustment, audit, and report reconciliation.
 
-### 20. Walk-in handling and pricing enforcement
-- Priority: P2
-- Effort: S
-- Acceptance criteria:
-  - Walk-in players with gear are charged the correct entrance fee.
-  - Rental walk-in flows use available inventory and pricing rules.
-  - UI blocks invalid walk-in requests that exceed inventory limits.
-  - Admin can reconcile walk-in bookings against recorded sales.
+## 13. Digital customer feedback and evaluation
 
-### 21. Native app and PWA enhancements
-- Priority: P3
-- Effort: L
-- Acceptance criteria:
-  - The web app remains mobile-friendly and installable as a PWA.
-  - Core flows work on mobile without browser friction.
-  - Offline support is not required for the initial release.
-  - Future app development remains possible without redesigning the data model.
+**Goal:** Collect post-game ratings for reservation, cleanliness, equipment, field layout, and staff/marshal performance; aggregate results for admins.
 
----
+- [x] Provide player/admin feedback pages and backend rating validation.
+- [x] Restrict player feedback to their own completed gameplay and one submission per game/player.
+- [x] Show admin/staff aggregate ratings and comments.
+- [ ] Verify the full player-to-admin workflow against persisted gameplay and live authorization in integration tests.
+- [ ] Add abuse controls/moderation and privacy rules for comments if approved.
 
-## Delivery Plan
+## 14. Staff recruitment and hiring portal
 
-### Phase 1: Foundation Launch
-Goal: Make the app usable and stable for the team.
-Deliverables:
-- Authentication and role gating
-- MongoDB structure and validation
-- Cloudinary image upload support
-- Core API consistency
+**Goal:** Publish job openings and accept applications with a protected staff review workflow.
 
-### Phase 2: Core Customer Experience
-Goal: Support actual customer booking and payment flow.
-Deliverables:
-- Reservation booking
-- Package recommendation
-- Payment proof upload
-- Waiver submission
+- [ ] Add public job listing records for roles such as marshal and registrar, with description and requirements.
+- [ ] Add validated application submission with contact details and approved supporting-document handling.
+- [ ] Restrict applicant records to authorized hiring staff; do not expose applications through public APIs.
+- [ ] Add review/status history, applicant notification, and retention/deletion rules.
+- [ ] Test public listing, private application data, and staff role enforcement.
 
-### Phase 3: Operational Management
-Goal: Support admin and staff running the business.
-Deliverables:
-- Reservation confirmation + gameplay automation
-- Equipment, weapon, and maintenance management
-- Player records and marshal/registrar processes
+## 15. RBAC and cross-platform security architecture
 
-### Phase 4: Reporting and Monitoring
-Goal: Support decision-making and compliance.
-Deliverables:
-- Reports and notifications
-- Feedback tracking
-- Donation and outreach reporting
+**Goal:** Enforce role boundaries on the server and provide responsive mobile/tablet/desktop workflows for admin, registrar, marshal, and player.
 
-### Phase 5: Advanced Automation and Expansion
-Goal: Add business intelligence and future-facing capabilities.
-Deliverables:
-- Discount automation
-- Team recommendation logic
-- Walk-in support refinements
-- Future PWA/mobile scaling
+- [x] Apply server-side authentication, role checks, and ownership checks to core reservation/payment/upload paths.
+- [x] Derive player identity from the authenticated session; do not trust client-supplied user IDs or roles for these workflows.
+- [ ] Complete an endpoint-by-endpoint authorization matrix for super admin, registrar, marshal, and player; test forbidden reads/writes as well as allowed access.
+- [ ] Restrict registrar to booking validation, counter billing, payment verification, and receipt operations.
+- [ ] Restrict marshal to attendance, chronograph, team balancing, and damage logging; prevent access to unrelated financial/admin data.
+- [ ] Restrict player portal to own booking, profile, waiver, package, payment, and feedback records.
+- [ ] Review audit logging, rate limiting, session/token handling, file access, input validation, and sensitive-data exposure.
+- [ ] Test booking, payment, waiver, inventory, reports, and recruitment flows on mobile, tablet, and desktop; fix usability/accessibility issues.
+- [ ] Run authorization/security tests and production configuration review before deployment.
 
----
+## Verification and release gates
 
-## Recommended Delivery Order
-1. P0 items first: auth, MongoDB, validation, upload, reservation flow, payment, waiver.
-2. P1 items next: admin operations, gameplay automation, equipment management, reporting.
-3. P2 items after operational stability: donation tracking, discount logic, walk-in enhancements.
-4. P3 items as optional roadmap items after the core product is stable.
-
----
-
-## Definition of Done
-A feature is considered done when:
-- The frontend flow works end-to-end.
-- The backend route saves and reads the correct MongoDB documents.
-- Validation and error handling are in place.
-- Admin or staff can complete the workflow without manual workarounds.
-- Data is visible and consistent across related pages.
-- The functionality is tested with realistic reservations, payments, and waiver scenarios.
+- [x] Add unit tests for server-side pricing, slot rules, inventory hold logic, GCash/Stripe payment rules, and cancellation/status handling.
+- [x] Run the production frontend build and TypeScript check; resolve TypeScript errors.
+- [ ] Add integration tests against a MongoDB replica set for transactional booking, inventory, payments, and cancellation.
+- [ ] Add provider test-mode integration tests for Stripe and end-to-end staff verification tests for manual payment methods.
+- [ ] Add browser-level tests for core booking, payment, waiver, feedback, registrar, and marshal workflows.
+- [ ] Configure and verify production environment variables, owner-approved business values, backups, and operational monitoring.
+- [ ] Revisit this checklist after each phase; mark an item complete only after its acceptance criteria pass end-to-end.
+- [ ] Do not create a commit unless explicitly requested.
