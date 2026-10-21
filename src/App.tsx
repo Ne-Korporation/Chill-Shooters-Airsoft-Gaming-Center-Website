@@ -168,7 +168,7 @@ export default function App() {
 
 
 
-        <Route path="admin" element={<AdminDashboardPageWrapper><AdminDashboardPage /></AdminDashboardPageWrapper>} />
+        <Route path="admin" element={<AdminDashboardPageWrapper />} />
         <Route path="admin/reservations" element={<AdminPageWrapper><AdminReservationsPage /></AdminPageWrapper>} />
         <Route path="admin/gameplay" element={<AdminPageWrapper><AdminGameplayPage /></AdminPageWrapper>} />
 

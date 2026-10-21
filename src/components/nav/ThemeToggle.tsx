@@ -1,22 +1,20 @@
 import React from 'react'
 import { FiMoon, FiSun } from 'react-icons/fi'
 import { useTheme } from '../../context/ThemeContext'
-import { Button } from '../ui/Button'
-
 
 export function ThemeToggle() {
   const { theme, toggleTheme } = useTheme()
+  const label = theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'
 
   return (
-    <Button
-      variant="ghost"
-      size="sm"
-      className="h-10 px-3"
+    <button
+      type="button"
       onClick={toggleTheme}
+      aria-label={label}
+      title={label}
+      className="hover-row rounded-xl p-2 text-muted hover:text-text"
     >
       {theme === 'dark' ? <FiMoon /> : <FiSun />}
-      <span className="hidden sm:inline">{theme === 'dark' ? 'Dark' : 'Light'}</span>
-    </Button>
+    </button>
   )
 }
-

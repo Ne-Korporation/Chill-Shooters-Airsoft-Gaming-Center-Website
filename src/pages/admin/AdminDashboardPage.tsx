@@ -1,10 +1,9 @@
 import React, { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { FiBriefcase, FiCalendar, FiClock, FiCreditCard, FiFileText, FiTool, FiUsers } from 'react-icons/fi'
 import { DashboardPostsPanel } from '../../components/dashboard/DashboardPostsPanel'
-import { Card } from '../../components/ui/Card'
+import { ActionRow, ActivityList, DashboardHeader, Panel, StatTile, type ActivityTone } from '../../components/dashboard/DashboardParts'
 import { apiGet } from '../../utils/apiClient'
 
-type ActivityTone = 'accent' | 'success' | 'danger' | 'muted'
 
 type ActivityItem = {
   title: string
@@ -31,55 +30,6 @@ const defaultState: DashboardState = {
   equipmentAlerts: 0,
   reviewQueue: 0,
   recentActivity: [],
-}
-
-const StatCard = ({
-  label,
-  value,
-  tone,
-}: {
-  label: string
-  value: string
-  tone: 'accent' | 'success' | 'danger' | 'muted'
-}) => {
-  const toneClass =
-    tone === 'accent'
-      ? 'text-accent'
-      : tone === 'success'
-        ? 'text-success'
-        : tone === 'danger'
-          ? 'text-danger'
-          : 'text-muted'
-
-  return (
-    <Card className="p-4">
-      <div className="text-xs uppercase tracking-widest text-muted">{label}</div>
-      <div className={`mt-2 text-2xl font-bold ${toneClass}`}>{value}</div>
-    </Card>
-  )
-}
-
-const QuickAction = ({
-  title,
-  subtitle,
-  href,
-}: {
-  title: string
-  subtitle: string
-  href: string
-}) => {
-  return (
-    <Link to={href} className="block">
-      <Card className="p-4 transition hover:bg-white/5">
-        <div className="text-sm font-semibold">{title}</div>
-        <div className="mt-1 text-xs text-muted">{subtitle}</div>
-        <div className="mt-3 flex h-9 items-center justify-between rounded-xl border border-white/5 bg-white/5 px-3">
-          <div className="text-[11px] text-muted">Open module</div>
-          <div className="h-2.5 w-2.5 rounded-full bg-accent" />
-        </div>
-      </Card>
-    </Link>
-  )
 }
 
 function formatRelativeTime(value?: string) {
@@ -198,124 +148,89 @@ export function AdminDashboardPage() {
     }
   }, [])
 
+  const attentionCount = dashboard.pendingApprovals + dashboard.reviewQueue + dashboard.equipmentAlerts
+
   return (
-    <div className="space-y-4">
-      <div>
-        <h1 className="text-3xl font-bold">Admin Dashboard</h1>
-        <p className="text-sm text-muted">Command Center Overview with live operational data.</p>
-      </div>
+    <div className="space-y-6">
+      <DashboardHeader
+        eyebrow="Admin"
+        title="Overview"
+        description="What's happening across reservations, players, and payments."
+      />
 
       {error ? (
-        <div className="rounded-2xl border border-danger/20 bg-danger/10 px-4 py-3 text-sm text-danger">
+        <div className="rounded-2xl border border-danger bg-[rgba(214,69,69,0.08)] px-4 py-3 text-sm text-danger">
           {error}
         </div>
       ) : null}
 
-      <div className="grid gap-4 md:grid-cols-3">
-        <StatCard label="Reservations" value={loading ? '…' : String(dashboard.reservations)} tone="accent" />
-        <StatCard label="Players" value={loading ? '…' : String(dashboard.players)} tone="success" />
-        <StatCard label="Payments" value={loading ? '…' : String(dashboard.payments)} tone="danger" />
+      <div className="grid gap-4 sm:grid-cols-3">
+        <StatTile label="Reservations" value={dashboard.reservations} icon={FiCalendar} hint="All bookings" loading={loading} />
+        <StatTile label="Players" value={dashboard.players} icon={FiUsers} hint="Registered accounts" loading={loading} />
+        <StatTile label="Payments" value={dashboard.payments} icon={FiCreditCard} hint="Submitted to date" loading={loading} />
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-3">
-        <div className="space-y-4 lg:col-span-2">
-          <Card className="p-4">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <div className="text-xs uppercase tracking-widest text-muted">Operational Snapshot</div>
-
-                <div className="mt-2 text-lg font-semibold">Live workflow status</div>
-              </div>
-              <div className="rounded-xl border border-white/5 bg-white/5 px-3 py-2">
-                <div className="text-[11px] text-muted">System</div>
-                <div className="mt-1 text-sm font-bold text-accent">Nominal</div>
-              </div>
-            </div>
-
-            <div className="mt-4 grid gap-3 sm:grid-cols-3">
-              <Card className="bg-white/5 p-3">
-                <div className="text-[11px] uppercase tracking-widest text-muted">Pending approvals</div>
-                <div className="mt-2 text-xl font-bold text-accent">{loading ? '…' : dashboard.pendingApprovals}</div>
-              </Card>
-              <Card className="bg-white/5 p-3">
-                <div className="text-[11px] uppercase tracking-widest text-muted">Equipment alerts</div>
-                <div className="mt-2 text-xl font-bold text-danger">{loading ? '…' : dashboard.equipmentAlerts}</div>
-              </Card>
-              <Card className="bg-white/5 p-3">
-                <div className="text-[11px] uppercase tracking-widest text-muted">Review queue</div>
-                <div className="mt-2 text-xl font-bold text-success">{loading ? '…' : dashboard.reviewQueue}</div>
-              </Card>
-            </div>
-          </Card>
-
-          <Card className="p-4">
-            <div className="text-xs uppercase tracking-widest text-muted">Recent Activity</div>
-            <div className="mt-2 text-sm text-muted">
-              The latest reservation and payment updates from the system.
-            </div>
-            <div className="mt-4 space-y-2">
-              {dashboard.recentActivity.length === 0 && !loading ? (
-                <div className="rounded-xl border border-white/5 bg-white/5/60 px-3 py-2 text-sm text-muted">
-                  No recent activity found yet.
-                </div>
-              ) : (
-                dashboard.recentActivity.map((row, idx) => (
-                  <div
-                    key={`${row.title}-${idx}`}
-                    className="flex items-center justify-between gap-3 rounded-xl border border-white/5 bg-white/5/60 px-3 py-2"
-                  >
-                    <div>
-                      <div className="text-sm font-semibold">{row.title}</div>
-                      <div className="text-xs text-muted">{row.subtitle}</div>
-                    </div>
-                    <div className={`text-xs font-semibold ${row.tone === 'accent' ? 'text-accent' : row.tone === 'success' ? 'text-success' : row.tone === 'danger' ? 'text-danger' : 'text-muted'}`}>
-                      {row.meta}
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </Card>
-        </div>
-
+      <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
         <div className="space-y-4">
-          <Card className="p-4">
-            <div className="text-xs uppercase tracking-widest text-muted">Quick Actions</div>
-            <div className="mt-2 text-sm text-muted">Jump to the admin modules that match your day-to-day workflow.</div>
-          </Card>
+          <Panel
+            title="Needs attention"
+            description={loading ? undefined : attentionCount > 0 ? `${attentionCount} items waiting on you` : 'All caught up'}
+          >
+            <div className="space-y-0.5">
+              <ActionRow
+                to="/app/admin/reservation-management"
+                icon={FiClock}
+                title="Reservations to approve"
+                description={dashboard.pendingApprovals > 0 ? 'Pending or flagged for review' : 'Nothing pending'}
+                badge={loading ? undefined : dashboard.pendingApprovals}
+              />
+              <ActionRow
+                to="/app/admin/payments"
+                icon={FiCreditCard}
+                title="Payments to review"
+                description={dashboard.reviewQueue > 0 ? 'Proofs waiting for verification' : 'Nothing pending'}
+                badge={loading ? undefined : dashboard.reviewQueue}
+              />
+              <ActionRow
+                to="/app/admin/equipment"
+                icon={FiTool}
+                title="Equipment alerts"
+                description={dashboard.equipmentAlerts > 0 ? 'Low stock or in maintenance' : 'All gear available'}
+                badge={loading ? undefined : dashboard.equipmentAlerts}
+              />
+            </div>
+          </Panel>
 
-          <div className="space-y-3">
-            <QuickAction
-              title="Reservation Management"
-              subtitle="Approve, reject, and reschedule bookings from one place."
-              href="/app/admin/reservation-management"
-            />
-            <QuickAction
-              title="Users"
-              subtitle="Review players and manage access for staff and players."
-              href="/app/admin/players"
-            />
-            <QuickAction
-              title="Partnerships"
-              subtitle="Track sponsors, schools, and community collaborations."
-              href="/app/admin/partnerships"
-            />
-            <QuickAction
-              title="Audit Logs"
-              subtitle="Trace recent administrative activity and changes."
-              href="/app/admin/audit-logs"
-            />
-          </div>
+          <Panel title="Recent activity">
+            <ActivityList items={dashboard.recentActivity} loading={loading} emptyText="No recent activity yet." />
+          </Panel>
         </div>
+
+        <Panel title="Shortcuts">
+          <div className="space-y-0.5">
+            <ActionRow
+              to="/app/admin/reservation-management"
+              icon={FiCalendar}
+              title="Reservation management"
+              description="Approve, reject, and reschedule"
+            />
+            <ActionRow to="/app/admin/players" icon={FiUsers} title="Users" description="Players and staff access" />
+            <ActionRow
+              to="/app/admin/partnerships"
+              icon={FiBriefcase}
+              title="Partnerships"
+              description="Sponsors, schools, and communities"
+            />
+            <ActionRow to="/app/admin/audit-logs" icon={FiFileText} title="Audit logs" description="Recent admin changes" />
+          </div>
+        </Panel>
       </div>
 
       <DashboardPostsPanel
         canManage
-        title="Dashboard posts"
-        subtitle="Publish updates, reminders, and image posts that appear across every dashboard page."
+        title="Announcements"
+        subtitle="Posts here appear on every dashboard: players, marshals, and registrars."
       />
     </div>
   )
 }
-
-

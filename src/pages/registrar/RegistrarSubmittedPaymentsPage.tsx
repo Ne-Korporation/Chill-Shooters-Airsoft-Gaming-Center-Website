@@ -92,10 +92,7 @@ export function RegistrarSubmittedPaymentsPage() {
   return (
     <div className="space-y-4">
       <div className="space-y-2">
-        <div className="inline-flex items-center gap-2 rounded-full bg-white/5 px-4 py-2 text-xs text-muted border border-white/5">
-          <span className="h-2.5 w-2.5 rounded-full bg-accent" />
-          <span className="uppercase tracking-[0.18em]">Registrar</span>
-        </div>
+        <div className="text-sm font-medium text-accent">Registrar</div>
         <h1 className="text-3xl font-bold">Submitted Online Payments</h1>
         <p className="text-muted text-sm">Verify uploaded payment proofs (prototype state-only).</p>
       </div>

@@ -37,10 +37,7 @@ export function ForgotPasswordPage() {
           className="grid gap-4 lg:grid-cols-2 lg:gap-6"
         >
           <div className="space-y-3">
-            <div className="inline-flex items-center gap-2 rounded-full bg-white/5 px-4 py-2 text-xs text-muted border border-white/5">
-              <span className="h-2.5 w-2.5 rounded-full bg-accent" />
-              <span className="uppercase tracking-[0.18em]">Recovery</span>
-            </div>
+            <div className="text-sm font-medium text-accent">Recovery</div>
             <h1 className="text-3xl font-bold leading-tight lg:text-4xl">Password Reset Protocol</h1>
             <p className="text-muted">Submit your email to receive an OTP verification code for reset.</p>
 

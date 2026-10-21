@@ -31,12 +31,12 @@ export function Button({
 
   const variants: Record<string, string> = {
     primary:
-      'bg-primary text-background shadow-soft hover:brightness-110 active:brightness-95',
+      'bg-primary text-white shadow-soft hover:brightness-110 active:brightness-95',
     secondary:
-      'bg-secondary text-background shadow-soft hover:brightness-110 active:brightness-95',
+      'bg-secondary text-white shadow-soft hover:brightness-110 active:brightness-95',
     ghost:
-      'bg-white/5 text-text border border-white/10 hover:bg-white/8 active:bg-white/10',
-    danger: 'bg-danger text-background shadow-soft hover:brightness-110 active:brightness-95',
+      'surface hover-row text-text',
+    danger: 'bg-danger text-white shadow-soft hover:brightness-110 active:brightness-95',
   }
 
   return (

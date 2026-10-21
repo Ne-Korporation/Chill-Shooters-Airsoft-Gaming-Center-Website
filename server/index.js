@@ -43,8 +43,71 @@ if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
     },
   })
 } else {
-  console.warn('SMTP credentials not provided. /api/contact will fail until configured.')
+  if (!process.env.BREVO_API_KEY) console.warn('No BREVO_API_KEY or SMTP credentials set. /api/contact will fail until configured.')
 }
+
+// Public: must be registered before the /api routers, which require auth.
+const CONTACT_TO = process.env.TO_EMAIL || 'support@chillshooters.com'
+const EMAIL_PATTERN = /^[^s@]+@[^s@]+.[^s@]+$/
+
+// Render's free tier blocks outbound SMTP, so prefer Brevo's HTTPS API when
+// BREVO_API_KEY is set and fall back to the SMTP transporter for local dev.
+async function sendContactEmail({ name, email, message }) {
+  const subject = `Website contact - ${name}`
+  const text = `From: ${name} <${email}>
+
+${message}`
+
+  if (process.env.BREVO_API_KEY) {
+    const sender = process.env.EMAIL_FROM || process.env.FROM_EMAIL
+    if (!sender) throw new Error('EMAIL_FROM is not configured')
+    const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST',
+      headers: {
+        'api-key': process.env.BREVO_API_KEY,
+        'content-type': 'application/json',
+        accept: 'application/json',
+      },
+      body: JSON.stringify({
+        sender: { email: sender, name: 'Chill Shooters Website' },
+        to: [{ email: CONTACT_TO }],
+        replyTo: { email, name },
+        subject,
+        textContent: text,
+      }),
+      signal: AbortSignal.timeout(10000),
+    })
+    if (!res.ok) throw new Error(`Brevo responded ${res.status}: ${await res.text()}`)
+    return
+  }
+
+  if (!transporter) throw new Error('mail transporter not configured')
+  await transporter.sendMail({
+    from: process.env.FROM_EMAIL || process.env.SMTP_USER,
+    to: CONTACT_TO,
+    replyTo: `${name} <${email}>`,
+    subject,
+    text,
+  })
+}
+
+app.post('/api/contact', async (req, res) => {
+  const name = String(req.body?.name || '').trim().slice(0, 100)
+  const email = String(req.body?.email || '').trim().slice(0, 200)
+  const message = String(req.body?.message || '').trim().slice(0, 5000)
+
+  if (!name) return res.status(400).json({ ok: false, error: 'Please enter your name.' })
+  if (!EMAIL_PATTERN.test(email)) return res.status(400).json({ ok: false, error: 'Please enter a valid email address.' })
+  if (!message) return res.status(400).json({ ok: false, error: 'Please write a message.' })
+
+  try {
+    await sendContactEmail({ name, email, message })
+    return res.json({ ok: true })
+  } catch (err) {
+    console.error('contact email error', err)
+    return res.status(502).json({ ok: false, error: 'Could not send your message right now.' })
+  }
+})
 
 app.use('/api', uploadRouter)
 app.use('/api/uploads', uploadRouter)
@@ -60,27 +123,6 @@ app.delete('/api/notifications', requireAuth, requireRole('admin'), async (req, 
     return res.json({ ok: true, deletedCount: result.deletedCount || 0 })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
-  }
-})
-
-app.post('/api/contact', async (req, res) => {
-  const { name, email, message } = req.body || {}
-  if (!message) return res.status(400).json({ error: 'message required' })
-  if (!transporter) return res.status(500).json({ error: 'mail transporter not configured' })
-
-  const mailOptions = {
-    from: process.env.FROM_EMAIL || process.env.SMTP_USER,
-    to: process.env.TO_EMAIL || 'support@chillshooters.com',
-    subject: `Website contact${name ? ` - ${name}` : ''}`,
-    text: `From: ${name || 'Anonymous'} <${email || 'no-reply'}>\n\n${message}`,
-  }
-
-  try {
-    const info = await transporter.sendMail(mailOptions)
-    return res.json({ ok: true, info })
-  } catch (err) {
-    console.error('sendMail error', err)
-    return res.status(500).json({ error: 'failed to send', details: String(err) })
   }
 })
 

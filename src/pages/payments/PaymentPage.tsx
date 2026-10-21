@@ -57,10 +57,7 @@ class PaymentPageErrorBoundary extends React.Component<{ children: React.ReactNo
       return (
         <div className="space-y-4">
           <div className="space-y-2">
-            <div className="inline-flex items-center gap-2 rounded-full bg-white/5 px-4 py-2 text-xs text-muted border border-white/5">
-              <span className="h-2.5 w-2.5 rounded-full bg-accent" />
-              <span className="uppercase tracking-[0.18em]">Payment</span>
-            </div>
+            <div className="text-sm font-medium text-accent">Payment</div>
             <h1 className="text-3xl font-bold">Reservation Payment</h1>
             <p className="text-muted text-sm">UI error fallback (prototype).</p>
           </div>
@@ -447,10 +444,7 @@ function PaymentPageContent() {
   return (
     <div id="payment-section" className="space-y-4">
       <div className="space-y-2">
-        <div className="inline-flex items-center gap-2 rounded-full bg-white/5 px-4 py-2 text-xs text-muted border border-white/5">
-          <span className="h-2.5 w-2.5 rounded-full bg-accent" />
-          <span className="uppercase tracking-[0.18em]">Payment</span>
-        </div>
+        <div className="text-sm font-medium text-accent">Payment</div>
         <h1 className="text-3xl font-bold">Reservation Payment</h1>
         <p className="text-muted text-sm">GCash still uploads proof, while card payments now confirm instantly and write directly to the records.</p>
       </div>

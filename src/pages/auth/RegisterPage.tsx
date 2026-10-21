@@ -104,10 +104,7 @@ export function RegisterPage() {
           className="grid gap-4 lg:grid-cols-2 lg:gap-6"
         >
           <div className="space-y-3">
-            <div className="inline-flex items-center gap-2 rounded-full bg-white/5 px-4 py-2 text-xs text-muted border border-white/5">
-              <span className="h-2.5 w-2.5 rounded-full bg-accent" />
-              <span className="uppercase tracking-[0.18em]">Registration</span>
-            </div>
+            <div className="text-sm font-medium text-accent">Registration</div>
             <h1 className="text-3xl font-bold leading-tight lg:text-4xl">Create your operator profile</h1>
             <p className="text-muted">
               Secure onboarding for managing chill shooter reservations, payments, and waivers.

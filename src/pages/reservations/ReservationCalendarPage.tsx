@@ -22,6 +22,7 @@ import {
 
 import { apiGet, apiPost } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
+import { LANDING_PREFILL_KEY, type LandingReservationPrefill } from '../auth/LandingPage'
 import { Card } from '../../components/ui/Card'
 import { Input } from '../../components/ui/Input'
 import { Button } from '../../components/ui/Button'
@@ -239,6 +240,27 @@ export function ReservationCalendarPage() {
     ? (location.state as PackageRecommendationPrefill)
     : undefined
 
+  // Booking bar selections from the landing page, if the user came from there.
+  const [landingPrefill] = useState<LandingReservationPrefill | null>(() => {
+    try {
+      const raw = sessionStorage.getItem(LANDING_PREFILL_KEY)
+      const parsed = raw ? (JSON.parse(raw) as LandingReservationPrefill) : null
+      if (!parsed || !locationOptions.some((l) => l.id === parsed.location)) return null
+      if (!timeSlots.includes(parsed.slot)) return null
+      return parsed
+    } catch {
+      return null
+    }
+  })
+
+  useEffect(() => {
+    try {
+      sessionStorage.removeItem(LANDING_PREFILL_KEY)
+    } catch {
+      // ignore
+    }
+  }, [])
+
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1)
   const [isConfirming, setIsConfirming] = useState(false)
   const [packages, setPackages] = useState<RentalPackage[]>([])
@@ -290,22 +312,27 @@ export function ReservationCalendarPage() {
     })
   }, [today])
 
-  const [selectedLocation, setSelectedLocation] = useState<LocationOption>('salawag')
+  const [selectedLocation, setSelectedLocation] = useState<LocationOption>(landingPrefill?.location ?? 'salawag')
 
   const availableFields = useMemo(() => {
     return getFieldsForLocation(selectedLocation)
   }, [selectedLocation])
 
   const [selectedFieldIds, setSelectedFieldIds] = useState<string[]>(() => {
-    const fields = getFieldsForLocation('salawag')
+    const fields = getFieldsForLocation(landingPrefill?.location ?? 'salawag')
+    const prefilled = fields.find((f) => f.name === landingPrefill?.fieldArea)
+    if (prefilled) return [prefilled.id]
     return fields.length > 0 ? [fields[0].id] : []
   })
 
   const initialDateISO = toISODate(addDays(today, 1))
   const todayDateISO = toISODate(today)
-  const [dateISO, setDateISO] = useState(initialDateISO)
-  const initialIsWeekend = isWeekend(initialDateISO)
-  const [slot, setSlot] = useState<TimeSlot>('morning')
+  // ISO dates compare correctly as strings; ignore a prefilled date that has already passed.
+  const startDateISO =
+    landingPrefill?.dateISO && landingPrefill.dateISO >= initialDateISO ? landingPrefill.dateISO : initialDateISO
+  const [dateISO, setDateISO] = useState(startDateISO)
+  const initialIsWeekend = isWeekend(startDateISO)
+  const [slot, setSlot] = useState<TimeSlot>(landingPrefill?.slot ?? 'morning')
   const [selectedSlots, setSelectedSlots] = useState<TimeSlot[]>([])
   const [slotTouched, setSlotTouched] = useState(false)
   const [sessionType, setSessionType] = useState<SessionType>(
@@ -392,6 +419,7 @@ export function ReservationCalendarPage() {
 
   const defaultPlayers = useMemo(() => {
     if (packagePrefill?.players) return packagePrefill.players
+    if (landingPrefill?.players) return landingPrefill.players
     const isWd = isWeekday(dateISO)
     return isWd ? 10 : MIN_PLAYERS
   }, [dateISO, packagePrefill?.players])
@@ -1047,10 +1075,7 @@ export function ReservationCalendarPage() {
 
   const StepHeader = ({ title, subtitle }: { title: string; subtitle: string }) => (
     <div>
-      <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs text-muted">
-        <span className="grid h-2.5 w-2.5 place-items-center rounded-full bg-accent" />
-        <span className="uppercase tracking-[0.18em]">Reservation</span>
-      </div>
+      <div className="text-sm font-medium text-accent">Reservation</div>
       <h1 className="mt-3 text-3xl font-bold">{title}</h1>
       <p className="mt-1 text-sm text-muted">{subtitle}</p>
     </div>

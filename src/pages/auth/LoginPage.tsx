@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react'
 
 import { useForm } from 'react-hook-form'
 import toast from 'react-hot-toast'
-import { useNavigate, Link } from 'react-router-dom'
+import { useNavigate, useLocation, Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { FiEye, FiEyeOff } from 'react-icons/fi'
 import { useTheme } from '../../context/ThemeContext'
@@ -21,6 +21,9 @@ type FormValues = {
 export function LoginPage() {
   const { login, loginWithGoogle } = useAuth()
   const navigate = useNavigate()
+  const location = useLocation()
+  // Set by RequireAuth and the landing page booking bar so login returns the user where they were headed.
+  const redirectFrom = (location.state as { from?: string } | null)?.from
   const [showPassword, setShowPassword] = useState(false)
 
   const {
@@ -33,8 +36,8 @@ export function LoginPage() {
 
   const missionCopy = useMemo(
     () => ({
-      title: 'Access the Operations Console',
-      subtitle: 'Sign in to manage reservations, players, and inventory.',
+      title: 'Welcome back',
+      subtitle: 'Log in to book games, sign your waiver, and track your payments.',
       hint: 'Demo roles are inferred by email suffix:',
       suffixes: [
         { k: '@admin.local', v: 'admin' },
@@ -46,6 +49,7 @@ export function LoginPage() {
   )
 
   const getRedirectRoute = (role?: string) => {
+    if (redirectFrom?.startsWith('/app')) return redirectFrom
     if (String(role || '').trim().toLowerCase() === 'admin') return '/app/admin'
     return '/app'
   }
@@ -86,10 +90,7 @@ export function LoginPage() {
           className="grid gap-4 lg:grid-cols-2 lg:gap-6"
 >
           <div className="space-y-4">
-            <div className="inline-flex items-center gap-2 rounded-full bg-white/5 px-4 py-2 text-xs text-muted border border-white/5">
-              <span className="h-2.5 w-2.5 rounded-full bg-accent" />
-              <span className="uppercase tracking-[0.18em]">AIM • BOOK • PLAY</span>
-            </div>
+            <div className="text-sm font-medium text-accent">Aim. Book. Play.</div>
             <h1 className={`text-3xl font-bold leading-tight lg:text-4xl ${theme === 'light' ? 'text-black' : ''}`}>{missionCopy.title}</h1>
             <p className="text-muted">{missionCopy.subtitle}</p>
 
@@ -119,13 +120,13 @@ export function LoginPage() {
 
             <form className="space-y-4" onSubmit={handleSubmit(onSubmit)}>
               <div className="space-y-2">
-                <div className="text-xs uppercase tracking-widest text-muted">Operator Login</div>
-                <h2 className="text-xl font-bold">Enter Credentials</h2>
+                <div className="text-sm font-medium text-accent">Chill Shooters</div>
+                <h2 className="text-xl font-bold">Log in to your account</h2>
               </div>
 
               <Input
                 label="Email"
-                placeholder="operator@chillshooters.com"
+                placeholder="you@example.com"
                 error={errors.email?.message}
                 {...register('email', { required: 'Email is required' })}
               />
@@ -159,8 +160,8 @@ export function LoginPage() {
               </Button>
 
               <div className="pt-3">
-                <Button type="button" onClick={handleGoogleSignIn} className="w-full">
-                  Sign in with Google
+                <Button type="button" variant="ghost" onClick={handleGoogleSignIn} className="w-full">
+                  Continue with Google
                 </Button>
               </div>
 

@@ -45,7 +45,7 @@ export function RegistrarAvailedPackagesPage() {
       const data = Array.isArray(res?.data) ? res.data : []
       const mapped = data
         .filter((item) => String(item.reservationStatus || '').toLowerCase() === 'confirmed' || String(item.reservationStatus || '').toLowerCase() === 'pending')
-        .map((item) => ({
+        .map((item): PackageRow => ({
           id: String(item.id || item._id || ''),
           packageName: item.packageName || item.selectedGameplayName || '—',
           gameMode: item.gameMode || item.mode || '—',
@@ -87,10 +87,7 @@ export function RegistrarAvailedPackagesPage() {
   return (
     <div className="space-y-4">
       <div className="space-y-2">
-        <div className="inline-flex items-center gap-2 rounded-full bg-white/5 px-4 py-2 text-xs text-muted border border-white/5">
-          <span className="h-2.5 w-2.5 rounded-full bg-accent" />
-          <span className="uppercase tracking-[0.18em]">Registrar</span>
-        </div>
+        <div className="text-sm font-medium text-accent">Registrar</div>
         <h1 className="text-3xl font-bold">Availed Packages</h1>
         <p className="text-muted text-sm">View packages that have been used/assigned, with gear readiness status (prototype).</p>
       </div>
