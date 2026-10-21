@@ -24,16 +24,7 @@ import toast from 'react-hot-toast'
 
 import { Button } from '../../components/ui/Button'
 import { useAuth } from '../../context/AuthContext'
-import { useTheme } from '../../context/ThemeContext'
-import { ThemeToggle } from '../../components/nav/ThemeToggle'
-import { Card } from '../../components/ui/Card'
-import { apiGet, getApiBase } from '../../utils/apiClient'
-
-type Testimonial = {
-  name: string
-  role: string
-  quote: string
-}
+import { getApiBase } from '../../utils/apiClient'
 
 type FAQ = {
   q: string
@@ -367,47 +358,6 @@ export function LandingPage() {
     if (!openMenu) return
     const onPointerDown = (e: PointerEvent) => {
       if (!bookingBarRef.current?.contains(e.target as Node)) setOpenMenu(null)
-    let isMounted = true
-
-    const loadMetrics = async () => {
-      setLoadingMetrics(true)
-      try {
-        const metricsRes = await apiGet<{
-          ok: boolean
-          data: {
-            reservations: number
-            pendingReservations: number
-            pendingPayments: number
-            pendingWaivers: number
-            activeGames: number
-          }
-        }>('/api/public/metrics')
-        const { reservations, pendingReservations, pendingPayments, pendingWaivers, activeGames } = metricsRes.data
-
-        const pendingItems = pendingReservations + pendingPayments + pendingWaivers
-        const readiness = Math.max(70, Math.min(100, 100 - pendingItems * 4))
-        const statusLabel = pendingItems > 0 ? 'Needs follow-up' : 'Ready'
-
-        if (isMounted) {
-          setLandingMetrics({
-            reservations,
-            pendingPayments,
-            pendingWaivers,
-            activeGames,
-            pendingItems,
-            readiness,
-            statusLabel,
-          })
-        }
-      } catch (error) {
-        if (isMounted) {
-          setLandingMetrics(initialMetrics)
-        }
-      } finally {
-        if (isMounted) {
-          setLoadingMetrics(false)
-        }
-      }
     }
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setOpenMenu(null)
