@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { CardElement, Elements, useElements, useStripe } from '@stripe/react-stripe-js'
 import { loadStripe } from '@stripe/stripe-js'
 import { useNavigate } from 'react-router-dom'
-import { apiGet, apiPost } from '../../utils/apiClient'
+import { apiBase, apiGet, apiPost } from '../../utils/apiClient'
 import toast from 'react-hot-toast'
 import { useAuth } from '../../context/AuthContext'
 
@@ -332,8 +332,7 @@ function PaymentPageContent() {
         if (!file || !file.type.startsWith('image/')) throw new Error('Only image files are allowed for GCash proof.')
         const formData = new FormData()
         formData.append('file', file)
-        const apiUrl = (import.meta as any).env?.VITE_API_URL || 'http://localhost:3001'
-        const uploadRes = await fetch(`${apiUrl}/api/upload-image`, { method: 'POST', body: formData })
+        const uploadRes = await fetch(`${apiBase}/api/upload-image`, { method: 'POST', body: formData })
         const uploadJson = await uploadRes.json().catch(() => null)
         if (!uploadRes.ok) throw new Error(uploadJson?.error || uploadJson?.message || 'Upload failed')
         const gcashImageUrl = uploadJson?.url

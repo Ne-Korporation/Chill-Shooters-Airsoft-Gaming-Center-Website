@@ -18,7 +18,7 @@ import { Button } from '../../components/ui/Button'
 import { useTheme } from '../../context/ThemeContext'
 import { ThemeToggle } from '../../components/nav/ThemeToggle'
 import { Card } from '../../components/ui/Card'
-import { apiGet } from '../../utils/apiClient'
+import { apiGet, getApiBase } from '../../utils/apiClient'
 
 type Testimonial = {
   name: string
@@ -174,7 +174,7 @@ export function LandingPage() {
   const handleContactSubmit = async (e: React.FormEvent | React.KeyboardEvent) => {
     if (e && 'preventDefault' in e) e.preventDefault()
     try {
-      const apiBase = (import.meta as any).env?.VITE_API_URL || 'http://localhost:3001'
+      const apiBase = getApiBase()
       const res = await fetch(`${apiBase}/api/contact`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
