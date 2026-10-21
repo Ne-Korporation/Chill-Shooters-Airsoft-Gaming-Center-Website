@@ -1,8 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
 import { DashboardPostsPanel } from '../../components/dashboard/DashboardPostsPanel'
-import { Card } from '../../components/ui/Card'
-import { FiCalendar, FiShield, FiPackage, FiCreditCard, FiCheckCircle, FiZap } from 'react-icons/fi'
+import { ActionRow, DashboardHeader, Panel, StatTile } from '../../components/dashboard/DashboardParts'
+import { FiCalendar, FiShield, FiPackage, FiCreditCard, FiZap } from 'react-icons/fi'
 import { apiGet } from '../../utils/apiClient'
 
 export function RegistrarDashboardHomePage() {
@@ -41,108 +41,94 @@ export function RegistrarDashboardHomePage() {
     void load()
   }, [])
 
-  const summary = useMemo(() => [
-    { label: 'Pending approvals', value: pendingReservations, tone: 'accent' },
-    { label: 'Waivers to review', value: pendingWaivers, tone: 'success' },
-    { label: 'Payments awaiting verify', value: pendingPayments, tone: 'danger' },
-  ], [pendingPayments, pendingReservations, pendingWaivers])
+  const totalQueue = pendingReservations + pendingWaivers + pendingPayments
 
   return (
-    <div className="space-y-5">
-      <div className="space-y-2">
-        <div className="inline-flex items-center gap-2 rounded-full bg-white/5 px-4 py-2 text-xs text-muted border border-white/5">
-          <span className="h-2.5 w-2.5 rounded-full bg-accent" />
-          <span className="uppercase tracking-[0.18em]">Registrar Console</span>
-        </div>
-        <h1 className="text-3xl font-bold">Registrar Dashboard</h1>
-        <p className="text-muted text-sm">Process reservation approvals, verify waivers & payments, and track ongoing games.</p>
+    <div className="space-y-6">
+      <DashboardHeader
+        eyebrow="Registrar"
+        title="Today's queue"
+        description="Approve reservations, then verify waivers and payments to confirm each booking."
+      />
+
+      <div className="grid gap-4 sm:grid-cols-3">
+        <StatTile
+          label="Reservations to approve"
+          value={pendingReservations}
+          icon={FiCalendar}
+          hint={pendingReservations > 0 ? 'Waiting for review' : 'All clear'}
+          attention={pendingReservations > 0}
+          loading={loading}
+        />
+        <StatTile
+          label="Waivers to review"
+          value={pendingWaivers}
+          icon={FiShield}
+          hint={pendingWaivers > 0 ? 'Waiting for review' : 'All clear'}
+          attention={pendingWaivers > 0}
+          loading={loading}
+        />
+        <StatTile
+          label="Payments to verify"
+          value={pendingPayments}
+          icon={FiCreditCard}
+          hint={pendingPayments > 0 ? 'Waiting for review' : 'All clear'}
+          attention={pendingPayments > 0}
+          loading={loading}
+        />
       </div>
 
-      <div className="grid gap-4 md:grid-cols-3">
-        {summary.map((item) => (
-          <Card key={item.label} className="p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-xs uppercase tracking-widest text-muted">{item.label}</div>
-                <div className={`mt-2 text-2xl font-bold ${item.tone === 'accent' ? 'text-accent' : item.tone === 'success' ? 'text-success' : 'text-danger'}`}>
-                  {loading ? '…' : item.value}
-                </div>
-              </div>
-              {item.tone === 'accent' ? <FiShield className="text-gold" /> : item.tone === 'success' ? <FiCheckCircle className="text-success" /> : <FiCreditCard className="text-danger" />}
-            </div>
-          </Card>
-        ))}
-      </div>
-
-      <div className="grid gap-4 md:grid-cols-2">
-        <Card className="p-4">
-          <div className="flex items-start gap-3">
-            <div className="grid h-10 w-10 place-items-center rounded-2xl bg-accent/10 ring-1 ring-accent/25">
-              <FiCalendar className="text-gold" />
-            </div>
-            <div>
-              <div className="text-sm font-bold">Reservation Approvals</div>
-              <div className="mt-1 text-xs text-muted">Approve or reject reservation requests in the registrar queue.</div>
-            </div>
+      <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
+        <Panel
+          title="Work queue"
+          description={loading ? undefined : totalQueue > 0 ? `${totalQueue} items to process` : 'Nothing waiting right now'}
+        >
+          <div className="space-y-0.5">
+            <ActionRow
+              to="/app/registrar/reservations"
+              icon={FiCalendar}
+              title="Reservations"
+              description="Approve or reject booking requests"
+              badge={loading ? undefined : pendingReservations}
+            />
+            <ActionRow
+              to="/app/registrar/waivers"
+              icon={FiShield}
+              title="Submitted waivers"
+              description="Accept or flag waiver submissions"
+              badge={loading ? undefined : pendingWaivers}
+            />
+            <ActionRow
+              to="/app/registrar/submitted-payments"
+              icon={FiCreditCard}
+              title="Submitted payments"
+              description="Check proofs and update payment status"
+              badge={loading ? undefined : pendingPayments}
+            />
           </div>
-        </Card>
+        </Panel>
 
-        <Card className="p-4">
-          <div className="flex items-start gap-3">
-            <div className="grid h-10 w-10 place-items-center rounded-2xl bg-accent/10 ring-1 ring-accent/25">
-              <FiZap className="text-gold" />
-            </div>
-            <div>
-              <div className="text-sm font-bold">Operational Flow</div>
-              <div className="mt-1 text-xs text-muted">Waiver → Payment → Confirmed reservation status.</div>
-            </div>
+        <Panel title="Shortcuts">
+          <div className="space-y-0.5">
+            <ActionRow to="/app/registrar/games" icon={FiZap} title="Games" description="Ongoing and archived sessions" />
+            <ActionRow
+              to="/app/registrar/availed-packages"
+              icon={FiPackage}
+              title="Availed packages"
+              description="Gear readiness per booking"
+            />
           </div>
-        </Card>
-      </div>
-
-      <div className="grid gap-4 md:grid-cols-3">
-        <Card className="p-4">
-          <div className="flex items-start gap-3">
-            <div className="grid h-10 w-10 place-items-center rounded-2xl bg-accent/10 ring-1 ring-accent/25">
-              <FiPackage className="text-gold" />
-            </div>
-            <div>
-              <div className="text-sm font-bold">Availed Packages</div>
-              <div className="mt-1 text-xs text-muted">Track gear readiness status (prototype).</div>
-            </div>
+          <div className="divider mt-4 border-t pt-4 text-xs text-muted">
+            Booking flow: <span className="text-text">Waiver</span> → <span className="text-text">Payment</span> →{' '}
+            <span className="text-text">Confirmed</span>
           </div>
-        </Card>
-
-        <Card className="p-4">
-          <div className="flex items-start gap-3">
-            <div className="grid h-10 w-10 place-items-center rounded-2xl bg-accent/10 ring-1 ring-accent/25">
-              <FiShield className="text-gold" />
-            </div>
-            <div>
-              <div className="text-sm font-bold">Submitted Waivers</div>
-              <div className="mt-1 text-xs text-muted">Accept or flag waiver submissions (prototype).</div>
-            </div>
-          </div>
-        </Card>
-
-        <Card className="p-4">
-          <div className="flex items-start gap-3">
-            <div className="grid h-10 w-10 place-items-center rounded-2xl bg-accent/10 ring-1 ring-accent/25">
-              <FiCreditCard className="text-gold" />
-            </div>
-            <div>
-              <div className="text-sm font-bold">Submitted Payments</div>
-              <div className="mt-1 text-xs text-muted">Verify payment proofs and update status (prototype).</div>
-            </div>
-          </div>
-        </Card>
+        </Panel>
       </div>
 
       <DashboardPostsPanel
-        title="Dashboard posts"
-        subtitle="Stay aligned with admin updates, schedule reminders, and attached visuals."
+        title="Announcements"
+        subtitle="Updates and reminders from the admin team."
       />
     </div>
   )
 }
-

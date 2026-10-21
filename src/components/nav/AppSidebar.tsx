@@ -1,6 +1,5 @@
 import React from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
-import { motion } from 'framer-motion'
 import type { IconType } from 'react-icons'
 import { useAuth } from '../../context/AuthContext'
 import { useNotifications } from '../../context/NotificationContext'
@@ -116,72 +115,42 @@ export function AppSidebar({
 
 
 
-  return (
-    <div
-      className={
-        'rounded-2xl glass border border-white/5 p-3 ' +
-        (className ? className : '')
-      }
-    >
-      <div className="mb-3 rounded-xl bg-white/5 p-3">
-        <div className="text-xs uppercase tracking-widest text-muted">Mission</div>
-        <div className="mt-1 text-sm font-semibold">
-          {role === 'admin'
-            ? 'Command Operations'
-            : role === 'marshal'
-              ? "Marshal Oversight"
-              : role === 'registrar'
-                ? 'Registrar Processing'
-                : 'Operator Dashboard'}
-        </div>
-        <div className="mt-2 text-[11px] text-muted">
-        </div>
-      </div>
+  const roleLabel =
+    role === 'admin' ? 'Admin' : role === 'marshal' ? 'Marshal' : role === 'registrar' ? 'Registrar' : 'Player'
 
-      <nav className="space-y-1">
+  return (
+    <div className={'surface rounded-2xl p-3 ' + (className ? className : '')}>
+      <div className="px-3 pb-2 pt-1 text-xs font-medium text-muted">{roleLabel} menu</div>
+
+      <nav className="space-y-0.5">
         {items.map((item) => {
           const Icon = item.icon
           return (
-            <motion.div
+            <NavLink
               key={item.to}
-              whileHover={{ scale: 1.01 }}
-              whileTap={{ scale: 0.99 }}
-              className="rounded-xl"
+              to={item.to}
+              onClick={onNavigate}
+              end
+              className={({ isActive }) =>
+                'flex items-center gap-3 rounded-xl px-3 py-2 text-sm transition ' +
+                (isActive ? 'nav-active font-medium' : 'hover-row text-muted hover:text-text')
+              }
             >
-              <NavLink
-                to={item.to}
-                onClick={onNavigate}
-                end
-                className={({ isActive }) =>
-                  'flex items-center gap-3 rounded-xl px-3 py-2 text-sm transition border border-transparent ' +
-                  (isActive
-                    ? 'bg-white/8 text-text border-accent/30'
-                    : 'text-muted hover:bg-white/5 hover:text-text')
-                }
-              >
-                <Icon className="text-accent" />
-                <span className="truncate">{item.label}</span>
-                {item.label === 'Notifications' && userUnread > 0 && (
-                  <span className="ml-auto h-2.5 w-2.5 rounded-full bg-success ring-2 ring-black" />
-                )}
-              </NavLink>
-            </motion.div>
+              {({ isActive }) => (
+                <>
+                  <Icon className={`h-4 w-4 shrink-0 ${isActive ? 'text-accent' : ''}`} />
+                  <span className="truncate">{item.label}</span>
+                  {item.label === 'Notifications' && userUnread > 0 && (
+                    <span className="ml-auto rounded-full bg-danger px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
+                      {userUnread > 9 ? '9+' : userUnread}
+                    </span>
+                  )}
+                </>
+              )}
+            </NavLink>
           )
         })}
       </nav>
-
-      <div className="mt-4 rounded-xl bg-white/5 p-3">
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="text-xs uppercase tracking-widest text-muted">Status</div>
-            <div className="mt-1 text-sm font-semibold">Operational</div>
-          </div>
-          <div className="h-10 w-10 rounded-xl bg-success/20 flex items-center justify-center">
-            <span className="h-2.5 w-2.5 rounded-full bg-success" />
-          </div>
-        </div>
-        <div className="mt-2 text-[11px] text-muted">System latency: nominal</div>
-      </div>
     </div>
   )
 }

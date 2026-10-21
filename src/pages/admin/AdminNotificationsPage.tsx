@@ -90,7 +90,7 @@ export function AdminNotificationsPage() {
     targets.forEach((audience) => {
       addNotification({
         userId: 'broadcast',
-        targetRole: audienceToTargetRole[audience] || 'all',
+        targetRole: audienceToTargetRole[audience as Audience] || 'all',
         type: 'payment_submitted',
         title: title.trim() || 'Broadcast notification',
         message: body.trim() || 'No message.',

@@ -209,10 +209,7 @@ export function RegistrarOngoingGamesPage() {
     <div className="space-y-4">
       <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
         <div className="space-y-2">
-          <div className="inline-flex items-center gap-2 rounded-full bg-white/5 px-4 py-2 text-xs text-muted border border-white/5">
-            <span className="h-2.5 w-2.5 rounded-full bg-accent" />
-            <span className="uppercase tracking-[0.18em]">Registrar</span>
-          </div>
+          <div className="text-sm font-medium text-accent">Registrar</div>
           <h1 className="text-3xl font-bold">Ongoing Games</h1>
           <p className="text-muted text-sm">Confirmed reservations appear here as gameplay records with start, complete, and archive actions.</p>
         </div>

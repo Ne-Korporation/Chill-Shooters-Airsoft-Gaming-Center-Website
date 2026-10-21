@@ -1,10 +1,10 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { DashboardPostsPanel } from '../../components/dashboard/DashboardPostsPanel'
-import { Card } from '../../components/ui/Card'
+import { ActionRow, DashboardHeader, Panel, StatTile } from '../../components/dashboard/DashboardParts'
 import { apiGet } from '../../utils/apiClient'
-import { FiClipboard, FiShield, FiTool, FiTruck, FiZap } from 'react-icons/fi'
+import { FiCheckCircle, FiClipboard, FiTool, FiTruck, FiUsers, FiZap } from 'react-icons/fi'
 
 type DashboardState = {
   activeGames: number
@@ -97,99 +97,81 @@ export function MarshalDashboardHomePage() {
     return () => { active = false }
   }, [])
 
-  const summaryCards = useMemo(
-    () => [
-      { label: 'Active games', value: stats.activeGames, tone: 'accent', icon: FiZap },
-      { label: 'Reserved ops', value: stats.reservedGames, tone: 'success', icon: FiClipboard },
-      { label: 'Equipment alerts', value: stats.equipmentAlerts, tone: 'danger', icon: FiTool },
-      { label: 'Weapon checks', value: stats.weaponAlerts, tone: 'warning', icon: FiTruck },
-      { label: 'Ready players', value: stats.playersReady, tone: 'muted', icon: FiShield },
-    ],
-    [stats],
-  )
+  const checklist = [
+    { title: 'Safety briefing', detail: 'Confirm squad readiness and field assignments before each session.' },
+    { title: 'Equipment check', detail: 'Pull worn or damaged gear before the next booking.' },
+    { title: 'Player roster', detail: 'Match verified players against upcoming games.' },
+  ]
 
   return (
     <div className="space-y-6">
-      <div className="space-y-2">
-        <div className="inline-flex items-center gap-2 rounded-full border border-white/5 bg-white/5 px-4 py-2 text-[11px] uppercase tracking-[0.2em] text-muted">
-          <span className="h-2.5 w-2.5 rounded-full bg-accent" />
-          <span>Marshal Operations</span>
-        </div>
-        <h1 className="text-3xl font-bold">Marshal Dashboard</h1>
-        <p className="text-sm text-muted">Monitor live field activity, equipment readiness, and safety checks across active bookings.</p>
-      </div>
+      <DashboardHeader
+        eyebrow="Marshal"
+        title="Field overview"
+        description="Live games, gear readiness, and safety checks for today's sessions."
+        actions={
+          <Link
+            to="/app/games"
+            className="inline-flex h-10 items-center gap-2 rounded-xl bg-primary px-4 text-sm font-semibold text-white transition hover:brightness-110"
+          >
+            <FiZap /> Open game board
+          </Link>
+        }
+      />
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-        {summaryCards.map(({ label, value, tone, icon: Icon }) => (
-          <Card key={label} className="p-4">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <div className="text-[11px] uppercase tracking-widest text-muted">{label}</div>
-                <div
-                  className={`mt-2 text-2xl font-bold ${
-                    tone === 'accent'
-                      ? 'text-accent'
-                      : tone === 'success'
-                        ? 'text-success'
-                        : tone === 'danger'
-                          ? 'text-danger'
-                          : tone === 'warning'
-                            ? 'text-gold'
-                            : 'text-muted'
-                  }`}
-                >
-                  {loading ? '…' : value}
-                </div>
-              </div>
-              <div className="rounded-xl bg-white/5 p-2 text-accent">
-                <Icon className="h-4 w-4" />
-              </div>
-            </div>
-          </Card>
-        ))}
+      <div className="grid gap-4 sm:grid-cols-3">
+        <StatTile label="Active games" value={stats.activeGames} icon={FiZap} hint="In progress now" loading={loading} />
+        <StatTile label="Reserved games" value={stats.reservedGames} icon={FiClipboard} hint="Approved or paid" loading={loading} />
+        <StatTile label="Ready players" value={stats.playersReady} icon={FiUsers} hint="Identity verified" loading={loading} />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <Card className="p-4">
-          <div className="mb-3 text-xs uppercase tracking-[0.2em] text-muted">Quick actions</div>
-          <div className="space-y-3">
-            <Link to="/app/games" className="block rounded-2xl border border-white/10 bg-white/5 p-3 transition hover:bg-white/10">
-              <div className="text-sm font-semibold">Manage active games</div>
-              <div className="mt-1 text-xs text-muted">Open the game board, schedules, and live field status.</div>
-            </Link>
-            <Link to="/app/admin/equipment" className="block rounded-2xl border border-white/10 bg-white/5 p-3 transition hover:bg-white/10">
-              <div className="text-sm font-semibold">Check equipment readiness</div>
-              <div className="mt-1 text-xs text-muted">Review maintenance issues and stock availability.</div>
-            </Link>
-            <Link to="/app/admin/weapons" className="block rounded-2xl border border-white/10 bg-white/5 p-3 transition hover:bg-white/10">
-              <div className="text-sm font-semibold">Weapon inspection queue</div>
-              <div className="mt-1 text-xs text-muted">Flag or clear weapons needing inspection before play.</div>
-            </Link>
+        <Panel
+          title="Needs attention"
+          description={
+            loading
+              ? undefined
+              : stats.equipmentAlerts + stats.weaponAlerts > 0
+                ? 'Check these before the next session'
+                : 'All gear is ready'
+          }
+        >
+          <div className="space-y-0.5">
+            <ActionRow
+              to="/app/admin/equipment"
+              icon={FiTool}
+              title="Equipment alerts"
+              description="Low stock or in maintenance"
+              badge={loading ? undefined : stats.equipmentAlerts}
+            />
+            <ActionRow
+              to="/app/admin/weapons"
+              icon={FiTruck}
+              title="Weapon inspections"
+              description="Flag or clear weapons before play"
+              badge={loading ? undefined : stats.weaponAlerts}
+            />
           </div>
-        </Card>
+        </Panel>
 
-        <Card className="p-4">
-          <div className="mb-3 text-xs uppercase tracking-[0.2em] text-muted">Operational focus</div>
-          <div className="space-y-3 text-sm text-muted">
-            <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
-              <div className="font-semibold text-text">Safety briefing</div>
-              <div className="mt-1">Verify active squad readiness before each session starts and confirm field assignments.</div>
-            </div>
-            <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
-              <div className="font-semibold text-text">Equipment checks</div>
-              <div className="mt-1">Watch inventory and maintenance states so worn or damaged gear is removed before the next booking.</div>
-            </div>
-            <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
-              <div className="font-semibold text-text">Player readiness</div>
-              <div className="mt-1">Track verified players and confirm active rosters are aligned with upcoming games.</div>
-            </div>
-          </div>
-        </Card>
+        <Panel title="Before each session">
+          <ul className="space-y-3">
+            {checklist.map((item) => (
+              <li key={item.title} className="flex gap-3">
+                <FiCheckCircle className="mt-0.5 h-4 w-4 shrink-0 text-success" />
+                <div>
+                  <div className="text-sm font-medium">{item.title}</div>
+                  <div className="text-xs text-muted">{item.detail}</div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </Panel>
       </div>
 
       <DashboardPostsPanel
-        title="Dashboard posts"
-        subtitle="Official updates, reminders, and notices shared by admin across the whole team."
+        title="Announcements"
+        subtitle="Updates and reminders from the admin team."
       />
     </div>
   )

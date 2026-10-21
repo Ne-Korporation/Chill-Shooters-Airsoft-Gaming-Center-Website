@@ -23,17 +23,17 @@ export function AppLayout() {
   )
 
   return (
-    <div className="min-h-screen bg-background text-text pt-20">
+    <div className="min-h-screen bg-background text-text pt-[72px]">
       <TopNav
         onMenu={() => setMobileOpen(true)}
         userName={user?.name ?? 'Operator'}
         onLogout={logout}
       />
 
-      <div className="mx-auto max-w-[1400px] px-3 py-4 lg:px-6">
-        <div className="relative flex gap-4">
+      <div className="mx-auto max-w-[1400px] px-3 py-6 lg:px-6">
+        <div className="relative flex gap-6">
           {/* Desktop Sidebar */}
-          <aside className="hidden w-[280px] shrink-0 lg:block">{sidebar}</aside>
+          <aside className="hidden w-[248px] shrink-0 lg:block"><div className="sticky top-[96px]">{sidebar}</div></aside>
 
           {/* Mobile Drawer */}
           <AnimatePresence>
@@ -53,13 +53,13 @@ export function AppLayout() {
                   animate={{ x: 0, opacity: 1 }}
                   exit={{ x: -20, opacity: 0 }}
                   transition={{ type: 'spring', stiffness: 260, damping: 22 }}
-                  className="absolute left-0 top-0 h-full w-[280px]"
+                  className="absolute left-0 top-0 h-full w-[280px] overflow-y-auto bg-background p-3"
                 >
                   <div className="flex items-center justify-between px-4 py-3">
-                    <div className="text-xs uppercase tracking-widest text-muted">A.B.P</div>
+                    <div className="text-sm font-semibold">Menu</div>
                     <button
                       onClick={() => setMobileOpen(false)}
-                      className="rounded-xl glass p-2 text-text hover:bg-white/5"
+                      className="hover-row rounded-xl p-2 text-text"
                       aria-label="Close menu"
                     >
                       <FiX />
@@ -77,14 +77,14 @@ export function AppLayout() {
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.25 }}
-              className="glass rounded-xl p-4 md:p-6"
+              className="min-w-0"
             >
               <Outlet />
             </motion.div>
           </main>
         </div>
 
-        <footer className="py-10 text-center text-xs text-muted">
+        <footer className="py-8 text-center text-xs text-muted">
           © {new Date().getFullYear()} Chill Shooters Airsoft — Aim. Book. Play.
         </footer>
       </div>

@@ -5,6 +5,7 @@ import toast from 'react-hot-toast'
 import {
   FiAlertTriangle,
   FiCheck,
+  FiCheckCircle,
   FiChevronRight,
   FiPrinter,
   FiShield,
@@ -164,6 +165,8 @@ export function WaiverPage({
   const [ageInput, setAgeInput] = useState('16')
 
   const [submitting, setSubmitting] = useState(false)
+  // Field errors stay hidden until the first submit attempt so the form starts calm.
+  const [showErrors, setShowErrors] = useState(false)
   const [submitted, setSubmitted] = useState(false)
   const [waiverStatus, setWaiverStatus] = useState<string | undefined>()
   const [submittedWaiver, setSubmittedWaiver] = useState<SubmittedWaiver | null>(null)
@@ -347,6 +350,7 @@ export function WaiverPage({
   }, [hasSignature, isMinor, state, guardianPhone, guardianIdImage, guardianSignatureImage])
 
   const canSubmit = Object.keys(errors).length === 0 && !submitting
+  const shownErrors: Record<string, string> = showErrors ? errors : {}
 
   const scrollToPayment = () => {
     const paymentSection = document.getElementById('payment-section')
@@ -779,10 +783,7 @@ export function WaiverPage({
         <>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
             <div className="space-y-2">
-              <div className="inline-flex items-center gap-2 rounded-full bg-white/5 px-4 py-2 text-xs text-muted border border-white/5">
-                <span className="h-2.5 w-2.5 rounded-full bg-accent" />
-                <span className="uppercase tracking-[0.18em]">Waiver</span>
-              </div>
+              <div className="text-sm font-medium text-accent">Waiver</div>
               <div className="flex flex-wrap items-center gap-3">
                 <h1 className="text-3xl font-bold">Online Waiver</h1>
                 {waiverStatus ? (
@@ -798,7 +799,7 @@ export function WaiverPage({
                 })()
               ) : null}
               </div>
-              <p className="text-muted text-sm">Digital waiver with signature pad + guardian consent (prototype only).</p>
+              <p className="text-muted text-sm">Sign once before your first game. Players under 18 need a guardian to sign too.</p>
             </div>
             <div className="flex items-center gap-3">
               <Button variant="ghost" disabled={viewWaiverLoading} onClick={handleViewWaiver}>
@@ -980,7 +981,7 @@ export function WaiverPage({
                 value={state.fullName}
                 disabled={submitted || submitting}
                 onChange={(e) => setState((s) => ({ ...s, fullName: e.target.value }))}
-                error={errors.fullName}
+                error={shownErrors.fullName}
               />
 
               <Input
@@ -1016,7 +1017,7 @@ export function WaiverPage({
                   setAgeInput(String(safeValue))
                   setState((s) => ({ ...s, age: safeValue }))
                 }}
-                error={errors.age}
+                error={shownErrors.age}
               />
             </div>
 
@@ -1025,10 +1026,10 @@ export function WaiverPage({
                 initial={{ opacity: 0, y: 6 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.25 }}
-                className="mt-5 rounded-2xl border border-danger/25 bg-danger/10 p-4"
+                className="surface mt-5 rounded-2xl p-4"
               >
-                <div className="flex items-center gap-2 text-sm font-bold text-danger">
-                  <FiAlertTriangle /> <span>Minor Consent Required</span>
+                <div className="flex items-center gap-2 text-sm font-bold text-accent">
+                  <FiShield /> <span>Guardian consent (under 18)</span>
                 </div>
                 <div className="mt-4 grid gap-4 md:grid-cols-2">
                   <Input
@@ -1037,7 +1038,7 @@ export function WaiverPage({
                     value={state.guardianName}
                     disabled={submitted || submitting}
                     onChange={(e) => setState((s) => ({ ...s, guardianName: e.target.value }))}
-                    error={errors.guardianName}
+                    error={shownErrors.guardianName}
                   />
 
                   <div className="flex items-end">
@@ -1052,8 +1053,8 @@ export function WaiverPage({
                         />
                         <div>
                           <div className="text-sm font-bold">I confirm guardian consent</div>
-                          {errors.guardianConsent ? (
-                            <div className="mt-1 text-xs font-semibold text-danger">{errors.guardianConsent}</div>
+                          {shownErrors.guardianConsent ? (
+                            <div className="mt-1 text-xs font-semibold text-danger">{shownErrors.guardianConsent}</div>
                           ) : (
                             <div className="mt-1 text-xs text-muted">Required to submit waiver.</div>
                           )}
@@ -1071,14 +1072,14 @@ export function WaiverPage({
                     value={guardianPhone}
                     disabled={submitted || submitting}
                     onChange={(e) => setGuardianPhone(e.target.value)}
-                    error={errors.guardianPhone}
+                    error={shownErrors.guardianPhone}
                   />
                   <IdUpload
                     label="Guardian ID"
                     value={guardianIdImage}
                     onChange={setGuardianIdImage}
                     disabled={submitted || submitting}
-                    error={errors.guardianIdImage}
+                    error={shownErrors.guardianIdImage}
                   />
                 </div>
 
@@ -1088,7 +1089,7 @@ export function WaiverPage({
                     value={guardianSignatureImage}
                     onChange={setGuardianSignatureImage}
                     disabled={submitted || submitting}
-                    error={errors.guardianSignature}
+                    error={shownErrors.guardianSignature}
                   />
                 </div>
               </motion.div>
@@ -1151,8 +1152,8 @@ export function WaiverPage({
                     />
                     <div>
                       <div className="text-sm font-bold">Accept terms & release of liability</div>
-                      {errors.termsAccepted ? (
-                        <div className="mt-1 text-xs font-semibold text-danger">{errors.termsAccepted}</div>
+                      {shownErrors.termsAccepted ? (
+                        <div className="mt-1 text-xs font-semibold text-danger">{shownErrors.termsAccepted}</div>
                       ) : (
                         <div className="mt-1 text-xs text-muted">I have read and agree to the waiver above. Required.</div>
                       )}
@@ -1171,8 +1172,8 @@ export function WaiverPage({
                     />
                     <div>
                       <div className="text-sm font-bold">Consent acknowledgement</div>
-                      {errors.consent ? (
-                        <div className="mt-1 text-xs font-semibold text-danger">{errors.consent}</div>
+                      {shownErrors.consent ? (
+                        <div className="mt-1 text-xs font-semibold text-danger">{shownErrors.consent}</div>
                       ) : (
                         <div className="mt-1 text-xs text-muted">I understand I have given up substantial rights and sign freely and voluntarily. Required.</div>
                       )}
@@ -1189,14 +1190,21 @@ export function WaiverPage({
               value={signatureImage}
               onChange={handlePlayerSignatureChange}
               disabled={submitted || submitting}
-              error={errors.signature}
+              error={shownErrors.signature}
             />
 
             <div className="mt-5 flex flex-col gap-2 sm:flex-row">
               <Button
                 variant="primary"
-                disabled={!canSubmit || submitted}
-                onClick={onSubmit}
+                disabled={submitting || submitted}
+                onClick={() => {
+                  if (!canSubmit) {
+                    setShowErrors(true)
+                    toast.error("Please complete the highlighted fields.")
+                    return
+                  }
+                  void onSubmit()
+                }}
               >
                 {submitting
                   ? 'Submitting…'
@@ -1237,57 +1245,51 @@ export function WaiverPage({
         </div>
 
         <div className="lg:col-span-1 space-y-4">
-          <Card className="p-4 md:p-6">
-            <div className="flex items-center gap-2 text-sm font-bold">
-              <FiShield /> <span>Submission Readiness</span>
-            </div>
-
-            <div className="mt-4 space-y-3">
-              {[
-                { label: 'Participant name', ok: !!state.fullName.trim() },
-                { label: 'Age provided', ok: Number.isFinite(state.age) && state.age > 0 },
-                { label: 'Terms accepted', ok: state.termsAccepted },
-                { label: 'Consent acknowledged', ok: state.consent },
-                { label: 'Signature captured', ok: hasSignature },
+          <Card className="p-5 md:p-5">
+            {(() => {
+              const steps = [
+                { label: "Your name", ok: !!state.fullName.trim() },
+                { label: "Your age", ok: Number.isFinite(state.age) && state.age > 0 },
                 ...(isMinor
                   ? [
-                      { label: 'Guardian consent', ok: state.guardianConsent },
-                      { label: 'Guardian phone', ok: !errors.guardianPhone },
-                      { label: 'Guardian ID photo', ok: !!guardianIdImage },
-                      { label: 'Guardian signature', ok: !!guardianSignatureImage },
+                      { label: "Guardian details & consent", ok: state.guardianConsent && !!state.guardianName.trim() && !errors.guardianPhone },
+                      { label: "Guardian ID photo", ok: !!guardianIdImage },
+                      { label: "Guardian signature", ok: !!guardianSignatureImage },
                     ]
                   : []),
-              ].map((item) => (
-                <div key={item.label} className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 p-3">
-                  <div className="text-xs font-bold text-muted">{item.label}</div>
-                  <div className={['text-xs font-bold rounded-xl px-3 py-1', item.ok ? 'bg-success/15 text-success' : 'bg-white/5 text-muted'].join(' ')}>
-                    {item.ok ? 'OK' : 'WAIT'}
+                { label: "Read & accept the terms", ok: state.termsAccepted && state.consent },
+                { label: "Your signature", ok: hasSignature },
+              ]
+              const done = steps.filter((step) => step.ok).length
+              return (
+                <>
+                  <div className="flex items-baseline justify-between gap-3">
+                    <h2 className="text-base font-semibold">Your progress</h2>
+                    <span className="text-sm text-muted">
+                      {done} of {steps.length}
+                    </span>
                   </div>
-                </div>
-              ))}
-            </div>
-
-            {!canSubmit && !submitted ? (
-              <div className="mt-4 rounded-2xl border border-danger/25 bg-danger/10 p-4">
-                <div className="flex items-start gap-2 text-sm font-bold text-danger">
-                  <FiAlertTriangle className="mt-0.5" /> <span>Incomplete submission</span>
-                </div>
-                <div className="mt-2 text-xs text-muted">Fill missing fields and provide signature to enable the submit button.</div>
-              </div>
-            ) : null}
-          </Card>
-
-          <Card className="p-4 md:p-6">
-            <div className="text-xs uppercase tracking-widest text-muted">What’s next</div>
-            <div className="mt-3 flex items-center gap-3 rounded-2xl border border-white/10 bg-black/20 p-4">
-              <div className="grid h-10 w-10 place-items-center rounded-2xl bg-accent/10 ring-1 ring-accent/25">
-                <FiChevronRight className="text-gold" />
-              </div>
-              <div>
-                <div className="text-sm font-bold">Waiver → Payment</div>
-                <div className="mt-1 text-xs text-muted">After acceptance, continue to GCash/bank transfer.</div>
-              </div>
-            </div>
+                  <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-[rgba(var(--text),0.08)]">
+                    <div className="h-full rounded-full bg-success transition-all" style={{ width: `${(done / steps.length) * 100}%` }} />
+                  </div>
+                  <ul className="mt-4 space-y-2.5">
+                    {steps.map((step) => (
+                      <li key={step.label} className="flex items-center gap-2.5 text-sm">
+                        {step.ok ? (
+                          <FiCheckCircle className="h-4 w-4 shrink-0 text-success" />
+                        ) : (
+                          <span className="h-4 w-4 shrink-0 rounded-full border-2 border-[rgba(var(--text),0.2)]" />
+                        )}
+                        <span className={step.ok ? "text-muted line-through" : ""}>{step.label}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="divider mt-4 border-t pt-4 text-xs text-muted">
+                    Next: once your waiver is approved, you can book and pay by GCash or bank transfer.
+                  </p>
+                </>
+              )
+            })()}
           </Card>
         </div>
       </div>
