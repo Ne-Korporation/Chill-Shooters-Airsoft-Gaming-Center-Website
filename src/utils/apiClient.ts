@@ -34,6 +34,10 @@ function buildHeaders(includeJsonBody = false) {
   return headers
 }
 
+export function getApiAuthHeaders() {
+  return buildHeaders()
+}
+
 export async function apiGet<T>(path: string) {
   const res = await fetch(`${apiBase}${path}`, { headers: buildHeaders() })
   const json = await res.json().catch(() => null)
@@ -80,4 +84,3 @@ export async function apiDelete<T>(path: string) {
   }
   return json as T
 }
-

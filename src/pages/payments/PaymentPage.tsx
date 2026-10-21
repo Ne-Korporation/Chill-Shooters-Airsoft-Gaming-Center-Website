@@ -1,4 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { CardElement, Elements, useElements, useStripe } from '@stripe/react-stripe-js'
+import { loadStripe } from '@stripe/stripe-js'
 import { useNavigate } from 'react-router-dom'
 import { apiBase, apiGet, apiPost } from '../../utils/apiClient'
 import toast from 'react-hot-toast'
@@ -28,18 +30,14 @@ type GcashQrSettings = {
   updatedAtISO?: string | null
 }
 
-type CardType = 'visa' | 'mastercard' | 'amex' | 'discover'
-
 type UploadState = {
   fileName: string | null
   fileSize: number | null
 }
 
-type CardDetails = {
-  number: string
-  expiry: string
-  cvc: string
-}
+const stripePromise = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY
+  ? loadStripe(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY)
+  : null
 
 function formatPHP(n: number) {
   return `₱${n.toLocaleString()}`
@@ -77,111 +75,31 @@ class PaymentPageErrorBoundary extends React.Component<{ children: React.ReactNo
   }
 }
 
-function CardPaymentField({
-  cardType,
-  onCardTypeChange,
-  cardDetails,
-  onChange,
-  expiryError,
-  cvvError,
-}: {
-  cardType: CardType
-  onCardTypeChange: (next: CardType) => void
-  cardDetails: CardDetails
-  onChange: (updates: Partial<CardDetails>) => void
-  expiryError?: string
-  cvvError?: string
-}) {
-  const formatCardNumber = (value: string) => {
-    const digits = value.replace(/\D/g, '').slice(0, 16)
-    return digits.replace(/(.{4})/g, '$1 ').trim()
-  }
-
+function CardPaymentField({ onChange }: { onChange: (complete: boolean) => void }) {
   return (
     <div className="rounded-[1.75rem] border border-white/10 bg-white/5 p-4">
       <div className="flex items-center justify-between gap-3 text-xs uppercase tracking-widest text-muted">
         <span>Card details</span>
-        <span>Secure entry</span>
+        <span>Stripe secure entry</span>
       </div>
-
-      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {(['visa', 'mastercard', 'amex', 'discover'] as CardType[]).map((type) => {
-          const selected = cardType === type
-          const label = type === 'visa' ? 'Visa' : type === 'mastercard' ? 'Mastercard' : type === 'amex' ? 'AmEx' : 'Discover'
-
-          return (
-            <button
-              key={type}
-              type="button"
-              onClick={() => onCardTypeChange(type)}
-              className={[
-                'rounded-2xl border px-4 py-3 text-left transition',
-                selected ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
-              ].join(' ')}
-            >
-              <div className="text-sm font-bold text-white">{label}</div>
-              <div className="mt-1 text-[11px] text-muted">{selected ? 'Selected' : 'Tap to choose'}</div>
-            </button>
-          )
-        })}
+      <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 px-4 py-4">
+        <CardElement
+          onChange={(event) => onChange(event.complete)}
+          options={{
+            hidePostalCode: true,
+            style: {
+              base: {
+                color: '#ffffff',
+                fontFamily: 'system-ui, sans-serif',
+                fontSize: '16px',
+                '::placeholder': { color: '#9ca3af' },
+              },
+              invalid: { color: '#f87171' },
+            },
+          }}
+        />
       </div>
-
-      <div className="mt-4 grid gap-3">
-        <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-4">
-          <div className="mb-2 text-[11px] uppercase tracking-[0.2em] text-muted">Card number</div>
-          <input
-            type="text"
-            inputMode="numeric"
-            autoComplete="cc-number"
-            value={cardDetails.number}
-            onChange={(e) => onChange({ number: formatCardNumber(e.target.value) })}
-            placeholder="1234 5678 9012 3456"
-            className="w-full bg-transparent text-base text-white placeholder:text-white/40 focus:outline-none"
-          />
-        </div>
-
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-4">
-            <div className="mb-2 text-[11px] uppercase tracking-[0.2em] text-muted">MM / YY</div>
-            <input
-              type="text"
-              inputMode="numeric"
-              autoComplete="cc-exp"
-              value={cardDetails.expiry}
-              onChange={(e) => {
-                const digits = e.target.value.replace(/\D/g, '').slice(0, 4)
-                const formatted = digits.length > 2 ? `${digits.slice(0, 2)}/${digits.slice(2)}` : digits
-                onChange({ expiry: formatted })
-              }}
-              placeholder="MM/YY"
-              className="w-full bg-transparent text-base text-white placeholder:text-white/40 focus:outline-none"
-            />
-          </div>
-
-          <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-4">
-            <div className="mb-2 text-[11px] uppercase tracking-[0.2em] text-muted">CVV</div>
-            <input
-              type="password"
-              inputMode="numeric"
-              maxLength={3}
-              pattern="[0-9]{3}"
-              autoComplete="cc-csc"
-              value={cardDetails.cvc}
-              onChange={(e) => onChange({ cvc: e.target.value.replace(/\D/g, '').slice(0, 3) })}
-              placeholder="123"
-              className="w-full bg-transparent text-base text-white placeholder:text-white/40 focus:outline-none"
-            />
-          </div>
-        </div>
-      </div>
-
-      {expiryError ? (
-        <div className="mt-3 text-[11px] font-medium text-danger">{expiryError}</div>
-      ) : cvvError ? (
-        <div className="mt-3 text-[11px] font-medium text-danger">{cvvError}</div>
-      ) : (
-        <div className="mt-3 text-[11px] text-muted">Card data is handled securely and never stored in this app.</div>
-      )}
+      <div className="mt-3 text-[11px] text-muted">Card details are entered directly into Stripe and are not stored by this app.</div>
     </div>
   )
 }
@@ -189,15 +107,16 @@ function CardPaymentField({
 function PaymentPageContent() {
   const navigate = useNavigate()
   const { user } = useAuth()
+  const stripe = useStripe()
+  const elements = useElements()
   const { addNotification } = useNotifications()
   const proofInputRef = useRef<HTMLInputElement | null>(null)
 
   const [method, setMethod] = useState<PaymentMethod>('gcash')
-  const [cardType, setCardType] = useState<CardType>('visa')
+  const [cardComplete, setCardComplete] = useState(false)
   const [refNo, setRefNo] = useState('ABP-7F21-93')
   const [phoneNumber, setPhoneNumber] = useState('')
   const [upload, setUpload] = useState<UploadState>({ fileName: null, fileSize: null })
-  const [cardDetails, setCardDetails] = useState<CardDetails>({ number: '', expiry: '', cvc: '' })
   const [submitting, setSubmitting] = useState(false)
   const [success, setSuccess] = useState(false)
   const [breakdown, setBreakdown] = useState({ field: 0, equipment: 0, entranceFee: 0, service: 0, total: 0, itemized: [] as Array<{ label: string; amount: number }> })
@@ -209,33 +128,9 @@ function PaymentPageContent() {
   const [gcashQrUrl, setGcashQrUrl] = useState('')
   const [gcashPhoneNumber, setGcashPhoneNumber] = useState('')
   const [gcashQrLoading, setGcashQrLoading] = useState(true)
-  const cardDigits = cardDetails.number.replace(/\D/g, '')
-
-  const validateExpiry = (value: string) => {
-    const trimmed = value.trim()
-    const match = /^(\d{2})\/(\d{2})$/.exec(trimmed)
-    if (!match) return false
-
-    const month = Number(match[1])
-    const year = Number(match[2])
-    if (month < 1 || month > 12) return false
-
-    const now = new Date()
-    const currentYear = now.getFullYear() % 100
-    const currentMonth = now.getMonth() + 1
-
-    if (year < currentYear) return false
-    if (year === currentYear && month < currentMonth) return false
-    return true
-  }
-
-  const expiryError = method === 'card' && cardDetails.expiry && !validateExpiry(cardDetails.expiry)
-    ? 'Expiry date must be a valid future MM/YY value.'
-    : ''
-
-  const cvvError = method === 'card' && cardDetails.cvc && !/^\d{3}$/.test(cardDetails.cvc)
-    ? 'CVV must be exactly 3 numeric digits.'
-    : ''
+  const [receiptReference, setReceiptReference] = useState('')
+  const [amountPaid, setAmountPaid] = useState(0)
+  const [balanceDue, setBalanceDue] = useState(0)
 
   useEffect(() => {
     const pendingReservationJson = localStorage.getItem('pending_reservation')
@@ -257,10 +152,11 @@ function PaymentPageContent() {
           })).filter((member: TeamMember) => !!member.id)
         : []
       const nextTeamSize = Math.max(1, Number(pendingReservation?.teamSize || nextTeamMembers.length + 1 || 1))
-      const nextPayerShareAmount = Number(
-        pendingReservation?.payerShareAmount || (nextPaymentMode === 'split' ? total / nextTeamSize : total),
-      )
-      const nextAmountDue = nextPaymentMode === 'split' ? nextPayerShareAmount : total
+      const isOwnGear = String(pendingReservation?.selectionMode || '').toLowerCase() === 'custom' &&
+        !(pendingReservation?.customWeaponIds?.length || pendingReservation?.customEquipmentIds?.length)
+      const estimatedDeposit = isOwnGear ? Math.min(total, 350) : Math.min(total, Math.round(total * 0.5))
+      const nextPayerShareAmount = nextPaymentMode === 'split' ? Math.round((estimatedDeposit / nextTeamSize) * 100) / 100 : estimatedDeposit
+      const nextAmountDue = nextPayerShareAmount
       const itemized = Array.isArray(pendingReservation?.itemizedBreakdown)
         ? pendingReservation.itemizedBreakdown.map((item: any) => ({
             label: String(item?.label || 'Charge'),
@@ -322,8 +218,8 @@ function PaymentPageContent() {
       return true
     }
 
-    return Boolean(cardType && cardDetails.number.trim() && cardDetails.expiry.trim() && cardDetails.cvc.trim() && !expiryError && !cvvError)
-  }, [cardDetails.cvc, cardDetails.expiry, cardDetails.number, cardType, cvvError, expiryError, method, refNo, submitting, upload.fileName])
+    return Boolean(stripe && elements && cardComplete && !(paymentMode === 'split' && payerShareAmount < breakdown.total))
+  }, [breakdown.total, cardComplete, elements, method, payerShareAmount, paymentMode, refNo, stripe, submitting, upload.fileName])
 
   const onPickFile = (f: File | null) => {
     if (!f) return
@@ -351,49 +247,50 @@ function PaymentPageContent() {
         throw new Error('Invalid pending reservation data.')
       }
 
-      const amount = Number(
-        paymentMode === 'split'
-          ? pendingReservation?.payerShareAmount || amountDue || payerShareAmount || breakdown.total || 0
-          : pendingReservation?.totalAmount || breakdown.total || 0,
-      )
-      if (!amount || amount <= 0) throw new Error('Payment amount is missing')
-
       if (method === 'gcash') {
         if (!upload.fileName) throw new Error('Proof image is required')
       }
-
-      if (method === 'card' && !validateExpiry(cardDetails.expiry)) {
-        throw new Error('Card expiry date is invalid or expired.')
+      if (method === 'card') {
+        const stripeClient = stripe
+        const stripeElements = elements
+        if (!stripeClient || !stripeElements) throw new Error('Card payments are not configured. Use GCash or contact staff.')
+        if (!cardComplete) throw new Error('Enter valid card details.')
+        if (paymentMode === 'split') throw new Error('Split card payments are not supported yet. Select GCash to submit your share.')
+        const cardElement = stripeElements.getElement(CardElement)
+        if (!cardElement) throw new Error('Card form is unavailable. Please reload and try again.')
       }
 
-      if (method === 'card' && !/^\d{3}$/.test(cardDetails.cvc)) {
-        throw new Error('CVV must be exactly 3 numeric digits.')
+      let reservationId = localStorage.getItem('pending_reservation_id') || ''
+      let serverReservation: any
+      if (!reservationId) {
+        const reservationResult = await apiPost<{ ok: boolean; insertedId?: string; data?: any }>('/api/reservations', pendingReservation)
+        reservationId = String(reservationResult?.data?.id ?? reservationResult?.insertedId ?? reservationResult?.data?._id ?? '')
+        if (reservationId) localStorage.setItem('pending_reservation_id', reservationId)
+        serverReservation = reservationResult?.data
       }
-
-      let gcashImageUrl: string | undefined
-      if (method === 'gcash') {
-        const file = proofInputRef.current?.files?.[0]
-        if (!file || !file.type.startsWith('image/')) throw new Error('Only image files are allowed for GCash proof.')
-
-        const formData = new FormData()
-        formData.append('file', file)
-
-        const uploadRes = await fetch(`${apiBase}/api/upload-image`, {
-          method: 'POST',
-          body: formData,
-        })
-        const uploadJson = await uploadRes.json().catch(() => null)
-        if (!uploadRes.ok) {
-          throw new Error(uploadJson?.error || uploadJson?.message || 'Upload failed')
-        }
-        gcashImageUrl = uploadJson?.url
-        if (!gcashImageUrl) throw new Error('Cloudinary upload returned no url')
-      }
-
-      const reservationResult = await apiPost<{ ok: boolean; insertedId?: string; data?: any }>('/api/reservations', pendingReservation)
-
-      const reservationId = reservationResult?.data?.id ?? reservationResult?.insertedId ?? reservationResult?.data?._id
       if (!reservationId) throw new Error('Reservation ID missing from API response')
+      if (!serverReservation) {
+        const reservationResult = await apiGet<{ ok: boolean; data: any }>(`/api/reservations/${encodeURIComponent(reservationId)}`)
+        serverReservation = reservationResult.data
+      }
+      const serverTotal = Number(serverReservation?.totalAmount)
+      const serverDeposit = Number(serverReservation?.depositAmount)
+      if (!Number.isFinite(serverTotal) || serverTotal <= 0 || !Number.isFinite(serverDeposit) || serverDeposit <= 0) {
+        throw new Error('The server could not verify a valid reservation price and deposit.')
+      }
+      if (paymentMode === 'split' && (!Number.isInteger(Number(serverReservation.teamSize)) || Number(serverReservation.teamSize) < 2)) {
+        throw new Error('The server could not verify your group payment settings.')
+      }
+      const amount = paymentMode === 'split'
+        ? Math.round((serverDeposit / Number(serverReservation.teamSize)) * 100) / 100
+        : serverDeposit
+      setBalanceDue(Number(serverReservation.balanceAmount) || 0)
+      setBreakdown((current) => ({
+        ...current,
+        total: serverTotal,
+        itemized: Array.isArray(serverReservation.pricingBreakdown) ? serverReservation.pricingBreakdown : current.itemized,
+      }))
+      setAmountDue(amount)
 
       localStorage.setItem('active_reservation_id', String(reservationId))
 
@@ -406,35 +303,60 @@ function PaymentPageContent() {
       })
 
       if (method === 'card') {
-        await apiPost('/api/payments', {
-          reservationId: String(reservationId),
-          userId: user.id,
-          amount,
-          paymentMethod: 'Card',
-          paymentStatus: 'paid',
-          transactionReference: `CARD-${refNo.trim() || Date.now()}`,
-          cardType,
-          cardNumberLast4: cardDigits.slice(-4),
-          cardExpiry: cardDetails.expiry,
-          createdAt: new Date().toISOString(),
+        const stripeClient = stripe
+        const stripeElements = elements
+        if (!stripeClient || !stripeElements) throw new Error('Card payments are not configured. Use GCash or contact staff.')
+        const intent = await apiPost<{ ok: boolean; clientSecret: string; paymentIntentId: string }>(
+          '/api/create-payment-intent',
+          { reservationId: String(reservationId) },
+        )
+        const cardElement = stripeElements.getElement(CardElement)
+        if (!cardElement) throw new Error('Card form is unavailable. Please reload and try again.')
+        const paymentResult = await stripeClient.confirmCardPayment(intent.clientSecret, {
+          payment_method: {
+            card: cardElement,
+            billing_details: { name: user.name, email: user.email },
+          },
         })
+        if (paymentResult.error) throw new Error(paymentResult.error.message || 'Card payment failed')
+        if (paymentResult.paymentIntent?.status !== 'succeeded') {
+          throw new Error(`Payment is not complete (status: ${paymentResult.paymentIntent?.status || 'unknown'}).`)
+        }
+        const receipt = await apiPost<{ ok: boolean; data: { id?: string; paymentIntentId: string } }>(
+          '/api/payments/stripe-confirm',
+          { reservationId: String(reservationId), paymentIntentId: intent.paymentIntentId },
+        )
+        setReceiptReference(receipt.data.id || receipt.data.paymentIntentId)
       } else {
-        await apiPost('/api/payments', {
+        const file = proofInputRef.current?.files?.[0]
+        if (!file || !file.type.startsWith('image/')) throw new Error('Only image files are allowed for GCash proof.')
+        const formData = new FormData()
+        formData.append('file', file)
+        const uploadRes = await fetch(`${apiBase}/api/upload-image`, { method: 'POST', body: formData })
+        const uploadJson = await uploadRes.json().catch(() => null)
+        if (!uploadRes.ok) throw new Error(uploadJson?.error || uploadJson?.message || 'Upload failed')
+        const gcashImageUrl = uploadJson?.url
+        if (!gcashImageUrl) throw new Error('Cloudinary upload returned no url')
+
+        const payment = await apiPost<{ ok: boolean; data?: { id?: string } }>('/api/payments', {
           reservationId: String(reservationId),
-          userId: user.id,
           amount,
           paymentMethod: 'GCash',
           paymentStatus: 'pending',
           gcashImageUrl: gcashImageUrl || '',
+          paymentMode,
           transactionReference: refNo.trim(),
           createdAt: new Date().toISOString(),
         })
+        setReceiptReference(payment.data?.id || refNo.trim())
       }
+      setAmountPaid(amount)
 
       localStorage.removeItem('pending_reservation')
+      localStorage.removeItem('pending_reservation_id')
 
       setSuccess(true)
-      toast.success(method === 'card' ? 'Card payment completed!' : 'Payment submitted! Reservation is now pending review.')
+      toast.success(method === 'card' ? 'Card payment verified.' : 'Payment submitted for staff review.')
     } catch (e: any) {
       toast.error(String(e?.message || e))
     } finally {
@@ -450,7 +372,7 @@ function PaymentPageContent() {
           <span className="uppercase tracking-[0.18em]">Payment</span>
         </div>
         <h1 className="text-3xl font-bold">Reservation Payment</h1>
-        <p className="text-muted text-sm">GCash still uploads proof, while card payments now confirm instantly and write directly to the records.</p>
+        <p className="text-muted text-sm">The server recalculates the reservation total and deposit. GCash submissions are reviewed by staff; card payments are verified through Stripe.</p>
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[1.6fr_0.9fr]">
@@ -506,9 +428,9 @@ function PaymentPageContent() {
               </ul>
             ) : (
               <ul className="mt-2 space-y-1 text-xs text-muted list-disc pl-5">
-                <li>Enter a valid card in the secure checkout form.</li>
-                <li>Card payments are charged immediately.</li>
-                <li>A successful charge creates a paid payment record automatically.</li>
+                <li>Enter card details in Stripe’s secure card field.</li>
+                <li>Card details are not sent to or stored by this app.</li>
+                <li>Payment is recorded as paid only after Stripe confirms the charge.</li>
               </ul>
             )}
           </div>
@@ -585,13 +507,13 @@ function PaymentPageContent() {
                       <span>Visa / Mastercard / Amex</span>
                     </div>
                     <div className="mt-3">
-                          <CardPaymentField cardType={cardType} onCardTypeChange={setCardType} cardDetails={cardDetails} onChange={(updates) => setCardDetails((current) => ({ ...current, ...updates }))} expiryError={expiryError} cvvError={cvvError} />
+                      <CardPaymentField onChange={setCardComplete} />
                     </div>
 
                     <div className="mt-4 grid gap-2 sm:grid-cols-3 text-[11px] text-muted">
                       <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2">Encrypted entry</div>
-                      <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2">Instant confirmation</div>
-                      <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2">Saved to records</div>
+                      <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2">Provider verified</div>
+                      <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2">Auditable payment record</div>
                     </div>
                   </div>
                 </div>
@@ -642,7 +564,7 @@ function PaymentPageContent() {
                 </div>
                 <div className="mt-2 flex items-center justify-between gap-3">
                   <div className="text-xs text-muted">Reference</div>
-                  <div className="text-xs font-bold">{method === 'gcash' ? refNo || '—' : `CARD-${cardDigits.slice(-4) || '••••'}`}</div>
+                  <div className="text-xs font-bold">{method === 'gcash' ? refNo || '—' : receiptReference || 'Stripe checkout'}</div>
                 </div>
                 {method === 'gcash' ? (
                   <div className="mt-2 flex items-center justify-between gap-3">
@@ -652,15 +574,9 @@ function PaymentPageContent() {
                 ) : (
                   <div className="mt-2 flex items-center justify-between gap-3">
                     <div className="text-xs text-muted">Status</div>
-                    <div className="text-xs font-bold">{cardDetails.number && cardDetails.expiry && cardDetails.cvc ? 'Ready to pay' : 'Awaiting card details'}</div>
+                    <div className="text-xs font-bold">{!stripe ? 'Card payments unavailable' : cardComplete ? 'Card details ready' : 'Awaiting card details'}</div>
                   </div>
                 )}
-                {method === 'card' ? (
-                  <div className="mt-2 flex items-center justify-between gap-3">
-                    <div className="text-xs text-muted">Card Type</div>
-                    <div className="text-xs font-bold uppercase">{cardType}</div>
-                  </div>
-                ) : null}
                 <div className="mt-3 h-px bg-white/10" />
                 {(breakdown.itemized.length > 0 ? breakdown.itemized : [
                   { label: 'Field reservation', amount: breakdown.field },
@@ -675,7 +591,7 @@ function PaymentPageContent() {
                 ))}
                 <div className="mt-3 h-px bg-white/10" />
                 <div className="mt-3 flex items-center justify-between gap-3">
-                  <div className="text-xs text-muted">Amount due</div>
+                  <div className="text-xs text-muted">Reservation deposit</div>
                   <div className="text-sm font-black text-gold">{formatPHP(amountDue || payerShareAmount || breakdown.total)}</div>
                 </div>
               </div>
@@ -697,11 +613,11 @@ function PaymentPageContent() {
               className="mt-4 rounded-2xl border border-success/25 bg-success/10 p-4"
             >
               <div className="flex items-center gap-2 text-sm font-bold text-success">
-                <FiCheck /> {method === 'card' ? 'Card Payment Successful' : 'Payment Submitted'}
+                <FiCheck /> {method === 'card' ? 'Card Payment Verified' : 'Payment Submitted'}
               </div>
               <div className="mt-2 text-xs text-muted">
                 {method === 'card'
-                  ? 'Your card payment details were saved to the payment records.'
+                  ? 'Stripe confirmed the charge and the payment record was saved.'
                   : 'Your payment proof has been submitted. The registrar/admin will review and verify it.'}
               </div>
 
@@ -709,14 +625,12 @@ function PaymentPageContent() {
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-xs text-muted">Receipt</span>
                   <span className="text-xs font-bold">
-                    {method === 'card'
-                      ? `CARD-${cardDigits.slice(-4) || '0000'}`
-                      : `ABP-RCPT-${refNo ? refNo.replace(/\W/g, '').slice(-6) : '000000'}`}
+                    {receiptReference || (method === 'card' ? 'Stripe receipt' : `ABP-RCPT-${refNo ? refNo.replace(/\W/g, '').slice(-6) : '000000'}`)}
                   </span>
                 </div>
                 <div className="mt-2 flex items-center justify-between gap-3">
                   <span className="text-xs text-muted">Total paid</span>
-                  <span className="text-xs font-bold text-gold">{formatPHP(breakdown.total)}</span>
+                  <span className="text-xs font-bold text-gold">{formatPHP(amountPaid)}</span>
                 </div>
               </div>
 
@@ -756,9 +670,15 @@ function PaymentPageContent() {
               <span className="font-bold text-accent">{formatPHP(breakdown.total)}</span>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-muted">Amount due</span>
+              <span className="text-muted">Reservation deposit</span>
               <span className="font-bold text-accent">{formatPHP(amountDue || payerShareAmount || breakdown.total)}</span>
             </div>
+            {balanceDue > 0 ? (
+              <div className="flex items-center justify-between">
+                <span className="text-muted">Remaining balance</span>
+                <span className="font-semibold">{formatPHP(balanceDue)}</span>
+              </div>
+            ) : null}
           </div>
 
           <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4">
@@ -776,7 +696,9 @@ function PaymentPageContent() {
 export function PaymentPage() {
   return (
     <PaymentPageErrorBoundary>
-      <PaymentPageContent />
+      <Elements stripe={stripePromise}>
+        <PaymentPageContent />
+      </Elements>
     </PaymentPageErrorBoundary>
   )
 }

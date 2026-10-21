@@ -420,7 +420,8 @@ router.post('/register', async (req, res) => {
       return res.status(500).json({ ok: false, error: 'failed to send verification email', details: String(mailErr) })
     }
 
-    return res.status(201).json({ ok: true, insertedId: result.insertedId, data: newDoc, needsOtp: true })
+    const { password: _password, otpCode: _otpCode, ...publicDoc } = newDoc
+    return res.status(201).json({ ok: true, insertedId: result.insertedId, data: publicDoc, needsOtp: true })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
   }

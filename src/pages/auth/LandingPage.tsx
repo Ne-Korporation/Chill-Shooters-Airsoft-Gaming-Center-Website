@@ -118,37 +118,17 @@ export function LandingPage() {
     const loadMetrics = async () => {
       setLoadingMetrics(true)
       try {
-        const [reservationsRes, paymentsRes, waiversRes, gameplayRes] = await Promise.all([
-          apiGet<{ ok: boolean; data: any[] }>('/api/reservations?limit=200'),
-          apiGet<{ ok: boolean; data: any[] }>('/api/payments?limit=200'),
-          apiGet<{ ok: boolean; data: any[] }>('/api/waivers?limit=200'),
-          apiGet<{ ok: boolean; data: any[] }>('/api/gameplay?limit=200'),
-        ])
-
-        const reservations = Array.isArray(reservationsRes?.data) ? reservationsRes.data : []
-        const payments = Array.isArray(paymentsRes?.data) ? paymentsRes.data : []
-        const waivers = Array.isArray(waiversRes?.data) ? waiversRes.data : []
-        const gameplay = Array.isArray(gameplayRes?.data) ? gameplayRes.data : []
-
-        const pendingReservations = reservations.filter((item) => {
-          const status = String(item?.reservationStatus || '').trim().toLowerCase()
-          return status === 'pending' || status === 'needs review' || status === 'needs_review' || status === 'review'
-        }).length
-
-        const pendingPayments = payments.filter((item) => {
-          const status = String(item?.paymentStatus || item?.status || '').trim().toLowerCase()
-          return status === 'pending' || status === 'submitted' || status === 'review'
-        }).length
-
-        const pendingWaivers = waivers.filter((item) => {
-          const status = String(item?.status || '').trim().toLowerCase()
-          return status === 'pending' || !status
-        }).length
-
-        const activeGames = gameplay.filter((item) => {
-          const status = String(item?.Status || item?.status || '').trim().toLowerCase()
-          return status === 'scheduled' || status === 'ongoing' || status === 'completed'
-        }).length
+        const metricsRes = await apiGet<{
+          ok: boolean
+          data: {
+            reservations: number
+            pendingReservations: number
+            pendingPayments: number
+            pendingWaivers: number
+            activeGames: number
+          }
+        }>('/api/public/metrics')
+        const { reservations, pendingReservations, pendingPayments, pendingWaivers, activeGames } = metricsRes.data
 
         const pendingItems = pendingReservations + pendingPayments + pendingWaivers
         const readiness = Math.max(70, Math.min(100, 100 - pendingItems * 4))
@@ -156,7 +136,7 @@ export function LandingPage() {
 
         if (isMounted) {
           setLandingMetrics({
-            reservations: reservations.length,
+            reservations,
             pendingPayments,
             pendingWaivers,
             activeGames,
@@ -909,4 +889,3 @@ export function LandingPage() {
     </div>
   )
 }
-

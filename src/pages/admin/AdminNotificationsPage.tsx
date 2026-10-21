@@ -86,7 +86,7 @@ export function AdminNotificationsPage() {
       registrars: 'registrar',
       marshals: 'marshal',
     }
-    const targets = selectedAudiences.length > 0 ? selectedAudiences : ['users']
+    const targets: Audience[] = selectedAudiences.length > 0 ? selectedAudiences : ['users']
     targets.forEach((audience) => {
       addNotification({
         userId: 'broadcast',
@@ -347,5 +347,4 @@ export function AdminNotificationsPage() {
     </div>
   )
 }
-
 

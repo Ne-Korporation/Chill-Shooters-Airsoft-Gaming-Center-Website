@@ -29,7 +29,12 @@ async function getDb() {
       })
   }
 
-  return dbPromise
+    return dbPromise
+}
+
+function startDbSession() {
+    if (!client) throw new Error('MongoDB client is not initialized')
+    return client.startSession()
 }
 
 async function getUserAccountsCollection() {
@@ -69,5 +74,4 @@ function isObjectIdLike(value) {
   return false
 }
 
-export { getDb, getCollectionName, toObjectId, isObjectIdLike, getUserAccountsCollection }
-
+export { getDb, getCollectionName, toObjectId, isObjectIdLike, getUserAccountsCollection, startDbSession }

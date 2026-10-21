@@ -1,0 +1,199 @@
+const DEFAULT_ENTRANCE_FEE = 150
+const DEFAULT_STANDARD_DEPOSIT_RATE = 0.5
+const DEFAULT_OWN_GEAR_DEPOSIT = 350
+
+function readNonNegativeNumber(value, fallback, name) {
+  const parsed = value === undefined || value === '' ? fallback : Number(value)
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`${name} must be a non-negative number`)
+  }
+  return parsed
+}
+
+function getPricingConfig(env = process.env) {
+  const standardDepositRate = readNonNegativeNumber(
+    env.STANDARD_DEPOSIT_RATE,
+    DEFAULT_STANDARD_DEPOSIT_RATE,
+    'STANDARD_DEPOSIT_RATE',
+  )
+  const cvsuDiscountPercent = readNonNegativeNumber(
+    env.CVSU_DISCOUNT_PERCENT,
+    10,
+    'CVSU_DISCOUNT_PERCENT',
+  )
+  if (standardDepositRate > 1) throw new Error('STANDARD_DEPOSIT_RATE cannot exceed 1')
+  if (cvsuDiscountPercent > 100) throw new Error('CVSU_DISCOUNT_PERCENT cannot exceed 100')
+
+  return {
+    entranceFeePerPlayer: readNonNegativeNumber(
+      env.ENTRANCE_FEE_PER_PLAYER,
+      DEFAULT_ENTRANCE_FEE,
+      'ENTRANCE_FEE_PER_PLAYER',
+    ),
+    standardDepositRate,
+    ownGearDeposit: readNonNegativeNumber(
+      env.OWN_GEAR_DEPOSIT,
+      DEFAULT_OWN_GEAR_DEPOSIT,
+      'OWN_GEAR_DEPOSIT',
+    ),
+    cvsuDiscountPercent,
+    privateSessionMultiplier: readNonNegativeNumber(
+      env.PRIVATE_SESSION_PRICE_MULTIPLIER,
+      1,
+      'PRIVATE_SESSION_PRICE_MULTIPLIER',
+    ),
+  }
+}
+
+function numberOrZero(value, label) {
+  const number = Number(value || 0)
+  if (!Number.isFinite(number) || number < 0) {
+    throw new Error(`${label} has an invalid price`)
+  }
+  return number
+}
+
+function applyDiscount(amount, pkg) {
+  const mode = pkg.discountMode || (Number(pkg.discountPct) > 0 ? 'percent' : 'none')
+  const value = numberOrZero(pkg.discountValue ?? pkg.discountPct, 'Package discount')
+  if (mode === 'settled') return Math.max(0, Math.round(value))
+  if (mode === 'amount') return Math.max(0, amount - Math.min(amount, Math.round(value)))
+  if (mode === 'percent') return Math.max(0, amount - Math.round(amount * Math.min(value, 100) / 100))
+  return amount
+}
+
+function calculateDeposit(total, isOwnGear, config) {
+  if (isOwnGear) return Math.min(total, Math.round(config.ownGearDeposit))
+  return Math.min(total, Math.round(total * config.standardDepositRate))
+}
+
+export async function calculateBookingPrice({ db, payload, players, findDocumentById, userId }) {
+  const config = getPricingConfig()
+  const sessionMultiplier = String(payload.sessionType || '').toLowerCase() === 'private'
+    ? config.privateSessionMultiplier
+    : 1
+  const entranceFee = Math.round(config.entranceFeePerPlayer * players * sessionMultiplier)
+  const selectionMode = String(payload.selectionMode || '').toLowerCase()
+  let subtotal = entranceFee
+  let packageDiscount = 0
+  let isOwnGear = false
+  const breakdown = [{ label: 'Player entrance fee', amount: entranceFee }]
+
+  if (selectionMode === 'package') {
+    const packageId = String(payload.selectedPackageId || '').trim()
+    if (!packageId) throw new Error('Choose a rental package before booking.')
+    const pkg = await findDocumentById(db, 'packages', packageId)
+    if (!pkg || (pkg.status && String(pkg.status).toLowerCase() !== 'active')) {
+      throw new Error('The selected rental package is unavailable.')
+    }
+
+    const settledPrice = numberOrZero(pkg.settledAmount, 'Package')
+    if (settledPrice > 0) {
+      const fixedPlayers = Math.round(Number(pkg.players || 0))
+      if (fixedPlayers > 0 && fixedPlayers !== players) {
+        throw new Error('The selected package is not priced for this group size.')
+      }
+      subtotal = Math.round(settledPrice)
+      const discountedTotal = applyDiscount(subtotal, {
+        ...pkg,
+        discountMode: pkg.discountMode === 'settled' ? 'none' : pkg.discountMode,
+      })
+      packageDiscount = subtotal - discountedTotal
+      subtotal = discountedTotal
+      breakdown.length = 0
+      breakdown.push({ label: pkg.name || 'Rental package', amount: subtotal })
+    } else {
+      const basePrice = numberOrZero(pkg.basePrice, 'Package')
+      const weaponIds = Array.isArray(pkg.weaponIds) ? pkg.weaponIds.map(String) : []
+      const equipmentIds = Array.isArray(pkg.equipmentIds) ? pkg.equipmentIds.map(String) : []
+      const weapons = await Promise.all(weaponIds.map((id) => findDocumentById(db, 'weapons', id)))
+      const equipment = await Promise.all(equipmentIds.map((id) => findDocumentById(db, 'equipments', id)))
+      if (weapons.some((item) => !item) || equipment.some((item) => !item)) {
+        throw new Error('The selected package references inventory that is no longer available.')
+      }
+      if (weapons.some((item) => String(item.status || 'available').toLowerCase() !== 'available')) {
+        throw new Error('One or more weapons in the selected package are unavailable.')
+      }
+      if (equipment.some((item) =>
+        String(item.status || 'available').toLowerCase() !== 'available' ||
+        Number(item.qty || 0) < players
+      )) {
+        throw new Error('One or more equipment items in the selected package are unavailable or out of stock.')
+      }
+
+      const listedWeaponPrice = weapons.reduce((sum, item) => sum + numberOrZero(item.price, 'Weapon'), 0)
+      const averageWeaponPrice = weapons.length ? listedWeaponPrice / weapons.length : 0
+      const packageWeaponCount = Math.max(
+        0,
+        Math.round(Number(pkg.weaponCount || weaponIds.length)),
+      )
+      const rentedWeaponCount = packageWeaponCount * players
+      const weaponsTotal = Math.round(averageWeaponPrice * rentedWeaponCount * sessionMultiplier)
+      const equipmentTotal = Math.round(
+        equipment.reduce((sum, item) => sum + numberOrZero(item.price, 'Equipment'), 0) * players * sessionMultiplier,
+      )
+      const packageBase = Math.round(basePrice * players * sessionMultiplier)
+      const preDiscount = packageBase + weaponsTotal + equipmentTotal + entranceFee
+      subtotal = applyDiscount(preDiscount, pkg)
+      packageDiscount = preDiscount - subtotal
+      breakdown.length = 0
+      if (packageBase) breakdown.push({ label: pkg.name || 'Package fee', amount: packageBase })
+      if (weaponsTotal) breakdown.push({ label: 'Rental weapons', amount: weaponsTotal })
+      if (equipmentTotal) breakdown.push({ label: 'Rental equipment', amount: equipmentTotal })
+      breakdown.push({ label: 'Player entrance fee', amount: entranceFee })
+      if (packageDiscount) breakdown.push({ label: 'Package discount', amount: -packageDiscount })
+    }
+  } else if (selectionMode === 'custom') {
+    const weaponIds = Array.isArray(payload.customWeaponIds) ? [...new Set(payload.customWeaponIds.map(String))] : []
+    const equipmentIds = Array.isArray(payload.customEquipmentIds) ? [...new Set(payload.customEquipmentIds.map(String))] : []
+    isOwnGear = weaponIds.length === 0 && equipmentIds.length === 0
+    const weapons = await Promise.all(weaponIds.map((id) => findDocumentById(db, 'weapons', id)))
+    const equipment = await Promise.all(equipmentIds.map((id) => findDocumentById(db, 'equipments', id)))
+    if (weapons.some((item) => !item) || equipment.some((item) => !item)) {
+      throw new Error('One or more selected rental items are unavailable.')
+    }
+    if (weapons.some((item) => String(item.status || 'available').toLowerCase() !== 'available')) {
+      throw new Error('One or more selected weapons are unavailable.')
+    }
+    if (equipment.some((item) =>
+      String(item.status || 'available').toLowerCase() !== 'available' ||
+      Number(item.qty || 0) < players
+    )) {
+      throw new Error('There is not enough available stock for one or more selected equipment items.')
+    }
+
+    const weaponsTotal = weapons.reduce((sum, item) => sum + numberOrZero(item.price, 'Weapon'), 0) * players
+    const equipmentTotal = equipment.reduce((sum, item) => sum + numberOrZero(item.price, 'Equipment'), 0) * players
+    subtotal = Math.round(entranceFee + weaponsTotal + equipmentTotal)
+    breakdown.length = 0
+    if (weaponsTotal) breakdown.push({ label: 'Custom rental weapons', amount: Math.round(weaponsTotal) })
+    if (equipmentTotal) breakdown.push({ label: 'Custom rental equipment', amount: Math.round(equipmentTotal) })
+    breakdown.push({ label: 'Player entrance fee', amount: entranceFee })
+  } else {
+    return { pricingVerified: false, reason: 'Select a package or choose custom/own gear.' }
+  }
+
+  if (userId && !isOwnGear) {
+    const account = await findDocumentById(db, 'user_accounts', userId)
+    const cvsuVerified = account &&
+      String(account.partnershipInstitution || '').toLowerCase() === 'cavite state university' &&
+      String(account.partnershipEligibilityStatus || '').toLowerCase() === 'verified'
+    if (cvsuVerified) {
+      const cvsuDiscount = Math.round(subtotal * config.cvsuDiscountPercent / 100)
+      subtotal = Math.max(0, subtotal - cvsuDiscount)
+      breakdown.push({ label: 'Verified CvSU discount', amount: -cvsuDiscount })
+    }
+  }
+
+  const totalAmount = Math.max(0, Math.round(subtotal))
+  return {
+    pricingVerified: true,
+    totalAmount,
+    depositAmount: calculateDeposit(totalAmount, isOwnGear, config),
+    balanceAmount: Math.max(0, totalAmount - calculateDeposit(totalAmount, isOwnGear, config)),
+    pricingBreakdown: breakdown,
+    pricingConfigVersion: 1,
+    packageDiscountAmount: packageDiscount,
+    paymentDepositPolicy: isOwnGear ? 'fixed_350_capped_at_total' : 'percentage',
+  }
+}

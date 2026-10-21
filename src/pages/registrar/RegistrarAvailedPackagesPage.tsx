@@ -45,7 +45,7 @@ export function RegistrarAvailedPackagesPage() {
       const data = Array.isArray(res?.data) ? res.data : []
       const mapped = data
         .filter((item) => String(item.reservationStatus || '').toLowerCase() === 'confirmed' || String(item.reservationStatus || '').toLowerCase() === 'pending')
-        .map((item) => ({
+        .map((item): PackageRow => ({
           id: String(item.id || item._id || ''),
           packageName: item.packageName || item.selectedGameplayName || '—',
           gameMode: item.gameMode || item.mode || '—',
@@ -230,4 +230,3 @@ export function RegistrarAvailedPackagesPage() {
     </div>
   )
 }
-
