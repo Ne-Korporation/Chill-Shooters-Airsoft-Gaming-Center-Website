@@ -30,6 +30,7 @@ import { AdminReportsPage } from './pages/admin/AdminReportsPage'
 import { AdminNotificationsPage } from './pages/admin/AdminNotificationsPage'
 import { AdminAuditLogsPage } from './pages/admin/AdminAuditLogsPage'
 import { AdminPartnershipsPage } from './pages/admin/AdminPartnershipsPage'
+import { AdminFeedbackPage } from './pages/admin/AdminFeedbackPage'
 
 import { ReservationManagementPage } from './pages/admin/ReservationManagementPage'
 import { PlayerManagementPage } from './pages/admin/PlayerManagementPage'
@@ -41,6 +42,7 @@ import { RegistrarAvailedPackagesPage } from './pages/registrar/RegistrarAvailed
 import { RegistrarSubmittedWaiversPage } from './pages/registrar/RegistrarSubmittedWaiversPage'
 import { RegistrarSubmittedPaymentsPage } from './pages/registrar/RegistrarSubmittedPaymentsPage'
 import { MarshalDashboardHomePage } from './pages/marshal/MarshalDashboardHomePage'
+import { PlayerFeedbackPage } from './pages/players/PlayerFeedbackPage'
 
 import { RequireRole } from './routes/RequireRole'
 import { NotificationProvider } from './context/NotificationContext'
@@ -137,6 +139,7 @@ export default function App() {
         <Route path="packages" element={<RequireRole roles={['user', 'admin', 'registrar']}>{<PackageRecommendationPage />}</RequireRole>} />
         <Route path="waiver" element={<RequireRole roles={['user', 'admin', 'registrar']}>{<WaiverPage />}</RequireRole>} />
         <Route path="payment" element={<RequireRole roles={['user', 'admin', 'registrar']}>{<PaymentPage />}</RequireRole>} />
+        <Route path="feedback" element={<RequireRole roles={['user']}><PlayerFeedbackPage /></RequireRole>} />
         <Route path="notifications" element={<RequireRole roles={['user', 'admin', 'registrar', 'marshal']}>{<AdminNotificationsPage />}</RequireRole>} />
         <Route path="players/:playerId" element={<PlayerProfilePage />} />
         <Route path="players/:playerId/weapons-and-equipment" element={<MyWeaponsAndEquipmentPage />} />
@@ -168,7 +171,7 @@ export default function App() {
 
 
 
-        <Route path="admin" element={<AdminDashboardPageWrapper><AdminDashboardPage /></AdminDashboardPageWrapper>} />
+        <Route path="admin" element={<AdminDashboardPageWrapper />} />
         <Route path="admin/reservations" element={<AdminPageWrapper><AdminReservationsPage /></AdminPageWrapper>} />
         <Route path="admin/gameplay" element={<AdminPageWrapper><AdminGameplayPage /></AdminPageWrapper>} />
 
@@ -203,6 +206,7 @@ export default function App() {
         <Route path="admin/rental-packages" element={<AdminPageWrapper><AdminRentalPackagesPage /></AdminPageWrapper>} />
         <Route path="admin/payments" element={<AdminPageWrapper><AdminPaymentsPage /></AdminPageWrapper>} />
         <Route path="admin/partnerships" element={<AdminPageWrapper><AdminPartnershipsPage /></AdminPageWrapper>} />
+        <Route path="admin/feedback" element={<AdminPageWrapper><AdminFeedbackPage /></AdminPageWrapper>} />
         <Route path="admin/reports" element={<AdminPageWrapper><AdminReportsPage /></AdminPageWrapper>} />
         <Route path="admin/notifications" element={<AdminPageWrapper><AdminNotificationsPage /></AdminPageWrapper>} />
         <Route path="admin/audit-logs" element={<AdminPageWrapper><AdminAuditLogsPage /></AdminPageWrapper>} />
@@ -224,4 +228,3 @@ export default function App() {
     </NotificationProvider>
   )
 }
-
