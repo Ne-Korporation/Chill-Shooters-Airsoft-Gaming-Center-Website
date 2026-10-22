@@ -1,11 +1,12 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
 import { DashboardPostsPanel } from '../../components/dashboard/DashboardPostsPanel'
-import { Card } from '../../components/ui/Card'
+import { Link } from 'react-router-dom'
+import { FiCalendar, FiCheckCircle, FiCreditCard, FiPlus, FiShield } from 'react-icons/fi'
+import { ActivityList, DashboardHeader, Panel, StatTile, type ActivityTone } from '../../components/dashboard/DashboardParts'
 import { apiGet } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
 
-type ActivityTone = 'accent' | 'success' | 'danger' | 'muted'
 
 type ActivityItem = {
   title: string
@@ -229,82 +230,95 @@ export function DashboardHomePage() {
     }
   }, [user?.id])
 
-  const statusClass = useMemo(() => {
-    if (dashboard.statusTone === 'danger') return 'text-danger'
-    if (dashboard.statusTone === 'accent') return 'text-accent'
-    if (dashboard.statusTone === 'success') return 'text-success'
-    return 'text-muted'
-  }, [dashboard.statusTone])
+  const firstName = String(user?.name || 'player').trim().split(/\s+/)[0]
+  const waiverApproved = dashboard.waiverStatus === 'Approved'
 
   return (
-    <div className="space-y-5">
-      <div className="space-y-2">
-        <div className="inline-flex items-center gap-2 rounded-full bg-white/5 px-4 py-2 text-xs text-muted border border-white/5">
-          <span className="h-2.5 w-2.5 rounded-full bg-accent" />
-          <span className="uppercase tracking-[0.18em]">Player</span>
-        </div>
-        <h1 className="text-3xl font-bold">Welcome back, {user?.name || 'player'}</h1>
-        <p className="text-muted text-sm">Your bookings, payments, and waiver updates in one place.</p>
+    <div className="space-y-6">
+      <DashboardHeader
+        eyebrow="Player dashboard"
+        title={`Welcome back, ${firstName}`}
+        description="Your bookings, payments, and waiver in one place."
+        actions={
+          <Link
+            to="/app/reservations"
+            className="inline-flex h-10 items-center gap-2 rounded-xl bg-primary px-4 text-sm font-semibold text-white transition hover:brightness-110"
+          >
+            <FiPlus /> Book a game
+          </Link>
+        }
+      />
+
+      <div className="grid gap-4 sm:grid-cols-3">
+        <StatTile
+          label="My reservations"
+          value={dashboard.totalReservations}
+          icon={FiCalendar}
+          hint="All time"
+          loading={loading}
+        />
+        <StatTile
+          label="Upcoming bookings"
+          value={dashboard.upcomingReservations}
+          icon={FiCheckCircle}
+          hint="Confirmed and ready"
+          loading={loading}
+        />
+        <StatTile
+          label="Pending payments"
+          value={dashboard.pendingPayments}
+          icon={FiCreditCard}
+          hint={dashboard.pendingPayments > 0 ? 'Needs your follow-up' : 'All settled'}
+          attention={dashboard.pendingPayments > 0}
+          loading={loading}
+        />
       </div>
 
-      <div className="grid gap-4 md:grid-cols-3">
-        <Card className="p-4">
-          <div className="text-xs uppercase tracking-widest text-muted">My Reservations</div>
-          <div className="mt-2 text-2xl font-bold text-accent">{loading ? '…' : dashboard.totalReservations}</div>
-        </Card>
-
-        <Card className="p-4">
-          <div className="text-xs uppercase tracking-widest text-muted">Upcoming Bookings</div>
-          <div className="mt-2 text-2xl font-bold text-success">{loading ? '…' : dashboard.upcomingReservations}</div>
-        </Card>
-
-        <Card className="p-4">
-          <div className="text-xs uppercase tracking-widest text-muted">Pending Payments</div>
-          <div className="mt-2 text-2xl font-bold text-danger">{loading ? '…' : dashboard.pendingPayments}</div>
-        </Card>
-      </div>
-
-      <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
-        <Card className="p-4">
-          <div className="text-xs uppercase tracking-widest text-muted">Your next step</div>
-          <div className={`mt-2 text-lg font-bold ${statusClass}`}>{dashboard.statusLabel}</div>
-          <div className="mt-3 grid gap-3 sm:grid-cols-2">
-            <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
-              <div className="text-[11px] uppercase tracking-widest text-muted">Next booking</div>
-              <div className="mt-2 text-sm font-semibold">{loading ? '…' : dashboard.nextReservation}</div>
-            </div>
-            <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
-              <div className="text-[11px] uppercase tracking-widest text-muted">Waiver status</div>
-              <div className="mt-2 text-sm font-semibold">{loading ? '…' : dashboard.waiverStatus}</div>
-            </div>
-          </div>
-        </Card>
-
-        <Card className="p-4">
-          <div className="text-xs uppercase tracking-widest text-muted">Recent Activity</div>
-          <div className="mt-3 space-y-2">
-            {dashboard.recentActivity.length === 0 && !loading ? (
-              <div className="rounded-xl border border-white/5 bg-white/5 px-3 py-2 text-sm text-muted">No activity recorded yet.</div>
-            ) : (
-              dashboard.recentActivity.map((item, index) => (
-                <div key={`${item.title}-${index}`} className="rounded-xl border border-white/10 bg-white/5 px-3 py-2">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="text-sm font-semibold">{item.title}</div>
-                      <div className="mt-1 text-xs text-muted">{item.subtitle}</div>
-                    </div>
-                    <div className="text-[11px] text-muted">{item.meta}</div>
-                  </div>
+      <div className="grid gap-4 lg:grid-cols-[1.2fr_1fr]">
+        <Panel title="Next up" description={loading ? undefined : dashboard.statusLabel}>
+          <div className="divider divide-y">
+            <div className="divider flex items-center gap-3 pb-3">
+              <span className="chip-accent grid h-9 w-9 shrink-0 place-items-center rounded-xl">
+                <FiCalendar className="h-4 w-4" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="text-xs text-muted">Next booking</div>
+                <div className="truncate text-sm font-medium">
+                  {loading ? <span className="skeleton inline-block h-4 w-40" /> : dashboard.nextReservation}
                 </div>
-              ))
-            )}
+              </div>
+            </div>
+            <div className="divider flex items-center gap-3 pt-3">
+              <span className="chip-accent grid h-9 w-9 shrink-0 place-items-center rounded-xl">
+                <FiShield className="h-4 w-4" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="text-xs text-muted">Waiver</div>
+                <div className="text-sm font-medium">
+                  {loading ? <span className="skeleton inline-block h-4 w-24" /> : dashboard.waiverStatus}
+                </div>
+              </div>
+              {!loading && !waiverApproved ? (
+                <Link to="/app/waiver" className="text-sm font-medium text-accent hover:underline">
+                  {dashboard.waiverStatus === 'Not submitted' ? 'Sign now' : 'View'}
+                </Link>
+              ) : null}
+            </div>
           </div>
-        </Card>
+        </Panel>
+
+        <Panel title="Recent activity">
+          <ActivityList
+            items={dashboard.recentActivity}
+            loading={loading}
+            emptyText="No activity yet. Book your first game to get started."
+          />
+        </Panel>
       </div>
 
       <DashboardPostsPanel
-        title="Dashboard posts"
-        subtitle="Admin updates, reminders, and photo posts that appear on every dashboard page."
+        title="Announcements"
+        subtitle="Updates and reminders from the Chill Shooters team."
       />
     </div>
   )

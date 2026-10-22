@@ -83,10 +83,10 @@ export function ResetPasswordPage() {
 
   return (
     <div className="relative min-h-screen overflow-hidden bg-background px-3 py-10 lg:py-14">
-      <div className="absolute inset-0 bg-camouflage opacity-20" />
+      <div className="pointer-events-none absolute inset-0 bg-camouflage opacity-20" />
       <div className="absolute left-[-140px] top-[-160px] h-[340px] w-[340px] rounded-full bg-accent/15 blur-3xl animate-gradientShift" />
 
-      <div className="mx-auto max-w-[940px]">
+      <div className="relative z-10 mx-auto max-w-[940px]">
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
@@ -94,10 +94,7 @@ export function ResetPasswordPage() {
           className="grid gap-4 lg:grid-cols-2 lg:gap-6"
         >
           <div className="space-y-3">
-            <div className="inline-flex items-center gap-2 rounded-full bg-white/5 px-4 py-2 text-xs text-muted border border-white/5">
-              <span className="h-2.5 w-2.5 rounded-full bg-accent" />
-              <span className="uppercase tracking-[0.18em]">Reset Password</span>
-            </div>
+            <div className="text-sm font-medium text-accent">Reset Password</div>
             <h1 className="text-3xl font-bold leading-tight lg:text-4xl">Secure Credential Update</h1>
             <p className="text-muted">
               Updating password for <span className="text-text font-semibold">{email || 'account'}</span>.

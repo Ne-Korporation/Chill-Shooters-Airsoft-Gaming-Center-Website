@@ -218,16 +218,13 @@ useEffect(() => {
   }
 
   return (
-    <Card className="p-4">
+    <Card className="p-5 md:p-5">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <div className="text-xs uppercase tracking-widest text-muted">{title}</div>
-          <div className="mt-2 text-sm text-muted">{subtitle}</div>
+          <h2 className="text-base font-semibold">{title}</h2>
+          <p className="mt-0.5 text-sm text-muted">{subtitle}</p>
         </div>
         <div className="flex items-center gap-2">
-          <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-[0.18em] text-muted">
-            Shared feed
-          </div>
           {canManage ? (
             <Button type="button" size="sm" onClick={openComposer}>
               <FiPlus />
@@ -243,17 +240,20 @@ useEffect(() => {
         </div>
       ) : null}
 
-      <div className="mt-4 space-y-3">
+      <div className="divider mt-4 divide-y">
         {loading ? (
-          <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-4 text-sm text-muted">Loading posts…</div>
+          <div className="space-y-3 py-2">
+            <div className="skeleton h-4 w-32" />
+            <div className="skeleton h-16 w-full" />
+          </div>
         ) : posts.length === 0 ? (
-          <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-4 text-sm text-muted">No dashboard posts have been published yet.</div>
+          <p className="py-6 text-center text-sm text-muted">No announcements yet.</p>
         ) : (
           posts.map((post) => (
-            <div key={post.id || `${post.postedAtISO || post.createdAtISO || post.updatedAtISO || post.message}-${post.imageUrl || 'no-image'}`} className="rounded-2xl border border-white/10 bg-white/5 p-4">
+            <div key={post.id || `${post.postedAtISO || post.createdAtISO || post.updatedAtISO || post.message}-${post.imageUrl || 'no-image'}`} className="divider py-4 first:pt-0 last:pb-0">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <div className="text-[11px] uppercase tracking-[0.18em] text-muted">
+                  <div className="text-xs text-muted">
                     Posted {formatPostedDate(post.postedAtISO || post.createdAtISO || post.updatedAtISO)}
                   </div>
                   <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-text">
@@ -280,9 +280,9 @@ useEffect(() => {
   type="button"
   onClick={() => setLightboxUrl(post.imageUrl || null)}
   aria-label="View image full size"
-  className="mt-4 block w-full cursor-zoom-in overflow-hidden rounded-2xl border border-white/10 bg-black/20"
+  className="mt-3 block w-full max-w-2xl cursor-zoom-in overflow-hidden rounded-xl bg-[rgba(var(--text),0.04)]"
 >
-  <img src={post.imageUrl} alt="Dashboard post attachment" className="mx-auto block h-auto max-h-[80vh] w-full object-contain" />
+  <img src={post.imageUrl} alt="Dashboard post attachment" className="block max-h-[420px] w-full object-contain transition hover:opacity-95" />
 </button>
               ) : null}
 

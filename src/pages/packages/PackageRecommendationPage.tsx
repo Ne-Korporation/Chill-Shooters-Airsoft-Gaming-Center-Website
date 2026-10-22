@@ -388,10 +388,7 @@ export function PackageRecommendationPage() {
   return (
     <div className="space-y-4">
       <div className="space-y-2">
-        <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs text-muted">
-          <span className="grid h-2.5 w-2.5 place-items-center rounded-full bg-accent" />
-          <span className="uppercase tracking-[0.18em]">Packages</span>
-        </div>
+        <div className="text-sm font-medium text-accent">Packages</div>
         <h1 className="text-3xl font-bold">Package Recommendation</h1>
         <p className="mt-1 text-sm text-muted">
           Enter your budget and group size — we will show the packages that match your group and fit your budget.

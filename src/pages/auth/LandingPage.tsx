@@ -1,79 +1,92 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
+  FiBox,
+  FiCalendar,
   FiCheck,
-  FiChevronRight,
+  FiChevronDown,
   FiChevronLeft,
-  FiShield,
-  FiZap,
-  FiMap,
-  FiUsers,
+  FiChevronRight,
+  FiClock,
   FiCreditCard,
-  FiMessageSquare,
-  FiHelpCircle,
+  FiMail,
+  FiMapPin,
+  FiMenu,
+  FiMinus,
+  FiPlus,
+  FiShield,
+  FiTarget,
+  FiUsers,
+  FiX,
 } from 'react-icons/fi'
+import toast from 'react-hot-toast'
 
 import { Button } from '../../components/ui/Button'
-import { useTheme } from '../../context/ThemeContext'
-import { ThemeToggle } from '../../components/nav/ThemeToggle'
-import { Card } from '../../components/ui/Card'
-import { apiGet, getApiBase } from '../../utils/apiClient'
-
-type Testimonial = {
-  name: string
-  role: string
-  quote: string
-}
+import { useAuth } from '../../context/AuthContext'
+import { getApiBase } from '../../utils/apiClient'
 
 type FAQ = {
   q: string
   a: string
 }
 
-type LandingMetrics = {
-  reservations: number
-  pendingPayments: number
-  pendingWaivers: number
-  activeGames: number
-  pendingItems: number
-  readiness: number
-  statusLabel: string
+type LocationOption = 'salawag' | 'langkaan' | 'binan'
+type FieldArea = 'Upper Ground' | 'Lower Ground' | 'Forest'
+type TimeSlot = 'morning' | 'afternoon' | 'evening'
+type BookingMenu = 'location' | 'field' | 'date' | 'players'
+
+// Read (and cleared) by ReservationCalendarPage to prefill step 1.
+export const LANDING_PREFILL_KEY = 'landing_reservation_prefill'
+
+export type LandingReservationPrefill = {
+  location: LocationOption
+  fieldArea: FieldArea
+  dateISO: string
+  slot: TimeSlot
+  players: number
 }
 
-const initialMetrics: LandingMetrics = {
-  reservations: 0,
-  pendingPayments: 0,
-  pendingWaivers: 0,
-  activeGames: 0,
-  pendingItems: 0,
-  readiness: 100,
-  statusLabel: 'Ready',
-}
+const bookingLocations: { id: LocationOption; name: string; detail: string }[] = [
+  { id: 'salawag', name: 'Delta Stronghold (Salawag)', detail: 'About 2 hectares · up to 400 players' },
+  { id: 'langkaan', name: 'Delta Stronghold (Langkaan)', detail: 'About 2 hectares · up to 400 players' },
+  { id: 'binan', name: 'LOMA Binan Laguna', detail: 'About 4 hectares · up to 600 players' },
+]
 
-function CamouflageOverlay({ opacity = 0.1 }: { opacity?: number }) {
-  return (
-    <div
-      aria-hidden="true"
-      className="pointer-events-none absolute inset-0"
-      style={{ opacity }}
-    >
-      <div
-        className="absolute inset-0"
-        style={{
-          backgroundImage:
-            'linear-gradient(135deg, rgba(47,79,47,1) 0%, rgba(18,18,18,0) 45%), linear-gradient(45deg, rgba(85,107,47,1) 0%, rgba(18,18,18,0) 55%)',
-          mixBlendMode: 'overlay',
-        }}
-      />
-      <div
-        className="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(197,163,90,0.35),transparent_35%),radial-gradient(circle_at_70%_35%,rgba(85,107,47,0.45),transparent_40%),radial-gradient(circle_at_45%_75%,rgba(47,79,47,0.55),transparent_45%)]"
-        style={{ filter: 'blur(6px)' }}
-      />
-    </div>
-  )
-}
+const fieldAreas: { id: FieldArea; detail: string }[] = [
+  { id: 'Upper Ground', detail: 'Private games from 10 players' },
+  { id: 'Lower Ground', detail: 'Private games from 20 players' },
+  { id: 'Forest', detail: 'Private games from 50 players' },
+]
 
+const MIN_BOOKING_PLAYERS = 2
+const MAX_BOOKING_PLAYERS = 100
+
+const bookingSlots: { id: TimeSlot; label: string }[] = [
+  { id: 'morning', label: 'Morning' },
+  { id: 'afternoon', label: 'Afternoon' },
+  { id: 'evening', label: 'Evening' },
+]
+
+const howItWorks = [
+  { icon: FiCalendar, title: 'Pick your slot', desc: 'Choose a field, date, and time that fits your group.' },
+  { icon: FiShield, title: 'Sign the waiver', desc: 'A quick online form. Players under 18 need a guardian.' },
+  { icon: FiCreditCard, title: 'Pay online', desc: 'Settle by GCash or bank transfer and upload your receipt.' },
+  { icon: FiTarget, title: 'Show up and play', desc: 'Our marshals brief your squad and get you in the game.' },
+]
+
+const navLinks = [
+  { href: '#about', label: 'About' },
+  { href: '/app/packages', label: 'Packages' },
+  { href: '#guidelines', label: 'Guidelines' },
+  { href: '#location', label: 'Location' },
+  { href: '#contact', label: 'Contact Us' },
+]
+
+function toISODate(d: Date) {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
 
 function SectionTitle({
   eyebrow,
@@ -101,147 +114,336 @@ function SectionTitle({
   )
 }
 
+// One segment of the hero booking bar: icon + label + current value, opening a
+// popover above the bar (the bar sits at the bottom of the hero).
+function BookingField({
+  icon,
+  label,
+  value,
+  open,
+  onToggle,
+  popoverClassName = 'w-72',
+  align = 'left',
+  children,
+}: {
+  icon: React.ReactNode
+  label: string
+  value: string
+  open: boolean
+  onToggle: () => void
+  popoverClassName?: string
+  align?: 'left' | 'right'
+  children: React.ReactNode
+}) {
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const popoverRef = useRef<HTMLDivElement>(null)
+  const [placement, setPlacement] = useState<{ side: 'top' | 'bottom'; maxHeight?: number }>({ side: 'top' })
+
+  // Open on whichever side of the bar has room: above unless the sticky navbar
+  // or the top of the window is in the way, then below. If neither side fits,
+  // take the roomier one and let the popover scroll.
+  useLayoutEffect(() => {
+    if (!open) return
+    const update = () => {
+      const trigger = triggerRef.current
+      const popover = popoverRef.current
+      if (!trigger || !popover) return
+      const rect = trigger.getBoundingClientRect()
+      const navBottom = document.querySelector('header')?.getBoundingClientRect().bottom ?? 0
+      const gap = 12
+      const above = rect.top - Math.max(navBottom, 0) - gap * 2
+      const below = window.innerHeight - rect.bottom - gap * 2
+      const needed = popover.scrollHeight
+      if (needed <= above) setPlacement({ side: 'top' })
+      else if (needed <= below) setPlacement({ side: 'bottom' })
+      else if (above >= below) setPlacement({ side: 'top', maxHeight: above })
+      else setPlacement({ side: 'bottom', maxHeight: below })
+    }
+    update()
+    window.addEventListener('scroll', update, { passive: true })
+    window.addEventListener('resize', update)
+    return () => {
+      window.removeEventListener('scroll', update)
+      window.removeEventListener('resize', update)
+    }
+  }, [open])
+
+  const slideFrom = placement.side === 'top' ? 6 : -6
+
+  return (
+    <div className="relative min-w-0 flex-1">
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        onClick={onToggle}
+        className={`flex w-full items-center gap-2.5 rounded-2xl px-3 py-2.5 text-left transition ${
+          open ? 'bg-[#f0f0ea]' : 'hover:bg-black/5'
+        }`}
+      >
+        <span className="shrink-0 text-2xl text-[#4a4a4a]">{icon}</span>
+        <span className="min-w-0 flex-1">
+          <span className="block whitespace-nowrap font-['Poppins'] text-sm font-semibold text-[#2b2b2b] md:text-base">{label}</span>
+          <span className="block truncate text-xs text-[#5a5a5a]">{value}</span>
+        </span>
+        <FiChevronDown className={`shrink-0 text-[#4a4a4a] transition ${open ? 'rotate-180' : ''}`} />
+      </button>
+      <AnimatePresence>
+        {open ? (
+          <motion.div
+            ref={popoverRef}
+            role="dialog"
+            aria-label={label}
+            initial={{ opacity: 0, y: slideFrom }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: slideFrom }}
+            transition={{ duration: 0.15 }}
+            style={{ maxHeight: placement.maxHeight }}
+            className={`absolute ${placement.side === 'top' ? 'bottom-full mb-3' : 'top-full mt-3'} ${
+              align === 'right' ? 'right-0' : 'left-0'
+            } z-30 max-w-[calc(100vw-2rem)] overflow-y-auto overscroll-contain rounded-2xl bg-white p-2 text-[#2b2b2b] shadow-[0_20px_50px_rgba(0,0,0,0.3)] ring-1 ring-black/5 ${popoverClassName}`}
+          >
+            {children}
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+    </div>
+  )
+}
+
+const weekdayLabels = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa']
+
+// Month grid date picker for the booking bar. ISO strings (YYYY-MM-DD) compare
+// correctly as strings, which keeps the min/max checks simple.
+function MiniCalendar({
+  value,
+  minISO,
+  maxISO,
+  onChange,
+}: {
+  value: string
+  minISO: string
+  maxISO: string
+  onChange: (iso: string) => void
+}) {
+  const [viewMonth, setViewMonth] = useState(() => {
+    const d = new Date(`${value || minISO}T12:00:00`)
+    return new Date(d.getFullYear(), d.getMonth(), 1)
+  })
+
+  const minMonth = new Date(`${minISO}T12:00:00`)
+  const maxMonth = new Date(`${maxISO}T12:00:00`)
+  const canGoPrev =
+    viewMonth.getFullYear() * 12 + viewMonth.getMonth() > minMonth.getFullYear() * 12 + minMonth.getMonth()
+  const canGoNext =
+    viewMonth.getFullYear() * 12 + viewMonth.getMonth() < maxMonth.getFullYear() * 12 + maxMonth.getMonth()
+
+  const cells = useMemo(() => {
+    const year = viewMonth.getFullYear()
+    const month = viewMonth.getMonth()
+    const leading = new Date(year, month, 1).getDay()
+    const daysInMonth = new Date(year, month + 1, 0).getDate()
+    return [
+      ...Array.from({ length: leading }, () => null),
+      ...Array.from({ length: daysInMonth }, (_, i) => toISODate(new Date(year, month, i + 1))),
+    ]
+  }, [viewMonth])
+
+  const shiftMonth = (delta: number) =>
+    setViewMonth((m) => new Date(m.getFullYear(), m.getMonth() + delta, 1))
+
+  return (
+    <div>
+      <div className="flex items-center justify-between">
+        <button
+          type="button"
+          aria-label="Previous month"
+          disabled={!canGoPrev}
+          onClick={() => shiftMonth(-1)}
+          className="grid h-6 w-6 text-sm place-items-center rounded-full text-[#3d4a1e] transition hover:bg-[#f0f0ea] disabled:opacity-30 disabled:hover:bg-transparent"
+        >
+          <FiChevronLeft />
+        </button>
+        <div className="font-['Poppins'] text-xs font-semibold">
+          {viewMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+        </div>
+        <button
+          type="button"
+          aria-label="Next month"
+          disabled={!canGoNext}
+          onClick={() => shiftMonth(1)}
+          className="grid h-6 w-6 text-sm place-items-center rounded-full text-[#3d4a1e] transition hover:bg-[#f0f0ea] disabled:opacity-30 disabled:hover:bg-transparent"
+        >
+          <FiChevronRight />
+        </button>
+      </div>
+
+      <div className="mt-1 grid grid-cols-7 text-center text-[10px] font-semibold text-[#8a8a8a]">
+        {weekdayLabels.map((d) => (
+          <div key={d} className="py-1">{d}</div>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-7 gap-y-0.5 text-center">
+        {cells.map((iso, idx) => {
+          if (!iso) return <div key={`blank-${idx}`} />
+          const disabled = iso < minISO || iso > maxISO
+          const selected = iso === value
+          return (
+            <button
+              key={iso}
+              type="button"
+              disabled={disabled}
+              aria-pressed={selected}
+              aria-label={new Date(`${iso}T12:00:00`).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
+              onClick={() => onChange(iso)}
+              className={`mx-auto grid h-7 w-7 place-items-center rounded-full text-xs transition ${
+                selected
+                  ? 'bg-[#3d4a1e] font-semibold text-white'
+                  : disabled
+                    ? 'cursor-not-allowed text-[#c4c4c4]'
+                    : 'text-[#2b2b2b] hover:bg-[#f0f0ea]'
+              }`}
+            >
+              {Number(iso.slice(8))}
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function BookingOption({
+  selected,
+  title,
+  detail,
+  onSelect,
+}: {
+  selected: boolean
+  title: string
+  detail?: string
+  onSelect: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition ${
+        selected ? 'bg-[#3d4a1e]/10' : 'hover:bg-[#f0f0ea]'
+      }`}
+    >
+      <span className="min-w-0 flex-1">
+        <span className={`block text-sm ${selected ? 'font-semibold text-[#3d4a1e]' : 'font-medium'}`}>{title}</span>
+        {detail ? <span className="block text-xs text-[#6a6a6a]">{detail}</span> : null}
+      </span>
+      {selected ? <FiCheck className="shrink-0 text-[#3d4a1e]" /> : null}
+    </button>
+  )
+}
+
 export function LandingPage() {
-  const { theme } = useTheme()
+  const { isAuthenticated } = useAuth()
+  const navigate = useNavigate()
   const [faqOpen, setFaqOpen] = useState<number | null>(null)
-  const [landingMetrics, setLandingMetrics] = useState<LandingMetrics>(initialMetrics)
-  const [loadingMetrics, setLoadingMetrics] = useState(true)
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const [openMenu, setOpenMenu] = useState<BookingMenu | null>(null)
+  const bookingBarRef = useRef<HTMLDivElement>(null)
+
+  const toggleMenu = (menu: BookingMenu) => setOpenMenu((current) => (current === menu ? null : menu))
+
+  // Close the open booking popover on an outside click or Escape.
+  useEffect(() => {
+    if (!openMenu) return
+    const onPointerDown = (e: PointerEvent) => {
+      if (!bookingBarRef.current?.contains(e.target as Node)) setOpenMenu(null)
+    }
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpenMenu(null)
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [openMenu])
+
+  const minDateISO = useMemo(() => {
+    const d = new Date()
+    d.setDate(d.getDate() + 1)
+    return toISODate(d)
+  }, [])
+
+  // Same booking window as ReservationCalendarPage: through the end of next month.
+  const maxDateISO = useMemo(() => {
+    const now = new Date()
+    return toISODate(new Date(now.getFullYear(), now.getMonth() + 2, 0))
+  }, [])
+
+  const [booking, setBooking] = useState<LandingReservationPrefill>({
+    location: 'salawag',
+    fieldArea: 'Upper Ground',
+    dateISO: minDateISO,
+    slot: 'morning',
+    players: 10,
+  })
+
+  const updateBooking = <K extends keyof LandingReservationPrefill>(key: K, value: LandingReservationPrefill[K]) => {
+    setBooking((prev) => ({ ...prev, [key]: value }))
+  }
+
+  const bookingDateLabel = useMemo(() => {
+    const d = new Date(`${booking.dateISO}T12:00:00`)
+    const date = Number.isNaN(d.getTime())
+      ? 'Pick a date'
+      : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+    const slot = bookingSlots.find((s) => s.id === booking.slot)?.label ?? ''
+    return `${date} · ${slot}`
+  }, [booking.dateISO, booking.slot])
+
+  const handleReserve = () => {
+    try {
+      sessionStorage.setItem(LANDING_PREFILL_KEY, JSON.stringify(booking))
+    } catch {
+      // Prefill is a convenience; the reservation page still works without it.
+    }
+    if (isAuthenticated) {
+      navigate('/app/reservations')
+    } else {
+      navigate('/login', { state: { from: '/app/reservations' } })
+    }
+  }
 
   const handleFaqToggle = (idx: number, open: boolean) => {
     setFaqOpen(open ? null : idx)
   }
-  const navigate = useNavigate()
 
-  useEffect(() => {
-    let isMounted = true
-
-    const loadMetrics = async () => {
-      setLoadingMetrics(true)
-      try {
-        const metricsRes = await apiGet<{
-          ok: boolean
-          data: {
-            reservations: number
-            pendingReservations: number
-            pendingPayments: number
-            pendingWaivers: number
-            activeGames: number
-          }
-        }>('/api/public/metrics')
-        const { reservations, pendingReservations, pendingPayments, pendingWaivers, activeGames } = metricsRes.data
-
-        const pendingItems = pendingReservations + pendingPayments + pendingWaivers
-        const readiness = Math.max(70, Math.min(100, 100 - pendingItems * 4))
-        const statusLabel = pendingItems > 0 ? 'Needs follow-up' : 'Ready'
-
-        if (isMounted) {
-          setLandingMetrics({
-            reservations,
-            pendingPayments,
-            pendingWaivers,
-            activeGames,
-            pendingItems,
-            readiness,
-            statusLabel,
-          })
-        }
-      } catch (error) {
-        if (isMounted) {
-          setLandingMetrics(initialMetrics)
-        }
-      } finally {
-        if (isMounted) {
-          setLoadingMetrics(false)
-        }
-      }
-    }
-
-    void loadMetrics()
-    return () => {
-      isMounted = false
-    }
-  }, [])
-
-  const handleContactClick = () => {
-    if (typeof window !== 'undefined') {
-      window.location.href =
-        'mailto:support@chillshooters.com?subject=Inquiry%20from%20Chill%20Shooters%20Website'
-    }
-  }
-
-  const [contactMessage, setContactMessage] = useState('')
+  const [contact, setContact] = useState({ name: '', email: '', message: '' })
+  const [contactSending, setContactSending] = useState(false)
 
   const handleContactSubmit = async (e: React.FormEvent | React.KeyboardEvent) => {
     if (e && 'preventDefault' in e) e.preventDefault()
+    if (contactSending) return
+    setContactSending(true)
     try {
       const apiBase = getApiBase()
       const res = await fetch(`${apiBase}/api/contact`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: contactMessage }),
+        body: JSON.stringify(contact),
       })
-      if (!res.ok) throw new Error('send failed')
-      setContactMessage('')
-      // eslint-disable-next-line no-alert
-      alert('Message sent — thanks!')
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error('contact send error', err)
-      // Inform the user that sending failed and require SMTP configuration
-      // eslint-disable-next-line no-alert
-      alert('Failed to send message. Please check server SMTP configuration.')
+      const body = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(body?.error || 'send failed')
+      setContact({ name: '', email: '', message: '' })
+      toast.success("Message sent. We'll reply to your email soon!")
+    } catch (err: any) {
+      toast.error(err?.message && err.message !== 'send failed' ? err.message : 'Sorry, your message could not be sent. Please email us instead.')
+    } finally {
+      setContactSending(false)
     }
   }
-
-  const features = useMemo(
-    () =>
-      [
-        {
-          icon: <FiShield className="h-5 w-5" />,
-          title: 'Digital Waivers',
-          desc: 'Capture signatures securely with guardian consent for minors.',
-        },
-        {
-          icon: <FiZap className="h-5 w-5" />,
-          title: 'Live Slot Control',
-          desc: 'Reservation calendar prevents full schedules in real time.',
-        },
-        {
-          icon: <FiUsers className="h-5 w-5" />,
-          title: 'Player Profiles',
-          desc: 'Track experience, equipment, history, and favorite game modes.',
-        },
-        {
-          icon: <FiCreditCard className="h-5 w-5" />,
-          title: 'Payment & Receipts',
-          desc: 'Upload proof, view breakdowns, and generate a clean receipt preview.',
-        },
-      ] as const,
-    [],
-  )
-
-  const testimonials: Testimonial[] = useMemo(
-    () => [
-      {
-        name: 'Sgt. Ramos',
-        role: 'Marshals Desk',
-        quote:
-          'The dashboard makes it easy to coordinate attendance and equipment distribution under pressure.',
-      },
-      {
-        name: 'Liza M.',
-        role: 'Regular Player',
-        quote: 'Reservations feel fast and structured. No more confusion on slot availability or payments.',
-      },
-      {
-        name: 'Karel V.',
-        role: 'Registrar',
-        quote:
-          'Waivers are streamlined. The workflow is clean and consistent for every group.',
-      },
-    ],
-    [],
-  )
 
   const faqs: FAQ[] = useMemo(
     () => [
@@ -273,619 +475,468 @@ export function LandingPage() {
     [],
   )
 
-  const stats = useMemo(
-    () => [
-      {
-        label: 'Live reservations',
-        value: loadingMetrics ? '…' : `${landingMetrics.reservations} active`,
-      },
-      {
-        label: 'Pending payments',
-        value: loadingMetrics ? '…' : `${landingMetrics.pendingPayments}`,
-      },
-      {
-        label: 'Waiver queue',
-        value: loadingMetrics ? '…' : `${landingMetrics.pendingWaivers}`,
-      },
-      {
-        label: 'Active games',
-        value: loadingMetrics ? '…' : `${landingMetrics.activeGames}`,
-      },
-    ],
-    [landingMetrics, loadingMetrics],
-  )
-
-  const opsLines = useMemo(
-    () => [
-      {
-        title: 'Reservations in motion',
-        detail: loadingMetrics ? 'Syncing live counts…' : `${landingMetrics.reservations} active reservations`,
-      },
-      {
-        title: 'Payments awaiting review',
-        detail: loadingMetrics ? 'Syncing live counts…' : `${landingMetrics.pendingPayments} pending payment checks`,
-      },
-      {
-        title: 'Waivers pending',
-        detail: loadingMetrics ? 'Syncing live counts…' : `${landingMetrics.pendingWaivers} awaiting review`,
-      },
-      {
-        title: 'Games in progress',
-        detail: loadingMetrics ? 'Syncing live counts…' : `${landingMetrics.activeGames} current sessions`,
-      },
-    ],
-    [landingMetrics, loadingMetrics],
-  )
-
   return (
     <div className="relative min-h-screen bg-background text-text">
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_0%,rgba(85,107,47,0.28),transparent_55%),radial-gradient(circle_at_90%_20%,rgba(197,163,90,0.18),transparent_52%),radial-gradient(circle_at_60%_95%,rgba(47,79,47,0.22),transparent_60)] pointer-events-none" />
-      <CamouflageOverlay opacity={0.1} />
+      <header className="sticky top-0 z-50 bg-[#5b6b3a] text-white shadow-[0_2px_12px_rgba(0,0,0,0.25)] bg-[url('/NavBar-BG.webp')] bg-cover bg-center">
+        <div className="mx-auto flex max-w-[1400px] items-center justify-between px-4 py-3 md:px-8">
+          <Link to="/" className="flex items-center" aria-label="Chill Shooters home">
+            <img src="/logingweb.png" alt="Chill Shooters" className="h-12 w-auto object-contain md:h-12" />
+          </Link>
 
-      {/* Top nav */}
-      <header className="sticky top-0 z-40 border-b border-white/5 bg-black/20 backdrop-blur">
-        <div className="mx-auto flex max-w-[1400px] items-center justify-between px-4 py-3 md:px-6">
-
+          <nav className="hidden items-center gap-10 lg:flex">
+            {navLinks.map((link) => (
+              <a key={link.href} href={link.href} className="text-sm font-medium text-white/90 transition hover:text-white">
+                {link.label}
+              </a>
+            ))}
+          </nav>
 
           <div className="flex items-center gap-3">
-            <img
-              src={theme === 'light' ? '/loggingwebdark.png' : '/logingweb.png'}
-              alt="A.B.P logo"
-              className="h-12 w-12 object-contain md:h-14 md:w-14"
-            />
-                            <div>
-                              <div className="text-sm font-bold tracking-wide">Chill Shooters Airsoft Gaming Center</div>
-                              <div className="text-xs text-muted">
-                                Airsoft Gaming Center
-                              </div>
-                            </div>
-                          </div>
-
-                          <nav className="hidden items-center gap-4 md:flex">
-                            <a className="text-sm text-muted hover:text-text" href="#features">
-                              Features
-                            </a>
-                            <a
-                              className="text-sm text-muted hover:text-text"
-                              href="#how-it-works"
-                            >
-                              How it works
-                            </a>
-                            <a className="text-sm text-muted hover:text-text" href="#faq">
-                              FAQ
-                            </a>
-                            <a
-                              className="text-sm text-muted hover:text-text"
-                              href="#contact"
-                            >
-                              Contact
-                            </a>
-                          </nav>
-
-                          <div className="flex items-center gap-2">
-                            <div className="hidden sm:block mr-2">
-                              <ThemeToggle />
-                            </div>
-                            <Button variant="ghost" className="hidden md:inline-flex">
-                              <Link to="/login">Login</Link>
-                            </Button>
-                            <Button className="relative overflow-hidden" variant="primary">
-                              <Link to="/register" className="flex items-center gap-2">
-                                Start Reservation
-                                <FiChevronRight />
-                              </Link>
-                            </Button>
-                          </div>
-                        </div>
-          </header>
-
-      {/* Hero */}
-      <section className="relative mx-auto max-w-[1400px] px-4 pb-10 pt-14 md:px-6 md:pb-16 md:pt-20">
-        <div className="grid items-center gap-8 lg:grid-cols-2">
-
-          <div>
-            <motion.div
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.5 }}
-              className={`inline-flex items-center gap-2 rounded-full border ${theme === 'light' ? 'border-gray-200/60' : 'border-white/10'} bg-white/5 px-3 py-1 text-xs text-muted`}
+            <Link
+              to={isAuthenticated ? '/app' : '/login'}
+              className="hidden text-sm font-medium text-white/90 transition hover:text-white sm:inline"
             >
-              <span className="h-2 w-2 rounded-full bg-gold" />
-              Inventory & Player Control—built for speed
-            </motion.div>
-
-            <h1 className="mt-5 text-4xl font-black tracking-tight md:text-6xl">
-              The #1 Airsoft Gaming Center
-              <span className="text-gold"> in Cavite</span>.
-            </h1>
-
-            <p className="mt-5 max-w-xl text-sm leading-relaxed text-muted md:text-base">
-              “Aim. Book. Play.” keeps reservations, waivers, payments, and admin
-              workflows consistent.
-            </p>
-
-            <div className="mt-7 flex flex-col gap-3 sm:flex-row sm:items-center">
-              <Button variant="primary">
-                <Link to="/register">Reserve a Slot</Link>
-              </Button>
-              <Button variant="ghost">
-                <Link
-                  to="/login"
-                  className="flex items-center gap-2"
-                >
-                  Access Dashboard <FiChevronRight />
-                </Link>
-              </Button>
-            </div>
-
-            <div className="mt-8 grid grid-cols-2 gap-3 sm:grid-cols-4">
-              {stats.map((s, idx) => (
-                <motion.div
-                  key={s.label}
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.35, delay: idx * 0.06 }}
-                  className={`rounded-2xl border ${theme === 'light' ? 'border-gray-200/60' : 'border-white/10'} bg-white/5 p-3 backdrop-blur`}
-                >
-                  <div className="text-sm font-bold">{s.value}</div>
-                  <div className="mt-1 text-xs text-muted">{s.label}</div>
-                </motion.div>
-              ))}
-            </div>
-          </div>
-
-          <div className="relative">
-            <motion.div
-              initial={{ opacity: 0, x: 24 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ duration: 0.6 }}
-              className={`relative overflow-hidden rounded-3xl border ${theme === 'light' ? 'border-gray-200/60' : 'border-white/10'} bg-white/5 p-5 shadow-xl`}
+              {isAuthenticated ? 'My Dashboard' : 'Login/Sign in'}
+            </Link>
+            <button
+              type="button"
+              className="grid h-10 w-10 place-items-center rounded-xl text-white lg:hidden"
+              aria-label={mobileNavOpen ? 'Close menu' : 'Open menu'}
+              aria-expanded={mobileNavOpen}
+              onClick={() => setMobileNavOpen((v) => !v)}
             >
-              <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(197,163,90,0.35),transparent_40%),radial-gradient(circle_at_75%_30%,rgba(85,107,47,0.25),transparent_45%),linear-gradient(180deg,rgba(18,18,18,0.0),rgba(18,18,18,0.55))] pointer-events-none" />
-              <CamouflageOverlay opacity={0.14} />
-
-              <div className="relative">
-                <div className="flex items-center justify-between">
-                  <div className={`text-xs uppercase tracking-widest ${theme === 'light' ? 'text-gray-600' : 'text-muted'}`}>
-                    Live Ops
-                  </div>
-                  <div className={`rounded-full border ${theme === 'light' ? 'border-gray-200/60' : 'border-white/10'} bg-black/40 px-3 py-1 text-xs ${theme === 'light' ? 'text-gray-800' : 'text-muted'}`}>
-                    Status: {loadingMetrics ? 'Syncing' : landingMetrics.statusLabel}
-                  </div>
-                </div>
-
-                <div className="mt-4 grid gap-3">
-                  {opsLines.map((line, i) => (
-                    <div
-                      key={line.title}
-                      className={`flex items-start gap-3 rounded-2xl ${theme === 'light' ? 'bg-white/10' : 'bg-black/20'} px-3 py-3 ring-1 ${theme === 'light' ? 'ring-gray-200/30' : 'ring-white/5'}`}
-                    >
-                      <div className={`mt-0.5 grid h-7 w-7 place-items-center rounded-xl bg-[linear-gradient(135deg,rgba(197,163,90,0.35),rgba(47,79,47,0.1))] ring-1 ${theme === 'light' ? 'ring-gray-200/30' : 'ring-white/10'}`}>
-                        <FiCheck className="h-4 w-4 text-gold" />
-                      </div>
-                      <div>
-                        <div className="text-sm font-semibold">{line.title}</div>
-                        <div className={`${theme === 'light' ? 'text-gray-800 text-xs' : 'text-xs text-muted'}`}>{line.detail}</div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="mt-5 grid grid-cols-2 gap-3">
-                  <div className={`rounded-2xl bg-white/5 p-3 ring-1 ${theme === 'light' ? 'ring-gray-200/30' : 'ring-white/10'}`}>
-                    <div className={`${theme === 'light' ? 'text-gray-700 text-xs' : 'text-xs text-muted'}`}>Operations focus</div>
-                    <div className="mt-1 text-sm font-bold">{loadingMetrics ? 'Syncing…' : landingMetrics.pendingItems > 0 ? `${landingMetrics.pendingItems} items need review` : 'All queues clear'}</div>
-                  </div>
-                  <div className={`rounded-2xl bg-white/5 p-3 ring-1 ${theme === 'light' ? 'ring-gray-200/30' : 'ring-white/10'}`}>
-                    <div className={`${theme === 'light' ? 'text-gray-700 text-xs' : 'text-xs text-muted'}`}>Equipment risk</div>
-                    <div className={`mt-1 text-sm font-bold ${landingMetrics.pendingItems > 0 ? 'text-danger' : 'text-success'}`}>{loadingMetrics ? 'Syncing…' : landingMetrics.pendingItems > 0 ? 'Needs review' : 'Low'}</div>
-                  </div>
-                </div>
-
-                <div className={`mt-4 rounded-2xl border ${theme === 'light' ? 'border-gray-200/60' : 'border-white/10'} bg-black/25 p-3`}>
-                  <div className="flex items-center justify-between">
-                    <div className="text-white text-xs">Operational readiness</div>
-                    <div className="text-xs font-semibold text-gold">{loadingMetrics ? '…' : `${landingMetrics.readiness}%`}</div>
-                  </div>
-                  <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/5">
-                    <motion.div
-                      className="h-full bg-[linear-gradient(90deg,rgba(197,163,90,0.9),rgba(85,107,47,0.8))]"
-                      initial={{ width: 0 }}
-                      animate={{ width: loadingMetrics ? '0%' : `${landingMetrics.readiness}%` }}
-                      transition={{ duration: 0.9, ease: 'easeOut' }}
-                    />
-                  </div>
-                </div>
-              </div>
-            </motion.div>
+              {mobileNavOpen ? <FiX className="h-6 w-6" /> : <FiMenu className="h-6 w-6" />}
+            </button>
           </div>
         </div>
-      </section>
 
-      {/* Features */}
-      <section id="features" className="mx-auto max-w-[1400px] px-4 pb-12 md:px-6 md:pb-16">
-        <SectionTitle
-          eyebrow="Capability Pack"
-          title="Built for reservations, players, and admin operations"
-          subtitle=""
+        {mobileNavOpen ? (
+          <nav className="border-t border-white/10 px-4 pb-4 lg:hidden">
+            {navLinks.map((link) => (
+              <a
+                key={link.href}
+                href={link.href}
+                onClick={() => setMobileNavOpen(false)}
+                className="block py-3 text-sm font-medium text-white/90"
+              >
+                {link.label}
+              </a>
+            ))}
+            <Link to={isAuthenticated ? '/app' : '/login'} className="block py-3 text-sm font-medium text-white/90 sm:hidden">
+              {isAuthenticated ? 'My Dashboard' : 'Login/Sign in'}
+            </Link>
+          </nav>
+        ) : null}
+      </header>
+
+      {/* Hero: full-bleed photo with the intro card and booking bar on top */}
+      <section className="relative isolate z-10 flex min-h-[640px] flex-col bg-[#2f3d1c] text-white md:min-h-[calc(100svh-13.5rem)]">
+        <img
+          src="/LandingPage-Picture.webp"
+          alt=""
+          aria-hidden="true"
+          className="absolute inset-0 -z-10 h-full w-full object-cover object-[75%_center]"
+          onError={(e) => {
+            e.currentTarget.style.display = 'none'
+          }}
         />
 
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {features.map((f, idx) => (
-            <motion.div
-              key={f.title}
-              initial={{ opacity: 0, y: 12 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true, amount: 0.35 }}
-              transition={{ duration: 0.4, delay: idx * 0.04 }}
-            >
-              <Card className={`relative overflow-hidden rounded-2xl border ${theme === 'light' ? 'border-gray-200/60' : 'border-white/10'} bg-white/5 p-5`}>
-                <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(197,163,90,0.25),transparent_40%)] opacity-80 pointer-events-none" />
-                <div className="relative">
-                  <div className="flex items-center gap-3">
-                    <div className="grid h-11 w-11 place-items-center rounded-2xl bg-[linear-gradient(135deg,rgba(47,79,47,0.9),rgba(18,18,18,0.25))] ring-1 ring-white/10">
-                      <span className="text-gold">{f.icon}</span>
-                    </div>
-                    <div className="text-base font-bold">{f.title}</div>
+        <div className="mx-auto flex w-full max-w-[1400px] flex-1 flex-col justify-between gap-8 px-4 pb-8 pt-8 md:gap-6 md:px-8 md:pb-6 md:pt-8">
+          <motion.div
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.6 }}
+            className="max-w-[540px] rounded-lg bg-[rgba(66,82,36,0.78)] px-7 py-10 backdrop-blur-[2px] md:px-8 md:py-8"
+          >
+            <div className="font-['Poppins'] text-xs font-semibold uppercase tracking-[0.2em] text-white md:text-sm">
+              Now Booking
+            </div>
+            <h1 className="mt-3 font-['Poppins'] text-4xl font-bold leading-tight text-[#c9b98a] md:text-[2.75rem]">
+              Gear Up for
+              <br />
+              Your Next Battle
+            </h1>
+            <p className="mt-4 max-w-md text-sm leading-relaxed text-white/90 md:text-base">
+              Three outdoor fields across Cavite and Laguna, rental gear for every player, and marshals on the
+              ground. Pick your field and lock in a slot in minutes.
+            </p>
+          </motion.div>
+
+          {/* Booking bar */}
+          <motion.div
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.6, delay: 0.15 }}
+            className="mx-auto w-full max-w-[980px] rounded-3xl bg-white p-2 text-[#2b2b2b] shadow-[0_20px_50px_rgba(0,0,0,0.3)] md:rounded-full"
+          >
+            <div ref={bookingBarRef} className="grid grid-cols-1 gap-1 sm:grid-cols-2 md:flex md:items-center md:gap-0">
+              <BookingField
+                icon={<FiMapPin />}
+                label="Location"
+                value={bookingLocations.find((l) => l.id === booking.location)?.name ?? ''}
+                open={openMenu === 'location'}
+                onToggle={() => toggleMenu('location')}
+                popoverClassName="w-80"
+              >
+                {bookingLocations.map((l) => (
+                  <BookingOption
+                    key={l.id}
+                    selected={booking.location === l.id}
+                    title={l.name}
+                    detail={l.detail}
+                    onSelect={() => {
+                      updateBooking('location', l.id)
+                      setOpenMenu(null)
+                    }}
+                  />
+                ))}
+              </BookingField>
+
+              <span aria-hidden="true" className="hidden h-12 w-0.5 shrink-0 bg-[#d0d0d0] md:block" />
+
+              <BookingField
+                icon={<FiBox />}
+                label="Field Area"
+                value={booking.fieldArea}
+                open={openMenu === 'field'}
+                onToggle={() => toggleMenu('field')}
+              >
+                {fieldAreas.map((f) => (
+                  <BookingOption
+                    key={f.id}
+                    selected={booking.fieldArea === f.id}
+                    title={f.id}
+                    detail={f.detail}
+                    onSelect={() => {
+                      updateBooking('fieldArea', f.id)
+                      setOpenMenu(null)
+                    }}
+                  />
+                ))}
+              </BookingField>
+
+              <span aria-hidden="true" className="hidden h-12 w-0.5 shrink-0 bg-[#d0d0d0] md:block" />
+
+              <BookingField
+                icon={<FiClock />}
+                label="Date & Time"
+                value={bookingDateLabel}
+                open={openMenu === 'date'}
+                onToggle={() => toggleMenu('date')}
+                popoverClassName="w-64"
+              >
+                <div className="p-2">
+                  <MiniCalendar
+                    value={booking.dateISO}
+                    minISO={minDateISO}
+                    maxISO={maxDateISO}
+                    onChange={(iso) => updateBooking('dateISO', iso)}
+                  />
+                  <div className="mt-2 text-[11px] font-semibold text-[#5a5a5a]">Time slot</div>
+                  <div className="mt-1 grid grid-cols-3 gap-1.5">
+                    {bookingSlots.map((s) => (
+                      <button
+                        key={s.id}
+                        type="button"
+                        onClick={() => updateBooking('slot', s.id)}
+                        className={`rounded-lg px-1 py-1.5 text-[11px] font-semibold transition ${
+                          booking.slot === s.id ? 'bg-[#3d4a1e] text-white' : 'bg-[#f0f0ea] text-[#2b2b2b] hover:bg-[#e4e4da]'
+                        }`}
+                      >
+                        {s.label}
+                      </button>
+                    ))}
                   </div>
-                  <p className="mt-3 text-sm leading-relaxed text-muted">{f.desc}</p>
-                  <div className="mt-4 inline-flex items-center gap-2 text-xs font-semibold text-gold">
-                    <span className="h-1.5 w-1.5 rounded-full bg-gold" />
-                    Operational ready
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setOpenMenu(null)}
+                    className="mt-3 w-full rounded-full bg-[#3d4a1e] py-1.5 text-xs font-semibold text-white transition hover:bg-[#4b5a26]"
+                  >
+                    Done
+                  </button>
                 </div>
-              </Card>
-            </motion.div>
-          ))}
+              </BookingField>
+
+              <span aria-hidden="true" className="hidden h-12 w-0.5 shrink-0 bg-[#d0d0d0] md:block" />
+
+              <BookingField
+                icon={<FiUsers />}
+                label="Players"
+                value={`${booking.players} Players`}
+                open={openMenu === 'players'}
+                onToggle={() => toggleMenu('players')}
+                align="right"
+                popoverClassName="w-64"
+              >
+                <div className="p-2">
+                  <div className="text-xs font-semibold text-[#5a5a5a]">Number of players</div>
+                  <div className="mt-2 flex items-center justify-between gap-3">
+                    <button
+                      type="button"
+                      aria-label="Fewer players"
+                      disabled={booking.players <= MIN_BOOKING_PLAYERS}
+                      onClick={() => updateBooking('players', Math.max(MIN_BOOKING_PLAYERS, booking.players - 1))}
+                      className="grid h-10 w-10 place-items-center rounded-full bg-[#f0f0ea] text-[#3d4a1e] transition hover:bg-[#e4e4da] disabled:opacity-40"
+                    >
+                      <FiMinus />
+                    </button>
+                    <div className="text-center">
+                      <div className="font-['Poppins'] text-2xl font-semibold">{booking.players}</div>
+                      <div className="text-xs text-[#6a6a6a]">players</div>
+                    </div>
+                    <button
+                      type="button"
+                      aria-label="More players"
+                      disabled={booking.players >= MAX_BOOKING_PLAYERS}
+                      onClick={() => updateBooking('players', Math.min(MAX_BOOKING_PLAYERS, booking.players + 1))}
+                      className="grid h-10 w-10 place-items-center rounded-full bg-[#f0f0ea] text-[#3d4a1e] transition hover:bg-[#e4e4da] disabled:opacity-40"
+                    >
+                      <FiPlus />
+                    </button>
+                  </div>
+                  <div className="mt-3 grid grid-cols-4 gap-2">
+                    {[10, 20, 30, 50].map((n) => (
+                      <button
+                        key={n}
+                        type="button"
+                        onClick={() => updateBooking('players', n)}
+                        className={`rounded-xl py-1.5 text-xs font-semibold transition ${
+                          booking.players === n ? 'bg-[#3d4a1e] text-white' : 'bg-[#f0f0ea] text-[#2b2b2b] hover:bg-[#e4e4da]'
+                        }`}
+                      >
+                        {n}
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setOpenMenu(null)}
+                    className="mt-4 w-full rounded-full bg-[#3d4a1e] py-2 text-sm font-semibold text-white transition hover:bg-[#4b5a26]"
+                  >
+                    Done
+                  </button>
+                </div>
+              </BookingField>
+
+              <button
+                type="button"
+                onClick={handleReserve}
+                className="col-span-full mt-1 shrink-0 rounded-full bg-[#3d4a1e] px-8 py-3 font-medium text-white transition hover:bg-[#4b5a26] md:col-auto md:ml-2 md:mt-0"
+              >
+                Reserve
+              </button>
+            </div>
+          </motion.div>
         </div>
       </section>
 
       {/* How it works */}
-      <section id="how-it-works" className="mx-auto max-w-[1400px] px-4 pb-12 md:px-6 md:pb-16">
-        <SectionTitle
-          eyebrow="Operational Flow"
-          title="How it works"
-          subtitle=""
-        />
+      <section id="about" className="mx-auto max-w-[1200px] scroll-mt-24 px-4 pb-16 pt-14 md:px-6 md:pt-10">
+        <SectionTitle eyebrow="How it works" title="From booking to battle in four steps" />
+        <ol className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {howItWorks.map((step, idx) => (
+            <motion.li
+              key={step.title}
+              initial={{ opacity: 0, y: 12 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true, amount: 0.05 }}
+              transition={{ duration: 0.4, delay: idx * 0.05 }}
+              className="surface rounded-2xl p-5"
+            >
+              <div className="flex items-center gap-3">
+                <span className="chip-accent grid h-10 w-10 place-items-center rounded-xl">
+                  <step.icon className="h-5 w-5" />
+                </span>
+                <span className="text-sm font-semibold text-muted">Step {idx + 1}</span>
+              </div>
+              <div className="mt-4 text-base font-bold">{step.title}</div>
+              <p className="mt-1 text-sm leading-relaxed text-muted">{step.desc}</p>
+            </motion.li>
+          ))}
+        </ol>
+      </section>
 
-        <div className="grid gap-4 lg:grid-cols-2">
-          <div className="space-y-4">
-            {[
-              {
-                icon: <FiMap className="h-5 w-5" />,
-                step: '01',
-                title: 'Reserve & lock slots',
-                desc: 'Pick field, date, and time window. The calendar blocks full schedules to prevent conflicts.',
-              },
-              {
-                icon: <FiZap className="h-5 w-5" />,
-                step: '02',
-                title: 'Select equipment & mode',
-                desc: 'Choose your game mode and gear. Pricing updates dynamically based on selection.',
-              },
-              {
-                icon: <FiShield className="h-5 w-5" />,
-                step: '03',
-                title: 'Complete digital waiver',
-                desc: 'Sign electronically and confirm guardian consent if a minor is participating.',
-              },
-            ].map((item, idx) => (
-              <motion.div
-                key={item.step}
-                initial={{ opacity: 0, y: 10 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true, amount: 0.25 }}
-                transition={{ duration: 0.35, delay: idx * 0.05 }}
-              >
-                <div className={`relative overflow-hidden rounded-2xl border ${theme === 'light' ? 'border-gray-200/60' : 'border-white/10'} bg-white/5 p-5`}>
-                  <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_30%,rgba(85,107,47,0.25),transparent_45%)] pointer-events-none" />
-                  <div className="relative flex gap-4">
-                    <div className="grid h-12 w-12 place-items-center rounded-2xl bg-black/30 ring-1 ring-white/10">
-                      <div className="text-gold">{item.icon}</div>
-                    </div>
-                    <div>
-                      <div className="text-xs font-bold tracking-[0.2em] text-muted">{item.step}</div>
-                      <div className="mt-1 text-lg font-bold">{item.title}</div>
-                      <div className="mt-2 text-sm text-muted">{item.desc}</div>
-                    </div>
+      {/* FAQ */}
+      <section id="guidelines" className="mx-auto max-w-[1200px] scroll-mt-24 px-4 pb-16 md:px-6">
+        <div className="grid gap-8 lg:grid-cols-[1fr_2fr]">
+          <SectionTitle
+            eyebrow="Guidelines"
+            title="Good to know before you play"
+            subtitle="Still unsure? Send us a message below and we'll get back to you."
+          />
+          <div className="surface divider divide-y rounded-2xl px-5">
+            {faqs.map((f, idx) => {
+              const open = faqOpen === idx
+              return (
+                <div key={f.q} className="divider">
+                  <button
+                    type="button"
+                    aria-expanded={open}
+                    aria-controls={`faq-content-${idx}`}
+                    className="flex w-full items-center justify-between gap-4 py-4 text-left"
+                    onClick={() => handleFaqToggle(idx, open)}
+                  >
+                    <span className="text-sm font-semibold md:text-base">{f.q}</span>
+                    <FiChevronDown className={`shrink-0 text-muted transition ${open ? 'rotate-180' : ''}`} />
+                  </button>
+                  <div
+                    id={`faq-content-${idx}`}
+                    className={`overflow-hidden transition-all duration-200 ${open ? 'max-h-96 pb-4 opacity-100' : 'max-h-0 opacity-0'}`}
+                  >
+                    <p className="text-sm leading-relaxed text-muted">{f.a}</p>
                   </div>
                 </div>
-              </motion.div>
-            ))}
-          </div>
-
-          <div className="space-y-4">
-            {[
-              {
-                icon: <FiCreditCard className="h-5 w-5" />,
-                step: '04',
-                title: 'Pay & upload proof',
-                desc: 'Choose GCash or bank transfer. Upload reference details and proof for verification.',
-              },
-              {
-                icon: <FiCheck className="h-5 w-5" />,
-                step: '05',
-                title: 'Admin confirms',
-                desc: 'Marshals/registrars approve reservations and equipment status with clear visibility.',
-              },
-              {
-                icon: <FiMessageSquare className="h-5 w-5" />,
-                step: '06',
-                title: 'Show up & play',
-                desc: 'Participants receive a streamlined confirmation flow and reservation history.',
-              },
-            ].map((item, idx) => (
-              <motion.div
-                key={item.step}
-                initial={{ opacity: 0, y: 10 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true, amount: 0.25 }}
-                transition={{ duration: 0.35, delay: idx * 0.05 }}
-              >
-                <div className={`relative overflow-hidden rounded-2xl border ${theme === 'light' ? 'border-gray-200/60' : 'border-white/10'} bg-white/5 p-5`}>
-                  <div className="absolute inset-0 bg-[radial-gradient(circle_at_75%_35%,rgba(197,163,90,0.22),transparent_45%)] pointer-events-none" />
-                  <div className="relative flex gap-4">
-                    <div className="grid h-12 w-12 place-items-center rounded-2xl bg-black/30 ring-1 ring-white/10">
-                      <div className="text-gold">{item.icon}</div>
-                    </div>
-                    <div>
-                      <div className="text-xs font-bold tracking-[0.2em] text-muted">{item.step}</div>
-                      <div className="mt-1 text-lg font-bold">{item.title}</div>
-                      <div className="mt-2 text-sm text-muted">{item.desc}</div>
-                    </div>
-                  </div>
-                </div>
-              </motion.div>
-            ))}
-
-            <div className={`rounded-2xl border ${theme === 'light' ? 'border-gray-200/60' : 'border-white/10'} bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(0,0,0,0.2))] p-5`}>
-              <div className="text-sm font-bold">Need a guided walkthrough?</div>
-              <div className="mt-2 text-sm text-muted">
-                Start your first reservation and explore the dashboard modules.
-              </div>
-              <div className="mt-4 flex flex-col gap-2 sm:flex-row">
-                <Button variant="primary">
-                  <Link to="/register">Create Account</Link>
-                </Button>
-                <Button variant="ghost">
-                  <Link to="/login" className="flex items-center gap-2">
-                    Sign In
-                    <FiChevronRight />
-                  </Link>
-                </Button>
-              </div>
-            </div>
+              )
+            })}
           </div>
         </div>
       </section>
 
-      {/* Testimonials */}
-      <section className="mx-auto max-w-[1400px] px-4 pb-12 md:px-6 md:pb-16">
+      <section id="location" className="mx-auto max-w-[1200px] scroll-mt-24 px-4 pb-16 md:px-6">
         <SectionTitle
-          eyebrow="Field Feedback"
-          title="Trusted by teams and regular players"
-          subtitle="Realistic workflows designed to reduce errors during busy reservation periods."
+          eyebrow="Our Locations"
+          title="Three distinct spaces for every playstyle"
         />
-        <div className="grid gap-4 md:grid-cols-3">
-          {testimonials.map((t, idx) => (
+
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {([
+            {
+              name: 'Delta Stronghold (Salawag)',
+              img: '/delta.png',
+              size: '~2 hectares',
+              capacity: 'Up to 400 players',
+              desc: 'Ideal for small to medium groups and tournaments.',
+            },
+            {
+              name: 'Delta Stronghold (Langkaan)',
+              img: '/langkaanPlaceholder.png',
+              size: '~2 hectares',
+              capacity: 'Up to 400 players',
+              desc: 'Ideal for small to medium groups and tournaments.',
+            },
+            {
+              name: 'LOMA Binan Laguna',
+              img: '/loma.png',
+              size: '~4 hectares',
+              capacity: 'Up to 600 players',
+              desc: 'Ideal for large groups and tournaments.',
+            },
+          ] as const).map((loc, idx) => (
             <motion.div
-              key={t.name}
+              key={loc.name}
               initial={{ opacity: 0, y: 12 }}
               whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true, amount: 0.3 }}
-              transition={{ duration: 0.4, delay: idx * 0.04 }}
+              viewport={{ once: true, amount: 0.2 }}
+              transition={{ duration: 0.4, delay: idx * 0.05 }}
+              className="surface flex flex-col overflow-hidden rounded-2xl"
             >
-              <Card className={`relative overflow-hidden rounded-2xl border ${theme === 'light' ? 'border-gray-200/60' : 'border-white/10'} bg-white/5 p-5`}>
-                <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_10%,rgba(197,163,90,0.18),transparent_45%)] pointer-events-none" />
-                <div className="relative">
-                  <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">
-                    {t.role}
-                  </div>
-                  <div className="mt-2 text-base font-bold">{t.name}</div>
-                  <p className="mt-3 text-sm leading-relaxed text-muted">
-                    “{t.quote}”
-                  </p>
+              <div className="aspect-[16/9] w-full overflow-hidden">
+                <img
+                  src={loc.img}
+                  alt={loc.name}
+                  className="h-full w-full object-cover"
+                  loading="lazy"
+                />
+              </div>
+              <div className="flex-1 p-4">
+                <div className="flex items-start gap-2">
+                  <FiMapPin className="mt-0.5 h-4 w-4 shrink-0 text-accent" />
+                  <div className="text-base font-bold">{loc.name}</div>
                 </div>
-              </Card>
+                <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                  <span className="chip-accent rounded-full px-2.5 py-1">{loc.size}</span>
+                  <span className="chip-accent rounded-full px-2.5 py-1">{loc.capacity}</span>
+                </div>
+                <p className="mt-3 text-sm leading-relaxed text-muted">{loc.desc}</p>
+              </div>
             </motion.div>
           ))}
         </div>
       </section>
 
-      {/* FAQ */}
-      <section id="faq" className="mx-auto max-w-[1400px] px-4 pb-12 md:px-6 md:pb-16 pointer-events-auto">
-        <SectionTitle
-          eyebrow="Answers"
-          title="FAQ"
-          subtitle="Short, practical answers—built for players and staff."
-        />
-
-        <div className="space-y-3">
-          {faqs.map((f, idx) => {
-            const open = faqOpen === idx
-            return (
-              <motion.div
-                key={f.q}
-                className={`overflow-hidden rounded-2xl border ${theme === 'light' ? 'border-gray-200/60' : 'border-white/10'} bg-white/5 pointer-events-auto relative z-10`}
-                initial={false}
-                layout
-                animate={{ backgroundColor: open ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.03)' }}
-                transition={{ duration: 0.2 }}
-              >
-                <button
-                  type="button"
-                  aria-expanded={open}
-                  aria-controls={`faq-content-${idx}`}
-                  className="flex w-full items-center justify-between gap-4 p-5 text-left"
-                  onClick={() => handleFaqToggle(idx, open)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault()
-                      handleFaqToggle(idx, open)
-                    }
-                  }}
-                >
-                  <div>
-                    <div className="text-sm font-bold">{f.q}</div>
-                    <div className="mt-1 text-xs text-muted">Tap to {open ? 'collapse' : 'expand'}</div>
-                  </div>
-                  <div className={`grid h-10 w-10 place-items-center rounded-2xl bg-black/25 ring-1 ${theme === 'light' ? 'ring-gray-200/30' : 'ring-white/10'} text-gold`}>
-                    <FiHelpCircle className="h-5 w-5" />
-                  </div>
-                </button>
-
-                <div
-                  id={`faq-content-${idx}`}
-                  className={`px-5 pb-5 transition-all duration-200 overflow-hidden ${
-                    open ? 'max-h-96 opacity-100' : 'max-h-0 opacity-0'
-                  }`}
-                >
-                  <p className="text-sm leading-relaxed text-muted">{f.a}</p>
-                </div>
-              </motion.div>
-            )
-          })}
-        </div>
-      </section>
-
-      <section className="mx-auto max-w-[1400px] px-4 pb-12 md:px-6 md:pb-16">
-         <div className={`mt-6 rounded-[32px] border ${theme === 'light' ? 'border-gray-200/60' : 'border-white/10'} bg-[linear-gradient(135deg,rgba(255,255,255,0.10),rgba(0,0,0,0.28))] p-4 md:p-6 lg:p-8`}>
-                <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-                  <div className="max-w-2xl">
-                    <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">
-                      Our Locations
-                    </div>
-                    <div className="mt-2 text-2xl font-bold sm:text-3xl">Three distinct spaces for every playstyle</div>
-                  </div>
-                  <div className={`hidden h-14 w-14 items-center justify-center rounded-3xl border ${theme === 'light' ? 'border-gray-200/60' : 'border-white/10'} bg-black/20 text-gold md:flex`}>
-                    <span className="text-2xl">📍</span>
-                  </div>
-                </div>
-                <div className="mt-6 grid gap-5 xl:grid-cols-3">
-                  {([
-                    {
-                      name: 'Delta Stronghold (Salawag)',
-                      img: '/delta.png',
-                      desc: 'Approximately 2 hectares. Can hold up to 400 Players. Ideal for small to medium groups and tournaments.',
-                    },
-                    {
-                      name: 'Delta Stronghold (Langkaan)',
-                      img: '/delta.png',
-                      desc: 'Approximately 2 hectares. Can hold up to 400 Players. Ideal for small to medium groups and tournaments.',
-                    },
-                    {
-                      name: 'LOMA Binan Laguna',
-                      img: '/loma.png',
-                      desc: 'Approximately 4 hectares. Can hold up to 600 players. Ideal for large groups and tournaments.',
-                    },
-                  ] as const).map((loc) => (
-                    <div
-                      key={loc.name}
-                      className={`flex h-full min-h-[420px] flex-col overflow-hidden rounded-[28px] border ${theme === 'light' ? 'border-gray-200/60' : 'border-white/10'} bg-black/25 shadow-[0_25px_80px_rgba(0,0,0,0.35)]`}
-                    >
-                      <div className="aspect-[4/3] w-full">
-                        <img
-                          src={loc.img}
-                          alt={loc.name}
-                          className="h-full w-full object-cover"
-                          loading="lazy"
-                        />
-                      </div>
-                      <div className="flex-1 p-5 md:p-6">
-                        <div className="text-xl font-bold">{loc.name}</div>
-                        <div className="mt-3 text-base leading-7 text-muted">
-                          {loc.desc}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-      </section>
-
-      {/* Contact + Footer */}
-      <section id="contact" className="mx-auto max-w-[1400px] px-4 pb-14 md:px-6 md:pb-18">
+      {/* Contact */}
+      <section id="contact" className="mx-auto max-w-[1200px] scroll-mt-24 px-4 pb-12 md:px-6">
         <div className="grid gap-4 lg:grid-cols-2">
-          <div className={`rounded-3xl border ${theme === 'light' ? 'border-gray-200/60' : 'border-white/10'} bg-white/5 p-6 md:p-8`}>
-            <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">
-              Contact
-            </div>
-            <div className="mt-3 text-2xl font-bold">Coordinate with Chill Shooters</div>
-            <p className="mt-3 text-sm leading-relaxed text-muted">
-              Any questions you want to ask? Reach out to us and we will get back to you as soon as possible.
-            </p>
-
-            <div className="mt-5 space-y-3">
-              <div className={`flex items-center gap-3 rounded-2xl bg-black/25 p-4 ring-1 ${theme === 'light' ? 'ring-gray-200/30' : 'ring-white/5'}`}>
-                <div className="grid h-10 w-10 place-items-center rounded-2xl bg-[linear-gradient(135deg,rgba(197,163,90,0.25),rgba(47,79,47,0.1))] ring-1 ring-white/10">
-                  <span className="text-gold">☎</span>
-                </div>
-                <div>
-                  <div className="text-sm font-bold">Operations Desk</div>
-                  <div className="text-xs text-muted">support@chillshooters.com</div>
-                </div>
-              </div>
-
-  
-
-              <form onSubmit={handleContactSubmit} className="space-y-3 w-full">
-                <div className={`flex w-full items-start gap-3 rounded-2xl bg-black/25 p-4 ring-1 ${theme === 'light' ? 'ring-gray-200/30' : 'ring-white/5'}`}>
-                  <div className="grid h-10 w-10 place-items-center rounded-2xl bg-[linear-gradient(135deg,rgba(85,107,47,0.25),rgba(18,18,18,0.1))] ring-1 ring-white/10">
-                    <span className="text-gold">✉</span>
-                  </div>
-                  <div className="flex-1">
-                    <label htmlFor="contactMessage" className="text-sm font-bold block">
-                      Contact Us
-                    </label>
-                    <div className="text-xs text-muted">support@chillshooters.com</div>
-                    <textarea
-                      id="contactMessage"
-                      value={contactMessage}
-                      onChange={(ev) => setContactMessage(ev.target.value)}
-                      onKeyDown={(ev) => {
-                        if ((ev.ctrlKey || ev.metaKey) && ev.key === 'Enter') {
-                          handleContactSubmit(ev)
-                        }
-                      }}
-                      placeholder="Write your message here."
-                      rows={4}
-                      className="mt-2 w-full resize-y rounded-md bg-transparent text-sm text-text placeholder:text-muted focus:outline-none"
-                    />
-                  </div>
-                </div>
-                <div className="flex gap-2">
-                  <Button type="submit" variant="primary">Send Message</Button>
-                  <Button type="button" variant="ghost" onClick={() => setContactMessage('')}>Clear</Button>
-                </div>
-              </form>
-            </div>
-          </div>
-          <div className={`rounded-3xl border ${theme === 'light' ? 'border-gray-200/60' : 'border-white/10'} bg-[linear-gradient(180deg,rgba(255,255,255,0.04),rgba(0,0,0,0.16))] p-6 md:p-8`}>
-            <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Location Map</div>
-            <div className="mt-4">
-              <div className={`overflow-hidden rounded-lg ring-1 ${theme === 'light' ? 'ring-gray-200/30' : 'ring-white/5'}`}>
-                <div className="aspect-[16/9] w-full bg-black/10">
-                  <iframe
-                    title="Chill Shooters locations"
-                    src="https://www.google.com/maps?q=Chill%20Shooters%20Airsoft&output=embed"
-                    className="h-full w-full border-0"
-                    loading="lazy"
+          <div className="surface rounded-2xl p-6">
+            <SectionTitle
+              eyebrow="Contact us"
+              title="Questions? We're here to help"
+              subtitle="Send us a message and we'll reply as soon as we can."
+            />
+            <form onSubmit={handleContactSubmit} className="space-y-3">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="block">
+                  <span className="sr-only">Your name</span>
+                  <input
+                    required
+                    autoComplete="name"
+                    value={contact.name}
+                    onChange={(ev) => setContact((c) => ({ ...c, name: ev.target.value }))}
+                    placeholder="Your name"
+                    className="surface w-full rounded-xl px-4 py-2.5 text-sm text-text placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-[rgba(197,163,90,0.4)]"
                   />
-                </div>
+                </label>
+                <label className="block">
+                  <span className="sr-only">Your email</span>
+                  <input
+                    required
+                    type="email"
+                    autoComplete="email"
+                    value={contact.email}
+                    onChange={(ev) => setContact((c) => ({ ...c, email: ev.target.value }))}
+                    placeholder="Your email"
+                    className="surface w-full rounded-xl px-4 py-2.5 text-sm text-text placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-[rgba(197,163,90,0.4)]"
+                  />
+                </label>
               </div>
-              <div className="mt-3 text-xs text-muted">
-                <a href="https://www.google.com/maps/search/?api=1&query=Chill+Shooters+Airsoft" target="_blank" rel="noreferrer" className="underline">Open in Google Maps</a>
+              <label htmlFor="contactMessage" className="sr-only">Your message</label>
+              <textarea
+                id="contactMessage"
+                required
+                value={contact.message}
+                onChange={(ev) => setContact((c) => ({ ...c, message: ev.target.value }))}
+                onKeyDown={(ev) => {
+                  if ((ev.ctrlKey || ev.metaKey) && ev.key === 'Enter') {
+                    handleContactSubmit(ev)
+                  }
+                }}
+                placeholder="Write your message here…"
+                rows={4}
+                className="surface w-full resize-y rounded-xl px-4 py-3 text-sm text-text placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-[rgba(197,163,90,0.4)]"
+              />
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <a href="mailto:support@chillshooters.com" className="inline-flex items-center gap-2 text-sm text-muted hover:text-text">
+                  <FiMail /> support@chillshooters.com
+                </a>
+                <Button type="submit" variant="primary" size="sm" disabled={contactSending}>
+                  {contactSending ? 'Sending…' : 'Send message'}
+                </Button>
               </div>
-            </div>
+            </form>
+          </div>
+
+          <div className="surface flex flex-col overflow-hidden rounded-2xl">
+            <iframe
+              title="Chill Shooters locations"
+              src="https://www.google.com/maps?q=Chill%20Shooters%20Airsoft&output=embed"
+              className="min-h-[260px] w-full flex-1 border-0"
+              loading="lazy"
+            />
+            <a
+              href="https://www.google.com/maps/search/?api=1&query=Chill+Shooters+Airsoft"
+              target="_blank"
+              rel="noreferrer"
+              className="hover-row flex items-center justify-between px-5 py-3 text-sm font-medium"
+            >
+              Open in Google Maps <FiChevronRight className="text-muted" />
+            </a>
           </div>
         </div>
 
-        <footer className="mt-10 border-t border-white/5 pt-8 text-center text-xs text-muted">
+        <footer className="divider mt-10 border-t pt-6 text-center text-xs text-muted">
           © {new Date().getFullYear()} Chill Shooters Airsoft — Aim. Book. Play.
         </footer>
       </section>
-
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-32 bg-[radial-gradient(circle_at_50%_100%,rgba(197,163,90,0.18),transparent_60%)]" />
     </div>
   )
 }

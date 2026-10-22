@@ -72,10 +72,10 @@ export function OtpVerificationPage() {
 
   return (
     <div className="relative min-h-screen overflow-hidden bg-background px-3 py-10 lg:py-14">
-      <div className="absolute inset-0 bg-camouflage opacity-20" />
+      <div className="pointer-events-none absolute inset-0 bg-camouflage opacity-20" />
       <div className="absolute right-[-140px] top-[-140px] h-[320px] w-[320px] rounded-full bg-secondary/20 blur-3xl animate-gradientShift" />
 
-      <div className="mx-auto max-w-[920px]">
+      <div className="relative z-10 mx-auto max-w-[920px]">
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
@@ -83,10 +83,7 @@ export function OtpVerificationPage() {
           className="grid gap-4 lg:grid-cols-2 lg:gap-6"
         >
           <div className="space-y-3">
-            <div className="inline-flex items-center gap-2 rounded-full bg-white/5 px-4 py-2 text-xs text-muted border border-white/5">
-              <span className="h-2.5 w-2.5 rounded-full bg-accent" />
-              <span className="uppercase tracking-[0.18em]">OTP Verification</span>
-            </div>
+            <div className="text-sm font-medium text-accent">OTP Verification</div>
             <h1 className="text-3xl font-bold leading-tight lg:text-4xl">Authenticate Transmission</h1>
             <p className="text-muted">
               Enter the one-time code sent to <span className="text-text font-semibold">{email || 'your email'}</span>.
