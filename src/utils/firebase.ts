@@ -22,6 +22,8 @@ export async function signInWithGoogle() {
     name: user.displayName || '',
     email: user.email || '',
     uid: user.uid,
+    // Sent to the API so it can confirm with Google that this sign-in really happened.
+    idToken: await user.getIdToken(),
   }
 }
 

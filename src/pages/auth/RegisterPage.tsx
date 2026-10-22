@@ -82,7 +82,7 @@ export function RegisterPage() {
         throw new Error('Google did not return an email address.')
       }
 
-      const user = await registerWithGoogle({ name: profile.name || 'Google User', email: profile.email })
+      const user = await registerWithGoogle({ name: profile.name || 'Google User', email: profile.email, idToken: profile.idToken })
       toast.success('Account created with Google.')
       navigate(getRedirectRoute(user.role))
     } catch (err: any) {

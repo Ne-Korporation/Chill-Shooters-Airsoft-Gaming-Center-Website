@@ -3,17 +3,10 @@ import bcrypt from 'bcrypt'
 import transporter from '../services/mailService.js'
 import { getDb, getUserAccountsCollection, USER_ACCOUNTS_COLLECTION } from '../db/mongo.js'
 import { createAuthToken, requireAuth, requireRole } from '../middleware/auth.js'
+import { nextShortId } from '../utils/shortIds.js'
 
 const router = express.Router()
 
-function formatShortId(prefix, value) {
-  return `${prefix}-${String(value).padStart(6, '0')}`
-}
-
-async function nextShortId(db, collectionName, prefix) {
-  const count = await db.collection(collectionName).countDocuments({})
-  return formatShortId(prefix, count + 1)
-}
 
 function normalizeEmail(email) {
   return String(email || '').trim().toLowerCase()
@@ -65,6 +58,35 @@ export function validateGoogleLoginEligibility(user) {
   return {
     allowed: false,
     error: 'This email is not registered for Google sign-in. Please use a registered account or contact support.',
+  }
+}
+
+// The Firebase web API key is public (it ships in the client bundle); it only
+// identifies the project when asking Firebase to look up a sign-in token.
+const FIREBASE_WEB_API_KEY = process.env.FIREBASE_API_KEY || 'AIzaSyAWZ97DTTBq6FZSorJbn-NtzCzKCIxWf9E'
+
+// Confirms a Firebase ID token with Google and returns the verified email/name,
+// so the social endpoints never trust an email address typed by the client.
+async function verifyGoogleIdToken(idToken) {
+  if (!idToken || typeof idToken !== 'string') return null
+  try {
+    const response = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${FIREBASE_WEB_API_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ idToken }),
+        signal: AbortSignal.timeout(10000),
+      },
+    )
+    if (!response.ok) return null
+    const payload = await response.json()
+    const account = payload?.users?.[0]
+    if (!account?.email || account.emailVerified === false) return null
+    return { email: normalizeEmail(account.email), name: account.displayName || '' }
+  } catch (err) {
+    console.error('Google token verification failed', err && (err.message || err))
+    return null
   }
 }
 
@@ -312,6 +334,12 @@ router.post('/admin/reset-password', requireAuth, requireRole('admin', 'marshal'
     }
     if (!user) {
       return res.status(404).json({ ok: false, error: 'user not found' })
+    }
+
+    // Only admins may reset staff accounts; marshals and registrars can reset players.
+    const targetRole = String(user.role || 'user').toLowerCase()
+    if (req.user?.role !== 'admin' && targetRole !== 'user') {
+      return res.status(403).json({ ok: false, error: 'only an admin can reset a staff password' })
     }
 
     const defaultPassword = generateDefaultPassword(user.name || 'User')
@@ -591,13 +619,14 @@ router.post('/login', async (req, res) => {
 
 router.post('/social-login', async (req, res) => {
   const body = req.body || {}
-  const { name, email } = body
+  const { name } = body
 
-  if (!email || typeof email !== 'string' || !email.trim()) {
-    return res.status(400).json({ ok: false, error: 'email is required' })
+  const verified = await verifyGoogleIdToken(body.idToken)
+  if (!verified) {
+    return res.status(401).json({ ok: false, error: 'Google sign-in could not be verified. Please try again.' })
   }
 
-  const normalizedEmail = normalizeEmail(email)
+  const normalizedEmail = verified.email
 
   try {
     const userAccounts = await getUserAccountsCollection()
@@ -634,14 +663,15 @@ router.post('/social-login', async (req, res) => {
 
 router.post('/social-register', async (req, res) => {
   const body = req.body || {}
-  const { name, email } = body
+  const { name } = body
 
-  if (!email || typeof email !== 'string' || !email.trim()) {
-    return res.status(400).json({ ok: false, error: 'email is required' })
+  const verified = await verifyGoogleIdToken(body.idToken)
+  if (!verified) {
+    return res.status(401).json({ ok: false, error: 'Google sign-up could not be verified. Please try again.' })
   }
 
-  const normalizedEmail = normalizeEmail(email)
-  const trimmedName = typeof name === 'string' ? name.trim() : ''
+  const normalizedEmail = verified.email
+  const trimmedName = verified.name || (typeof name === 'string' ? name.trim() : '')
 
   try {
     const userAccounts = await getUserAccountsCollection()

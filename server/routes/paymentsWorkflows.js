@@ -8,6 +8,7 @@ import {
   stripeIntentMatchesReservation,
 } from '../utils/paymentRules.js'
 import { recordVerifiedStripePayment } from '../utils/stripePayments.js'
+import { emailPaymentEvent } from '../services/notificationEmails.js'
 
 const router = express.Router()
 const SETTINGS_COLLECTION = 'site_settings'
@@ -144,6 +145,7 @@ router.post('/payments/stripe-confirm', requireAuth, async (req, res) => {
       amount: expectedAmount / 100,
     })
 
+    void emailPaymentEvent(db, payment, payment?.paymentStatus || 'paid')
     return res.json({ ok: true, data: payment })
   } catch (err) {
     console.error('Stripe payment confirmation error:', err)
@@ -264,6 +266,7 @@ router.put('/payments/:id/verify', requireAuth, requireRole('admin', 'registrar'
     const updated = result?.value ?? result
     if (!updated) return res.status(404).json({ ok: false, error: 'not found' })
 
+    void emailPaymentEvent(db, updated, nextStatus, reason)
     return res.json({ ok: true, data: updated })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })

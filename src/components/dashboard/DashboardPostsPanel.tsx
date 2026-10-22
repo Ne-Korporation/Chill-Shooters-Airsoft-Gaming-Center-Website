@@ -5,7 +5,7 @@ import { FiEdit2, FiImage, FiPlus, FiTrash2, FiUpload, FiX } from 'react-icons/f
 import { Card } from '../ui/Card'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
-import { apiBase, apiDelete, apiGet, apiPost, apiPut } from '../../utils/apiClient'
+import { apiBase, apiDelete, apiGet, apiPost, apiPut, getApiAuthHeaders } from '../../utils/apiClient'
 
 type DashboardPost = {
   id?: string
@@ -134,6 +134,7 @@ useEffect(() => {
 
       const response = await fetch(`${apiBase}/api/uploads/upload-image`, {
         method: 'POST',
+        headers: getApiAuthHeaders(),
         body: formData,
       })
       const json = await response.json().catch(() => null)

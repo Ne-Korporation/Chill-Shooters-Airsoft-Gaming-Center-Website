@@ -55,6 +55,9 @@ export function PlayerManagementPage() {
             verificationStatus,
             verificationLabel: verificationStatus === 'verified' ? 'Verified' : verificationStatus === 'pending_review' ? 'Pending review' : 'Not submitted',
             identityDocumentUrl: doc.identityDocumentUrl || null,
+            partnershipInstitution: doc.partnershipInstitution || '',
+            partnershipEligibilityStatus: String(doc.partnershipEligibilityStatus || ''),
+            partnershipProofUrl: doc.partnershipProofUrl || '',
             role,
           }
         })
@@ -251,12 +254,55 @@ export function PlayerManagementPage() {
     ))
   )
 
+  const pendingPartnershipRequests = players.filter((p) => p.partnershipEligibilityStatus === 'pending')
+
+  const reviewPartnership = async (playerId: string, decision: 'verified' | 'rejected') => {
+    let reason = ''
+    if (decision === 'rejected') {
+      reason = window.prompt('Reason for rejecting this discount request?')?.trim() || ''
+      if (!reason) return
+    }
+    setVerifyingId(playerId)
+    try {
+      await apiPut(`/api/partnership-discount/${encodeURIComponent(playerId)}/review`, { decision, reason })
+      toast.success(decision === 'verified' ? 'Discount verified.' : 'Discount request rejected.')
+      await fetchUsers()
+    } catch (e: any) {
+      toast.error(String(e?.message || e))
+    } finally {
+      setVerifyingId(null)
+    }
+  }
+
   return (
     <div className="space-y-4">
       <div>
         <h1 className="text-3xl font-bold">Users</h1>
         <p className="mt-1 text-sm text-muted">Manage players and staff accounts, including marshal, admin, and registrar access.</p>
       </div>
+
+      {pendingPartnershipRequests.length > 0 ? (
+        <Card className="p-4">
+          <div className="text-xs uppercase tracking-widest text-muted">Partnership discount requests</div>
+          <div className="mt-3 space-y-2">
+            {pendingPartnershipRequests.map((p) => (
+              <div key={p.id} className="flex flex-col gap-2 rounded-xl border border-white/10 bg-white/5 p-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <div className="text-sm font-semibold">{p.name} <span className="text-xs text-muted">({p.id})</span></div>
+                  <div className="text-xs text-muted">{p.partnershipInstitution}</div>
+                  {p.partnershipProofUrl ? (
+                    <a href={p.partnershipProofUrl} target="_blank" rel="noreferrer" className="text-xs text-accent underline">View school ID</a>
+                  ) : null}
+                </div>
+                <div className="flex gap-2">
+                  <Button size="sm" disabled={verifyingId === p.id} onClick={() => reviewPartnership(p.id, 'verified')}>Verify</Button>
+                  <Button size="sm" variant="danger" disabled={verifyingId === p.id} onClick={() => reviewPartnership(p.id, 'rejected')}>Reject</Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      ) : null}
 
       <div className="grid gap-4 md:grid-cols-3">
         <Card className="p-4">

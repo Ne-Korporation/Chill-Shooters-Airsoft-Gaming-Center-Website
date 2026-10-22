@@ -6,6 +6,9 @@ import { useNotifications } from '../../context/NotificationContext'
 import {
   FiGrid,
   FiCalendar,
+  FiList,
+  FiAlertTriangle,
+  FiHeart,
   FiPackage,
   FiUsers,
   FiUser,
@@ -38,9 +41,10 @@ const baseItems: Item[] = [
   // Shared items the operator/registrar/marshal can see; admin gets only the admin module nav.
   { label: 'Dashboard Home', to: '/app', icon: FiGrid, roles: ['user'] },
   { label: 'Reservations', to: '/app/reservations', icon: FiCalendar, roles: ['user'] },
+  { label: 'My Reservations', to: '/app/my-reservations', icon: FiList, roles: ['user'] },
   { label: 'Recommended Packages', to: '/app/packages', icon: FiPackage, roles: ['user'] },
   { label: 'Online Waiver', to: '/app/waiver', icon: FiShield, roles: ['user'] },
-  { label: 'Game Feedback', to: '/app/feedback', icon: FiMessageSquare, roles: ['user'] },
+  { label: 'Game Evaluation', to: '/app/feedback', icon: FiMessageSquare, roles: ['user'] },
 ]
 
 
@@ -50,6 +54,7 @@ const marshalItems: Item[] = [
   { label: 'Games', to: '/app/games', icon: FiZap, roles: ['marshal'] },
   { label: 'Equipment', to: '/app/admin/equipment', icon: FiTool, roles: ['marshal'] },
   { label: 'Weapons', to: '/app/admin/weapons', icon: FiTruck, roles: ['marshal'] },
+  { label: 'Safety Logs', to: '/app/safety', icon: FiAlertTriangle, roles: ['marshal'] },
 ]
 
 
@@ -61,10 +66,12 @@ const adminItems: Item[] = [
   { label: 'Users', to: '/app/admin/player-management', icon: FiUsers, roles: ['admin'] },
   { label: 'Equipment', to: '/app/admin/equipment', icon: FiTool, roles: ['admin'] },
   { label: 'Weapons', to: '/app/admin/weapons', icon: FiTruck, roles: ['admin'] },
+  { label: 'Safety Logs', to: '/app/safety', icon: FiAlertTriangle, roles: ['admin'] },
   { label: 'Waivers', to: '/app/admin/waivers', icon: FiShield, roles: ['admin'] },
   { label: 'Package Recommendation', to: '/app/admin/rental-packages', icon: FiPackage, roles: ['admin'] },
   { label: 'Payments', to: '/app/admin/payments', icon: FiCreditCard, roles: ['admin'] },
   { label: 'Partnerships', to: '/app/admin/partnerships', icon: FiBriefcase, roles: ['admin'] },
+  { label: 'REACH Fund', to: '/app/admin/reach-fund', icon: FiHeart, roles: ['admin'] },
   { label: 'Player Feedback', to: '/app/admin/feedback', icon: FiMessageSquare, roles: ['admin'] },
   { label: 'Audit Logs', to: '/app/admin/audit-logs', icon: FiFileText, roles: ['admin'] },
 ]
