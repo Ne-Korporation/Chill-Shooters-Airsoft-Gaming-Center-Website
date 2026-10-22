@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import toast from 'react-hot-toast'
-import { apiBase, apiDelete, apiGet, apiPut } from '../../utils/apiClient'
+import { apiBase, apiDelete, apiGet, apiPut, getApiAuthHeaders } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
 import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
 
@@ -141,6 +141,7 @@ export function AdminPaymentsPage() {
 
       const uploadRes = await fetch(`${apiBase}/api/upload-image`, {
         method: 'POST',
+        headers: getApiAuthHeaders(),
         body: formData,
       })
       const uploadJson = await uploadRes.json().catch(() => null)

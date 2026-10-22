@@ -10,6 +10,7 @@ import { ResetPasswordPage } from './pages/auth/ResetPasswordPage'
 
 import { DashboardHomePage } from './pages/dashboard/DashboardHomePage'
 import { ReservationCalendarPage } from './pages/reservations/ReservationCalendarPage'
+import { MyReservationsPage } from './pages/reservations/MyReservationsPage'
 
 import { PackageRecommendationPage } from './pages/packages/PackageRecommendationPage'
 import { WaiverPage } from './pages/waiver/WaiverPage'
@@ -31,6 +32,8 @@ import { AdminNotificationsPage } from './pages/admin/AdminNotificationsPage'
 import { AdminAuditLogsPage } from './pages/admin/AdminAuditLogsPage'
 import { AdminPartnershipsPage } from './pages/admin/AdminPartnershipsPage'
 import { AdminFeedbackPage } from './pages/admin/AdminFeedbackPage'
+import { AdminReachFundPage } from './pages/admin/AdminReachFundPage'
+import { SafetyLogPage } from './pages/marshal/SafetyLogPage'
 
 import { ReservationManagementPage } from './pages/admin/ReservationManagementPage'
 import { PlayerManagementPage } from './pages/admin/PlayerManagementPage'
@@ -136,6 +139,7 @@ export default function App() {
       >
         <Route index element={<AppHomePage />} />
         <Route path="reservations" element={<RequireRole roles={['user', 'admin', 'registrar']}>{<ReservationCalendarPage />}</RequireRole>} />
+        <Route path="my-reservations" element={<RequireRole roles={['user']}><MyReservationsPage /></RequireRole>} />
         <Route path="packages" element={<RequireRole roles={['user', 'admin', 'registrar']}>{<PackageRecommendationPage />}</RequireRole>} />
         <Route path="waiver" element={<RequireRole roles={['user', 'admin', 'registrar']}>{<WaiverPage />}</RequireRole>} />
         <Route path="payment" element={<RequireRole roles={['user', 'admin', 'registrar']}>{<PaymentPage />}</RequireRole>} />
@@ -207,6 +211,8 @@ export default function App() {
         <Route path="admin/payments" element={<AdminPageWrapper><AdminPaymentsPage /></AdminPageWrapper>} />
         <Route path="admin/partnerships" element={<AdminPageWrapper><AdminPartnershipsPage /></AdminPageWrapper>} />
         <Route path="admin/feedback" element={<AdminPageWrapper><AdminFeedbackPage /></AdminPageWrapper>} />
+        <Route path="admin/reach-fund" element={<AdminPageWrapper><AdminReachFundPage /></AdminPageWrapper>} />
+        <Route path="safety" element={<RequireRole roles={['marshal', 'admin']}><SafetyLogPage /></RequireRole>} />
         <Route path="admin/reports" element={<AdminPageWrapper><AdminReportsPage /></AdminPageWrapper>} />
         <Route path="admin/notifications" element={<AdminPageWrapper><AdminNotificationsPage /></AdminPageWrapper>} />
         <Route path="admin/audit-logs" element={<AdminPageWrapper><AdminAuditLogsPage /></AdminPageWrapper>} />

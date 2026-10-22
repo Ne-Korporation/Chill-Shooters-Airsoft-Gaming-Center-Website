@@ -272,7 +272,7 @@ export function MyWeaponsAndEquipmentPage() {
                 <select
                   value={equipmentForm.category}
                   onChange={(event) => setEquipmentForm((current) => ({ ...current, category: event.target.value }))}
-                  className="w-full rounded-xl bg-white/5 border border-white/10 px-4 py-3 text-sm text-text focus:outline-none focus:ring-2 focus:ring-accent/40"
+                  className="w-full rounded-xl bg-background border border-white/10 px-4 py-3 text-sm text-text focus:outline-none focus:ring-2 focus:ring-accent/40 [&>option]:bg-background [&>option]:text-text"
                 >
                   <option value="gear">Gear</option>
                   <option value="masks">Masks</option>
@@ -316,7 +316,7 @@ export function MyWeaponsAndEquipmentPage() {
                 <select
                   value={weaponForm.category}
                   onChange={(event) => setWeaponForm((current) => ({ ...current, category: event.target.value }))}
-                  className="w-full rounded-xl bg-white/5 border border-white/10 px-4 py-3 text-sm text-text focus:outline-none focus:ring-2 focus:ring-accent/40"
+                  className="w-full rounded-xl bg-background border border-white/10 px-4 py-3 text-sm text-text focus:outline-none focus:ring-2 focus:ring-accent/40 [&>option]:bg-background [&>option]:text-text"
                 >
                   <option value="rifles">Rifles</option>
                   <option value="pistols">Pistols</option>

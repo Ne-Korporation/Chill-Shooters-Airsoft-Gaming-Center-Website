@@ -108,8 +108,8 @@ export function PlayerFeedbackPage() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-3xl font-bold">Game Feedback</h1>
-        <p className="mt-1 text-sm text-muted">Share feedback after a completed game to help improve the experience.</p>
+        <h1 className="text-3xl font-bold">Game Evaluation</h1>
+        <p className="mt-1 text-sm text-muted">Rate your experience after a completed game: reservation, cleanliness, equipment, field layout, and staff.</p>
       </div>
 
       <Card className="p-4 md:p-6">
@@ -125,7 +125,7 @@ export function PlayerFeedbackPage() {
                 value={gameplayId}
                 onChange={(event) => setGameplayId(event.target.value)}
                 required
-                className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-3 text-sm text-text"
+                className="w-full rounded-xl border border-white/10 bg-background px-3 py-3 text-sm text-text [&>option]:bg-background"
               >
                 <option value="">Choose a game</option>
                 {availableGames.map((game) => (
@@ -143,7 +143,7 @@ export function PlayerFeedbackPage() {
                   <select
                     value={ratings[key]}
                     onChange={(event) => setRatings((current) => ({ ...current, [key]: Number(event.target.value) }))}
-                    className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-text"
+                    className="w-full rounded-xl border border-white/10 bg-background px-3 py-2 text-sm text-text [&>option]:bg-background"
                   >
                     {[5, 4, 3, 2, 1].map((score) => <option key={score} value={score}>{score} / 5</option>)}
                   </select>

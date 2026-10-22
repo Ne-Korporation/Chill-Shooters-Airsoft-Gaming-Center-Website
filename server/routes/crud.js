@@ -7,6 +7,8 @@ import { ALLOWED_COLLECTIONS } from './collections.js'
 import { calculateBookingPrice } from '../utils/bookingPricing.js'
 import { getBookingInventoryRequirements, holdBookingInventory } from '../utils/inventoryHolds.js'
 import { submitGcashPayment } from '../utils/gcashPayments.js'
+import { nextShortId } from '../utils/shortIds.js'
+import { emailReservationEvent } from '../services/notificationEmails.js'
 import {
   BLOCKING_RESERVATION_STATUSES,
   getBlockingSlotReservations,
@@ -50,10 +52,6 @@ function isDashboardPostCollection(collection) {
   return collection === 'dashboard_posts'
 }
 
-function formatShortId(prefix, value) {
-  return `${prefix}-${String(value).padStart(6, '0')}`
-}
-
 router.get('/health', async (req, res) => {
   try {
     const db = await getDb()
@@ -71,7 +69,24 @@ router.get('/team-directory', requireAuth, requireRole('user'), async (_req, res
       .find({ role: 'user', emailVerified: true }, { projection: { id: 1, name: 1, email: 1 } })
       .limit(500)
       .toArray()
-    return res.json({ ok: true, data: players })
+
+    // Players can only read their own waivers, so report each teammate's approval
+    // here as a flag instead of exposing other players' waiver records.
+    const approvedWaivers = await db.collection('waivers')
+      .find({ status: { $regex: '^approved$', $options: 'i' } }, { projection: { userId: 1, playerId: 1, accountId: 1 } })
+      .toArray()
+    const approvedIds = new Set(approvedWaivers
+      .flatMap((waiver) => [waiver.userId, waiver.playerId, waiver.accountId])
+      .map((value) => String(value || '').trim())
+      .filter(Boolean))
+
+    return res.json({
+      ok: true,
+      data: players.map((player) => ({
+        ...player,
+        waiverApproved: approvedIds.has(String(player.id || '')) || approvedIds.has(String(player._id || '')),
+      })),
+    })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
   }
@@ -125,6 +140,199 @@ router.get('/reservation-availability', requireAuth, requireRole('user'), async 
         locationId: normalizeLocationId(reservation.locationId || reservation.location || reservation.locationName),
       })),
     })
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: String(err) })
+  }
+})
+
+// Game modes players can request when booking; marshals see the choice on the game.
+const GAME_MODES = [
+  "Marshal's choice",
+  'Team Deathmatch',
+  'Capture the Flag',
+  'Search & Destroy (bomb defusal)',
+  'Domination / King of the Hill',
+  'VIP Escort',
+  'Attack & Defend',
+]
+
+const RESCHEDULE_CUTOFF_DAYS = 3
+const RESCHEDULABLE_STATUSES = ['pending', 'needs review', 'confirmed']
+
+// Calendar date in the field's timezone, so the cutoff doesn't shift at UTC midnight.
+function manilaTodayISO() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(new Date())
+}
+
+function daysBetweenISO(fromISO, toISO) {
+  return Math.round((Date.parse(`${toISO}T00:00:00Z`) - Date.parse(`${fromISO}T00:00:00Z`)) / 86400000)
+}
+
+// POST /api/reservations/:id/reschedule { reservationDate, reservationTime, fieldIds?, reason }
+// Moves a booking to a new date/slot at least three days before the original date.
+// Payments stay linked to the same reservation id, so the deposit carries over.
+router.post('/reservations/:id/reschedule', requireAuth, requireRole('user', 'admin', 'registrar'), async (req, res) => {
+  const body = req.body || {}
+  const newDate = String(body.reservationDate || '').trim()
+  const newTime = String(body.reservationTime || '').trim().toLowerCase()
+  const reason = String(body.reason || '').trim().slice(0, 500)
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(newDate) || Number.isNaN(Date.parse(`${newDate}T00:00:00Z`))) {
+    return res.status(400).json({ ok: false, error: 'reservationDate must be a valid YYYY-MM-DD date' })
+  }
+  if (!SLOT_NAMES.includes(newTime)) {
+    return res.status(400).json({ ok: false, error: 'reservationTime must be morning, afternoon, or evening' })
+  }
+  if (!reason) return res.status(400).json({ ok: false, error: 'Please give a reason for rescheduling.' })
+
+  const todayISO = manilaTodayISO()
+  if (newDate <= todayISO) {
+    return res.status(400).json({ ok: false, error: 'The new date must be after today.' })
+  }
+
+  try {
+    const db = await getDb()
+    const reservation = await findDocumentById(db, 'reservations', req.params.id)
+    if (!reservation) return res.status(404).json({ ok: false, error: 'Reservation not found' })
+    if (req.user.role === 'user' && !isOwnedByUser(reservation, req.user.id)) {
+      return res.status(403).json({ ok: false, error: 'You can only reschedule your own reservations.' })
+    }
+
+    const status = String(reservation.reservationStatus || 'pending').toLowerCase()
+    if (!RESCHEDULABLE_STATUSES.includes(status)) {
+      return res.status(409).json({ ok: false, error: `A ${status} reservation cannot be rescheduled.` })
+    }
+
+    const originalDate = String(reservation.reservationDate || reservation.dateISO || '')
+    const originalTime = String(reservation.reservationTime || reservation.slot || '').toLowerCase()
+    if (req.user.role === 'user' && daysBetweenISO(todayISO, originalDate) < RESCHEDULE_CUTOFF_DAYS) {
+      return res.status(409).json({
+        ok: false,
+        error: `Reservations can only be rescheduled at least ${RESCHEDULE_CUTOFF_DAYS} days before the original date.`,
+      })
+    }
+    if (newDate === originalDate && newTime === originalTime && !Array.isArray(body.fieldIds)) {
+      return res.status(400).json({ ok: false, error: 'Choose a different date or time slot.' })
+    }
+
+    const locationId = normalizeLocationId(reservation.locationId || reservation.location || reservation.locationName)
+    const sessionType = String(reservation.sessionType || 'public').toLowerCase()
+    const playersCount = Number(reservation.numberOfPlayers ?? reservation.players ?? 0)
+    if (isWeekdayDateISO(newDate) && sessionType !== 'private') {
+      return res.status(400).json({ ok: false, error: 'Weekday reservations must be private sessions.' })
+    }
+
+    const knownFieldIds = new Set((LOCATION_FIELD_DEFS[locationId] || []).map((field) => field.id))
+    const fieldIds = Array.isArray(body.fieldIds)
+      ? Array.from(new Set(body.fieldIds.map(String).filter(Boolean)))
+      : extractReservationFieldIds(reservation)
+    if (fieldIds.length === 0 || fieldIds.some((id) => !knownFieldIds.has(id))) {
+      return res.status(400).json({ ok: false, error: 'One or more selected fields are invalid for this location.' })
+    }
+
+    const reservationId = String(reservation.id || reservation._id)
+    const nowISO = new Date().toISOString()
+    const rescheduleEvent = {
+      fromDate: originalDate,
+      fromTime: originalTime,
+      toDate: newDate,
+      toTime: newTime,
+      fieldIds,
+      reason,
+      actorId: String(req.user.id || ''),
+      actorRole: req.user.role,
+      atISO: nowISO,
+    }
+
+    const session = startDbSession()
+    try {
+      let updated
+      await session.withTransaction(async () => {
+        const lockId = `${locationId}:${newDate}:${newTime}`
+        await db.collection('reservation_slot_locks').updateOne(
+          { _id: lockId },
+          { $inc: { version: 1 } },
+          { upsert: true, session },
+        )
+
+        const sameSlot = await db.collection('reservations').find(
+          {
+            $and: [
+              { $or: [{ reservationDate: newDate }, { dateISO: newDate }] },
+              { $or: [{ reservationTime: newTime }, { slot: newTime }] },
+            ],
+          },
+          { session },
+        ).toArray()
+        const blocking = getBlockingSlotReservations({ reservations: sameSlot, locationId, normalizeLocationId })
+          .filter((other) => String(other.id || other._id) !== reservationId)
+
+        const capacity = getLocationCapacities()[locationId][newTime]
+        const usedPlayers = getSlotPlayerCount(blocking)
+        if (usedPlayers + playersCount > capacity) {
+          const full = new Error(`The new slot has only ${Math.max(0, capacity - usedPlayers)} places remaining.`)
+          full.statusCode = 409
+          throw full
+        }
+
+        if (sessionType === 'private') {
+          const bookedFieldIds = new Set(blocking.flatMap(extractReservationFieldIds))
+          const validation = validatePrivateFieldSelection({ locationId, fieldIds, playersCount, bookedFieldIds })
+          if (!validation.ok) {
+            const conflict = new Error(validation.reason)
+            conflict.statusCode = 409
+            throw conflict
+          }
+        }
+
+        updated = await db.collection('reservations').findOneAndUpdate(
+          { _id: reservation._id, reservationStatus: reservation.reservationStatus },
+          {
+            $set: {
+              reservationDate: newDate,
+              dateISO: newDate,
+              reservationTime: newTime,
+              slot: newTime,
+              fieldIds,
+              fieldId: fieldIds[0],
+              rescheduledAtISO: nowISO,
+              updatedAtISO: nowISO,
+            },
+            $push: { rescheduleHistory: rescheduleEvent },
+          },
+          { session, returnDocument: 'after' },
+        )
+        if (!updated) {
+          const changed = new Error('This reservation changed while you were rescheduling. Please reload and try again.')
+          changed.statusCode = 409
+          throw changed
+        }
+      })
+
+      // A confirmed booking already has a gameplay entry; keep its schedule in step.
+      await db.collection('gameplay').updateMany(
+        { reservationId: { $in: [reservationId, String(reservation._id)] } },
+        { $set: { Schedule: `${newDate} • ${newTime}`, updatedAtISO: nowISO } },
+      )
+
+      await db.collection('audit_logs').insertOne({
+        action: 'reservation_rescheduled',
+        resourceType: 'reservations',
+        resourceId: reservationId,
+        actorId: String(req.user.id || ''),
+        actorRole: req.user.role,
+        details: rescheduleEvent,
+        createdAtISO: nowISO,
+      }).catch((err) => console.error('Failed to write reschedule audit log', err))
+
+      void emailReservationEvent(db, updated, 'rescheduled', nowISO)
+      return res.json({ ok: true, data: updated })
+    } catch (err) {
+      if (err?.statusCode) return res.status(err.statusCode).json({ ok: false, error: err.message })
+      throw err
+    } finally {
+      await session.endSession()
+    }
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
   }
@@ -554,10 +762,6 @@ router.post('/:collection', requireAuth, async (req, res) => {
         return res.status(400).json({ ok: false, error: 'reservationTime must be morning, afternoon, or evening' })
       }
 
-      if (collection === 'feedback') {
-        const count = await db.collection(collection).countDocuments({})
-        doc.id = formatShortId('FB', count + 1)
-      }
       if (!['public', 'private'].includes(sessionType)) {
         return res.status(400).json({ ok: false, error: 'sessionType must be public or private' })
       }
@@ -567,6 +771,14 @@ router.post('/:collection', requireAuth, async (req, res) => {
       if (fieldIds.length === 0) {
         return res.status(400).json({ ok: false, error: 'Select at least one field.' })
       }
+
+      const gameModePreference = String(payload.gameModePreference || '').trim()
+      if (gameModePreference && !GAME_MODES.includes(gameModePreference)) {
+        return res.status(400).json({ ok: false, error: 'Choose a game mode from the list.' })
+      }
+      payload.gameModePreference = gameModePreference || undefined
+      payload.layoutRequest = String(payload.layoutRequest || '').trim().slice(0, 500) || undefined
+      payload.notes = String(payload.notes || '').trim().slice(0, 1000)
 
       const knownFieldIds = new Set((LOCATION_FIELD_DEFS[locationId] || []).map((f) => f.id))
       const hasUnknownField = fieldIds.some((id) => !knownFieldIds.has(id))
@@ -644,8 +856,7 @@ router.post('/:collection', requireAuth, async (req, res) => {
         return res.status(409).json({ ok: false, error: err.message || 'Unable to validate selected inventory' })
       }
     } else if (prefix && !doc.id) {
-      const count = await db.collection(collection).countDocuments({})
-      doc.id = formatShortId(prefix, count + 1)
+      doc.id = await nextShortId(db, collection, prefix)
     }
 
     if (collection === 'reservations') {
@@ -714,6 +925,7 @@ router.post('/:collection', requireAuth, async (req, res) => {
           const insert = await db.collection(collection).insertOne(doc, { session })
           insertedId = insert.insertedId
         })
+        void emailReservationEvent(db, doc, 'received')
         return res.status(201).json({ ok: true, insertedId, data: doc })
       } catch (err) {
         if (err?.statusCode) {

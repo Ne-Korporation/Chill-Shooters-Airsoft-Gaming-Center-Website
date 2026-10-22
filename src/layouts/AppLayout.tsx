@@ -23,12 +23,14 @@ export function AppLayout() {
   )
 
   return (
-    <div className="min-h-screen bg-background text-text pt-20">
-      <TopNav
-        onMenu={() => setMobileOpen(true)}
-        userName={user?.name ?? 'Operator'}
-        onLogout={logout}
-      />
+    <div className="min-h-screen bg-background text-text pt-20 print:pt-0">
+      <div className="print:hidden">
+        <TopNav
+          onMenu={() => setMobileOpen(true)}
+          userName={user?.name ?? 'Operator'}
+          onLogout={logout}
+        />
+      </div>
 
       <div className="mx-auto max-w-[1400px] px-3 py-4 lg:px-6">
         <div className="relative flex gap-4">

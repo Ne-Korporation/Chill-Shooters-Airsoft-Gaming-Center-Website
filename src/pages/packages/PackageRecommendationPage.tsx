@@ -140,7 +140,8 @@ function computeTotal({
     return computeSettledTotal(pkg, players)
   }
 
-  const sessionMultiplier = budgetModel === 'private' ? 1.25 : 1.0
+  // Matches the server's PRIVATE_SESSION_PRICE_MULTIPLIER (1) so quotes equal the booked price.
+  const sessionMultiplier = 1
   const pricing = calculatePackagePricing({
     pkg,
     players,
@@ -337,7 +338,10 @@ export function PackageRecommendationPage() {
       .filter((pkg) => {
         // Packages with a set headcount only match that exact number of players
         const playersOk = pkg.players > 0 ? pkg.players === playerSafe : playerSafe >= pkg.minPlayers
-        const weaponsOk = pkg.weaponCount >= rentalWeaponsNeeded && (weaponsWantedSafe <= 0 || pkg.weaponCount >= weaponsWantedSafe)
+        // Settled packages give a fixed number of weapons for the whole group; computed
+        // packages are per player (the server rents weaponCount × players).
+        const totalWeapons = pkg.settledAmount > 0 ? pkg.weaponCount : pkg.weaponCount * playerSafe
+        const weaponsOk = totalWeapons >= rentalWeaponsNeeded && (weaponsWantedSafe <= 0 || totalWeapons >= weaponsWantedSafe)
         return playersOk && weaponsOk
       })
       .map((pkg) => {

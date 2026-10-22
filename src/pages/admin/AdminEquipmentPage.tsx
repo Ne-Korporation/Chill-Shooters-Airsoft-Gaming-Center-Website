@@ -11,6 +11,7 @@ type EquipmentCategory = 'masks' | 'vests' | 'gloves' | 'gear'
 type EquipmentStatus = 'available' | 'rented' | 'maintenance'
 
 type InventoryItem = {
+  partnerId?: string
   id: string
   _id?: any
   name: string
@@ -76,7 +77,7 @@ function generateEquipmentId(name: string, existingIds: string[]): string {
   return `EQ-${prefix}-${String(nextSeq).padStart(3, '0')}`
 }
 
-const emptyForm = () => ({ name: '', description: '', qty: '1', price: '0', status: 'available' as EquipmentStatus, category: 'gear' as EquipmentCategory })
+const emptyForm = () => ({ name: '', description: '', qty: '1', price: '0', status: 'available' as EquipmentStatus, category: 'gear' as EquipmentCategory, partnerId: '' })
 
 export function AdminEquipmentPage() {
   const [activeCategory, setActiveCategory] = React.useState<EquipmentCategory | 'all'>('all')
@@ -111,6 +112,7 @@ export function AdminEquipmentPage() {
         source: (d.source || (d.submittedBy ? 'player' : 'business')) as 'business' | 'player',
         approvalStatus: (d.approvalStatus || (d.source === 'player' || d.submittedBy ? 'pending' : 'approved')) as 'pending' | 'approved' | 'rejected',
         rejectionReason: d.rejectionReason || '',
+        partnerId: d.partnerId || '',
       }))
 
       setInventory(equipmentItems)
@@ -161,6 +163,7 @@ export function AdminEquipmentPage() {
         createdAtISO: new Date().toISOString(),
         source: 'business',
         approvalStatus: 'approved',
+        partnerId: form.partnerId,
       }
 
       const res = await apiPost<any>('/api/equipments', newItem)
@@ -185,10 +188,22 @@ export function AdminEquipmentPage() {
       price: String(item.price),
       status: item.status,
       category: item.category,
+      partnerId: item.partnerId || '',
     })
   }
 
   const nameRef = React.useRef<HTMLInputElement | null>(null)
+
+  const [partners, setPartners] = React.useState<Array<{ id: string; name: string }>>([])
+
+  React.useEffect(() => {
+    // Only admins can read partnerships; other roles just see center-owned items.
+    apiGet<{ ok: boolean; data: any[] }>('/api/partnerships?limit=200')
+      .then((res) => setPartners((res.data || [])
+        .filter((p: any) => p.type === 'equipment_partner')
+        .map((p: any) => ({ id: String(p.id || p._id), name: String(p.name || 'Partner') }))))
+      .catch(() => setPartners([]))
+  }, [])
 
   React.useEffect(() => {
     if (selectedItemId) {
@@ -287,6 +302,7 @@ export function AdminEquipmentPage() {
         status: form.status,
         description: form.description.trim(),
         note: form.description.trim() || 'Updated from admin inventory.',
+        partnerId: form.partnerId,
         updatedAtISO: new Date().toISOString(),
       })
       toast.success('Equipment updated')
@@ -583,6 +599,22 @@ export function AdminEquipmentPage() {
                 </select>
               </div>
             </div>
+            {partners.length > 0 ? (
+            <label className="mt-3 block">
+              <div className="block text-sm font-semibold text-text">Owned by partner</div>
+              <select
+                value={form.partnerId}
+                onChange={(event) => setForm((prev) => ({ ...prev, partnerId: event.target.value }))}
+                className="mt-2 w-full rounded-xl border border-white/10 bg-background px-4 py-3 text-sm text-text [&>option]:bg-background"
+              >
+                <option value="">Center-owned</option>
+                {partners.map((partner) => (
+                  <option key={partner.id} value={partner.id}>{partner.name}</option>
+                ))}
+              </select>
+              <div className="mt-1 text-xs text-muted">Partner-owned items count toward that partner's income share.</div>
+            </label>
+            ) : null}
 
             <div className="mt-4 flex items-center gap-2">
               {selectedItemId ? (

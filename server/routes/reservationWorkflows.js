@@ -3,6 +3,8 @@ import { ObjectId } from 'mongodb'
 import { getDb, startDbSession, toObjectId } from '../db/mongo.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
 import { updateReservationStatusAtomically } from '../utils/reservationStatus.js'
+import { nextShortId } from '../utils/shortIds.js'
+import { emailReservationEvent } from '../services/notificationEmails.js'
 
 const router = express.Router()
 
@@ -49,7 +51,7 @@ function mapReservationToGameplay({ reservation }) {
     reservation?.mode ||
     '—'
 
-  const mode = reservation?.mode || reservation?.gameMode || reservation?.sessionType || '—'
+  const mode = reservation?.gameModePreference || reservation?.mode || reservation?.gameMode || reservation?.sessionType || '—'
   const group = reservation?.group || reservation?.sessionType || `${reservation?.numberOfPlayers || '—'} players`
   const pkg = reservation?.packageName || reservation?.selectedGameplayName || reservation?.selectedPackageId || reservation?.package || '—'
 
@@ -59,6 +61,8 @@ function mapReservationToGameplay({ reservation }) {
     Mode: mode,
     Group: group,
     Package: pkg,
+    LayoutRequest: reservation?.layoutRequest || '',
+    Notes: reservation?.notes || '',
     Status: 'Scheduled',
     Actions: {
       canStart: true,
@@ -123,7 +127,9 @@ async function updateReservationStatus(req, res) {
           ...already,
           Game: already.Game || already.game || updatedReservation.packageName || updatedReservation.selectedGameplayName || updatedReservation.selectedPackageId || '—',
           Schedule: already.Schedule || [updatedReservation.reservationDate, updatedReservation.reservationTime].filter(Boolean).join(' • ') || updatedReservation.createdAtISO || '',
-          Mode: already.Mode || already.mode || updatedReservation.mode || updatedReservation.gameMode || updatedReservation.sessionType || '—',
+          Mode: already.Mode || already.mode || updatedReservation.gameModePreference || updatedReservation.mode || updatedReservation.gameMode || updatedReservation.sessionType || '—',
+          LayoutRequest: already.LayoutRequest || updatedReservation.layoutRequest || '',
+          Notes: already.Notes || updatedReservation.notes || '',
           Group: already.Group || already.group || updatedReservation.group || updatedReservation.sessionType || `${updatedReservation.numberOfPlayers || '—'} players`,
           Package: already.Package || already.package || updatedReservation.packageName || updatedReservation.selectedGameplayName || updatedReservation.selectedPackageId || '—',
           Status: already.Status || already.status || 'Scheduled',
@@ -139,8 +145,7 @@ async function updateReservationStatus(req, res) {
         gameplayDoc.userId = String(updatedReservation.userId)
 
         // Generate sequential GP id like GP-000001 (matching reservation R- prefix pattern)
-        const gameplayCount = await db.collection('gameplay').countDocuments({})
-        const gameplayId = `GP-${String(gameplayCount + 1).padStart(6, '0')}`
+        const gameplayId = await nextShortId(db, 'gameplay', 'GP')
 
         const insert = await db.collection('gameplay').insertOne({
           ...gameplayDoc,
@@ -151,6 +156,8 @@ async function updateReservationStatus(req, res) {
         gameplayCreated = true
       }
     }
+
+    void emailReservationEvent(db, updatedReservation, nextStatus, String(updatedReservation?.statusHistory?.length || ''))
 
     return res.json({
       ok: true,

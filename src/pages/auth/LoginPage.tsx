@@ -63,7 +63,7 @@ export function LoginPage() {
   async function handleGoogleSignIn() {
     try {
       const profile = await signInWithGoogle()
-      const user = await loginWithGoogle({ name: profile.name, email: profile.email })
+      const user = await loginWithGoogle({ name: profile.name, email: profile.email, idToken: profile.idToken })
       toast.success('Signed in with Google.')
       navigate(getRedirectRoute(user.role))
     } catch (err: any) {

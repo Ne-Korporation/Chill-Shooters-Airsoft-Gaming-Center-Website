@@ -99,6 +99,17 @@ type PackageRecommendationPrefill = {
 
 type SelectionMode = 'package' | 'custom'
 
+// Must match GAME_MODES in server/routes/crud.js
+const GAME_MODES = [
+  "Marshal's choice",
+  'Team Deathmatch',
+  'Capture the Flag',
+  'Search & Destroy (bomb defusal)',
+  'Domination / King of the Hill',
+  'VIP Escort',
+  'Attack & Defend',
+]
+
 type TeamMember = {
   id: string
   name: string
@@ -327,10 +338,10 @@ export function ReservationCalendarPage() {
   }, [selectedLocation])
 
   // Fetch only the minimal future slot data used for availability indicators.
-  const fetchReservations = useCallback(async () => {
+  const fetchReservations = useCallback(async (silent = false) => {
     let cancelled = false
     try {
-      setLoadingReservations(true)
+      if (!silent) setLoadingReservations(true)
       const res = await apiGet<{ ok: boolean; data: any[]; capacities?: SlotCapacities }>('/api/reservation-availability')
       if (cancelled) return
 
@@ -362,9 +373,16 @@ export function ReservationCalendarPage() {
     return () => { cancelled = true }
   }, [])
 
-  // Initial fetch
+  // Initial fetch, then keep availability fresh while the page is open
   useEffect(() => {
     fetchReservations()
+    const interval = window.setInterval(() => fetchReservations(true), 60_000)
+    const onFocus = () => fetchReservations(true)
+    window.addEventListener('focus', onFocus)
+    return () => {
+      window.clearInterval(interval)
+      window.removeEventListener('focus', onFocus)
+    }
   }, [fetchReservations])
 
   // Refresh reservations if flagged (e.g., after returning from payment)
@@ -399,6 +417,8 @@ export function ReservationCalendarPage() {
   const [players, setPlayers] = useState(defaultPlayers)
   const [playersInput, setPlayersInput] = useState(String(defaultPlayers))
   const [notes, setNotes] = useState('')
+  const [gameModePreference, setGameModePreference] = useState<string>(GAME_MODES[0])
+  const [layoutRequest, setLayoutRequest] = useState('')
   const [selectedPackageId, setSelectedPackageId] = useState<string>('')
 
   const [selectionMode, setSelectionMode] = useState<SelectionMode>('package')
@@ -445,7 +465,7 @@ export function ReservationCalendarPage() {
               name: String(doc.name || doc.fullName || 'Unnamed player'),
               email: String(doc.email || ''),
               status: derivedStatus,
-              waiverSubmitted: false,
+              waiverSubmitted: doc.waiverApproved === true,
             }
           })
           .filter((doc: TeamMember) => doc.id && doc.id !== user.id && doc.status === 'active')
@@ -516,7 +536,7 @@ export function ReservationCalendarPage() {
   useEffect(() => {
     setTeamMembers((current) => current.map((member) => ({
       ...member,
-      waiverSubmitted: waiverEligibleSet.has(member.id),
+      waiverSubmitted: member.waiverSubmitted || waiverEligibleSet.has(member.id),
     })))
   }, [waiverEligibleSet])
 
@@ -791,15 +811,15 @@ export function ReservationCalendarPage() {
     return fields
   }
 
-  // Used players from reservations
+  // Used players from reservations. Capacity is per location and slot (all fields),
+  // matching the server's check, so the counter never shows room the server will refuse.
   const usedPlayers = useMemo(() => {
     return reservations
       .filter((r) => r.dateISO === dateISO &&
                      r.slot === slot &&
-                     (sessionType === 'public' || selectedFieldIds.some((fieldId) => r.fieldIds.includes(fieldId))) &&
                      r.locationId === selectedLocation)
       .reduce((sum, r) => sum + r.players, 0)
-  }, [dateISO, slot, selectedFieldIds, reservations, selectedLocation, sessionType])
+  }, [dateISO, slot, reservations, selectedLocation])
 
   const maxCapacity = useMemo(() => {
     return serverCapacities?.[selectedLocation]?.[slot] ?? capacityFor(selectedLocation, slot)
@@ -1014,7 +1034,10 @@ export function ReservationCalendarPage() {
       return [member.name, member.email, member.id].some((value) => value.toLowerCase().includes(query))
     })
   }, [teamMembers, teamSearch])
+  // Teammates are optional: any spots not filled with registered players are walk-ins.
   const teamSelectionComplete = maxTeammates === 0 || selectedTeammateIds.length === maxTeammates
+  const walkInSpots = Math.max(0, maxTeammates - selectedTeammateIds.length)
+  const canSplitPayment = players > 1 && selectedTeammateIds.length > 0
   const splitPartySize = Math.max(1, selectedTeammateIds.length + 1)
   const payerShareAmount = paymentMode === 'split'
     ? Number((dynamicPricing.total / splitPartySize).toFixed(2))
@@ -1033,10 +1056,10 @@ export function ReservationCalendarPage() {
 
   // If the team becomes incomplete, fall back to single payer
   useEffect(() => {
-    if (paymentMode === 'split' && (players <= 1 || !teamSelectionComplete)) {
+    if (paymentMode === 'split' && !canSplitPayment) {
       setPaymentMode('self')
     }
-  }, [paymentMode, players, teamSelectionComplete])
+  }, [paymentMode, canSplitPayment])
 
   const formatCurrency = (value: number | string | null | undefined) => {
     const numeric = Number(value ?? 0)
@@ -1087,14 +1110,7 @@ export function ReservationCalendarPage() {
       }
     }
 
-    const currentUsed = reservations
-      .filter((r) => r.dateISO === dateISO &&
-                     r.slot === slot &&
-                     selectedFieldIds.some((fieldId) => r.fieldIds.includes(fieldId)) &&
-                     r.locationId === selectedLocation)
-      .reduce((sum, r) => sum + r.players, 0)
-    const currentCapacity = serverCapacities?.[selectedLocation]?.[slot] ?? capacityFor(selectedLocation, slot)
-    const currentRemaining = currentCapacity - currentUsed
+    const currentRemaining = maxCapacity - usedPlayers
 
     if (players > currentRemaining) {
       toast.error(`Only ${currentRemaining} slots remaining. Please reduce players.`)
@@ -1111,12 +1127,8 @@ export function ReservationCalendarPage() {
       return
     }
 
-    if (!teamSelectionComplete) {
-      toast.error(
-        maxTeammates === 0
-          ? 'No teammates are required for this reservation.'
-          : `Select ${maxTeammates} teammate${maxTeammates === 1 ? '' : 's'} before continuing.`,
-      )
+    if (selectedTeammateIds.length > maxTeammates) {
+      toast.error(`You can add at most ${maxTeammates} teammate${maxTeammates === 1 ? '' : 's'} for ${players} players.`)
       return
     }
 
@@ -1152,6 +1164,8 @@ export function ReservationCalendarPage() {
         serviceFee,
         itemizedBreakdown,
         notes,
+        gameModePreference,
+        layoutRequest: layoutRequest.trim(),
         reservationStatus: 'pending',
         packageName: pkgName,
         selectionMode,
@@ -1180,6 +1194,9 @@ export function ReservationCalendarPage() {
       }
 
       localStorage.setItem('pending_reservation', JSON.stringify(pendingReservation))
+      // A reservation id left over from an earlier, unfinished payment belongs to
+      // different booking details; drop it so the payment page creates this one.
+      localStorage.removeItem('pending_reservation_id')
 
       // Flag to refresh reservations when user returns
       localStorage.setItem('refresh_reservations', 'true')
@@ -2187,6 +2204,25 @@ export function ReservationCalendarPage() {
                   )}
                 </div>
 
+                <div className="grid gap-3 md:grid-cols-2">
+                  <label className="block">
+                    <div className="mb-2 text-sm font-semibold text-text">Preferred game mode</div>
+                    <select
+                      value={gameModePreference}
+                      onChange={(e) => setGameModePreference(e.target.value)}
+                      className="w-full rounded-xl border border-white/10 bg-background px-4 py-3 text-sm text-text focus:outline-none focus:ring-2 focus:ring-accent/40 [&>option]:bg-background"
+                    >
+                      {GAME_MODES.map((mode) => <option key={mode} value={mode}>{mode}</option>)}
+                    </select>
+                  </label>
+                  <Input
+                    label="Field layout request (Optional)"
+                    hint="Obstacles, objectives, or spawn setup for the marshals to prepare."
+                    value={layoutRequest}
+                    maxLength={500}
+                    onChange={(e) => setLayoutRequest(e.target.value)}
+                  />
+                </div>
                 <div>
                   <Input
                     label="Operation Notes (Optional)"
@@ -2314,6 +2350,12 @@ export function ReservationCalendarPage() {
                   <div className="mt-2 text-sm text-text">{reservationSummary.notes}</div>
                 </div>
               )}
+
+              <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
+                <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Gameplay request</div>
+                <div className="mt-2 text-sm text-text">{gameModePreference}</div>
+                {layoutRequest.trim() && <div className="mt-1 text-sm text-muted">Layout: {layoutRequest.trim()}</div>}
+              </div>
 
               <div className="mt-4 rounded-2xl border border-accent/30 bg-accent/10 p-4">
                 <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Payment breakdown</div>
@@ -2448,7 +2490,7 @@ export function ReservationCalendarPage() {
                 <FiUsers /> <span>Select Your Teammates</span>
               </div>
               <p className="mt-1 text-xs text-muted">
-                Choose the players joining this reservation. You are already counted, so pick {maxTeammates} teammate{maxTeammates === 1 ? '' : 's'}. Only players with an approved waiver can be added.
+                Optionally add registered players joining this reservation (up to {maxTeammates}). You are already counted, and any spots you don't fill are treated as walk-in players. Only players with an approved waiver can be added.
               </p>
 
               <div className="mt-4 space-y-4">
@@ -2537,8 +2579,8 @@ export function ReservationCalendarPage() {
                 </div>
 
                 {!teamSelectionComplete && maxTeammates > 0 && (
-                  <div className="rounded-2xl border border-warning/20 bg-warning/10 p-3 text-xs text-warning">
-                    Select {maxTeammates - selectedTeammateIds.length} more teammate{maxTeammates - selectedTeammateIds.length === 1 ? '' : 's'} to match the reservation headcount of {players}.
+                  <div className="rounded-2xl border border-white/10 bg-white/5 p-3 text-xs text-muted">
+                    {walkInSpots} of {players} spot{walkInSpots === 1 ? '' : 's'} will be walk-in player{walkInSpots === 1 ? '' : 's'} without an account. They'll sign their waiver at the field.
                   </div>
                 )}
               </div>
@@ -2567,19 +2609,19 @@ export function ReservationCalendarPage() {
 
                 <button
                   type="button"
-                  disabled={players <= 1 || !teamSelectionComplete}
+                  disabled={!canSplitPayment}
                   onClick={() => setPaymentMode('split')}
                   className={[
                     'rounded-2xl border px-4 py-3 text-left transition',
                     paymentMode === 'split' ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
-                    players <= 1 || !teamSelectionComplete ? 'cursor-not-allowed opacity-50' : '',
+                    !canSplitPayment ? 'cursor-not-allowed opacity-50' : '',
                   ].join(' ')}
                 >
                   <div className="text-sm font-bold">Split among the team</div>
                   <div className="mt-1 text-xs text-muted">
-                    {teamSelectionComplete
-                      ? 'Divide the total equally among you and your teammates.'
-                      : 'Select all teammates first to enable splitting.'}
+                    {canSplitPayment
+                      ? 'Divide the total equally among you and your selected teammates.'
+                      : 'Add at least one registered teammate to enable splitting.'}
                   </div>
                 </button>
               </div>
@@ -2608,7 +2650,7 @@ export function ReservationCalendarPage() {
                 <Button variant="ghost" onClick={() => setStep(3)}>Back</Button>
                 <Button
                   variant="primary"
-                  disabled={isConfirming || !canSubmitReservation || !teamSelectionComplete}
+                  disabled={isConfirming || !canSubmitReservation}
                   onClick={handleConfirm}
                 >
                   {isConfirming ? 'Processing...' : 'Proceed to Payment'} <FiChevronRight />

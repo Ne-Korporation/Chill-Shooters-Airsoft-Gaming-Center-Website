@@ -20,6 +20,7 @@ const { default: authRouter } = await import('./routes/auth.js')
 const { default: uploadRouter } = await import('./routes/uploads.js')
 const { default: reservationWorkflowsRouter } = await import('./routes/reservationWorkflows.js')
 const { default: paymentsWorkflowsRouter } = await import('./routes/paymentsWorkflows.js')
+const { default: operationsRouter } = await import('./routes/operations.js')
 
 const app = express()
 app.use(cors())
@@ -59,13 +60,16 @@ if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
     },
   })
 } else {
-  console.warn('SMTP credentials not provided. /api/contact will fail until configured.')
+  // Fall back to the shared mail service (Brevo API or Gmail) used for account emails.
+  const { default: mailService } = await import('./services/mailService.js')
+  transporter = mailService
 }
 
 app.use('/api', uploadRouter)
 app.use('/api/uploads', uploadRouter)
 app.use('/api', reservationWorkflowsRouter)
 app.use('/api', paymentsWorkflowsRouter)
+app.use('/api', operationsRouter)
 app.use('/api/auth', authRouter)
 app.use('/api', crudRouter)
 
@@ -85,8 +89,8 @@ app.post('/api/contact', async (req, res) => {
   if (!transporter) return res.status(500).json({ error: 'mail transporter not configured' })
 
   const mailOptions = {
-    from: process.env.FROM_EMAIL || process.env.SMTP_USER,
-    to: process.env.TO_EMAIL || 'support@chillshooters.com',
+    from: process.env.FROM_EMAIL || process.env.SMTP_USER || process.env.EMAIL_FROM || process.env.EMAIL_USER,
+    to: process.env.TO_EMAIL || process.env.EMAIL_USER || 'support@chillshooters.com',
     subject: `Website contact${name ? ` - ${name}` : ''}`,
     text: `From: ${name || 'Anonymous'} <${email || 'no-reply'}>\n\n${message}`,
   }
