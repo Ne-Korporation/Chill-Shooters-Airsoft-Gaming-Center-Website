@@ -93,10 +93,10 @@ export function RegisterPage() {
 
   return (
     <div className="relative min-h-screen overflow-hidden bg-background px-3 py-10 lg:py-14">
-      <div className="absolute inset-0 bg-camouflage opacity-20" />
+      <div className="pointer-events-none absolute inset-0 bg-camouflage opacity-20" />
       <div className="absolute right-[-120px] top-[-120px] h-[260px] w-[260px] rounded-full bg-secondary/20 blur-3xl animate-gradientShift" />
 
-      <div className="mx-auto max-w-[920px]">
+      <div className="relative z-10 mx-auto max-w-[920px]">
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
