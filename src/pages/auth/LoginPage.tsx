@@ -78,11 +78,11 @@ export function LoginPage() {
 
   return (
     <div className="relative min-h-screen overflow-hidden bg-background px-3 py-10 lg:py-14">
-      <div className="absolute inset-0 bg-camouflage opacity-20" />
-      <div className="absolute left-1/2 top-[-120px] h-[260px] w-[260px] -translate-x-1/2 rounded-full bg-accent/20 blur-3xl animate-gradientShift" />
+      <div className="pointer-events-none absolute inset-0 bg-camouflage opacity-20" />
+      <div className="pointer-events-none absolute left-1/2 top-[-120px] h-[260px] w-[260px] -translate-x-1/2 rounded-full bg-accent/20 blur-3xl animate-gradientShift" />
   
   
-      <div className="mx-auto max-w-[980px]">
+      <div className="relative z-10 mx-auto max-w-[980px]">
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
