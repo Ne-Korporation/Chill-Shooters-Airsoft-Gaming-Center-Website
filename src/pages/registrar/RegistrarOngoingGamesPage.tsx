@@ -19,6 +19,8 @@ type GameplayDoc = {
   Mode?: string
   Group?: string
   Package?: string
+  LayoutRequest?: string
+  Notes?: string
   Status?: GameplayStatus | string
   createdAtISO?: string
   updatedAtISO?: string
@@ -323,6 +325,8 @@ export function RegistrarOngoingGamesPage() {
                       </td>
                       <td className="py-3 pr-3">
                         <div className="font-bold">{doc.Mode || '—'}</div>
+                        {doc.LayoutRequest ? <div className="mt-1 max-w-[220px] text-xs text-muted">Layout: {doc.LayoutRequest}</div> : null}
+                        {doc.Notes ? <div className="mt-1 max-w-[220px] text-xs text-muted">Notes: {doc.Notes}</div> : null}
                       </td>
                       <td className="py-3 pr-3">
                         <div className="font-bold">{doc.Group || '—'}</div>

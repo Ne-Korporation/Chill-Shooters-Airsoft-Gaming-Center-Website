@@ -83,10 +83,10 @@ export function ResetPasswordPage() {
 
   return (
     <div className="relative min-h-screen overflow-hidden bg-background px-3 py-10 lg:py-14">
-      <div className="absolute inset-0 bg-camouflage opacity-20" />
+      <div className="pointer-events-none absolute inset-0 bg-camouflage opacity-20" />
       <div className="absolute left-[-140px] top-[-160px] h-[340px] w-[340px] rounded-full bg-accent/15 blur-3xl animate-gradientShift" />
 
-      <div className="mx-auto max-w-[940px]">
+      <div className="relative z-10 mx-auto max-w-[940px]">
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}

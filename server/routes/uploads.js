@@ -44,7 +44,7 @@ async function uploadToCloudinary(fileBuffer, filename) {
   })
 }
 
-router.post('/upload-image', (req, res, next) => {
+router.post('/upload-image', requireAuth, (req, res, next) => {
   upload.single('file')(req, res, (err) => {
     if (err) {
       return res.status(400).json({ ok: false, error: err.message || 'Only image files are allowed for upload.' })

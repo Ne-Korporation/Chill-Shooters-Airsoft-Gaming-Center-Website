@@ -10,6 +10,7 @@ type WeaponCategory = 'rifles' | 'pistols' | 'snipers' | 'mg' | 'shotguns'
 type WeaponStatus = 'available' | 'rented' | 'needs-check'
 
 type WeaponItem = {
+  partnerId?: string
   id: string
   _id?: any
   name: string
@@ -82,7 +83,7 @@ function generateWeaponId(name: string, existingIds: string[]): string {
   return `W-${prefix}-${String(nextSeq).padStart(3, '0')}`
 }
 
-const emptyForm = () => ({ name: '', description: '', category: 'rifles' as WeaponCategory, status: 'available' as WeaponStatus, price: '0' })
+const emptyForm = () => ({ name: '', description: '', category: 'rifles' as WeaponCategory, status: 'available' as WeaponStatus, price: '0', partnerId: '' })
 
 export function AdminWeaponsPage() {
   const [category, setCategory] = React.useState<WeaponCategory | 'all'>('all')
@@ -96,6 +97,17 @@ export function AdminWeaponsPage() {
   const [rejectionTargetId, setRejectionTargetId] = React.useState<string | null>(null)
   const [rejectionReason, setRejectionReason] = React.useState('')
   const nameRef = React.useRef<HTMLInputElement | null>(null)
+
+  const [partners, setPartners] = React.useState<Array<{ id: string; name: string }>>([])
+
+  React.useEffect(() => {
+    // Only admins can read partnerships; other roles just see center-owned items.
+    apiGet<{ ok: boolean; data: any[] }>('/api/partnerships?limit=200')
+      .then((res) => setPartners((res.data || [])
+        .filter((p: any) => p.type === 'equipment_partner')
+        .map((p: any) => ({ id: String(p.id || p._id), name: String(p.name || 'Partner') }))))
+      .catch(() => setPartners([]))
+  }, [])
 
   const refresh = React.useCallback(async () => {
     setLoading(true)
@@ -116,6 +128,7 @@ export function AdminWeaponsPage() {
         source: (d.source || (d.submittedBy ? 'player' : 'business')) as 'business' | 'player',
         approvalStatus: (d.approvalStatus || (d.source === 'player' || d.submittedBy ? 'pending' : 'approved')) as 'pending' | 'approved' | 'rejected',
         rejectionReason: d.rejectionReason || '',
+        partnerId: d.partnerId || '',
       }))
       setWeapons(normalized)
     } catch (e: any) {
@@ -164,6 +177,7 @@ export function AdminWeaponsPage() {
         createdAtISO: new Date().toISOString(),
         source: 'business',
         approvalStatus: 'approved',
+        partnerId: form.partnerId,
       }
 
       const res = await apiPost<any>('/api/weapons', newWeapon)
@@ -187,6 +201,7 @@ export function AdminWeaponsPage() {
       category: weapon.category,
       status: weapon.status,
       price: String(weapon.price),
+      partnerId: weapon.partnerId || '',
     })
   }
 
@@ -214,6 +229,7 @@ export function AdminWeaponsPage() {
         price: Number(form.price) || 0,
         description: form.description.trim(),
         note: form.description.trim() || 'Updated from admin inventory.',
+        partnerId: form.partnerId,
         updatedAtISO: new Date().toISOString(),
       })
       toast.success('Weapon updated')
@@ -612,6 +628,22 @@ export function AdminWeaponsPage() {
                   </select>
                 </label>
               </div>
+              {partners.length > 0 ? (
+            <label className="mt-3 block">
+              <div className="mb-2 text-sm font-semibold text-text">Owned by partner</div>
+              <select
+                value={form.partnerId}
+                onChange={(event) => setForm((prev) => ({ ...prev, partnerId: event.target.value }))}
+                className="w-full rounded-xl border border-white/10 bg-background px-4 py-3 text-sm text-text [&>option]:bg-background"
+              >
+                <option value="">Center-owned</option>
+                {partners.map((partner) => (
+                  <option key={partner.id} value={partner.id}>{partner.name}</option>
+                ))}
+              </select>
+              <div className="mt-1 text-xs text-muted">Partner-owned items count toward that partner's income share.</div>
+            </label>
+              ) : null}
             </div>
             <div className="mt-4">
               {selectedWeaponId ? (

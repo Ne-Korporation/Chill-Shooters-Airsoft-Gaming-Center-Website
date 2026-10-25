@@ -6,6 +6,7 @@ import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { apiBase, apiGet, apiPost, apiPut, getApiAuthHeaders } from '../../utils/apiClient'
+import { PartnershipDiscountCard } from './PartnershipDiscountCard'
 import { useAuth } from '../../context/AuthContext'
 
 type PlayerProfileDoc = {
@@ -21,6 +22,9 @@ type PlayerProfileDoc = {
   emailVerified?: boolean
   equipmentIds?: string[]
   equipment?: Array<{ id?: string; name?: string; category?: string }>
+  partnershipInstitution?: string
+  partnershipEligibilityStatus?: string
+  partnershipReviewReason?: string
 }
 
 type EquipmentItem = {
@@ -210,6 +214,7 @@ export function PlayerProfilePage() {
 
     const uploadRes = await fetch(`${apiBase}/api/upload-image`, {
       method: 'POST',
+      headers: getApiAuthHeaders(),
       body: formData,
     })
     const uploadJson = await uploadRes.json().catch(() => null)
@@ -610,6 +615,15 @@ export function PlayerProfilePage() {
             ) : null}
           </div>
         </Card>
+
+        {user?.role === 'user' && String(player?.id || '') === String(user.id) ? (
+          <PartnershipDiscountCard
+            institution={player?.partnershipInstitution}
+            status={player?.partnershipEligibilityStatus}
+            reviewReason={player?.partnershipReviewReason}
+            onSubmitted={(next) => setPlayer((current) => (current ? { ...current, ...next } : current))}
+          />
+        ) : null}
       </div>
     </div>
   )
