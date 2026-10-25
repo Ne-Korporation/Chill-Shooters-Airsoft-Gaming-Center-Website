@@ -8,12 +8,16 @@ if (!AUTH_SECRET) {
   throw new Error('AUTH_SECRET must be configured in production')
 }
 
-export function createAuthToken(user) {
+// "Remember me" sessions stay valid for 30 days; regular sessions expire after 12 hours.
+export const REMEMBERED_SESSION_MS = 1000 * 60 * 60 * 24 * 30
+export const STANDARD_SESSION_MS = 1000 * 60 * 60 * 12
+
+export function createAuthToken(user, { remember = false } = {}) {
   const payload = {
     sub: user?.id || user?.email || 'unknown',
     email: user?.email || '',
     role: user?.role || 'user',
-    exp: Date.now() + 1000 * 60 * 60 * 24 * 7,
+    exp: Date.now() + (remember ? REMEMBERED_SESSION_MS : STANDARD_SESSION_MS),
   }
 
   const body = Buffer.from(JSON.stringify(payload)).toString('base64url')

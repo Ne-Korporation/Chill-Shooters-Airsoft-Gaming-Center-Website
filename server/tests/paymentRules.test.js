@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   buildPaymentStatusUpdate,
   getGcashAmountDue,
+  getPaymentProgress,
   hasActivePayment,
   normalizeGcashReference,
   paymentAmountMatchesDue,
@@ -99,4 +100,25 @@ test('manual payment verification produces actor-attributed audit data and block
 test('active-payment detection ignores failed and rejected records', () => {
   assert.equal(hasActivePayment([{ paymentStatus: 'failed' }, { status: 'rejected' }]), false)
   assert.equal(hasActivePayment([{ paymentStatus: 'pending' }]), true)
+})
+
+test('payment progress tracks who has paid and finalizes once every share is submitted', () => {
+  const reservation = { userId: 'captain', splitPayerIds: ['mate-1', 'mate-2'], paymentMode: 'split', depositAmount: 300 }
+  const partial = getPaymentProgress(reservation, [
+    { userId: 'captain', amount: 100, paymentStatus: 'paid' },
+    { userId: 'mate-1', amount: 100, paymentStatus: 'rejected' },
+  ])
+  assert.equal(partial.state, 'partial')
+  assert.equal(partial.remaining, 200)
+  assert.equal(partial.verified, 100)
+  assert.deepEqual(partial.paidPayerIds, ['captain'])
+  assert.deepEqual(partial.pendingPayerIds, ['mate-1', 'mate-2'])
+
+  const done = getPaymentProgress(reservation, [
+    { userId: 'captain', amount: 100, paymentStatus: 'paid' },
+    { userId: 'mate-1', amount: 100, paymentStatus: 'pending' },
+    { userId: 'mate-2', amount: 100, paymentStatus: 'pending' },
+  ])
+  assert.equal(done.state, 'finalized')
+  assert.equal(done.remaining, 0)
 })

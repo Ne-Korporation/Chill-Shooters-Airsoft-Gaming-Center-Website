@@ -1,3 +1,5 @@
+import { readStoredSessionRaw } from './authStorage'
+
 function normalizeApiBase(value?: string) {
   return value?.trim().replace(/\/+$/, '') || ''
 }
@@ -13,7 +15,7 @@ export const apiBase = getApiBase()
 
 function readAuthToken() {
   try {
-    const raw = localStorage.getItem('aim-book-play.auth')
+    const raw = readStoredSessionRaw()
     if (!raw) return ''
     const parsed = JSON.parse(raw)
     return typeof parsed?.token === 'string' ? parsed.token : ''

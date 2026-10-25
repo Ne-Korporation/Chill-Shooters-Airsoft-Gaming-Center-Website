@@ -113,3 +113,35 @@ test('verified CvSU eligibility applies the configured discount from server prof
   assert.equal(result.totalAmount, 675)
   assert.equal(result.depositAmount, 338)
 })
+
+test('verified own weapons replace rental weapons in package and custom pricing', async () => {
+  const base = { sessionType: 'public', verifiedOwnWeaponCount: 2 }
+  const packaged = await calculateBookingPrice({
+    db: {},
+    payload: { ...base, selectionMode: 'package', selectedPackageId: 'computed-rental' },
+    players: 3,
+    findDocumentById,
+    userId: 'player',
+  })
+  // base 300 + 1 rented rifle 500 + vests 150 + entrance 450
+  assert.equal(packaged.totalAmount, 1400)
+
+  const custom = await calculateBookingPrice({
+    db: {},
+    payload: { ...base, selectionMode: 'custom', customWeaponIds: ['rifle'], customEquipmentIds: [] },
+    players: 3,
+    findDocumentById,
+    userId: 'player',
+  })
+  // 1 rented rifle 500 + entrance 450
+  assert.equal(custom.totalAmount, 950)
+
+  const unverified = await calculateBookingPrice({
+    db: {},
+    payload: { selectionMode: 'package', selectedPackageId: 'computed-rental', sessionType: 'public', ownWeapons: 2 },
+    players: 3,
+    findDocumentById,
+    userId: 'player',
+  })
+  assert.equal(unverified.totalAmount, 2400)
+})

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { FiCalendar, FiPrinter, FiRefreshCw } from 'react-icons/fi'
+import { FiCalendar, FiLock, FiPrinter, FiRefreshCw, FiXCircle } from 'react-icons/fi'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { apiGet, apiPost } from '../../utils/apiClient'
@@ -33,6 +33,10 @@ type ReservationDoc = {
   totalAmount?: number
   depositAmount?: number
   rescheduleHistory?: RescheduleEvent[]
+  paymentMode?: string
+  paymentState?: 'awaiting' | 'partial' | 'finalized'
+  paymentDueAtISO?: string
+  cancellationReason?: string
   pricingBreakdown?: Array<{ label?: string; amount?: number }>
 }
 
@@ -40,6 +44,7 @@ type PaymentDoc = ReceiptPayment & { reservationId?: string }
 
 const RESCHEDULE_CUTOFF_DAYS = 3
 const RESCHEDULABLE_STATUSES = ['pending', 'needs review', 'confirmed']
+const CANCELLABLE_STATUSES = ['pending', 'needs review', 'confirmed']
 const SLOTS = ['morning', 'afternoon', 'evening'] as const
 
 function manilaTodayISO() {
@@ -93,6 +98,7 @@ export function MyReservationsPage() {
   const [newSlot, setNewSlot] = useState<string>('morning')
   const [reason, setReason] = useState('')
   const [saving, setSaving] = useState(false)
+  const [cancellingId, setCancellingId] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -157,6 +163,21 @@ export function MyReservationsPage() {
     }
   }
 
+  const cancelReservation = async (reservation: ReservationDoc) => {
+    const id = reservationIdOf(reservation)
+    if (!window.confirm('Cancel this reservation? The slot will be released for other players.')) return
+    setCancellingId(id)
+    try {
+      await apiPost(`/api/reservations/${encodeURIComponent(id)}/cancel`, {})
+      toast.success('Reservation cancelled and the slot released.')
+      await load()
+    } catch (err: any) {
+      toast.error(err?.message || 'Unable to cancel')
+    } finally {
+      setCancellingId(null)
+    }
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
@@ -191,6 +212,9 @@ export function MyReservationsPage() {
         const editing = editingId === id
         const reservationPayments = payments.filter((payment) => [reservation.id, reservation._id].map(String).includes(String(payment.reservationId)))
         const hasVerifiedPayment = reservationPayments.some(isVerifiedPayment)
+        // No-cancellation policy: fully paid bookings stand (the server enforces this too).
+        const fullyPaid = reservation.paymentState === 'finalized'
+        const canCancel = CANCELLABLE_STATUSES.includes(status) && !fullyPaid
 
         return (
           <Card key={id} className="p-4 md:p-5">
@@ -205,6 +229,15 @@ export function MyReservationsPage() {
                 <div className="mt-1 text-xs text-muted">
                   Total {formatPHP(reservation.totalAmount)} · Deposit {formatPHP(reservation.depositAmount)} · ID {id}
                 </div>
+                {status === 'cancelled' && reservation.cancellationReason === 'payment_window_expired' ? (
+                  <div className="mt-1 text-xs text-warning">Released because payment wasn't completed in time.</div>
+                ) : null}
+                {canCancel && reservation.paymentState !== 'finalized' && reservation.paymentDueAtISO ? (
+                  <div className="mt-1 text-xs text-muted">
+                    {reservation.paymentMode === 'split' ? 'Team payment' : 'Payment'} must be complete by{' '}
+                    {new Date(reservation.paymentDueAtISO).toLocaleString('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short' })} or the slot is released.
+                  </div>
+                ) : null}
               </div>
               <div className="flex flex-col items-start gap-2 md:items-end">
                 <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold uppercase tracking-widest">
@@ -221,6 +254,14 @@ export function MyReservationsPage() {
                   </Button>
                 ) : null}
                 {!canReschedule && blockedReason ? <div className="text-xs text-muted">{blockedReason}</div> : null}
+                {canCancel && !editing ? (
+                  <Button variant="ghost" disabled={cancellingId === id} onClick={() => cancelReservation(reservation)}>
+                    <FiXCircle /> {cancellingId === id ? 'Cancelling…' : 'Cancel reservation'}
+                  </Button>
+                ) : null}
+                {fullyPaid && status !== 'cancelled' ? (
+                  <div className="flex items-center gap-1 text-xs text-muted"><FiLock /> Fully paid — no cancellation</div>
+                ) : null}
               </div>
             </div>
 

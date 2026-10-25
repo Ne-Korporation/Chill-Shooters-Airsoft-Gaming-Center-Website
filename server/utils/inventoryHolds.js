@@ -10,6 +10,7 @@ function stockQuantity(item, collection) {
 
 export async function getBookingInventoryRequirements({ db, payload, players, findDocumentById }) {
   const mode = String(payload.selectionMode || '').toLowerCase()
+  const ownWeaponCount = Math.max(0, Math.round(Number(payload.verifiedOwnWeaponCount) || 0))
   let weaponIds = []
   let equipmentIds = []
   let weaponQuantity = players
@@ -19,7 +20,7 @@ export async function getBookingInventoryRequirements({ db, payload, players, fi
     if (!pkg) throw new Error('The selected rental package is unavailable.')
     weaponIds = Array.isArray(pkg.weaponIds) ? [...new Set(pkg.weaponIds.map(String))] : []
     equipmentIds = Array.isArray(pkg.equipmentIds) ? [...new Set(pkg.equipmentIds.map(String))] : []
-    weaponQuantity = Math.max(0, Math.round(Number(pkg.weaponCount || weaponIds.length)) * players)
+    weaponQuantity = Math.max(0, Math.round(Number(pkg.weaponCount || weaponIds.length)) * players - ownWeaponCount)
   } else if (mode === 'custom') {
     weaponIds = Array.isArray(payload.customWeaponIds) ? [...new Set(payload.customWeaponIds.map(String))] : []
     equipmentIds = Array.isArray(payload.customEquipmentIds) ? [...new Set(payload.customEquipmentIds.map(String))] : []
@@ -45,14 +46,24 @@ export async function getBookingInventoryRequirements({ db, payload, players, fi
     }
   }
 
-  let remainingWeaponQuantity = mode === 'custom' ? weaponIds.length * players : weaponQuantity
+  let remainingWeaponQuantity = mode === 'custom'
+    ? Math.max(0, weaponIds.length * players - ownWeaponCount)
+    : weaponQuantity
+  // Own weapons reduce custom rentals evenly, starting with the first selected weapon.
+  const ownPerWeapon = weaponIds.length ? Math.floor(Math.min(ownWeaponCount, weaponIds.length * players) / weaponIds.length) : 0
+  let ownExtra = weaponIds.length ? Math.min(ownWeaponCount, weaponIds.length * players) % weaponIds.length : 0
   for (const id of weaponIds) {
     const item = await findDocumentById(db, 'weapons', id)
     if (!item || String(item.status || 'available').toLowerCase() !== 'available') {
       throw new Error('One or more selected weapons are unavailable.')
     }
+    let customQuantity = players - ownPerWeapon
+    if (ownExtra > 0) {
+      customQuantity -= 1
+      ownExtra -= 1
+    }
     const quantity = mode === 'custom'
-      ? players
+      ? Math.max(0, customQuantity)
       : Math.min(remainingWeaponQuantity, stockQuantity(item, 'weapons'))
     if (quantity > 0) {
       requirements.push({

@@ -1,6 +1,8 @@
-import React, { createContext, useContext, useMemo, useState } from 'react'
+import React, { createContext, useContext, useEffect, useMemo, useState } from 'react'
+import toast from 'react-hot-toast'
 
 import { apiPost } from '../utils/apiClient'
+import { clearStoredSession, getTokenExpiry, readStoredSessionRaw, writeStoredSession } from '../utils/authStorage'
 
 type Role = 'user' | 'admin' | 'marshal' | 'registrar'
 
@@ -14,14 +16,15 @@ type AuthUser = {
 type AuthSession = {
   user: AuthUser
   token: string
+  remember?: boolean
 }
 
 type AuthContextValue = {
   user: AuthUser | null
   token: string
   isAuthenticated: boolean
-  login: (payload: { email: string; password: string }) => Promise<AuthUser>
-  loginWithGoogle: (payload: { name: string; email: string; idToken: string }) => Promise<AuthUser>
+  login: (payload: { email: string; password: string; remember?: boolean }) => Promise<AuthUser>
+  loginWithGoogle: (payload: { name: string; email: string; idToken: string; remember?: boolean }) => Promise<AuthUser>
   registerWithGoogle: (payload: { name: string; email: string; idToken: string }) => Promise<AuthUser>
   register: (payload: { name: string; email: string; password: string }) => Promise<void>
   updateUser: (updates: Partial<AuthUser>) => void
@@ -30,14 +33,21 @@ type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | null>(null)
 
-const STORAGE_KEY = 'aim-book-play.auth'
+// Sessions without "Remember me" are logged out after this much inactivity.
+const IDLE_TIMEOUT_MS = Math.max(1, Number(import.meta.env.VITE_SESSION_IDLE_MINUTES) || 30) * 60 * 1000
+const ACTIVITY_EVENTS = ['mousedown', 'keydown', 'scroll', 'touchstart', 'mousemove'] as const
 
 function loadSession(): AuthSession | null {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    const raw = readStoredSessionRaw()
     if (!raw) return null
     const parsed = JSON.parse(raw)
     if (!parsed?.user || !parsed?.token) return null
+    const exp = getTokenExpiry(parsed.token)
+    if (exp && exp < Date.now()) {
+      clearStoredSession()
+      return null
+    }
     return parsed as AuthSession
   } catch {
     return null
@@ -50,39 +60,80 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const user = session?.user ?? null
   const token = session?.token ?? ''
 
+  const startSession = React.useCallback((next: AuthSession) => {
+    setSession(next)
+    writeStoredSession(next, !!next.remember)
+  }, [])
+
+  const logout = React.useCallback(() => {
+    setSession(null)
+    clearStoredSession()
+  }, [])
+
   const updateUser = React.useCallback((updates: Partial<AuthUser>) => {
     setSession((current) => {
       if (!current) return current
       const nextUser = { ...current.user, ...updates }
       const next = { ...current, user: nextUser }
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
+      writeStoredSession(next, !!next.remember)
       return next
     })
   }, [])
+
+  // Log out when the token itself expires.
+  useEffect(() => {
+    if (!token) return
+    const exp = getTokenExpiry(token)
+    if (!exp) return
+    const timer = window.setTimeout(() => {
+      logout()
+      toast.error('Your session has expired. Please log in again.')
+    }, Math.max(0, Math.min(exp - Date.now(), 2 ** 31 - 1)))
+    return () => window.clearTimeout(timer)
+  }, [token, logout])
+
+  // Auto-logout after inactivity for sessions that were not remembered.
+  useEffect(() => {
+    if (!token || session?.remember) return
+    let timer = 0
+    let lastReset = 0
+    const reset = () => {
+      const now = Date.now()
+      if (now - lastReset < 1000) return
+      lastReset = now
+      window.clearTimeout(timer)
+      timer = window.setTimeout(() => {
+        logout()
+        toast.error('You were logged out due to inactivity.')
+      }, IDLE_TIMEOUT_MS)
+    }
+    reset()
+    ACTIVITY_EVENTS.forEach((event) => window.addEventListener(event, reset, { passive: true }))
+    return () => {
+      window.clearTimeout(timer)
+      ACTIVITY_EVENTS.forEach((event) => window.removeEventListener(event, reset))
+    }
+  }, [token, session?.remember, logout])
 
   const value = useMemo<AuthContextValue>(
     () => ({
       user,
       token,
       isAuthenticated: !!user,
-      login: async ({ email, password }) => {
-        const res = await apiPost<any>('/api/auth/login', { email, password })
+      login: async ({ email, password, remember = false }) => {
+        const res = await apiPost<any>('/api/auth/login', { email, password, remember })
         if (!res?.ok || !res?.user || !res?.token) {
           throw new Error('Login failed')
         }
-        const nextSession = { user: res.user, token: res.token }
-        setSession(nextSession)
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(nextSession))
+        startSession({ user: res.user, token: res.token, remember })
         return res.user
       },
-      loginWithGoogle: async ({ name, email, idToken }) => {
-        const res = await apiPost<any>('/api/auth/social-login', { name, email, idToken })
+      loginWithGoogle: async ({ name, email, idToken, remember = false }) => {
+        const res = await apiPost<any>('/api/auth/social-login', { name, email, idToken, remember })
         if (!res?.ok || !res?.user || !res?.token) {
           throw new Error('Social login failed')
         }
-        const nextSession = { user: res.user, token: res.token }
-        setSession(nextSession)
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(nextSession))
+        startSession({ user: res.user, token: res.token, remember })
         return res.user
       },
       registerWithGoogle: async ({ name, email, idToken }) => {
@@ -90,9 +141,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (!res?.ok || !res?.user || !res?.token) {
           throw new Error(res?.error || 'Google registration failed')
         }
-        const nextSession = { user: res.user, token: res.token }
-        setSession(nextSession)
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(nextSession))
+        startSession({ user: res.user, token: res.token })
         return res.user
       },
       register: async ({ name, email, password }) => {
@@ -100,12 +149,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (!res?.ok) throw new Error(res?.error || 'Registration failed')
       },
       updateUser,
-      logout: () => {
-        setSession(null)
-        localStorage.removeItem(STORAGE_KEY)
-      },
+      logout,
     }),
-    [session, token, updateUser, user],
+    [token, updateUser, user, startSession, logout],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
@@ -116,5 +162,3 @@ export function useAuth() {
   if (!ctx) throw new Error('useAuth must be used within AuthProvider')
   return ctx
 }
-
-

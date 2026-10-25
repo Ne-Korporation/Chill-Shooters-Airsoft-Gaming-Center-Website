@@ -1,8 +1,10 @@
-import React from 'react'
-import { NavLink, useNavigate } from 'react-router-dom'
+import React, { useEffect, useState } from 'react'
+import { NavLink } from 'react-router-dom'
 import type { IconType } from 'react-icons'
 import { useAuth } from '../../context/AuthContext'
 import { useNotifications } from '../../context/NotificationContext'
+import { apiGet } from '../../utils/apiClient'
+import { SPLIT_PAYMENTS_CHANGED_EVENT } from '../../pages/payments/SplitPaymentPage'
 import {
   FiGrid,
   FiCalendar,
@@ -26,6 +28,7 @@ import {
   FiTarget,
   FiBriefcase,
   FiMessageSquare,
+  FiDollarSign,
 } from 'react-icons/fi'
 
 type Role = 'user' | 'admin' | 'marshal' | 'registrar'
@@ -86,6 +89,34 @@ const registrarItems: Item[] = [
 
 
 
+// Players see the Split Payment module only while they owe a share or, as captain, are waiting on the team.
+function useHasOpenSplitPayment(enabled: boolean) {
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    if (!enabled) {
+      setOpen(false)
+      return
+    }
+    let active = true
+    const check = () => {
+      apiGet<{ ok: boolean; data: unknown[] }>('/api/split-payments/mine')
+        .then((res) => { if (active) setOpen(Array.isArray(res?.data) && res.data.length > 0) })
+        .catch(() => { if (active) setOpen(false) })
+    }
+    check()
+    const timer = window.setInterval(check, 60_000)
+    window.addEventListener(SPLIT_PAYMENTS_CHANGED_EVENT, check)
+    window.addEventListener('focus', check)
+    return () => {
+      active = false
+      window.clearInterval(timer)
+      window.removeEventListener(SPLIT_PAYMENTS_CHANGED_EVENT, check)
+      window.removeEventListener('focus', check)
+    }
+  }, [enabled])
+  return open
+}
+
 export function AppSidebar({
   role,
   onNavigate,
@@ -99,6 +130,7 @@ export function AppSidebar({
   const { unreadCount, getNotificationsForRole } = useNotifications()
   const userUnread = user?.role ? getNotificationsForRole(user.role, user.id).filter((n) => !n.read).length : 0
   const profilePath = user?.id ? `/app/players/${encodeURIComponent(user.id)}` : '/app/players/1'
+  const hasOpenSplitPayment = useHasOpenSplitPayment(role === 'user' && !!user?.id)
 
   const items = [
     ...(role === 'user' || role === 'registrar' || role === 'marshal'
@@ -107,6 +139,9 @@ export function AppSidebar({
         ]
       : []),
     ...baseItems.filter((it) => !it.roles || it.roles.includes(role)),
+    ...(hasOpenSplitPayment
+      ? [{ label: 'Split Payment', to: '/app/split-payments', icon: FiDollarSign, roles: ['user'] }]
+      : []),
     ...(role === 'user' || role === 'registrar' || role === 'marshal'
       ? [
           { label: 'My Weapons & Equipment', to: `/app/players/${encodeURIComponent(user?.id || '1')}/weapons-and-equipment`, icon: FiTarget, roles: ['user'] },

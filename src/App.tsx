@@ -15,6 +15,7 @@ import { MyReservationsPage } from './pages/reservations/MyReservationsPage'
 import { PackageRecommendationPage } from './pages/packages/PackageRecommendationPage'
 import { WaiverPage } from './pages/waiver/WaiverPage'
 import { PaymentPage } from './pages/payments/PaymentPage'
+import { SplitPaymentPage } from './pages/payments/SplitPaymentPage'
 import { PlayerProfilePage } from './pages/players/PlayerProfilePage'
 import { MyWeaponsAndEquipmentPage } from './pages/players/MyWeaponsAndEquipmentPage'
 
@@ -143,6 +144,7 @@ export default function App() {
         <Route path="packages" element={<RequireRole roles={['user', 'admin', 'registrar']}>{<PackageRecommendationPage />}</RequireRole>} />
         <Route path="waiver" element={<RequireRole roles={['user', 'admin', 'registrar']}>{<WaiverPage />}</RequireRole>} />
         <Route path="payment" element={<RequireRole roles={['user', 'admin', 'registrar']}>{<PaymentPage />}</RequireRole>} />
+        <Route path="split-payments" element={<RequireRole roles={['user']}><SplitPaymentPage /></RequireRole>} />
         <Route path="feedback" element={<RequireRole roles={['user']}><PlayerFeedbackPage /></RequireRole>} />
         <Route path="notifications" element={<RequireRole roles={['user', 'admin', 'registrar', 'marshal']}>{<AdminNotificationsPage />}</RequireRole>} />
         <Route path="players/:playerId" element={<PlayerProfilePage />} />

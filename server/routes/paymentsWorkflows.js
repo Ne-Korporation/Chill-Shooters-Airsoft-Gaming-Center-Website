@@ -9,6 +9,7 @@ import {
 } from '../utils/paymentRules.js'
 import { recordVerifiedStripePayment } from '../utils/stripePayments.js'
 import { emailPaymentEvent } from '../services/notificationEmails.js'
+import { syncReservationPaymentState } from '../utils/paymentProgress.js'
 
 const router = express.Router()
 const SETTINGS_COLLECTION = 'site_settings'
@@ -145,6 +146,7 @@ router.post('/payments/stripe-confirm', requireAuth, async (req, res) => {
       amount: expectedAmount / 100,
     })
 
+    await syncReservationPaymentState(db, reservation)
     void emailPaymentEvent(db, payment, payment?.paymentStatus || 'paid')
     return res.json({ ok: true, data: payment })
   } catch (err) {
@@ -265,6 +267,14 @@ router.put('/payments/:id/verify', requireAuth, requireRole('admin', 'registrar'
 
     const updated = result?.value ?? result
     if (!updated) return res.status(404).json({ ok: false, error: 'not found' })
+
+    // A rejected share reopens the split; a verified one updates the running totals.
+    const reservationId = String(updated.reservationId || '')
+    const reservationObjectId = toObjectId(reservationId)
+    const reservation = await db.collection('reservations').findOne({
+      $or: [{ id: reservationId }, ...(reservationObjectId ? [{ _id: reservationObjectId }] : [])],
+    })
+    await syncReservationPaymentState(db, reservation)
 
     void emailPaymentEvent(db, updated, nextStatus, reason)
     return res.json({ ok: true, data: updated })

@@ -8,7 +8,13 @@ import { calculateBookingPrice } from '../utils/bookingPricing.js'
 import { getBookingInventoryRequirements, holdBookingInventory } from '../utils/inventoryHolds.js'
 import { submitGcashPayment } from '../utils/gcashPayments.js'
 import { nextShortId } from '../utils/shortIds.js'
-import { emailReservationEvent } from '../services/notificationEmails.js'
+import { emailGearReviewEvent, emailReservationEvent, emailSplitShareRequest } from '../services/notificationEmails.js'
+import {
+  PAYMENT_WINDOW_HOURS,
+  expireOverdueReservations,
+  notifyUser,
+  syncReservationPaymentState,
+} from '../utils/paymentProgress.js'
 import {
   BLOCKING_RESERVATION_STATUSES,
   getBlockingSlotReservations,
@@ -79,12 +85,15 @@ router.get('/team-directory', requireAuth, requireRole('user'), async (_req, res
       .flatMap((waiver) => [waiver.userId, waiver.playerId, waiver.accountId])
       .map((value) => String(value || '').trim())
       .filter(Boolean))
+    const weaponOwnerIds = await getApprovedWeaponOwnerIds(db)
 
     return res.json({
       ok: true,
       data: players.map((player) => ({
         ...player,
         waiverApproved: approvedIds.has(String(player.id || '')) || approvedIds.has(String(player._id || '')),
+        // Only a yes/no flag: teammates don't see each other's registered gear.
+        hasApprovedWeapon: weaponOwnerIds.has(String(player.id || '')) || weaponOwnerIds.has(String(player._id || '')),
       })),
     })
   } catch (err) {
@@ -92,9 +101,10 @@ router.get('/team-directory', requireAuth, requireRole('user'), async (_req, res
   }
 })
 
-router.get('/reservation-availability', requireAuth, requireRole('user'), async (_req, res) => {
+router.get('/reservation-availability', requireAuth, requireRole('user'), async (req, res) => {
   try {
     const db = await getDb()
+    await expireOverdueReservations(db, startDbSession)
     const todayISO = new Date().toISOString().slice(0, 10)
     const reservations = await db.collection('reservations').find(
       {
@@ -127,19 +137,187 @@ router.get('/reservation-availability', requireAuth, requireRole('user'), async 
       },
     ).toArray()
 
+    // Slots other players are in the middle of booking count as taken too.
+    const holds = await db.collection('slot_holds').find({
+      reservationDate: { $gte: todayISO },
+      expiresAt: { $gt: new Date() },
+      userId: { $ne: String(req.user.id) },
+    }).toArray()
+
     return res.json({
       ok: true,
       capacities: getLocationCapacities(),
-      data: reservations.map((reservation) => ({
-        dateISO: reservation.reservationDate || reservation.dateISO || '',
-        fieldIds: extractReservationFieldIds(reservation),
-        slot: reservation.reservationTime || reservation.slot || 'morning',
-        sessionType: reservation.sessionType || 'public',
-        players: Number(reservation.numberOfPlayers || reservation.players || 0),
-        reservationStatus: reservation.reservationStatus,
-        locationId: normalizeLocationId(reservation.locationId || reservation.location || reservation.locationName),
-      })),
+      data: [
+        ...reservations.map((reservation) => ({
+          dateISO: reservation.reservationDate || reservation.dateISO || '',
+          fieldIds: extractReservationFieldIds(reservation),
+          slot: reservation.reservationTime || reservation.slot || 'morning',
+          sessionType: reservation.sessionType || 'public',
+          players: Number(reservation.numberOfPlayers || reservation.players || 0),
+          reservationStatus: reservation.reservationStatus,
+          locationId: normalizeLocationId(reservation.locationId || reservation.location || reservation.locationName),
+        })),
+        ...holds.map((hold) => ({
+          dateISO: hold.reservationDate,
+          fieldIds: hold.fieldIds || [],
+          slot: hold.reservationTime,
+          sessionType: hold.sessionType,
+          players: Number(hold.players || 0),
+          reservationStatus: 'held',
+          locationId: hold.locationId,
+        })),
+      ],
     })
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: String(err) })
+  }
+})
+
+const SLOT_HOLD_MINUTES = Math.max(1, Number(process.env.SLOT_HOLD_MINUTES) || 15)
+
+async function getApprovedWeaponOwnerIds(db, userIds) {
+  const owners = await db.collection('weapons').distinct('submittedBy', {
+    approvalStatus: 'approved',
+    ...(userIds ? { submittedBy: { $in: userIds.map(String) } } : {}),
+  })
+  return new Set(owners.map((id) => String(id || '')).filter(Boolean))
+}
+
+// Throws a statusCode error when the slot can't take this booking. Counts blocking reservations
+// plus other players' live slot holds, so two people can't book the same slot at once.
+async function assertSlotAvailable({ db, session, locationId, reservationDate, reservationTime, sessionType, fieldIds, playersCount, excludeUserId }) {
+  const sameSlotReservations = await db.collection('reservations').find(
+    {
+      $and: [
+        { $or: [{ reservationDate }, { dateISO: reservationDate }] },
+        { $or: [{ reservationTime }, { slot: reservationTime }] },
+      ],
+    },
+    { session },
+  ).toArray()
+  const blockingReservations = getBlockingSlotReservations({
+    reservations: sameSlotReservations,
+    locationId,
+    normalizeLocationId,
+  })
+  const holds = await db.collection('slot_holds').find(
+    {
+      locationId,
+      reservationDate,
+      reservationTime,
+      expiresAt: { $gt: new Date() },
+      ...(excludeUserId ? { userId: { $ne: String(excludeUserId) } } : {}),
+    },
+    { session },
+  ).toArray()
+
+  const bookedFieldIds = new Set([
+    ...blockingReservations.flatMap(extractReservationFieldIds),
+    ...holds.filter((hold) => hold.sessionType === 'private').flatMap((hold) => hold.fieldIds || []),
+  ])
+  const capacity = getLocationCapacities()[locationId][reservationTime]
+  const usedPlayers = getSlotPlayerCount(blockingReservations) + holds.reduce((sum, hold) => sum + Number(hold.players || 0), 0)
+  if (usedPlayers + playersCount > capacity) {
+    const full = new Error(`This slot has only ${Math.max(0, capacity - usedPlayers)} places remaining.`)
+    full.statusCode = 409
+    throw full
+  }
+
+  if (sessionType === 'private') {
+    const conflictedFieldIds = fieldIds.filter((fieldId) => bookedFieldIds.has(fieldId))
+    if (conflictedFieldIds.length > 0) {
+      const conflict = new Error('One or more selected fields are already booked or being booked for this time slot.')
+      conflict.statusCode = 409
+      conflict.conflictedFieldIds = conflictedFieldIds
+      throw conflict
+    }
+
+    const validation = validatePrivateFieldSelection({ locationId, fieldIds, playersCount, bookedFieldIds })
+    if (!validation.ok) {
+      const invalid = new Error(validation.reason)
+      invalid.statusCode = 400
+      throw invalid
+    }
+  }
+}
+
+// POST /api/slot-holds - temporarily locks the chosen slot while the player finishes booking.
+// Calling it again refreshes the hold; each player has at most one hold.
+router.post('/slot-holds', requireAuth, requireRole('user'), async (req, res) => {
+  const body = req.body || {}
+  const locationId = normalizeLocationId(body.locationId)
+  const reservationDate = String(body.reservationDate || '').trim()
+  const reservationTime = String(body.reservationTime || '').trim().toLowerCase()
+  const sessionType = String(body.sessionType || '').trim().toLowerCase()
+  const playersCount = Number(body.players)
+  const fieldIds = Array.from(new Set((Array.isArray(body.fieldIds) ? body.fieldIds : []).map(String).filter(Boolean)))
+
+  if (!LOCATION_FIELD_DEFS[locationId]) return res.status(400).json({ ok: false, error: 'locationId is not supported' })
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(reservationDate)) return res.status(400).json({ ok: false, error: 'reservationDate must be YYYY-MM-DD' })
+  if (!SLOT_NAMES.includes(reservationTime)) return res.status(400).json({ ok: false, error: 'reservationTime must be morning, afternoon, or evening' })
+  if (!['public', 'private'].includes(sessionType)) return res.status(400).json({ ok: false, error: 'sessionType must be public or private' })
+  if (!Number.isInteger(playersCount) || playersCount <= 0 || playersCount > 600) {
+    return res.status(400).json({ ok: false, error: 'players must be a whole number between 1 and 600' })
+  }
+  const knownFieldIds = new Set(LOCATION_FIELD_DEFS[locationId].map((f) => f.id))
+  if (fieldIds.length === 0 || fieldIds.some((id) => !knownFieldIds.has(id))) {
+    return res.status(400).json({ ok: false, error: 'Select valid fields for this location.' })
+  }
+
+  let session
+  try {
+    const db = await getDb()
+    await expireOverdueReservations(db, startDbSession)
+    session = startDbSession()
+    let hold
+    await session.withTransaction(async () => {
+      await db.collection('reservation_slot_locks').updateOne(
+        { _id: `${locationId}:${reservationDate}:${reservationTime}` },
+        { $inc: { version: 1 } },
+        { upsert: true, session },
+      )
+      await assertSlotAvailable({
+        db, session, locationId, reservationDate, reservationTime, sessionType, fieldIds, playersCount,
+        excludeUserId: req.user.id,
+      })
+      hold = {
+        userId: String(req.user.id),
+        locationId,
+        reservationDate,
+        reservationTime,
+        sessionType,
+        fieldIds,
+        players: playersCount,
+        expiresAt: new Date(Date.now() + SLOT_HOLD_MINUTES * 60_000),
+        updatedAtISO: new Date().toISOString(),
+      }
+      await db.collection('slot_holds').updateOne(
+        { _id: `user:${req.user.id}` },
+        { $set: hold },
+        { upsert: true, session },
+      )
+    })
+    db.collection('slot_holds').createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }).catch(() => null)
+    return res.json({ ok: true, data: { ...hold, expiresAtISO: hold.expiresAt.toISOString() } })
+  } catch (err) {
+    if (err?.statusCode) {
+      return res.status(err.statusCode).json({
+        ok: false,
+        error: err.message,
+        ...(err.conflictedFieldIds ? { conflictedFieldIds: err.conflictedFieldIds } : {}),
+      })
+    }
+    return res.status(500).json({ ok: false, error: String(err) })
+  } finally {
+    await session?.endSession()
+  }
+})
+
+router.delete('/slot-holds/mine', requireAuth, requireRole('user'), async (req, res) => {
+  try {
+    const db = await getDb()
+    await db.collection('slot_holds').deleteOne({ _id: `user:${req.user.id}` })
+    return res.json({ ok: true })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
   }
@@ -627,6 +805,77 @@ router.get('/:collection/:id', requireAuth, async (req, res) => {
   }
 })
 
+// Rebuilds the team from verified accounts (never trusting client names or sizes), works out
+// who shares a split payment, and counts own weapons only for players with an approved one on file.
+async function resolveTeamAndOwnWeapons(db, doc) {
+  const captainId = String(doc.userId)
+  const requestedIds = Array.from(new Set(
+    (Array.isArray(doc.selectedTeammateIds) ? doc.selectedTeammateIds : []).map(String).filter((id) => id && id !== captainId),
+  ))
+  if (requestedIds.length > Math.max(0, doc.numberOfPlayers - 1)) {
+    const tooMany = new Error('You selected more teammates than the group size allows.')
+    tooMany.statusCode = 400
+    throw tooMany
+  }
+  const objectIds = requestedIds.map((id) => toObjectId(id)).filter(Boolean)
+  const accounts = requestedIds.length
+    ? await db.collection('user_accounts').find(
+      { role: 'user', $or: [{ id: { $in: requestedIds } }, ...(objectIds.length ? [{ _id: { $in: objectIds } }] : [])] },
+      { projection: { id: 1, name: 1, email: 1 } },
+    ).toArray()
+    : []
+  if (accounts.length !== requestedIds.length) {
+    const unknown = new Error('One or more selected teammates could not be found.')
+    unknown.statusCode = 400
+    throw unknown
+  }
+  const teamMembers = accounts.map((account) => ({ id: String(account.id || account._id), name: account.name || '', email: account.email || '' }))
+  const split = String(doc.paymentMode || 'self').toLowerCase() === 'split'
+  if (split && teamMembers.length === 0) {
+    const noTeam = new Error('Add at least one registered teammate to split the payment.')
+    noTeam.statusCode = 400
+    throw noTeam
+  }
+
+  const memberIds = new Set([captainId, ...teamMembers.map((member) => member.id)])
+  const bringerIds = Array.from(new Set(
+    (Array.isArray(doc.ownWeaponBringerIds) ? doc.ownWeaponBringerIds : []).map(String).filter((id) => memberIds.has(id)),
+  ))
+  const owners = bringerIds.length ? await getApprovedWeaponOwnerIds(db, bringerIds) : new Set()
+  const ownWeaponBringers = bringerIds.map((userId) => ({ userId, verified: owners.has(userId) }))
+
+  return {
+    teamMembers,
+    selectedTeammateIds: teamMembers.map((member) => member.id),
+    paymentMode: split ? 'split' : 'self',
+    teamSize: split ? teamMembers.length + 1 : 1,
+    splitPayerIds: split ? teamMembers.map((member) => member.id) : [],
+    ownWeaponBringerIds: bringerIds,
+    ownWeaponBringers,
+    ownWeaponTarget: Math.max(0, Math.round(Number(doc.ownWeaponTarget) || 0)),
+    verifiedOwnWeaponCount: Math.min(doc.numberOfPlayers, ownWeaponBringers.filter((bringer) => bringer.verified).length),
+  }
+}
+
+// Tells each teammate in a split payment what they owe and by when.
+async function notifySplitPayers(db, reservation) {
+  if (reservation.paymentMode !== 'split') return
+  const share = Math.round((Number(reservation.depositAmount || 0) / reservation.teamSize) * 100) / 100
+  const captain = await findDocumentById(db, 'user_accounts', reservation.userId)
+  const captainName = captain?.name || 'Your team captain'
+  const dueLabel = new Date(reservation.paymentDueAtISO).toLocaleString('en-PH', { timeZone: 'Asia/Manila' })
+  for (const userId of reservation.splitPayerIds) {
+    await notifyUser(db, {
+      userId,
+      type: 'split_payment_requested',
+      title: 'Your split payment share is due',
+      message: `${captainName} added you to a reservation on ${reservation.reservationDate} (${reservation.reservationTime}). Your share is ₱${share.toLocaleString()}; pay it from Split Payment before ${dueLabel}.`,
+      linkedResourceId: reservation.id,
+    })
+    void emailSplitShareRequest(db, reservation, userId, share, captainName, dueLabel)
+  }
+}
+
 // CREATE
 router.post('/:collection', requireAuth, async (req, res) => {
   const { collection } = req.params
@@ -662,6 +911,17 @@ router.post('/:collection', requireAuth, async (req, res) => {
       'entranceFee',
       'serviceFee',
       'itemizedBreakdown',
+      'verifiedOwnWeaponCount',
+      'ownWeaponBringers',
+      'splitPayerIds',
+      'teamSize',
+      'paymentState',
+      'paymentDueAtISO',
+      'paymentSubmittedAmount',
+      'paymentVerifiedAmount',
+      'paymentFinalizedAtISO',
+      'forwardedToAdminAtISO',
+      'cancellationReason',
     ]) {
       delete payload[field]
     }
@@ -833,6 +1093,13 @@ router.post('/:collection', requireAuth, async (req, res) => {
       doc.createdAtISO = nowISO
       doc.updatedAtISO = nowISO
       doc.reservationStatus = 'pending'
+      doc.paymentState = 'awaiting'
+      doc.paymentDueAtISO = new Date(Date.now() + PAYMENT_WINDOW_HOURS * 3600_000).toISOString()
+      try {
+        Object.assign(doc, await resolveTeamAndOwnWeapons(db, doc))
+      } catch (err) {
+        return res.status(err?.statusCode || 400).json({ ok: false, error: err.message || 'Invalid team selection' })
+      }
       try {
         Object.assign(doc, await calculateBookingPrice({
           db,
@@ -871,50 +1138,17 @@ router.post('/:collection', requireAuth, async (req, res) => {
             { upsert: true, session },
           )
 
-          const sameSlotReservations = await db.collection('reservations').find(
-            {
-              $and: [
-                { $or: [{ reservationDate: doc.reservationDate }, { dateISO: doc.reservationDate }] },
-                { $or: [{ reservationTime: doc.reservationTime }, { slot: doc.reservationTime }] },
-              ],
-            },
-            { session },
-          ).toArray()
-          const blockingReservations = getBlockingSlotReservations({
-            reservations: sameSlotReservations,
+          await assertSlotAvailable({
+            db,
+            session,
             locationId: doc.locationId,
-            normalizeLocationId,
+            reservationDate: doc.reservationDate,
+            reservationTime: doc.reservationTime,
+            sessionType: doc.sessionType,
+            fieldIds: doc.fieldIds,
+            playersCount: doc.numberOfPlayers,
+            excludeUserId: doc.userId,
           })
-          const bookedFieldIds = new Set(blockingReservations.flatMap(extractReservationFieldIds))
-          const capacity = getLocationCapacities()[doc.locationId][doc.reservationTime]
-          const usedPlayers = getSlotPlayerCount(blockingReservations)
-          if (usedPlayers + playersCount > capacity) {
-            const full = new Error(`This slot has only ${Math.max(0, capacity - usedPlayers)} places remaining.`)
-            full.statusCode = 409
-            throw full
-          }
-
-          if (doc.sessionType === 'private') {
-            const conflictedFieldIds = doc.fieldIds.filter((fieldId) => bookedFieldIds.has(fieldId))
-            if (conflictedFieldIds.length > 0) {
-              const conflict = new Error('One or more selected fields are already booked for this location and time slot.')
-              conflict.statusCode = 409
-              conflict.conflictedFieldIds = conflictedFieldIds
-              throw conflict
-            }
-
-            const validation = validatePrivateFieldSelection({
-              locationId: doc.locationId,
-              fieldIds: doc.fieldIds,
-              playersCount,
-              bookedFieldIds,
-            })
-            if (!validation.ok) {
-              const invalid = new Error(validation.reason)
-              invalid.statusCode = 400
-              throw invalid
-            }
-          }
 
           await holdBookingInventory({
             db,
@@ -924,8 +1158,11 @@ router.post('/:collection', requireAuth, async (req, res) => {
           })
           const insert = await db.collection(collection).insertOne(doc, { session })
           insertedId = insert.insertedId
+          // The booking now holds the slot itself.
+          await db.collection('slot_holds').deleteOne({ _id: `user:${doc.userId}` }, { session })
         })
         void emailReservationEvent(db, doc, 'received')
+        void notifySplitPayers(db, doc)
         return res.status(201).json({ ok: true, insertedId, data: doc })
       } catch (err) {
         if (err?.statusCode) {
@@ -968,6 +1205,8 @@ router.post('/:collection', requireAuth, async (req, res) => {
         for (const key of Object.keys(doc)) delete doc[key]
         Object.assign(doc, submitted.payment)
         result = { insertedId: submitted.insertedId }
+        const paidReservation = await findDocumentById(db, 'reservations', paymentReservationId)
+        await syncReservationPaymentState(db, paidReservation)
       } else {
         result = await db.collection(collection).insertOne(doc)
       }
@@ -986,6 +1225,32 @@ router.post('/:collection', requireAuth, async (req, res) => {
     return res.status(500).json({ ok: false, error: String(err) })
   }
 })
+
+// When staff approve or reject a player's submitted gear, tell the owner in-app and by email.
+async function notifyGearReview(db, collection, before, after) {
+  const status = String(after.approvalStatus || '').toLowerCase()
+  if (!after.submittedBy || status === String(before.approvalStatus || '').toLowerCase()) return
+  if (!['approved', 'rejected'].includes(status)) return
+  const kind = collection === 'weapons' ? 'weapon' : 'equipment'
+  const name = after.name || after.id || 'your item'
+  try {
+    await db.collection('notifications').insertOne({
+      id: await nextShortId(db, 'notifications', 'N'),
+      userId: String(after.submittedBy),
+      type: `${kind}_${status}`,
+      title: status === 'approved' ? `Your ${kind} was approved` : `Your ${kind} was not approved`,
+      message: status === 'approved'
+        ? `"${name}" passed admin review. You can now bring it to your games.`
+        : `"${name}" was not approved.${after.rejectionReason ? ` Reason: ${after.rejectionReason}` : ''}`,
+      linkedResourceId: String(after.id || after._id),
+      read: false,
+      createdAtISO: new Date().toISOString(),
+    })
+  } catch (err) {
+    console.error('Gear review notification failed', err?.message || err)
+  }
+  void emailGearReviewEvent(db, after, kind, status)
+}
 
 // UPDATE - fixed: uses updateOne + separate findOne to avoid MongoDB driver v6 bug
 // where findOneAndUpdate with returnDocument:'after' returns value:null on success
@@ -1109,6 +1374,10 @@ router.put('/:collection/:id', requireAuth, async (req, res) => {
 
     const updatedDoc = await findDocumentById(db, collection, existing.id || id)
     if (!updatedDoc) return res.status(404).json({ ok: false, error: 'not found' })
+
+    if (['equipment', 'equipments', 'weapons'].includes(collection)) {
+      await notifyGearReview(db, collection, existing, updatedDoc)
+    }
 
     return res.json({ ok: true, data: updatedDoc })
   } catch (err) {
