@@ -189,3 +189,34 @@ export function emailSplitShareRequest(db, reservation, userId, share, captainNa
     ],
   })
 }
+
+export function emailGameReminder(db, reservation, userId) {
+  if (!reservation || !userId) return Promise.resolve({ skipped: 'missing data' })
+  const id = String(reservation.id || reservation._id)
+  return sendLogged(db, {
+    key: `reminder:game:${id}:${userId}:${reservation.reservationDate}`,
+    userId,
+    subject: 'Reminder: your Chill Shooters game is tomorrow',
+    title: 'See you on the field tomorrow',
+    lines: [
+      `Your game is on ${reservationLabel(reservation)}.`,
+      'Please arrive 30 minutes early for the safety orientation and chronograph check. We play rain or shine; if weather stops you, your payment can be moved to another date but is not refundable.',
+      `Reservation ID: ${escapeHtml(id)}`,
+    ],
+  })
+}
+
+export function emailWaiverReminder(db, reservation, userId) {
+  if (!reservation || !userId) return Promise.resolve({ skipped: 'missing data' })
+  const id = String(reservation.id || reservation._id)
+  return sendLogged(db, {
+    key: `reminder:waiver:${id}:${userId}`,
+    userId,
+    subject: 'Please complete your Chill Shooters waiver',
+    title: 'Your waiver is still needed',
+    lines: [
+      `You are booked for ${reservationLabel(reservation)}, but we don't have an approved waiver for you yet.`,
+      'Log in and open <b>Online Waiver</b> to complete it before the game so you can skip the line at the field.',
+    ],
+  })
+}

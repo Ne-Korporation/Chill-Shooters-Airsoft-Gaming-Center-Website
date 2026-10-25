@@ -35,6 +35,10 @@ import { AdminPartnershipsPage } from './pages/admin/AdminPartnershipsPage'
 import { AdminFeedbackPage } from './pages/admin/AdminFeedbackPage'
 import { AdminReachFundPage } from './pages/admin/AdminReachFundPage'
 import { SafetyLogPage } from './pages/marshal/SafetyLogPage'
+import { TeamGroupingPage } from './pages/operations/TeamGroupingPage'
+import { CounterPage } from './pages/operations/CounterPage'
+import { RentalsPage } from './pages/operations/RentalsPage'
+import { RepairsPage } from './pages/operations/RepairsPage'
 
 import { ReservationManagementPage } from './pages/admin/ReservationManagementPage'
 import { PlayerManagementPage } from './pages/admin/PlayerManagementPage'
@@ -215,6 +219,10 @@ export default function App() {
         <Route path="admin/feedback" element={<AdminPageWrapper><AdminFeedbackPage /></AdminPageWrapper>} />
         <Route path="admin/reach-fund" element={<AdminPageWrapper><AdminReachFundPage /></AdminPageWrapper>} />
         <Route path="safety" element={<RequireRole roles={['marshal', 'admin']}><SafetyLogPage /></RequireRole>} />
+        <Route path="team-grouping" element={<RequireRole roles={['marshal', 'admin']}><TeamGroupingPage /></RequireRole>} />
+        <Route path="counter" element={<RequireRole roles={['registrar', 'admin']}><CounterPage /></RequireRole>} />
+        <Route path="rentals" element={<RequireRole roles={['marshal', 'registrar', 'admin']}><RentalsPage /></RequireRole>} />
+        <Route path="repairs" element={<RequireRole roles={['marshal', 'admin']}><RepairsPage /></RequireRole>} />
         <Route path="admin/reports" element={<AdminPageWrapper><AdminReportsPage /></AdminPageWrapper>} />
         <Route path="admin/notifications" element={<AdminPageWrapper><AdminNotificationsPage /></AdminPageWrapper>} />
         <Route path="admin/audit-logs" element={<AdminPageWrapper><AdminAuditLogsPage /></AdminPageWrapper>} />

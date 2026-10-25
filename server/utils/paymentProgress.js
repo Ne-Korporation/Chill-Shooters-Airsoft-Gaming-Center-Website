@@ -69,7 +69,9 @@ export async function syncReservationPaymentState(db, reservation) {
     })
   }
 
-  if (progress.state === 'finalized') {
+  // Only bookings still awaiting approval go to the admin queue (not walk-ins or balances paid later).
+  const awaitingApproval = ['pending', 'needs review'].includes(String(reservation.reservationStatus || '').toLowerCase())
+  if (progress.state === 'finalized' && awaitingApproval) {
     const forwarded = await db.collection('reservations').updateOne(
       { ...filter, forwardedToAdminAtISO: { $exists: false } },
       { $set: { forwardedToAdminAtISO: nowISO, paymentFinalizedAtISO: nowISO } },

@@ -22,7 +22,9 @@ const { default: reservationWorkflowsRouter } = await import('./routes/reservati
 const { default: paymentsWorkflowsRouter } = await import('./routes/paymentsWorkflows.js')
 const { default: operationsRouter } = await import('./routes/operations.js')
 const { default: teamBookingsRouter } = await import('./routes/teamBookings.js')
+const { default: fieldOpsRouter } = await import('./routes/fieldOps.js')
 const { expireOverdueReservations } = await import('./utils/paymentProgress.js')
+const { sendDueReminders } = await import('./utils/reminders.js')
 
 const app = express()
 app.use(cors())
@@ -56,6 +58,13 @@ setInterval(() => {
     .then((db) => expireOverdueReservations(db, startDbSession, { force: true }))
     .catch((err) => console.warn('Payment window sweep failed:', String(err)))
 }, 5 * 60_000).unref()
+
+// Game-day and waiver reminders; each one is sent once, so a frequent sweep is safe.
+setInterval(() => {
+  getDb()
+    .then((db) => sendDueReminders(db, { force: true }))
+    .catch((err) => console.warn('Reminder sweep failed:', String(err)))
+}, 30 * 60_000).unref()
 
 let transporter
 if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
@@ -141,6 +150,7 @@ app.use('/api', reservationWorkflowsRouter)
 app.use('/api', paymentsWorkflowsRouter)
 app.use('/api', operationsRouter)
 app.use('/api', teamBookingsRouter)
+app.use('/api', fieldOpsRouter)
 app.use('/api/auth', authRouter)
 app.use('/api', crudRouter)
 

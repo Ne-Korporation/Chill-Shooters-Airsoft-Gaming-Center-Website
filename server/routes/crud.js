@@ -323,6 +323,152 @@ router.delete('/slot-holds/mine', requireAuth, requireRole('user'), async (req, 
   }
 })
 
+const WALK_IN_LOCATION_NAMES = {
+  salawag: 'Delta Stronghold (Salawag)',
+  langkaan: 'Delta Stronghold (Langkaan)',
+  binan: 'LOMA Binan Laguna',
+}
+const ONSITE_PAYMENT_METHODS = { cash: 'Cash', gcash: 'GCash', bank_transfer: 'Bank transfer', card: 'Card' }
+
+// POST /api/walk-ins — the counter registers a walk-in group for today's public game: own-gear
+// players pay the entrance fee; rental walk-ins only get gear that is still free. Uses the same
+// capacity, inventory, and pricing checks as online bookings, and records the onsite payment.
+router.post('/walk-ins', requireAuth, requireRole('admin', 'registrar'), async (req, res) => {
+  const body = req.body || {}
+  const walkInName = String(body.name || '').trim().slice(0, 120)
+  const locationId = normalizeLocationId(body.locationId)
+  const reservationTime = String(body.reservationTime || '').trim().toLowerCase()
+  const playersCount = Number(body.players)
+  const mode = String(body.mode || 'own_gear')
+  const paymentMethod = String(body.paymentMethod || '').toLowerCase()
+  const reference = String(body.reference || '').trim().slice(0, 120)
+  const reservationDate = manilaTodayISO()
+
+  if (!walkInName) return res.status(400).json({ ok: false, error: 'Enter the walk-in name.' })
+  if (!LOCATION_FIELD_DEFS[locationId]) return res.status(400).json({ ok: false, error: 'Choose a location.' })
+  if (!SLOT_NAMES.includes(reservationTime)) return res.status(400).json({ ok: false, error: 'Choose a time slot.' })
+  if (!Number.isInteger(playersCount) || playersCount < 1 || playersCount > 100) {
+    return res.status(400).json({ ok: false, error: 'Players must be a whole number from 1 to 100.' })
+  }
+  if (!['own_gear', 'package', 'custom'].includes(mode)) return res.status(400).json({ ok: false, error: 'Choose own gear, a package, or custom rentals.' })
+  if (isWeekdayDateISO(reservationDate)) {
+    return res.status(400).json({ ok: false, error: 'Walk-ins are only accepted for public games on weekends.' })
+  }
+  if (paymentMethod && !ONSITE_PAYMENT_METHODS[paymentMethod]) return res.status(400).json({ ok: false, error: 'Choose a valid payment method.' })
+  if (paymentMethod && paymentMethod !== 'cash' && reference.length < 4) {
+    return res.status(400).json({ ok: false, error: 'Enter the transaction reference number.' })
+  }
+
+  const nowISO = new Date().toISOString()
+  const doc = {
+    id: `R-${randomUUID()}`,
+    userId: 'walk-in',
+    walkIn: true,
+    walkInName,
+    walkInContact: String(body.contact || '').trim().slice(0, 60),
+    locationId,
+    locationName: WALK_IN_LOCATION_NAMES[locationId],
+    reservationDate,
+    reservationTime,
+    sessionType: 'public',
+    numberOfPlayers: playersCount,
+    fieldIds: [LOCATION_FIELD_DEFS[locationId][0].id],
+    fieldId: LOCATION_FIELD_DEFS[locationId][0].id,
+    selectionMode: mode === 'package' ? 'package' : 'custom',
+    selectedPackageId: mode === 'package' ? String(body.selectedPackageId || '') : undefined,
+    customWeaponIds: mode === 'custom' && Array.isArray(body.customWeaponIds) ? body.customWeaponIds.map(String) : [],
+    customEquipmentIds: mode === 'custom' && Array.isArray(body.customEquipmentIds) ? body.customEquipmentIds.map(String) : [],
+    packageName: mode === 'own_gear' ? 'Walk-in (own gear)' : undefined,
+    paymentMode: 'self',
+    teamSize: 1,
+    teamMembers: [],
+    notes: String(body.notes || '').trim().slice(0, 500),
+    reservationStatus: 'confirmed',
+    createdAtISO: nowISO,
+    updatedAtISO: nowISO,
+    createdBy: { id: String(req.user.id), role: req.user.role },
+    statusHistory: [{ status: 'confirmed', changedBy: String(req.user.id), changedByRole: req.user.role, changedAtISO: nowISO, reason: 'walk_in' }],
+  }
+
+  let session
+  try {
+    const db = await getDb()
+    if (mode === 'package') {
+      const pkg = await findDocumentById(db, 'packages', doc.selectedPackageId)
+      doc.packageName = pkg?.name || 'Rental package'
+      doc.selectedGameplayName = doc.packageName
+    } else if (mode === 'custom') {
+      doc.packageName = 'Walk-in (custom rentals)'
+    }
+    try {
+      Object.assign(doc, await calculateBookingPrice({ db, payload: doc, players: playersCount, findDocumentById, userId: null }))
+      doc.inventoryRequirements = await getBookingInventoryRequirements({ db, payload: doc, players: playersCount, findDocumentById })
+    } catch (err) {
+      return res.status(409).json({ ok: false, error: err.message || 'That gear is not available for this group.' })
+    }
+
+    session = startDbSession()
+    await session.withTransaction(async () => {
+      await db.collection('reservation_slot_locks').updateOne(
+        { _id: `${locationId}:${reservationDate}:${reservationTime}` },
+        { $inc: { version: 1 } },
+        { upsert: true, session },
+      )
+      await assertSlotAvailable({
+        db, session, locationId, reservationDate, reservationTime, sessionType: 'public', fieldIds: doc.fieldIds, playersCount,
+      })
+      await holdBookingInventory({ db, session, reservationId: doc.id, requirements: doc.inventoryRequirements || [] })
+      await db.collection('reservations').insertOne(doc, { session })
+    })
+
+    // Marshals see walk-ins on the games board like any confirmed booking.
+    await db.collection('gameplay').insertOne({
+      id: await nextShortId(db, 'gameplay', 'GP'),
+      Game: doc.packageName,
+      Schedule: `${reservationDate} • ${reservationTime}`,
+      Mode: "Marshal's choice",
+      Group: `${playersCount} players (walk-in)`,
+      Package: doc.packageName,
+      LayoutRequest: '',
+      Notes: doc.notes,
+      Status: 'Scheduled',
+      Actions: { canStart: true, canComplete: false, canDelete: false },
+      userId: 'walk-in',
+      reservationId: doc.id,
+      createdAtISO: nowISO,
+      updatedAtISO: nowISO,
+    })
+
+    let payment = null
+    if (paymentMethod) {
+      payment = {
+        id: `PMT-${randomUUID()}`,
+        reservationId: doc.id,
+        userId: 'walk-in',
+        amount: doc.totalAmount,
+        paymentMethod: ONSITE_PAYMENT_METHODS[paymentMethod],
+        paymentStatus: 'paid',
+        status: 'paid',
+        kind: 'onsite',
+        ...(reference ? { transactionReference: reference.toLowerCase() } : {}),
+        recordedBy: { actorId: String(req.user.id), actorRole: req.user.role },
+        verifiedBy: String(req.user.id),
+        verifiedByRole: req.user.role,
+        verifiedAtISO: nowISO,
+        createdAtISO: nowISO,
+      }
+      await db.collection('payments').insertOne(payment)
+      await syncReservationPaymentState(db, doc)
+    }
+    return res.status(201).json({ ok: true, data: doc, payment })
+  } catch (err) {
+    if (err?.statusCode) return res.status(err.statusCode).json({ ok: false, error: err.message })
+    return res.status(500).json({ ok: false, error: String(err) })
+  } finally {
+    await session?.endSession()
+  }
+})
+
 // Game modes players can request when booking; marshals see the choice on the game.
 const GAME_MODES = [
   "Marshal's choice",

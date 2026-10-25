@@ -216,6 +216,9 @@ export function SafetyLogPage() {
                     <option value="aeg">AEG / rifle / pistol (≤ {limits.aeg})</option>
                     <option value="sniper">Sniper / VSR (≤ {limits.sniper})</option>
                   </select>
+                  {fpsForm.weaponId ? (
+                    <div className="mt-1 text-xs text-muted">Center weapons are checked against the class and limit saved on the weapon.</div>
+                  ) : null}
                 </label>
                 <Input
                   label="Reading (FPS)"

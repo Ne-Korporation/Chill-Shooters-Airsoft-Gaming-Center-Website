@@ -29,6 +29,9 @@ import {
   FiBriefcase,
   FiMessageSquare,
   FiDollarSign,
+  FiShuffle,
+  FiShoppingBag,
+  FiLogOut,
 } from 'react-icons/fi'
 
 type Role = 'user' | 'admin' | 'marshal' | 'registrar'
@@ -58,6 +61,9 @@ const marshalItems: Item[] = [
   { label: 'Equipment', to: '/app/admin/equipment', icon: FiTool, roles: ['marshal'] },
   { label: 'Weapons', to: '/app/admin/weapons', icon: FiTruck, roles: ['marshal'] },
   { label: 'Safety Logs', to: '/app/safety', icon: FiAlertTriangle, roles: ['marshal'] },
+  { label: 'Team Grouping', to: '/app/team-grouping', icon: FiShuffle, roles: ['marshal'] },
+  { label: 'Rental Check-out', to: '/app/rentals', icon: FiLogOut, roles: ['marshal'] },
+  { label: 'Repairs', to: '/app/repairs', icon: FiTool, roles: ['marshal'] },
 ]
 
 
@@ -70,6 +76,10 @@ const adminItems: Item[] = [
   { label: 'Equipment', to: '/app/admin/equipment', icon: FiTool, roles: ['admin'] },
   { label: 'Weapons', to: '/app/admin/weapons', icon: FiTruck, roles: ['admin'] },
   { label: 'Safety Logs', to: '/app/safety', icon: FiAlertTriangle, roles: ['admin'] },
+  { label: 'Counter', to: '/app/counter', icon: FiShoppingBag, roles: ['admin'] },
+  { label: 'Team Grouping', to: '/app/team-grouping', icon: FiShuffle, roles: ['admin'] },
+  { label: 'Rental Check-out', to: '/app/rentals', icon: FiLogOut, roles: ['admin'] },
+  { label: 'Repairs', to: '/app/repairs', icon: FiTool, roles: ['admin'] },
   { label: 'Waivers', to: '/app/admin/waivers', icon: FiShield, roles: ['admin'] },
   { label: 'Package Recommendation', to: '/app/admin/rental-packages', icon: FiPackage, roles: ['admin'] },
   { label: 'Payments', to: '/app/admin/payments', icon: FiCreditCard, roles: ['admin'] },
@@ -81,6 +91,8 @@ const adminItems: Item[] = [
 
 const registrarItems: Item[] = [
   { label: 'Reservations', to: '/app/registrar/reservations', icon: FiCalendar, roles: ['registrar'] },
+  { label: 'Counter', to: '/app/counter', icon: FiShoppingBag, roles: ['registrar'] },
+  { label: 'Rental Check-out', to: '/app/rentals', icon: FiLogOut, roles: ['registrar'] },
   { label: 'Games', to: '/app/registrar/games', icon: FiZap, roles: ['registrar'] },
   { label: 'Availed Packages', to: '/app/registrar/availed-packages', icon: FiPackage, roles: ['registrar'] },
   { label: 'Submitted Waivers', to: '/app/registrar/waivers', icon: FiShield, roles: ['registrar'] },
