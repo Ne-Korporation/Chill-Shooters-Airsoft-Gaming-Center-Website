@@ -4,6 +4,7 @@ import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { apiGet, apiPost, apiPut, apiDelete } from '../../utils/apiClient'
 import { formatDiscountTargetLabel, resolvePackageDiscountConfig, type PackageDiscountMode, type PackageDiscountTarget } from '../../utils/packagePricing'
+import { modelOf, summarizeModels } from '../../utils/inventoryModels'
 
 type PackageStatus = 'active' | 'draft' | 'archived'
 
@@ -34,6 +35,8 @@ type WeaponItem = {
   id: string
   _id?: any
   name: string
+  model?: string
+  source?: string
   category: string
   status: string
   price: number
@@ -45,6 +48,8 @@ type EquipmentItem = {
   id: string
   _id?: any
   name: string
+  model?: string
+  source?: string
   category: string
   status: string
   qty: number
@@ -214,6 +219,8 @@ export function AdminRentalPackagesPage() {
         id: d.id ?? (d._id ? String(d._id) : undefined),
         _id: d._id,
         name: d.name || 'Unnamed weapon',
+        model: modelOf(d),
+        source: d.source,
         category: d.category || 'rifles',
         status: d.status || 'available',
         price: typeof d.price === 'number' ? d.price : 0,
@@ -227,6 +234,8 @@ export function AdminRentalPackagesPage() {
         id: d.id ?? (d._id ? String(d._id) : undefined),
         _id: d._id,
         name: d.name || 'Unnamed equipment',
+        model: modelOf(d),
+        source: d.source,
         category: d.category || 'gear',
         status: d.status || 'available',
         qty: typeof d.qty === 'number' ? d.qty : 1,
@@ -443,24 +452,41 @@ export function AdminRentalPackagesPage() {
     }
   }
 
-  // Toggle weapon selection
-  const toggleWeapon = (weaponId: string) => {
-    setForm((prev) => ({
-      ...prev,
-      weaponIds: prev.weaponIds.includes(weaponId)
-        ? prev.weaponIds.filter((id) => id !== weaponId)
-        : [...prev.weaponIds, weaponId],
-    }))
+  // Packages include kinds of items (models), not specific pieces: the booking assigns each
+  // player a free piece of every included model. The package stores one piece ID per model.
+  const weaponModels = React.useMemo(() => summarizeModels(weapons), [weapons])
+  const equipmentModels = React.useMemo(() => summarizeModels(equipment), [equipment])
+  const modelOfPiece = (list: Array<{ id: string; model?: string; name?: string }>, id: string) => {
+    const piece = list.find((item) => item.id === id)
+    return piece ? modelOf(piece) : id
+  }
+  const firstPieceOf = (list: Array<{ id: string; model?: string; name?: string; source?: string }>, model: string) =>
+    list.find((item) => item.source !== 'player' && modelOf(item) === model)?.id
+
+  const toggleWeapon = (model: string) => {
+    setForm((prev) => {
+      const selected = prev.weaponIds.some((id) => modelOfPiece(weapons, id) === model)
+      const pieceId = firstPieceOf(weapons, model)
+      return {
+        ...prev,
+        weaponIds: selected
+          ? prev.weaponIds.filter((id) => modelOfPiece(weapons, id) !== model)
+          : pieceId ? [...prev.weaponIds, pieceId] : prev.weaponIds,
+      }
+    })
   }
 
-  // Toggle equipment selection
-  const toggleEquipment = (eqId: string) => {
-    setForm((prev) => ({
-      ...prev,
-      equipmentIds: prev.equipmentIds.includes(eqId)
-        ? prev.equipmentIds.filter((id) => id !== eqId)
-        : [...prev.equipmentIds, eqId],
-    }))
+  const toggleEquipment = (model: string) => {
+    setForm((prev) => {
+      const selected = prev.equipmentIds.some((id) => modelOfPiece(equipment, id) === model)
+      const pieceId = firstPieceOf(equipment, model)
+      return {
+        ...prev,
+        equipmentIds: selected
+          ? prev.equipmentIds.filter((id) => modelOfPiece(equipment, id) !== model)
+          : pieceId ? [...prev.equipmentIds, pieceId] : prev.equipmentIds,
+      }
+    })
   }
 
   // Get weapon details from the weapons array
@@ -807,11 +833,11 @@ export function AdminRentalPackagesPage() {
                   <div className="text-xs text-muted">No weapons available. Add weapons first in the Weapons module.</div>
                 ) : (
                   <div className="max-h-48 overflow-y-auto rounded-xl border border-white/10 bg-white/5 p-2 space-y-1">
-                    {weapons.map((weapon) => {
-                      const isSelected = form.weaponIds.includes(weapon.id)
+                    {weaponModels.map((weapon) => {
+                      const isSelected = form.weaponIds.some((id) => modelOfPiece(weapons, id) === weapon.model)
                       return (
                         <label
-                          key={weapon.id}
+                          key={weapon.model}
                           className={`flex items-center gap-3 rounded-xl px-3 py-2 cursor-pointer transition ${
                             isSelected ? 'bg-accent/15 ring-1 ring-accent/30' : 'hover:bg-white/5'
                           }`}
@@ -819,16 +845,15 @@ export function AdminRentalPackagesPage() {
                           <input
                             type="checkbox"
                             checked={isSelected}
-                            onChange={() => toggleWeapon(weapon.id)}
+                            onChange={() => toggleWeapon(weapon.model)}
                             className="h-4 w-4 rounded border-white/20 bg-transparent accent-accent"
                           />
                           <div className="flex-1 flex items-center justify-between">
                             <div>
-                              <div className="text-sm font-semibold text-text">{weapon.name}</div>
-                              <div className="text-[11px] text-muted">{weapon.category.toUpperCase()} • {weapon.status}</div>
+                              <div className="text-sm font-semibold text-text">{weapon.model}</div>
+                              <div className="text-[11px] text-muted">{weapon.category.toUpperCase()} • {weapon.available} of {weapon.total} pieces available</div>
                             </div>
                             <div className="text-right">
-                              <div className="text-[11px] text-muted">{weapon.id}</div>
                               <div className="text-[11px] font-semibold text-accent">₱{weapon.price}</div>
                             </div>
                           </div>
@@ -847,11 +872,11 @@ export function AdminRentalPackagesPage() {
                   <div className="text-xs text-muted">No equipment available. Add equipment first in the Equipment module.</div>
                 ) : (
                   <div className="max-h-48 overflow-y-auto rounded-xl border border-white/10 bg-white/5 p-2 space-y-1">
-                    {equipment.map((eq) => {
-                      const isSelected = form.equipmentIds.includes(eq.id)
+                    {equipmentModels.map((eq) => {
+                      const isSelected = form.equipmentIds.some((id) => modelOfPiece(equipment, id) === eq.model)
                       return (
                         <label
-                          key={eq.id}
+                          key={eq.model}
                           className={`flex items-center gap-3 rounded-xl px-3 py-2 cursor-pointer transition ${
                             isSelected ? 'bg-accent/15 ring-1 ring-accent/30' : 'hover:bg-white/5'
                           }`}
@@ -859,16 +884,15 @@ export function AdminRentalPackagesPage() {
                           <input
                             type="checkbox"
                             checked={isSelected}
-                            onChange={() => toggleEquipment(eq.id)}
+                            onChange={() => toggleEquipment(eq.model)}
                             className="h-4 w-4 rounded border-white/20 bg-transparent accent-accent"
                           />
                           <div className="flex-1 flex items-center justify-between">
                             <div>
-                              <div className="text-sm font-semibold text-text">{eq.name}</div>
-                              <div className="text-[11px] text-muted">{eq.category.toUpperCase()} • Qty: {eq.qty}</div>
+                              <div className="text-sm font-semibold text-text">{eq.model}</div>
+                              <div className="text-[11px] text-muted">{eq.category.toUpperCase()} • {eq.available} of {eq.total} pieces available</div>
                             </div>
                             <div className="text-right">
-                              <div className="text-[11px] text-muted">{eq.id}</div>
                               <div className="text-[11px] font-semibold text-accent">₱{eq.price}</div>
                             </div>
                           </div>
@@ -952,8 +976,28 @@ export function AdminRentalPackagesPage() {
                     <div className="pt-1 text-[11px] text-muted">Holds as long as the player count stays at {settledPreview.players}.</div>
                   </div>
                 ) : (
-                  <div className="mt-2 text-xs text-muted">
-                    No settled amount yet. Enter a number of players and a settled amount to preview the total, or leave it at 0 to use computed per-player pricing.
+                  <div className="mt-2 space-y-1 text-xs">
+                    {/* Computed pricing: what one player pays before discounts. The standard full
+                        package is ₱150 entrance + ₱500 rifle (2 mags, 600 BBs) + ₱50 mask + ₱50 vest = ₱750. */}
+                    <div className="flex items-center justify-between text-muted">
+                      <span>Package base fee</span>
+                      <span>₱{(Number(form.basePrice) || 0).toLocaleString()}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-muted">
+                      <span>Included weapons &amp; equipment</span>
+                      <span>₱{Math.round(totalItemPrice).toLocaleString()}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-muted">
+                      <span>Entrance fee</span>
+                      <span>₱150</span>
+                    </div>
+                    <div className="flex items-center justify-between border-t border-white/10 pt-2 text-sm font-bold text-accent">
+                      <span>Per player (before discount)</span>
+                      <span>₱{Math.round((Number(form.basePrice) || 0) + totalItemPrice + 150).toLocaleString()}</span>
+                    </div>
+                    <div className="pt-1 text-[11px] text-muted">
+                      Full package standard: ₱150 entrance + ₱500 rifle (2 magazines, 600 BBs) + ₱50 mask + ₱50 vest = ₱750 per player. Or set a settled amount for a fixed group price.
+                    </div>
                   </div>
                 )}
               </div>
@@ -975,7 +1019,7 @@ export function AdminRentalPackagesPage() {
                       return (
                         <div key={wid} className="rounded-lg border border-white/5 bg-white/5 px-3 py-2">
                           <div className="flex items-center justify-between">
-                            <div className="text-sm font-semibold text-text">{weapon?.name || wid}</div>
+                            <div className="text-sm font-semibold text-text">{weapon ? modelOf(weapon) : wid}</div>
                             <div className="text-[10px] text-muted">{weapon?.category || '—'}</div>
                           </div>
                           <div className="mt-1 flex items-center justify-between">
@@ -1005,11 +1049,11 @@ export function AdminRentalPackagesPage() {
                       return (
                         <div key={eid} className="rounded-lg border border-white/5 bg-white/5 px-3 py-2">
                           <div className="flex items-center justify-between">
-                            <div className="text-sm font-semibold text-text">{eq?.name || eid}</div>
+                            <div className="text-sm font-semibold text-text">{eq ? modelOf(eq) : eid}</div>
                             <div className="text-[10px] text-muted">{eq?.category || '—'}</div>
                           </div>
                           <div className="mt-1 flex items-center justify-between">
-                            <div className="text-[11px] text-muted">ID: {eid} • Qty: {eq?.qty || '—'}</div>
+                            <div className="text-[11px] text-muted">{eq ? `${equipmentModels.find((g) => g.model === modelOf(eq))?.total ?? 0} pieces in inventory` : `ID: ${eid}`}</div>
                             {eq?.price !== undefined && (
                               <div className="text-[11px] font-semibold text-accent">₱{eq.price}</div>
                             )}

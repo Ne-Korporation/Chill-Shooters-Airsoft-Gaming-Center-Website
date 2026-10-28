@@ -4,6 +4,8 @@ import { calculateBookingPrice } from '../utils/bookingPricing.js'
 
 const records = {
   packages: [
+    // Manuscript full package: ₱150 entrance + ₱500 rifle (2 mags, 600 BBs) + ₱50 mask + ₱50 vest = ₱750
+    { id: 'full-package', name: 'Full Package', status: 'active', settledAmount: 0, basePrice: 0, weaponIds: ['M4-1'], weaponCount: 1, equipmentIds: ['MASK-1', 'VEST-1'] },
     { id: 'full-rental', name: 'Full Rental', status: 'active', settledAmount: 750, players: 1 },
     {
       id: 'computed-rental',
@@ -18,9 +20,12 @@ const records = {
   ],
   weapons: [
     { id: 'rifle', name: 'Rifle', price: 500, status: 'available' },
+    { id: 'M4-1', name: 'M4 Rifle #1', model: 'M4 Rifle', price: 500, status: 'available' },
   ],
   equipments: [
     { id: 'vest', name: 'Vest', price: 50, qty: 10, status: 'available' },
+    { id: 'MASK-1', name: 'Mask #1', model: 'Mask', price: 50, status: 'available' },
+    { id: 'VEST-1', name: 'Vest #1', model: 'Vest', price: 50, status: 'available' },
   ],
   user_accounts: [
     { id: 'verified-cvsu', partnershipInstitution: 'Cavite State University', partnershipEligibilityStatus: 'verified' },
@@ -65,7 +70,7 @@ test('standard rental package charges the 50 percent deposit', async () => {
   assert.equal(result.balanceAmount, 375)
 })
 
-test('custom rentals calculate item prices on the server and charge half as deposit', async () => {
+test('custom rentals charge each chosen piece once plus entrance, and half as deposit', async () => {
   const result = await calculateBookingPrice({
     db: {},
     payload: { selectionMode: 'custom', customWeaponIds: ['rifle'], customEquipmentIds: ['vest'], sessionType: 'public' },
@@ -74,9 +79,10 @@ test('custom rentals calculate item prices on the server and charge half as depo
     userId: 'player',
   })
 
-  assert.equal(result.totalAmount, 1400)
-  assert.equal(result.depositAmount, 700)
-  assert.equal(result.balanceAmount, 700)
+  // one rifle 500 + one vest 50 + entrance 2 × 150
+  assert.equal(result.totalAmount, 850)
+  assert.equal(result.depositAmount, 425)
+  assert.equal(result.balanceAmount, 425)
 })
 
 test('own-gear bookings charge entrance fees and cap the fixed deposit at the total', async () => {
@@ -144,4 +150,25 @@ test('verified own weapons replace rental weapons in package and custom pricing'
     userId: 'player',
   })
   assert.equal(unverified.totalAmount, 2400)
+})
+
+test('the full package is ₱750 per player with a 50% deposit', async () => {
+  const one = await calculateBookingPrice({
+    db: {},
+    payload: { selectionMode: 'package', selectedPackageId: 'full-package', sessionType: 'public' },
+    players: 1,
+    findDocumentById,
+    userId: 'player',
+  })
+  assert.equal(one.totalAmount, 750)
+  assert.equal(one.depositAmount, 375)
+
+  const ten = await calculateBookingPrice({
+    db: {},
+    payload: { selectionMode: 'package', selectedPackageId: 'full-package', sessionType: 'private' },
+    players: 10,
+    findDocumentById,
+    userId: 'player',
+  })
+  assert.equal(ten.totalAmount, 7500)
 })

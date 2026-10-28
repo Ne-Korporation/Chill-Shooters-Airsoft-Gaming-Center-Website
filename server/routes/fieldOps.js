@@ -6,6 +6,7 @@ import { requireAuth, requireRole } from '../middleware/auth.js'
 import { nextShortId } from '../utils/shortIds.js'
 import { getReservationPayments, syncReservationPaymentState } from '../utils/paymentProgress.js'
 import { getExperienceLevel, getAgeGroup, suggestBalancedTeams } from '../utils/teamBalancing.js'
+import { createPieces, modelFilter } from '../utils/inventoryPieces.js'
 
 // Field-side operations from the manuscript scope that sit outside the booking flow:
 // player experience and balanced team grouping, onsite/balance payments and extra
@@ -636,6 +637,61 @@ router.put('/rentals/:id/return', requireAuth, requireRole(...STAFF), async (req
     }
     await db.collection('rentals').updateOne({ _id: rental._id }, { $set: update })
     return res.json({ ok: true, data: { ...rental, ...update }, damageReport: report })
+  } catch (err) {
+    return sendError(res, err)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Rental inventory pieces: each physical item is its own record
+// ---------------------------------------------------------------------------
+
+const PIECE_FIELDS = ['category', 'price', 'description', 'note', 'status', 'partnerId', 'fpsClass', 'fpsLimit']
+
+function readPieceFields(body) {
+  const fields = {}
+  for (const key of PIECE_FIELDS) {
+    if (body[key] === undefined) continue
+    fields[key] = ['price', 'fpsLimit'].includes(key) ? Math.max(0, Number(body[key]) || 0) : String(body[key] ?? '').trim().slice(0, 500)
+  }
+  return fields
+}
+
+// POST /api/inventory/:collection/pieces { model, count, price, category, ... } — "Mask × 5" creates
+// five separate masks, each with its own ID and number.
+router.post('/inventory/:collection/pieces', requireAuth, requireRole('admin', 'marshal'), async (req, res) => {
+  const collection = String(req.params.collection)
+  if (!RENTAL_COLLECTIONS.includes(collection)) return res.status(400).json({ ok: false, error: 'collection must be weapons or equipments' })
+  const model = String(req.body?.model || '').trim().slice(0, 80)
+  const count = Number(req.body?.count)
+  if (!model) return res.status(400).json({ ok: false, error: 'Enter the item name.' })
+  if (!Number.isInteger(count) || count < 1 || count > 200) return res.status(400).json({ ok: false, error: 'Add between 1 and 200 pieces at a time.' })
+  try {
+    const db = await getDb()
+    const pieces = await createPieces(db, collection, {
+      model,
+      count,
+      fields: { status: 'available', ...readPieceFields(req.body || {}), createdBy: actorOf(req) },
+    })
+    return res.status(201).json({ ok: true, data: pieces })
+  } catch (err) {
+    return sendError(res, err)
+  }
+})
+
+// PUT /api/inventory/:collection/models { model, price, category, ... } — change shared details
+// (like the rental price) on every piece of a model at once. Status stays per piece.
+router.put('/inventory/:collection/models', requireAuth, requireRole('admin', 'marshal'), async (req, res) => {
+  const collection = String(req.params.collection)
+  if (!RENTAL_COLLECTIONS.includes(collection)) return res.status(400).json({ ok: false, error: 'collection must be weapons or equipments' })
+  const model = String(req.body?.model || '').trim()
+  if (!model) return res.status(400).json({ ok: false, error: 'model is required' })
+  const { status, ...fields } = readPieceFields(req.body || {})
+  if (!Object.keys(fields).length) return res.status(400).json({ ok: false, error: 'Nothing to update.' })
+  try {
+    const db = await getDb()
+    const result = await db.collection(collection).updateMany(modelFilter(model), { $set: { ...fields, updatedAtISO: new Date().toISOString() } })
+    return res.json({ ok: true, updated: result.modifiedCount })
   } catch (err) {
     return sendError(res, err)
   }

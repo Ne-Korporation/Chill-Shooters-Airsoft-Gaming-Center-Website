@@ -453,7 +453,13 @@ router.post('/walk-ins', requireAuth, requireRole('admin', 'registrar'), async (
     }
     try {
       Object.assign(doc, await calculateBookingPrice({ db, payload: doc, players: playersCount, findDocumentById, userId: null }))
-      doc.inventoryRequirements = await getBookingInventoryRequirements({ db, payload: doc, players: playersCount, findDocumentById })
+      doc.inventoryRequirements = await getBookingInventoryRequirements({
+        db,
+        payload: doc,
+        players: playersCount,
+        findDocumentById,
+        heldQuantities: await getHeldQuantities(db, { reservationDate, reservationTime }),
+      })
     } catch (err) {
       return res.status(409).json({ ok: false, error: err.message || 'That gear is not available for this group.' })
     }

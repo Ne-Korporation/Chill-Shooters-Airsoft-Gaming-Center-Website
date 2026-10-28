@@ -2,11 +2,13 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { getBookingInventoryRequirements, holdBookingInventory } from '../utils/inventoryHolds.js'
 
+// Rental gear is one record per piece: Rifle A has 6 pieces, Rifle B has 4.
+const piece = (model, prefix, n) => ({ id: `${prefix}-${n}`, name: `${model} #${n}`, model, unitNumber: n, quantity: 1, status: 'available' })
 const records = {
-  packages: [{ id: 'pkg', weaponIds: ['rifle-a', 'rifle-b'], equipmentIds: [], weaponCount: 1 }],
+  packages: [{ id: 'pkg', weaponIds: ['A-1', 'B-1'], equipmentIds: [], weaponCount: 1 }],
   weapons: [
-    { id: 'rifle-a', name: 'Rifle A', quantity: 6, status: 'available' },
-    { id: 'rifle-b', name: 'Rifle B', quantity: 4, status: 'available' },
+    ...[1, 2, 3, 4, 5, 6].map((n) => piece('Rifle A', 'A', n)),
+    ...[1, 2, 3, 4].map((n) => piece('Rifle B', 'B', n)),
   ],
   equipments: [],
 }
@@ -15,18 +17,21 @@ async function findDocumentById(_db, collection, id) {
   return records[collection]?.find((record) => record.id === id) || null
 }
 
-test('package weapons are drawn across models and respect units already held in the slot', async () => {
+async function listPieces(_db, collection, model) {
+  return records[collection].filter((record) => record.model === model)
+}
+
+test('package weapons are drawn across models and skip pieces already held in the slot', async () => {
+  const held = new Map([['weapons:A-1', 1], ['weapons:A-2', 1]])
   const requirements = await getBookingInventoryRequirements({
     db: {},
     payload: { selectionMode: 'package', selectedPackageId: 'pkg' },
     players: 8,
     findDocumentById,
-    heldQuantities: new Map([['weapons:rifle-a', 2]]),
+    listPieces,
+    heldQuantities: held,
   })
-  assert.deepEqual(
-    requirements.map(({ itemId, quantity }) => ({ itemId, quantity })),
-    [{ itemId: 'rifle-a', quantity: 4 }, { itemId: 'rifle-b', quantity: 4 }],
-  )
+  assert.deepEqual(requirements.map(({ itemId }) => itemId), ['A-3', 'A-4', 'A-5', 'A-6', 'B-1', 'B-2', 'B-3', 'B-4'])
 
   await assert.rejects(
     getBookingInventoryRequirements({
@@ -34,9 +39,10 @@ test('package weapons are drawn across models and respect units already held in 
       payload: { selectionMode: 'package', selectedPackageId: 'pkg' },
       players: 9,
       findDocumentById,
-      heldQuantities: new Map([['weapons:rifle-a', 2]]),
+      listPieces,
+      heldQuantities: held,
     }),
-    /needs 9 rental weapon\(s\) but only 8 are available/,
+    /needs 9 rental weapon\(s\) but only 8 are free/,
   )
 })
 
