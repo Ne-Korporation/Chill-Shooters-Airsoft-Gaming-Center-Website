@@ -21,6 +21,7 @@ type WeaponItem = {
   note: string
   description?: string
   price: number
+  quantity: number
   createdAtISO?: string
   submittedBy?: string
   source?: 'business' | 'player'
@@ -85,7 +86,18 @@ function generateWeaponId(name: string, existingIds: string[]): string {
   return `W-${prefix}-${String(nextSeq).padStart(3, '0')}`
 }
 
-const emptyForm = () => ({ name: '', description: '', category: 'rifles' as WeaponCategory, status: 'available' as WeaponStatus, price: '0', partnerId: '', fpsClass: '', fpsLimit: '' })
+const emptyForm = () => ({ name: '', description: '', category: 'rifles' as WeaponCategory, status: 'available' as WeaponStatus, price: '0', quantity: '1', partnerId: '', fpsClass: '', fpsLimit: '' })
+
+// Rental units of this model on hand; legacy records without a count are one unit.
+function readQuantity(d: any) {
+  const value = Number(d.quantity ?? d.qty ?? d.stock ?? 1)
+  return Number.isInteger(value) && value >= 0 ? value : 0
+}
+
+function parseQuantityInput(value: string) {
+  const quantity = Number(value)
+  return Number.isInteger(quantity) && quantity >= 0 ? quantity : null
+}
 
 // Blank class follows the category (snipers are sniper class); blank limit uses the class default.
 function fpsFields(form: { fpsClass: string; fpsLimit: string }) {
@@ -130,6 +142,7 @@ export function AdminWeaponsPage() {
         note: d.note || d.description || '',
         description: d.description || d.note || '',
         price: typeof d.price === 'number' ? d.price : 0,
+        quantity: readQuantity(d),
         createdAtISO: d.createdAtISO || null,
         submittedBy: d.submittedBy,
         source: (d.source || (d.submittedBy ? 'player' : 'business')) as 'business' | 'player',
@@ -171,6 +184,11 @@ export function AdminWeaponsPage() {
       toast.error('Weapon name is required')
       return
     }
+    const quantity = parseQuantityInput(form.quantity)
+    if (quantity === null) {
+      toast.error('Stock must be a whole number (0 or more).')
+      return
+    }
 
     setSaving(true)
     try {
@@ -181,6 +199,7 @@ export function AdminWeaponsPage() {
         category: form.category,
         status: form.status,
         price: Number(form.price) || 0,
+        quantity,
         description: form.description.trim(),
         note: form.description.trim() || 'Added through the admin inventory review.',
         createdAtISO: new Date().toISOString(),
@@ -211,6 +230,7 @@ export function AdminWeaponsPage() {
       category: weapon.category,
       status: weapon.status,
       price: String(weapon.price),
+      quantity: String(weapon.quantity),
       partnerId: weapon.partnerId || '',
       fpsClass: weapon.fpsClass || '',
       fpsLimit: weapon.fpsLimit ? String(weapon.fpsLimit) : '',
@@ -231,6 +251,11 @@ export function AdminWeaponsPage() {
       toast.error('Weapon name is required')
       return
     }
+    const quantity = parseQuantityInput(form.quantity)
+    if (quantity === null) {
+      toast.error('Stock must be a whole number (0 or more).')
+      return
+    }
 
     setSaving(true)
     try {
@@ -239,6 +264,7 @@ export function AdminWeaponsPage() {
         category: form.category,
         status: form.status,
         price: Number(form.price) || 0,
+        quantity,
         description: form.description.trim(),
         note: form.description.trim() || 'Updated from admin inventory.',
         partnerId: form.partnerId,
@@ -506,7 +532,8 @@ export function AdminWeaponsPage() {
             <div className="grid grid-cols-12 bg-white/5 px-3 py-2 text-xs uppercase tracking-widest text-muted">
               <div className="col-span-2">ID</div>
               <div className="col-span-3">Weapon</div>
-              <div className="col-span-2 text-right">Price</div>
+              <div className="col-span-1 text-right">Stock</div>
+              <div className="col-span-1 text-right">Price</div>
               <div className="col-span-2 text-right">Status</div>
               <div className="col-span-3 text-right">Actions</div>
             </div>
@@ -531,7 +558,8 @@ export function AdminWeaponsPage() {
                     </div>
                     <div className="mt-1 text-xs text-muted">{weapon.description || weapon.note}</div>
                   </div>
-                  <div className="col-span-2 text-right text-sm text-muted">₱{weapon.price}</div>
+                  <div className="col-span-1 text-right text-sm font-semibold">{weapon.source === 'player' ? '—' : weapon.quantity}</div>
+                  <div className="col-span-1 text-right text-sm text-muted">₱{weapon.price}</div>
                   <div className="col-span-2 text-right">
                     <StatusBadge status={weapon.status} onToggle={() => handleStatusToggle(weapon.id)} />
                   </div>
@@ -603,6 +631,20 @@ export function AdminWeaponsPage() {
                   placeholder="e.g. 150"
                   className="w-full rounded-xl border border-white/10 bg-transparent px-4 py-3 text-sm text-text placeholder:text-muted"
                 />
+              </label>
+
+              <label className="block">
+                <div className="mb-2 text-sm font-semibold text-text">Stock (rental units)</div>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={form.quantity}
+                  onChange={(event) => setForm((prev) => ({ ...prev, quantity: event.target.value }))}
+                  placeholder="e.g. 40"
+                  className="w-full rounded-xl border border-white/10 bg-transparent px-4 py-3 text-sm text-text placeholder:text-muted"
+                />
+                <div className="mt-1 text-xs text-muted">How many of this weapon can be rented out in the same time slot.</div>
               </label>
 
               <label className="block">

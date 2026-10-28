@@ -771,7 +771,7 @@ export function AdminRentalPackagesPage() {
                     />
                   </label>
                   <label className="block">
-                    <div className="mb-2 text-sm font-semibold text-text">Number of weapons</div>
+                    <div className="mb-2 text-sm font-semibold text-text">Weapons per player</div>
                     <input
                       type="number"
                       min="0"
@@ -781,7 +781,8 @@ export function AdminRentalPackagesPage() {
                       className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-text"
                     />
                     <div className="mt-1 text-[11px] text-muted">
-                      Leave at 0 to use the {pickedWeaponCount} weapon{pickedWeaponCount === 1 ? '' : 's'} picked below.
+                      How many rental weapons each player gets (usually 1). A booking for 10 players at 1 per player
+                      needs 10 units in stock across the weapons picked below. Leave at 0 to use {pickedWeaponCount}.
                     </div>
                     {errors.weaponCount ? <div className="mt-1 text-xs text-danger">{errors.weaponCount}</div> : null}
                   </label>
