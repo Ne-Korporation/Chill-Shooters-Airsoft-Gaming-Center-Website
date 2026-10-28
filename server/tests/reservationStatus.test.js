@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { updateReservationStatusAtomically } from '../utils/reservationStatus.js'
 
-function createFakeDatabase(initialReservation) {
+function createFakeDatabase(initialReservation, payments = []) {
   const state = {
     reservation: { ...initialReservation, statusHistory: initialReservation.statusHistory || [] },
     inventoryHolds: [{ reservationId: initialReservation.id, status: 'held', quantity: 2 }],
@@ -31,6 +31,14 @@ function createFakeDatabase(initialReservation) {
             state.operations.push({ name: 'updateReservation', session: options.session })
             Object.assign(state.reservation, update.$set)
             state.reservation.statusHistory.push(update.$push.statusHistory)
+          },
+        }
+      }
+      if (name === 'payments') {
+        return {
+          find: (_filter, options) => {
+            state.operations.push({ name: 'readPayments', session: options.session })
+            return { toArray: async () => payments }
           },
         }
       }
@@ -106,4 +114,24 @@ test('cancelled reservations cannot be reopened', async () => {
   )
   assert.equal(fake.state.reservation.reservationStatus, 'cancelled')
   assert.equal(fake.state.operations.some((operation) => operation.name === 'updateReservation'), false)
+})
+
+test('fully paid reservations cannot be cancelled', async () => {
+  const fake = createFakeDatabase(
+    { id: 'R-9', reservationStatus: 'pending', depositAmount: 500, userId: 'captain' },
+    [{ reservationId: 'R-9', userId: 'captain', amount: 500, paymentStatus: 'pending' }],
+  )
+  await assert.rejects(
+    updateReservationStatusAtomically({
+      db: fake.db,
+      startSession: fake.startSession,
+      reservationFilter: { id: 'R-9' },
+      reservationId: 'R-9',
+      nextStatus: 'cancelled',
+      actor: { id: 'captain', role: 'user' },
+    }),
+    { statusCode: 409 },
+  )
+  assert.equal(fake.state.reservation.reservationStatus, 'pending')
+  assert.equal(fake.state.inventoryHolds[0].status, 'held')
 })

@@ -6,6 +6,7 @@ import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { apiBase, apiGet, apiPost, apiPut, getApiAuthHeaders } from '../../utils/apiClient'
+import { PlayerStatsCard } from '../../components/players/PlayerStatsCard'
 import { PartnershipDiscountCard } from './PartnershipDiscountCard'
 import { useAuth } from '../../context/AuthContext'
 
@@ -379,7 +380,6 @@ export function PlayerProfilePage() {
   const displayName = player?.name || user?.name || (playerId ? `Player ${playerId}` : 'Unnamed player')
   const displayEmail = player?.email || user?.email || '—'
   const displayRole = player?.role || user?.role || 'user'
-  const displayExperience = player?.experience ?? 0
   const ownedEquipment = React.useMemo(() => {
     const selectedIds = Array.isArray(player?.equipmentIds) && player.equipmentIds.length > 0
       ? player.equipmentIds
@@ -543,7 +543,6 @@ export function PlayerProfilePage() {
                 </span>
               </div>
               <div className="text-sm text-muted">Role: {displayRole}</div>
-              <div className="text-sm text-muted">Experience: {displayExperience}</div>
               <div className="text-sm text-muted">Email: {displayEmail}</div>
             </div>
           </div>
@@ -565,8 +564,16 @@ export function PlayerProfilePage() {
             </div>
           </div>
 
+          {(playerId || user?.id) && displayRole === 'user' ? (
+            <div className="mt-4">
+              <PlayerStatsCard playerId={String(playerId || user?.id)} canAdjust={user?.role === 'admin'} />
+            </div>
+          ) : null}
+
           <div className="mt-4 space-y-2">
-            <Button className="w-full" onClick={() => {}}>View Reservation History</Button>
+            {!playerId || playerId === user?.id ? (
+              <Button className="w-full" onClick={() => navigate('/app/my-reservations')}>View Reservation History</Button>
+            ) : null}
             <Button
               variant="ghost"
               className="w-full bg-white/5 border border-white/10"

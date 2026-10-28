@@ -47,9 +47,16 @@ export function getFpsLimits(env = process.env) {
   return { aeg: Number.isFinite(aeg) && aeg > 0 ? aeg : 450, sniper: Number.isFinite(sniper) && sniper > 0 ? sniper : 550 }
 }
 
-export function evaluateFpsReading(weaponClass, fps, limits = getFpsLimits()) {
-  const limit = weaponClass === 'sniper' ? limits.sniper : limits.aeg
+// A weapon's own fpsLimit, when set on its record, overrides its class limit.
+export function evaluateFpsReading(weaponClass, fps, limits = getFpsLimits(), weaponLimit = 0) {
+  const limit = Number(weaponLimit) > 0 ? Number(weaponLimit) : weaponClass === 'sniper' ? limits.sniper : limits.aeg
   return { limit, result: fps <= limit ? 'pass' : 'fail' }
+}
+
+export function weaponFpsClass(weapon) {
+  const recorded = String(weapon?.fpsClass || '').toLowerCase()
+  if (['aeg', 'sniper'].includes(recorded)) return recorded
+  return String(weapon?.category || '').toLowerCase().startsWith('sniper') ? 'sniper' : 'aeg'
 }
 
 router.get('/fps-logs', requireAuth, requireRole(...STAFF), async (req, res) => {
@@ -64,9 +71,9 @@ router.get('/fps-logs', requireAuth, requireRole(...STAFF), async (req, res) => 
 
 router.post('/fps-logs', requireAuth, requireRole('admin', 'marshal'), async (req, res) => {
   const body = req.body || {}
-  const weaponClass = String(body.weaponClass || '').toLowerCase()
+  let weaponClass = String(body.weaponClass || '').toLowerCase()
   const fps = Number(body.fps)
-  if (!['aeg', 'sniper'].includes(weaponClass)) {
+  if (!['aeg', 'sniper'].includes(weaponClass) && !body.weaponId) {
     return res.status(400).json({ ok: false, error: 'weaponClass must be aeg or sniper' })
   }
   if (!Number.isFinite(fps) || fps <= 0 || fps > 1500) {
@@ -80,7 +87,9 @@ router.post('/fps-logs', requireAuth, requireRole('admin', 'marshal'), async (re
     const weaponName = String(weapon?.name || body.weaponName || '').trim().slice(0, 120)
     if (!weaponName) return res.status(400).json({ ok: false, error: 'Choose a weapon or enter its name.' })
 
-    const { limit, result } = evaluateFpsReading(weaponClass, fps)
+    // Center weapons are tested against their recorded classification and limit.
+    if (weapon) weaponClass = weaponFpsClass(weapon)
+    const { limit, result } = evaluateFpsReading(weaponClass, fps, getFpsLimits(), weapon?.fpsLimit)
     const nowISO = new Date().toISOString()
     const doc = {
       id: await nextShortId(db, 'fps_logs', 'FPS'),

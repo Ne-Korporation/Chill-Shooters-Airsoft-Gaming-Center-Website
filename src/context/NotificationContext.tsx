@@ -19,6 +19,10 @@ export type NotificationType =
   | 'payment_verified'
   | 'gameplay_status_updated'
   | 'gameplay_created'
+  | 'split_payment_requested'
+  | 'reservation_payment_finalized'
+  | 'reservation_reminder'
+  | 'waiver_reminder'
 
 export type NotificationTargetRole = 'user' | 'registrar' | 'marshal' | 'admin' | 'all'
 

@@ -183,6 +183,8 @@ export function calculatePackagePricing({
       isLegacyPct: false,
       isSettled: true,
       settledAmount: settled,
+      rentedWeaponCount: 0,
+      ownWeaponsUsed: 0,
     }
   }
 
@@ -244,5 +246,7 @@ export function calculatePackagePricing({
     isLegacyPct,
     isSettled: false,
     settledAmount: 0,
+    rentedWeaponCount,
+    ownWeaponsUsed: packageWeaponCount * players - rentedWeaponCount,
   }
 }

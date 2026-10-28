@@ -48,7 +48,7 @@ export function buildWaiverPrintHtml(w: PrintableWaiver) {
   @page { size: A4; margin: 0; }
   html, body { margin: 0; padding: 0; background: #fff; color: #000; font-family: Arial, Helvetica, sans-serif; }
   body { width: 210mm; padding: 15mm; box-sizing: border-box; }
-  .sheet { width: 180mm; font-size: 10.5px; line-height: 1.3; }
+  .sheet { width: 180mm; font-size: 13px; line-height: 1.4; }
   h1 { font-size: 1.5em; margin: 0 0 4px; text-align: center; }
   .meta { display: flex; flex-wrap: wrap; gap: 2px 18px; font-size: .95em; border-top: 1px solid #000; border-bottom: 1px solid #000; padding: 4px 0; margin-bottom: 6px; }
   p { margin: 0 0 5px; }
@@ -99,11 +99,12 @@ export function printWaiverDocument(w: PrintableWaiver) {
   )
 
   ready.then(() => {
-    // Shrink the text until everything fits on ONE A4 page (180mm x 267mm usable inside the 15mm margins)
+    // Shrink the text toward one A4 page (180mm x 267mm usable inside the 15mm margins), but never
+    // below a legible 12px; longer waivers flow onto a second page instead.
     const sheet = win.document.getElementById('sheet') as HTMLElement
     const maxH = (267 * 96) / 25.4 - 6
-    let size = 10.5
-    while (sheet.getBoundingClientRect().height > maxH && size > 6) {
+    let size = 13
+    while (sheet.getBoundingClientRect().height > maxH && size > 12) {
       size -= 0.25
       sheet.style.fontSize = `${size}px`
     }

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { FiBriefcase, FiCalendar, FiClock, FiCreditCard, FiFileText, FiTool, FiUsers } from 'react-icons/fi'
 import { DashboardPostsPanel } from '../../components/dashboard/DashboardPostsPanel'
+import { PaymentCompletePanel } from '../../components/dashboard/PaymentCompletePanel'
 import { ActionRow, ActivityList, DashboardHeader, Panel, StatTile, type ActivityTone } from '../../components/dashboard/DashboardParts'
 import { apiGet } from '../../utils/apiClient'
 
@@ -200,6 +201,8 @@ export function AdminDashboardPage() {
               />
             </div>
           </Panel>
+
+          <PaymentCompletePanel />
 
           <Panel title="Recent activity">
             <ActivityList items={dashboard.recentActivity} loading={loading} emptyText="No recent activity yet." />

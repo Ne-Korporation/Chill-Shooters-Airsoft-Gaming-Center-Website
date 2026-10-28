@@ -8,6 +8,12 @@ export function resolveNotificationRoute(notification: NotificationItem, role?: 
   const notificationType = String(notification.type || '').toLowerCase()
   const currentRole = String(role || '').toLowerCase()
 
+  if (notificationType.startsWith('split_payment_')) return '/app/split-payments'
+
+  if (notificationType === 'reservation_payment_finalized') {
+    return currentRole === 'admin' ? '/app/admin' : '/app/my-reservations'
+  }
+
   if (notificationType.startsWith('reservation_')) {
     if (currentRole === 'admin') return '/app/admin/reservation-management'
     if (currentRole === 'registrar') return '/app/registrar/reservations'

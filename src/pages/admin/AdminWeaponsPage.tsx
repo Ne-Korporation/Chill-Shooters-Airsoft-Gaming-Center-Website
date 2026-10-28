@@ -11,6 +11,8 @@ type WeaponStatus = 'available' | 'rented' | 'needs-check'
 
 type WeaponItem = {
   partnerId?: string
+  fpsClass?: string
+  fpsLimit?: number
   id: string
   _id?: any
   name: string
@@ -84,17 +86,11 @@ function generateWeaponId(name: string, existingIds: string[]): string {
   return `W-${prefix}-${String(nextSeq).padStart(3, '0')}`
 }
 
-const emptyForm = () => ({ name: '', description: '', category: 'rifles' as WeaponCategory, status: 'available' as WeaponStatus, price: '0', quantity: '1', partnerId: '' })
+const emptyForm = () => ({ name: '', description: '', category: 'rifles' as WeaponCategory, status: 'available' as WeaponStatus, price: '0', partnerId: '', fpsClass: '', fpsLimit: '' })
 
-// Rental units of this model on hand; legacy records without a count are one unit.
-function readQuantity(d: any) {
-  const value = Number(d.quantity ?? d.qty ?? d.stock ?? 1)
-  return Number.isInteger(value) && value >= 0 ? value : 0
-}
-
-function parseQuantityInput(value: string) {
-  const quantity = Number(value)
-  return Number.isInteger(quantity) && quantity >= 0 ? quantity : null
+// Blank class follows the category (snipers are sniper class); blank limit uses the class default.
+function fpsFields(form: { fpsClass: string; fpsLimit: string }) {
+  return { fpsClass: form.fpsClass, fpsLimit: Number(form.fpsLimit) > 0 ? Number(form.fpsLimit) : 0 }
 }
 
 export function AdminWeaponsPage() {
@@ -142,6 +138,8 @@ export function AdminWeaponsPage() {
         approvalStatus: (d.approvalStatus || (d.source === 'player' || d.submittedBy ? 'pending' : 'approved')) as 'pending' | 'approved' | 'rejected',
         rejectionReason: d.rejectionReason || '',
         partnerId: d.partnerId || '',
+        fpsClass: d.fpsClass || '',
+        fpsLimit: Number(d.fpsLimit) || 0,
       }))
       setWeapons(normalized)
     } catch (e: any) {
@@ -197,6 +195,7 @@ export function AdminWeaponsPage() {
         source: 'business',
         approvalStatus: 'approved',
         partnerId: form.partnerId,
+        ...fpsFields(form),
       }
 
       const res = await apiPost<any>('/api/weapons', newWeapon)
@@ -222,6 +221,8 @@ export function AdminWeaponsPage() {
       price: String(weapon.price),
       quantity: String(weapon.quantity),
       partnerId: weapon.partnerId || '',
+      fpsClass: weapon.fpsClass || '',
+      fpsLimit: weapon.fpsLimit ? String(weapon.fpsLimit) : '',
     })
   }
 
@@ -256,6 +257,7 @@ export function AdminWeaponsPage() {
         description: form.description.trim(),
         note: form.description.trim() || 'Updated from admin inventory.',
         partnerId: form.partnerId,
+        ...fpsFields(form),
         updatedAtISO: new Date().toISOString(),
       })
       toast.success('Weapon updated')
@@ -668,6 +670,32 @@ export function AdminWeaponsPage() {
                     <option value="rented">Rented</option>
                     <option value="needs-check">Damage</option>
                   </select>
+                </label>
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-2">
+                <label className="block">
+                  <div className="mb-2 text-sm font-semibold text-text">FPS classification</div>
+                  <select
+                    value={form.fpsClass}
+                    onChange={(event) => setForm((prev) => ({ ...prev, fpsClass: event.target.value }))}
+                    className="w-full rounded-xl border border-white/10 glass px-4 py-3 text-sm text-text"
+                  >
+                    <option value="">From category ({form.category === 'snipers' ? 'sniper / VSR' : 'AEG'})</option>
+                    <option value="aeg">AEG / rifle / pistol (450 FPS)</option>
+                    <option value="sniper">Sniper / VSR (550 FPS, 0.20g BBs)</option>
+                  </select>
+                </label>
+                <label className="block">
+                  <div className="mb-2 text-sm font-semibold text-text">FPS limit override</div>
+                  <input
+                    type="number"
+                    min="0"
+                    value={form.fpsLimit}
+                    onChange={(event) => setForm((prev) => ({ ...prev, fpsLimit: event.target.value }))}
+                    placeholder="Blank = class limit"
+                    className="w-full rounded-xl border border-white/10 bg-transparent px-4 py-3 text-sm text-text placeholder:text-muted"
+                  />
                 </label>
               </div>
               {partners.length > 0 ? (

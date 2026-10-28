@@ -14,6 +14,7 @@ import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
+import { clearPackagePrefill } from '../../utils/packagePrefill'
 
 type PaymentMethod = 'gcash' | 'card'
 
@@ -197,6 +198,31 @@ function PaymentPageContent() {
     }
   }, [])
 
+  // Keep the slot locked until the reservation itself is created (which then holds the slot).
+  useEffect(() => {
+    if (success) return
+    const refreshHold = () => {
+      if (localStorage.getItem('pending_reservation_id')) return
+      try {
+        const pending = JSON.parse(localStorage.getItem('pending_reservation') || 'null')
+        if (!pending) return
+        apiPost('/api/slot-holds', {
+          locationId: pending.locationId,
+          reservationDate: pending.reservationDate,
+          reservationTime: pending.reservationTime,
+          sessionType: pending.sessionType,
+          fieldIds: pending.fieldIds,
+          players: pending.numberOfPlayers,
+        }).catch((err) => toast.error(err?.message || 'Your slot could not be kept. Please choose another one.'))
+      } catch {
+        // ignore malformed pending data; submit() reports it
+      }
+    }
+    refreshHold()
+    const timer = window.setInterval(refreshHold, 4 * 60 * 1000)
+    return () => window.clearInterval(timer)
+  }, [success])
+
   useEffect(() => {
     let cancelled = false
 
@@ -367,6 +393,7 @@ function PaymentPageContent() {
 
       localStorage.removeItem('pending_reservation')
       localStorage.removeItem('pending_reservation_id')
+      clearPackagePrefill()
 
       setSuccess(true)
       toast.success(method === 'card' ? 'Card payment verified.' : 'Payment submitted for staff review.')
@@ -631,6 +658,9 @@ function PaymentPageContent() {
                 {method === 'card'
                   ? 'Stripe confirmed the charge and the payment record was saved.'
                   : 'Your payment proof has been submitted. The registrar/admin will review and verify it.'}
+                {paymentMode === 'split'
+                  ? ' Your teammates have been notified of their shares. Track who has paid under Split Payment in the menu — the slot stays reserved for 24 hours while the team pays.'
+                  : ''}
               </div>
 
               <div className="mt-3 rounded-2xl border border-white/10 bg-white/5 p-3">

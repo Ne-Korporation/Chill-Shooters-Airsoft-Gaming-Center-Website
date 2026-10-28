@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect, useCallback } from 'react'
+import React, { useMemo, useState, useEffect, useCallback, useRef } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import toast from 'react-hot-toast'
@@ -22,7 +22,7 @@ import {
   FiX,
 } from 'react-icons/fi'
 
-import { apiGet, apiPost } from '../../utils/apiClient'
+import { apiDelete, apiGet, apiPost } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
 import { LANDING_PREFILL_KEY, type LandingReservationPrefill } from '../auth/LandingPage'
 import { Card } from '../../components/ui/Card'
@@ -30,6 +30,10 @@ import { Input } from '../../components/ui/Input'
 import { Button } from '../../components/ui/Button'
 import { calculatePackagePricing } from '../../utils/packagePricing'
 import { formatDiscountTargetLabel, resolvePackageDiscountConfig } from '../../utils/packagePricing'
+import { loadPackagePrefill } from '../../utils/packagePrefill'
+
+// Slot holds last 15 minutes on the server; refresh well before that while the player is booking.
+const SLOT_HOLD_REFRESH_MS = 4 * 60 * 1000
 
 type SessionType = 'public' | 'private'
 type TimeSlot = 'morning' | 'afternoon' | 'evening'
@@ -93,13 +97,6 @@ type ReservationRecord = {
   locationId?: string
 }
 
-type PackageRecommendationPrefill = {
-  fromPackageRecommendation?: boolean
-  players?: number
-  sessionType?: SessionType
-  selectedPackageId?: string
-}
-
 type SelectionMode = 'package' | 'custom'
 
 // Must match GAME_MODES in server/routes/crud.js
@@ -119,6 +116,7 @@ type TeamMember = {
   email: string
   status: string
   waiverSubmitted: boolean
+  hasApprovedWeapon: boolean
 }
 
 type PaymentMode = 'self' | 'split'
@@ -258,9 +256,8 @@ export function ReservationCalendarPage() {
   const today = useMemo(() => new Date(), [])
   const { user } = useAuth()
 
-  const packagePrefill = (location.state as PackageRecommendationPrefill | null)?.fromPackageRecommendation
-    ? (location.state as PackageRecommendationPrefill)
-    : undefined
+  // Package picked in the Recommendation Engine (router state, or sessionStorage after a refresh).
+  const [packagePrefill] = useState(() => loadPackagePrefill(location.state))
 
   // Booking bar selections from the landing page, if the user came from there.
   const [landingPrefill] = useState<LandingReservationPrefill | null>(() => {
@@ -469,6 +466,12 @@ export function ReservationCalendarPage() {
   const [playerApprovedEquipment, setPlayerApprovedEquipment] = useState<any[]>([])
   const [selectedOwnWeaponIds, setSelectedOwnWeaponIds] = useState<string[]>([])
   const [selectedOwnEquipmentIds, setSelectedOwnEquipmentIds] = useState<string[]>([])
+  // How many players the group said will bring their own weapon, and which teammates were assigned.
+  const [ownWeaponTarget, setOwnWeaponTarget] = useState(() => Math.max(0, Math.round(packagePrefill?.ownWeapons ?? 0)))
+  const [teammateOwnWeaponIds, setTeammateOwnWeaponIds] = useState<string[]>([])
+  const [noWeaponWarning, setNoWeaponWarning] = useState<TeamMember | null>(null)
+  const [slotHoldExpiresAt, setSlotHoldExpiresAt] = useState<string | null>(null)
+  const [placingHold, setPlacingHold] = useState(false)
 
   const findTeammate = async () => {
     const email = teamEmail.trim().toLowerCase()
@@ -476,28 +479,44 @@ export function ReservationCalendarPage() {
       setTeamLookup({ status: 'error', error: 'Enter a valid email address.' })
       return
     }
-    if (user?.email && email === user.email.toLowerCase()) {
-      setTeamLookup({ status: 'error', error: 'You are already counted as the team captain.' })
-      return
-    }
-    setTeamLookup({ status: 'searching' })
-    try {
-      const res = await apiGet<{ ok: boolean; data: { id: string; name: string; email: string; waiverApproved: boolean } }>(
-        `/api/team-directory/lookup?email=${encodeURIComponent(email)}`,
-      )
-      const found = res.data
-      setTeamLookup({
-        status: 'found',
-        member: {
-          id: String(found.id),
-          name: found.name || found.email,
-          email: found.email,
-          status: 'active',
-          waiverSubmitted: found.waiverApproved === true,
-        },
-      })
-    } catch (err: any) {
-      setTeamLookup({ status: 'error', error: err?.message || 'Could not look up that player.' })
+
+    let cancelled = false
+
+    const fetchTeamMembers = async () => {
+      try {
+        setLoadingTeamMembers(true)
+        const res = await apiGet<{ ok: boolean; data: any[] }>('/api/team-directory')
+        if (cancelled) return
+
+        const docs = Array.isArray(res?.data) ? res.data : []
+        const normalized = docs
+          .filter((doc: any) => String(doc.role || 'user').toLowerCase() === 'user')
+          .map((doc: any) => {
+            const emailVerified = doc.emailVerified === true
+            const status = String(doc.status || '').toLowerCase()
+            const derivedStatus = status === 'active' || status === 'pending' || status === 'suspended'
+              ? status
+              : emailVerified
+                ? 'active'
+                : 'pending'
+
+            return {
+              id: String(doc.id ?? doc.playerId ?? doc.accountId ?? doc._id ?? ''),
+              name: String(doc.name || doc.fullName || 'Unnamed player'),
+              email: String(doc.email || ''),
+              status: derivedStatus,
+              waiverSubmitted: doc.waiverApproved === true,
+              hasApprovedWeapon: doc.hasApprovedWeapon === true,
+            }
+          })
+          .filter((doc: TeamMember) => doc.id && doc.id !== user.id && doc.status === 'active')
+
+        setTeamMembers(normalized)
+      } catch {
+        if (!cancelled) setTeamMembers([])
+      } finally {
+        if (!cancelled) setLoadingTeamMembers(false)
+      }
     }
   }
 
@@ -576,6 +595,13 @@ export function ReservationCalendarPage() {
     const limit = Math.max(0, players - 1)
     setSelectedTeammates((current) => (current.length > limit ? current.slice(0, limit) : current))
   }, [players])
+
+  useEffect(() => {
+    setTeammateOwnWeaponIds((current) => {
+      const next = current.filter((id) => selectedTeammateIds.includes(id))
+      return next.length === current.length ? current : next
+    })
+  }, [selectedTeammateIds])
 
   // Fetch real packages, weapons, and equipment from API
   useEffect(() => {
@@ -672,38 +698,14 @@ export function ReservationCalendarPage() {
     return () => { cancelled = true }
   }, [user?.id])
 
-  // Rental stock left for the chosen date/slot, so players see shortages here
-  // instead of hitting them when the reservation is submitted at payment.
-  const [slotStock, setSlotStock] = useState<SlotStock | null>(null)
-  const [loadingSlotStock, setLoadingSlotStock] = useState(false)
-  useEffect(() => {
-    if (!dateISO || !slot) return
-    let cancelled = false
-    setLoadingSlotStock(true)
-    apiGet<{ ok: boolean; data: SlotStock }>(`/api/inventory-availability?date=${encodeURIComponent(dateISO)}&slot=${encodeURIComponent(slot)}`)
-      .then((res) => { if (!cancelled) setSlotStock(res?.data ?? null) })
-      .catch(() => { if (!cancelled) setSlotStock(null) })
-      .finally(() => { if (!cancelled) setLoadingSlotStock(false) })
-    return () => { cancelled = true }
-  }, [dateISO, slot, step])
-
-  const weaponAvailable = useCallback(
-    (weaponId: string) => slotStock?.weapons?.[weaponId]?.available ?? null,
-    [slotStock],
+  // Only players with an approved weapon on file count; the rest are charged a rental weapon.
+  const captainBringsOwnWeapon = selectedOwnWeaponIds.length > 0
+  const verifiedTeammateBringers = useMemo(
+    () => teamMembers.filter((member) => teammateOwnWeaponIds.includes(member.id) && member.hasApprovedWeapon),
+    [teamMembers, teammateOwnWeaponIds],
   )
-  const equipmentAvailable = useCallback(
-    (item: EquipmentItemDetails) => slotStock?.equipments?.[item.id]?.available ?? Math.max(0, Number(item.qty ?? 0)),
-    [slotStock],
-  )
-
-  // Mirrors the server: a package rents weaponCount × players units, drawn from its weapons.
-  const packageWeaponStock = useCallback((pkg: RentalPackage) => {
-    const needed = Math.max(0, Math.round(pkg.weaponCount || pkg.weaponIds.length)) * players
-    const known = pkg.weaponIds.map(weaponAvailable)
-    if (known.some((value) => value === null)) return { needed, available: null as number | null, ok: true }
-    const available = (known as number[]).reduce((sum, value) => sum + value, 0)
-    return { needed, available, ok: available >= needed }
-  }, [players, weaponAvailable])
+  const verifiedOwnWeaponCount = Math.min(players, (captainBringsOwnWeapon ? 1 : 0) + verifiedTeammateBringers.length)
+  const ownWeaponShortfall = Math.max(0, ownWeaponTarget - verifiedOwnWeaponCount)
 
   const cheapestPackage = useMemo(() => {
     if (packages.length === 0) return undefined
@@ -951,9 +953,15 @@ export function ReservationCalendarPage() {
     return wp + ep + ENTRANCE_FEE_PER_PLAYER
   }, [customSelectedWeapons, customSelectedEquipment])
 
+  // Matches the server: each verified own weapon replaces one rental at the average weapon price.
+  const customOwnWeaponsUsed = Math.min(verifiedOwnWeaponCount, customSelectedWeapons.length * players)
+  const customWeaponDeduction = customSelectedWeapons.length
+    ? Math.round((customSelectedWeapons.reduce((sum, w) => sum + (w.price || 0), 0) / customSelectedWeapons.length) * customOwnWeaponsUsed)
+    : 0
+
   const customTotal = useMemo(() => {
-    return customPerPlayerTotal * players
-  }, [customPerPlayerTotal, players])
+    return Math.max(0, customPerPlayerTotal * players - customWeaponDeduction)
+  }, [customPerPlayerTotal, players, customWeaponDeduction])
 
   const basePricing = useMemo(() => {
     if (selectionMode === 'custom') {
@@ -970,11 +978,12 @@ export function ReservationCalendarPage() {
         originalTotal: customTotal,
         mode: 'custom' as const,
         totalBeforeOverall: customTotal,
+        details: null,
       }
     }
 
     if (!selectedPackage) {
-      return { total: 0, perPlayer: 0, discountPct: 0, discountLabel: '—', discountSummary: '—', discountAmount: 0, equipmentTotalPerPlayer: 0, sessionMultiplier: 1, savings: 0, originalTotal: 0, mode: 'package' as const, entranceFeeTotal: 0, totalBeforeOverall: 0 }
+      return { total: 0, perPlayer: 0, discountPct: 0, discountLabel: '—', discountSummary: '—', discountAmount: 0, equipmentTotalPerPlayer: 0, sessionMultiplier: 1, savings: 0, originalTotal: 0, mode: 'package' as const, entranceFeeTotal: 0, totalBeforeOverall: 0, details: null }
     }
     const sessionMultiplier = 1.0
     const packagePricing = calculatePackagePricing({
@@ -984,6 +993,7 @@ export function ReservationCalendarPage() {
       weapons: packageWeapons,
       equipment: packageEquipment,
       entranceFeePerPlayer: ENTRANCE_FEE_PER_PLAYER,
+      ownWeapons: verifiedOwnWeaponCount,
     })
 
     return {
@@ -1000,74 +1010,56 @@ export function ReservationCalendarPage() {
       mode: 'package' as const,
       entranceFeeTotal: packagePricing.entranceFeeTotal,
       totalBeforeOverall: packagePricing.total,
+      details: packagePricing,
     }
-  }, [players, selectedPackage, sessionType, packageWeapons, packageEquipment, equipmentTotalPerPlayer, selectionMode, customTotal, customPerPlayerTotal])
+  }, [players, selectedPackage, packageWeapons, packageEquipment, equipmentTotalPerPlayer, selectionMode, customTotal, customPerPlayerTotal, verifiedOwnWeaponCount])
 
   const dynamicPricing = basePricing
 
   const paymentBreakdown = useMemo(() => {
-    const packageBase = selectionMode === 'package' && selectedPackage ? selectedPackage.basePrice * players : 0
     const entranceFee = ENTRANCE_FEE_PER_PLAYER * players
-    const packageWeaponCharge = selectionMode === 'package'
-      ? packageWeapons.reduce((sum, weapon) => sum + (Number(weapon?.price || 0) * players), 0)
-      : 0
-    const packageEquipmentCharge = selectionMode === 'package'
-      ? packageEquipment.reduce((sum, item) => sum + (Number(item?.price || 0) * players), 0)
-      : 0
-    const customGearCharge = selectionMode === 'custom'
-      ? customSelectedWeapons.reduce((sum, weapon) => sum + (Number(weapon?.price || 0) * players), 0)
-      : 0
-    const customEquipmentCharge = selectionMode === 'custom'
-      ? customSelectedEquipment.reduce((sum, item) => sum + (Number(item?.price || 0) * players), 0)
-      : 0
+    const itemizedBreakdown: Array<{ label: string; amount: number }> = []
+    let fieldPrice = 0
+    let equipmentPrice = 0
 
-    const equipmentPrice = packageWeaponCharge + packageEquipmentCharge + customGearCharge + customEquipmentCharge
-    const fieldPrice = packageBase
-    const serviceFee = Math.max(0, dynamicPricing.totalBeforeOverall - fieldPrice - equipmentPrice - entranceFee)
-    
-    const selectedGearItems = Array.isArray(selectionMode === 'package' ? packageWeapons : customSelectedWeapons)
-      ? (selectionMode === 'package' ? packageWeapons : customSelectedWeapons)
-      : []
-    const selectedEquipmentItems = Array.isArray(selectionMode === 'package' ? packageEquipment : customSelectedEquipment)
-      ? (selectionMode === 'package' ? packageEquipment : customSelectedEquipment)
-      : []
-
-    const toPositiveNumber = (value: unknown, fallback = 0) => {
-      const parsed = Number(value ?? fallback)
-      return Number.isFinite(parsed) ? parsed : fallback
+    if (selectionMode === 'package' && selectedPackage && dynamicPricing.details) {
+      const details = dynamicPricing.details
+      if (details.isSettled) {
+        itemizedBreakdown.push({ label: `${selectedPackage.name} (set price for ${players} players)`, amount: details.basePriceTotal })
+        fieldPrice = details.basePriceTotal
+      } else {
+        fieldPrice = details.basePriceTotal
+        equipmentPrice = details.weaponsTotal + details.equipmentTotal
+        if (details.basePriceTotal > 0) itemizedBreakdown.push({ label: `${selectedPackage.name} fee`, amount: details.basePriceTotal })
+        if (details.weaponsTotal > 0) itemizedBreakdown.push({ label: `Rental weapons (${details.rentedWeaponCount})`, amount: details.weaponsTotal })
+        if (details.ownWeaponsUsed > 0) itemizedBreakdown.push({ label: `Own weapons (${details.ownWeaponsUsed}) — no rental charge`, amount: 0 })
+        packageEquipment.forEach((item) => {
+          itemizedBreakdown.push({ label: `${item.name} (1 per player)`, amount: Number(item.price || 0) * players })
+        })
+        itemizedBreakdown.push({ label: `Player entrance fee (${players} × ₱${ENTRANCE_FEE_PER_PLAYER})`, amount: entranceFee })
+      }
+      if (details.discountAmount > 0) itemizedBreakdown.push({ label: `Package discount (${details.discountSummary})`, amount: -details.discountAmount })
+    } else if (selectionMode === 'custom') {
+      const weaponsCharge = customSelectedWeapons.reduce((sum, w) => sum + Number(w.price || 0) * players, 0) - customWeaponDeduction
+      const equipmentCharge = customSelectedEquipment.reduce((sum, item) => sum + Number(item.price || 0) * players, 0)
+      equipmentPrice = Math.max(0, weaponsCharge) + equipmentCharge
+      if (weaponsCharge > 0) itemizedBreakdown.push({ label: 'Custom rental weapons', amount: Math.max(0, weaponsCharge) })
+      if (customOwnWeaponsUsed > 0) itemizedBreakdown.push({ label: `Own weapons (${customOwnWeaponsUsed}) — no rental charge`, amount: 0 })
+      customSelectedEquipment.forEach((item) => {
+        itemizedBreakdown.push({ label: `${item.name} (1 per player)`, amount: Number(item.price || 0) * players })
+      })
+      itemizedBreakdown.push({ label: `Player entrance fee (${players} × ₱${ENTRANCE_FEE_PER_PLAYER})`, amount: entranceFee })
     }
-
-    const itemizedBreakdown = [
-      ...(fieldPrice > 0 ? [{ label: selectionMode === 'package' ? `${selectedPackage?.name || 'Package'} fee` : 'Field booking', amount: fieldPrice }] : []),
-      ...selectedGearItems
-        .filter((item) => item && typeof item === 'object' && typeof item.name === 'string')
-        .map((item) => ({
-          label: `${String(item.name)} (Qty: 1 per player)`,
-          amount: toPositiveNumber(item.price) * players,
-        })),
-      ...selectedEquipmentItems
-        .filter((item) => item && typeof item === 'object' && typeof item.name === 'string')
-        .map((item) => {
-          const unitPrice = toPositiveNumber(item.price)
-          const availableQty = Math.max(0, toPositiveNumber(item.qty, 0))
-          return {
-            label: `${String(item.name)} (Qty: 1 per player, available: ${availableQty})`,
-            amount: unitPrice * players,
-          }
-        }),
-      { label: `Player entrance fee (${players} × ₱${ENTRANCE_FEE_PER_PLAYER})`, amount: entranceFee },
-      ...(serviceFee > 0 ? [{ label: 'Service fee', amount: serviceFee }] : []),
-    ].filter((item) => item && typeof item.label === 'string' && Number.isFinite(Number(item.amount)))
 
     return {
       fieldPrice,
       equipmentPrice,
       entranceFee,
-      serviceFee,
+      serviceFee: 0,
       total: dynamicPricing.total,
       itemizedBreakdown,
     }
-  }, [customSelectedEquipment, customSelectedWeapons, dynamicPricing.total, dynamicPricing.totalBeforeOverall, packageEquipment, packageWeapons, players, selectedPackage, selectionMode])
+  }, [customOwnWeaponsUsed, customSelectedEquipment, customSelectedWeapons, customWeaponDeduction, dynamicPricing, packageEquipment, players, selectedPackage, selectionMode])
 
   const reservationSummary = useMemo(() => {
     const selectedFields = availableFields.filter((f) => selectedFieldIds.includes(f.id))
@@ -1096,6 +1088,17 @@ export function ReservationCalendarPage() {
   // Teammates are optional: any spots not filled with registered players are walk-ins.
   const teamSelectionComplete = maxTeammates === 0 || selectedTeammateIds.length === maxTeammates
   const walkInSpots = Math.max(0, maxTeammates - selectedTeammateIds.length)
+  const toggleTeammateOwnWeapon = (member: TeamMember) => {
+    if (teammateOwnWeaponIds.includes(member.id)) {
+      setTeammateOwnWeaponIds((current) => current.filter((id) => id !== member.id))
+      return
+    }
+    if (!member.hasApprovedWeapon) {
+      setNoWeaponWarning(member)
+      return
+    }
+    setTeammateOwnWeaponIds((current) => [...current, member.id])
+  }
   const canSplitPayment = players > 1 && selectedTeammateIds.length > 0
   const splitPartySize = Math.max(1, selectedTeammateIds.length + 1)
   const payerShareAmount = paymentMode === 'split'
@@ -1119,6 +1122,60 @@ export function ReservationCalendarPage() {
       setPaymentMode('self')
     }
   }, [paymentMode, canSplitPayment])
+
+  const slotHoldPayload = useMemo(() => ({
+    locationId: selectedLocation,
+    reservationDate: dateISO,
+    reservationTime: slot,
+    sessionType,
+    fieldIds: selectedFieldIds,
+    players,
+  }), [selectedLocation, dateISO, slot, sessionType, selectedFieldIds, players])
+
+  // Locks the chosen slot on the server so nobody else can book it while this player finishes.
+  const placeSlotHold = useCallback(async (silent = false) => {
+    try {
+      const res = await apiPost<{ ok: boolean; data: { expiresAtISO: string } }>('/api/slot-holds', slotHoldPayload)
+      setSlotHoldExpiresAt(res.data.expiresAtISO)
+      return true
+    } catch (e: any) {
+      setSlotHoldExpiresAt(null)
+      toast.error(e?.message || 'That slot was just taken. Please choose another one.')
+      fetchReservations(true)
+      if (silent) setStep(1)
+      return false
+    }
+  }, [slotHoldPayload, fetchReservations])
+
+  // While past step 1, keep the hold alive; changing the slot details re-places it.
+  useEffect(() => {
+    if (step === 1 || !slotHoldExpiresAt) return
+    const timer = window.setInterval(() => { void placeSlotHold(true) }, SLOT_HOLD_REFRESH_MS)
+    return () => window.clearInterval(timer)
+  }, [step, slotHoldExpiresAt, placeSlotHold])
+
+  useEffect(() => {
+    if (step > 1 && slotHoldExpiresAt) void placeSlotHold(true)
+    // Re-hold only when the booked slot or headcount changes, not on every hold refresh.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slotHoldPayload])
+
+  const goToStep2 = async () => {
+    setPlacingHold(true)
+    const held = await placeSlotHold()
+    setPlacingHold(false)
+    if (held) setStep(2)
+  }
+
+  // Leaving the page without booking frees the slot right away instead of waiting for it to expire.
+  const proceedingToPaymentRef = useRef(false)
+  const hasSlotHoldRef = useRef(false)
+  hasSlotHoldRef.current = !!slotHoldExpiresAt
+  useEffect(() => () => {
+    if (hasSlotHoldRef.current && !proceedingToPaymentRef.current) {
+      apiDelete('/api/slot-holds/mine').catch(() => null)
+    }
+  }, [])
 
   const formatCurrency = (value: number | string | null | undefined) => {
     const numeric = Number(value ?? 0)
@@ -1232,13 +1289,20 @@ export function ReservationCalendarPage() {
         })),
         selectedTeammateIds,
         paymentMode,
-        teamSize: splitPartySize,
+        teamSize: paymentMode === 'split' ? splitPartySize : 1,
         payerShareAmount,
+        ownWeaponTarget,
+        ownWeaponBringerIds: [
+          ...(captainBringsOwnWeapon ? [user.id] : []),
+          ...teammateOwnWeaponIds,
+        ],
       }
 
       if (selectionMode === 'package') {
         pendingReservation.selectedPackageId = selectedPackage?.id
         pendingReservation.selectedGameplayName = selectedPackage?.name
+        pendingReservation.selectedOwnWeaponIds = selectedOwnWeaponIds
+        pendingReservation.selectedOwnEquipmentIds = selectedOwnEquipmentIds
       } else {
         pendingReservation.customWeaponIds = customWeaponIds
         pendingReservation.customEquipmentIds = customEquipmentIds
@@ -1257,6 +1321,7 @@ export function ReservationCalendarPage() {
       // Flag to refresh reservations when user returns
       localStorage.setItem('refresh_reservations', 'true')
 
+      proceedingToPaymentRef.current = true
       toast.success('Proceed to payment to complete your reservation.')
       navigate('/app/payment')
     } catch (e: any) {
@@ -1321,6 +1386,29 @@ export function ReservationCalendarPage() {
         title={getStepTitle()}
         subtitle="Mobile-first reservation flow with live slot prevention."
       />
+
+      {packagePrefill?.selectedPackageId && selectionMode === 'package' && selectedPackageId === packagePrefill.selectedPackageId ? (
+        <div className="flex items-start gap-3 rounded-2xl border border-accent/25 bg-accent/10 px-4 py-3 text-sm">
+          <FiPackage className="mt-0.5 h-4 w-4 flex-shrink-0 text-gold" />
+          <div>
+            <div className="font-bold">Package from your recommendation: {selectedPackage?.name || packagePrefill.selectedPackageName}</div>
+            <div className="mt-0.5 text-xs text-muted">
+              {packagePrefill.players ? `${packagePrefill.players} players` : ''}
+              {ownWeaponTarget > 0 ? ` · ${ownWeaponTarget} bringing their own weapon` : ''}
+              {' '}· You can still change it in step 2.
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {slotHoldExpiresAt && step > 1 ? (
+        <div className="flex items-center gap-2 rounded-2xl border border-success/25 bg-success/10 px-4 py-2 text-xs text-success">
+          <FiClock className="h-4 w-4 flex-shrink-0" />
+          <span>
+            {slotLabels[slot]} on {dateISO} is locked for you while you finish booking. It's released if you leave without paying.
+          </span>
+        </div>
+      ) : null}
 
       <div className="grid grid-cols-4 gap-3">
         {([1, 2, 3, 4] as const).map((s) => {
@@ -1809,8 +1897,8 @@ export function ReservationCalendarPage() {
               </div>
 
               <div className="mt-4 flex flex-col gap-2 sm:flex-row">
-                <Button variant="primary" disabled={!canProceed || !hasCurrentUserWaiver} onClick={() => setStep(2)}>
-                  Continue <FiChevronRight />
+                <Button variant="primary" disabled={!canProceed || !hasCurrentUserWaiver || placingHold} onClick={goToStep2}>
+                  {placingHold ? 'Locking slot…' : 'Continue'} <FiChevronRight />
                 </Button>
                 <Button variant="ghost" onClick={() => {
                   const newDateISO = toISODate(addDays(today, 1))
@@ -2128,7 +2216,21 @@ export function ReservationCalendarPage() {
               <div className="flex items-center gap-2 text-sm font-bold">
                 <FiTool /> <span>Bring Your Own (Free)</span>
               </div>
-              <p className="mt-1 text-xs text-muted">Select from your admin-approved weapons and equipment. No charge — you can bring these alongside your package rental.</p>
+              <p className="mt-1 text-xs text-muted">Select from your admin-approved weapons and equipment. Each player who brings an approved weapon skips one rental weapon charge.</p>
+
+              <div className="mt-4 flex flex-col gap-3 rounded-2xl border border-white/10 bg-black/20 p-4 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <div className="text-sm font-bold">Players bringing their own weapon</div>
+                  <div className="mt-1 text-xs text-muted">
+                    You'll choose which teammates in step 4. Only weapons registered and approved on a player's profile are deducted.
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button variant="ghost" size="sm" onClick={() => setOwnWeaponTarget((n) => Math.max(0, n - 1))} aria-label="Fewer own weapons"><FiMinus /></Button>
+                  <span className="w-8 text-center text-lg font-bold">{ownWeaponTarget}</span>
+                  <Button variant="ghost" size="sm" onClick={() => setOwnWeaponTarget((n) => Math.min(players, n + 1))} aria-label="More own weapons"><FiPlus /></Button>
+                </div>
+              </div>
 
               {playerApprovedWeapons.length === 0 && playerApprovedEquipment.length === 0 ? (
                 <div className="mt-4 text-sm text-muted">
@@ -2676,10 +2778,78 @@ export function ReservationCalendarPage() {
                       </div>
                     ))}
 
-                    {selectedTeammates.length === 0 && maxTeammates > 0 && (
-                      <div className="rounded-2xl border border-dashed border-white/10 bg-black/20 p-3 text-xs text-muted">
-                        No teammates added yet. Find a teammate by email above.
-                      </div>
+                        return (
+                          <button
+                            key={member.id}
+                            type="button"
+                            disabled={disabled}
+                            onClick={() => {
+                              if (noWaiver) {
+                                toast.error(`${member.name}'s waiver isn't approved yet.`)
+                                return
+                              }
+                              setSelectedTeammateIds((current) => {
+                                if (current.includes(member.id)) {
+                                  return current.filter((id) => id !== member.id)
+                                }
+                                if (current.length >= maxTeammates) return current
+                                return [...current, member.id]
+                              })
+                            }}
+                            className={[
+                              'w-full rounded-2xl border p-3 text-left transition',
+                              active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
+                              disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer',
+                            ].join(' ')}
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <div className="text-sm font-bold">{member.name}</div>
+                                <div className="mt-1 text-xs text-muted">{member.email || member.id}</div>
+                                {active && ownWeaponTarget > 0 ? (
+                                  <span
+                                    role="checkbox"
+                                    aria-checked={teammateOwnWeaponIds.includes(member.id)}
+                                    tabIndex={0}
+                                    onClick={(event) => {
+                                      event.stopPropagation()
+                                      toggleTeammateOwnWeapon(member)
+                                    }}
+                                    onKeyDown={(event) => {
+                                      if (event.key !== 'Enter' && event.key !== ' ') return
+                                      event.preventDefault()
+                                      event.stopPropagation()
+                                      toggleTeammateOwnWeapon(member)
+                                    }}
+                                    className={[
+                                      'mt-2 inline-flex items-center gap-1.5 rounded-xl border px-2 py-1 text-[11px] font-semibold',
+                                      teammateOwnWeaponIds.includes(member.id)
+                                        ? member.hasApprovedWeapon
+                                          ? 'border-success/30 bg-success/10 text-success'
+                                          : 'border-warning/30 bg-warning/10 text-warning'
+                                        : 'border-white/10 bg-white/5 text-muted',
+                                    ].join(' ')}
+                                  >
+                                    <FiCrosshair className="h-3 w-3" />
+                                    {teammateOwnWeaponIds.includes(member.id)
+                                      ? member.hasApprovedWeapon ? 'Brings own weapon' : 'No registered weapon'
+                                      : 'Brings own weapon?'}
+                                  </span>
+                                ) : null}
+                              </div>
+                              <div className="flex items-center gap-1 text-[10px] uppercase tracking-[0.18em] text-muted">
+                                {noWaiver ? (
+                                  <span className="text-warning">Waiver not approved</span>
+                                ) : active ? (
+                                  <><FiCheck className="text-gold" /> Selected</>
+                                ) : (
+                                  'Tap to add'
+                                )}
+                              </div>
+                            </div>
+                          </button>
+                        )
+                      })
                     )}
                   </div>
                 </div>
@@ -2689,6 +2859,23 @@ export function ReservationCalendarPage() {
                     {walkInSpots === 0
                       ? `All ${players} players have accounts.`
                       : `${walkInSpots} of ${players} player${players === 1 ? '' : 's'} will be walk-in${walkInSpots === 1 ? '' : 's'} without an account. They'll sign their waiver at the field.`}
+                  </div>
+                )}
+
+                {ownWeaponTarget > 0 && (
+                  <div className={[
+                    'rounded-2xl border p-3 text-xs',
+                    ownWeaponShortfall > 0 ? 'border-warning/25 bg-warning/10 text-warning' : 'border-success/25 bg-success/10 text-success',
+                  ].join(' ')}>
+                    <div className="font-bold">
+                      Own weapons: {verifiedOwnWeaponCount} of {ownWeaponTarget} verified
+                    </div>
+                    <div className="mt-1 text-muted">
+                      {captainBringsOwnWeapon ? 'You are bringing one of your approved weapons. ' : ''}
+                      {ownWeaponShortfall > 0
+                        ? `${ownWeaponShortfall} more player${ownWeaponShortfall === 1 ? '' : 's'} will rent a weapon instead — you can still continue, and the price below already includes those rentals.`
+                        : 'Every own weapon is verified, so those rental charges are removed from the total.'}
+                    </div>
                   </div>
                 )}
               </div>
@@ -2768,6 +2955,36 @@ export function ReservationCalendarPage() {
           </div>
         </div>
       )}
+
+      {noWeaponWarning ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4" role="dialog" aria-modal="true" aria-labelledby="no-weapon-title">
+          <Card className="w-full max-w-md p-5">
+            <div className="flex items-start gap-3">
+              <FiAlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-warning" />
+              <div>
+                <div id="no-weapon-title" className="text-base font-bold">No registered weapon on file</div>
+                <p className="mt-2 text-sm text-muted">
+                  {noWeaponWarning.name} hasn't registered an approved weapon on their profile, so it can't be counted as an own weapon.
+                  If you keep them marked, they'll still be charged for a rental weapon.
+                </p>
+              </div>
+            </div>
+            <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
+              <Button variant="ghost" onClick={() => setNoWeaponWarning(null)}>Keep as rental</Button>
+              <Button
+                variant="primary"
+                onClick={() => {
+                  const member = noWeaponWarning
+                  setTeammateOwnWeaponIds((current) => current.includes(member.id) ? current : [...current, member.id])
+                  setNoWeaponWarning(null)
+                }}
+              >
+                Mark anyway
+              </Button>
+            </div>
+          </Card>
+        </div>
+      ) : null}
     </div>
   )
 }

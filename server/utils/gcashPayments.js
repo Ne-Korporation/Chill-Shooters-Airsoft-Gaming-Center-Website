@@ -39,9 +39,10 @@ export async function submitGcashPayment({
       }
 
       const objectId = toObjectId(reservationId)
+      // The captain, or a teammate sharing a split payment, can pay toward the reservation.
       const reservation = await db.collection('reservations').findOne({
         $and: [
-          { userId: String(userId) },
+          { $or: [{ userId: String(userId) }, { splitPayerIds: String(userId) }] },
           { $or: [{ id: reservationId }, ...(objectId ? [{ _id: objectId }] : [])] },
         ],
       }, { session })
@@ -49,6 +50,11 @@ export async function submitGcashPayment({
         const unavailable = new Error('Reservation not found or its price is not verified.')
         unavailable.statusCode = 409
         throw unavailable
+      }
+      if (String(reservation.reservationStatus || 'pending').toLowerCase() === 'cancelled') {
+        const cancelled = new Error('This reservation was cancelled and no longer accepts payments.')
+        cancelled.statusCode = 409
+        throw cancelled
       }
 
       const existingPayments = await db.collection('payments').find(
@@ -58,9 +64,11 @@ export async function submitGcashPayment({
         },
         { session },
       ).toArray()
-      const expectedAmount = getGcashAmountDue(reservation, existingPayments)
+      const expectedAmount = getGcashAmountDue(reservation, existingPayments, String(userId))
       if (!paymentAmountMatchesDue(amount, expectedAmount)) {
-        const amountConflict = new Error('Payment amount does not match the reservation amount due.')
+        const amountConflict = new Error(expectedAmount <= 0
+          ? 'Your share for this reservation has already been submitted.'
+          : 'Payment amount does not match the reservation amount due.')
         amountConflict.statusCode = expectedAmount <= 0 ? 409 : 400
         throw amountConflict
       }

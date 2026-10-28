@@ -74,6 +74,9 @@ export async function calculateBookingPrice({ db, payload, players, findDocument
     : 1
   const entranceFee = Math.round(config.entranceFeePerPlayer * players * sessionMultiplier)
   const selectionMode = String(payload.selectionMode || '').toLowerCase()
+  // Set by the server after checking which players have an approved weapon on file;
+  // each one replaces one rental weapon.
+  const ownWeaponCount = Math.max(0, Math.round(Number(payload.verifiedOwnWeaponCount) || 0))
   let subtotal = entranceFee
   let packageDiscount = 0
   let isOwnGear = false
@@ -127,7 +130,7 @@ export async function calculateBookingPrice({ db, payload, players, findDocument
         0,
         Math.round(Number(pkg.weaponCount || weaponIds.length)),
       )
-      const rentedWeaponCount = packageWeaponCount * players
+      const rentedWeaponCount = Math.max(0, packageWeaponCount * players - ownWeaponCount)
       const weaponsTotal = Math.round(averageWeaponPrice * rentedWeaponCount * sessionMultiplier)
       const equipmentTotal = Math.round(
         equipment.reduce((sum, item) => sum + numberOrZero(item.price, 'Equipment'), 0) * players * sessionMultiplier,
@@ -138,7 +141,8 @@ export async function calculateBookingPrice({ db, payload, players, findDocument
       packageDiscount = preDiscount - subtotal
       breakdown.length = 0
       if (packageBase) breakdown.push({ label: pkg.name || 'Package fee', amount: packageBase })
-      if (weaponsTotal) breakdown.push({ label: 'Rental weapons', amount: weaponsTotal })
+      if (weaponsTotal) breakdown.push({ label: `Rental weapons (${rentedWeaponCount})`, amount: weaponsTotal })
+      if (ownWeaponCount && packageWeaponCount) breakdown.push({ label: `Own weapons (${Math.min(ownWeaponCount, packageWeaponCount * players)}) — no rental charge`, amount: 0 })
       if (equipmentTotal) breakdown.push({ label: 'Rental equipment', amount: equipmentTotal })
       breakdown.push({ label: 'Player entrance fee', amount: entranceFee })
       if (packageDiscount) breakdown.push({ label: 'Package discount', amount: -packageDiscount })
@@ -162,11 +166,15 @@ export async function calculateBookingPrice({ db, payload, players, findDocument
       throw new Error('There is not enough available stock for one or more selected equipment items.')
     }
 
-    const weaponsTotal = weapons.reduce((sum, item) => sum + numberOrZero(item.price, 'Weapon'), 0) * players
+    const weaponPriceSum = weapons.reduce((sum, item) => sum + numberOrZero(item.price, 'Weapon'), 0)
+    const averageWeaponPrice = weapons.length ? weaponPriceSum / weapons.length : 0
+    const ownWeaponsUsed = Math.min(ownWeaponCount, weapons.length * players)
+    const weaponsTotal = Math.max(0, weaponPriceSum * players - averageWeaponPrice * ownWeaponsUsed)
     const equipmentTotal = equipment.reduce((sum, item) => sum + numberOrZero(item.price, 'Equipment'), 0) * players
     subtotal = Math.round(entranceFee + weaponsTotal + equipmentTotal)
     breakdown.length = 0
     if (weaponsTotal) breakdown.push({ label: 'Custom rental weapons', amount: Math.round(weaponsTotal) })
+    if (ownWeaponsUsed) breakdown.push({ label: `Own weapons (${ownWeaponsUsed}) — no rental charge`, amount: 0 })
     if (equipmentTotal) breakdown.push({ label: 'Custom rental equipment', amount: Math.round(equipmentTotal) })
     breakdown.push({ label: 'Player entrance fee', amount: entranceFee })
   } else {

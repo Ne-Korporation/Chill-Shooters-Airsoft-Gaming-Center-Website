@@ -6,7 +6,7 @@ import { Input } from '../../components/ui/Input'
 import { apiGet, apiPost, apiPut, apiDelete } from '../../utils/apiClient'
 import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
 
-type EquipmentCategory = 'masks' | 'vests' | 'gloves' | 'gear'
+type EquipmentCategory = 'masks' | 'vests' | 'gloves' | 'gear' | 'ammo' | 'optics' | 'consumables'
 
 type EquipmentStatus = 'available' | 'rented' | 'maintenance'
 
@@ -33,6 +33,9 @@ const categoryMeta: Record<EquipmentCategory, { subtitle: string }> = {
   vests: { subtitle: 'Body armor and protective carriers' },
   gloves: { subtitle: 'Grip, impact, and handling gear' },
   gear: { subtitle: 'Holsters, pouches, and accessories' },
+  ammo: { subtitle: 'BB packs and magazines (e.g. 2 magazines / 600 rounds)' },
+  optics: { subtitle: 'Allowed scopes, red dots, and sights' },
+  consumables: { subtitle: 'Single-use grenades, smoke, and other one-time items' },
 }
 
 const StatusBadge = ({ status }: { status: EquipmentStatus }) => {

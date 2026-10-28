@@ -153,3 +153,70 @@ export function emailDamageCharge(db, reservation, report) {
     ].filter(Boolean),
   })
 }
+
+// status: approved | rejected — tells the owner how staff reviewed their submitted gear
+export function emailGearReviewEvent(db, item, kind, status) {
+  if (!item?.submittedBy || !['approved', 'rejected'].includes(status)) return Promise.resolve({ skipped: 'not notified' })
+  const id = String(item.id || item._id)
+  const label = kind === 'weapon' ? 'weapon' : 'equipment'
+  const approved = status === 'approved'
+  return sendLogged(db, {
+    key: `gear:${id}:${status}:${item.updatedAtISO || ''}`,
+    userId: item.submittedBy,
+    subject: approved ? `Your ${label} was approved` : `Your ${label} was not approved`,
+    title: approved ? `${label[0].toUpperCase()}${label.slice(1)} approved` : `${label[0].toUpperCase()}${label.slice(1)} not approved`,
+    lines: [
+      approved
+        ? `Staff reviewed and approved your ${label} "${escapeHtml(item.name || id)}". You can now bring it to your games.`
+        : `Staff reviewed your ${label} "${escapeHtml(item.name || id)}" and did not approve it.${item.rejectionReason ? ` Reason: ${escapeHtml(item.rejectionReason)}` : ''}`,
+    ],
+  })
+}
+
+export function emailSplitShareRequest(db, reservation, userId, share, captainName, dueLabel) {
+  if (!reservation || !userId) return Promise.resolve({ skipped: 'missing data' })
+  const id = String(reservation.id || reservation._id)
+  return sendLogged(db, {
+    key: `split-share:${id}:${userId}`,
+    userId,
+    subject: 'Your share of a Chill Shooters reservation is due',
+    title: 'Split payment requested',
+    lines: [
+      `${escapeHtml(captainName)} added you to the reservation for ${reservationLabel(reservation)} and split the payment with the team.`,
+      `Your share is <b>${formatPHP(share)}</b>. Log in and open <b>Split Payment</b> in the menu to pay with GCash and upload your proof.`,
+      `Please pay before ${escapeHtml(dueLabel)}. If the team doesn't finish paying by then, the slot is released.`,
+      `Reservation ID: ${escapeHtml(id)}`,
+    ],
+  })
+}
+
+export function emailGameReminder(db, reservation, userId) {
+  if (!reservation || !userId) return Promise.resolve({ skipped: 'missing data' })
+  const id = String(reservation.id || reservation._id)
+  return sendLogged(db, {
+    key: `reminder:game:${id}:${userId}:${reservation.reservationDate}`,
+    userId,
+    subject: 'Reminder: your Chill Shooters game is tomorrow',
+    title: 'See you on the field tomorrow',
+    lines: [
+      `Your game is on ${reservationLabel(reservation)}.`,
+      'Please arrive 30 minutes early for the safety orientation and chronograph check. We play rain or shine; if weather stops you, your payment can be moved to another date but is not refundable.',
+      `Reservation ID: ${escapeHtml(id)}`,
+    ],
+  })
+}
+
+export function emailWaiverReminder(db, reservation, userId) {
+  if (!reservation || !userId) return Promise.resolve({ skipped: 'missing data' })
+  const id = String(reservation.id || reservation._id)
+  return sendLogged(db, {
+    key: `reminder:waiver:${id}:${userId}`,
+    userId,
+    subject: 'Please complete your Chill Shooters waiver',
+    title: 'Your waiver is still needed',
+    lines: [
+      `You are booked for ${reservationLabel(reservation)}, but we don't have an approved waiver for you yet.`,
+      'Log in and open <b>Online Waiver</b> to complete it before the game so you can skip the line at the field.',
+    ],
+  })
+}
