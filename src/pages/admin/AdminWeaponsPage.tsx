@@ -78,7 +78,8 @@ function fpsFields(form: { fpsClass: string; fpsLimit: string }) {
 export function AdminWeaponsPage() {
   const [category, setCategory] = React.useState<WeaponCategory | 'all'>('all')
   const [status, setStatus] = React.useState<WeaponStatus | 'all'>('all')
-  const [sourceFilter, setSourceFilter] = React.useState<'all' | 'business' | 'player'>('all')
+  const [sourceFilter, setSourceFilter] = React.useState<'business' | 'player'>('business')
+  const [ownerNames, setOwnerNames] = React.useState<Record<string, string>>({})
   const [weapons, setWeapons] = React.useState<WeaponItem[]>([])
   const [loading, setLoading] = React.useState(true)
   const [saving, setSaving] = React.useState(false)
@@ -135,11 +136,18 @@ export function AdminWeaponsPage() {
 
   React.useEffect(() => { refresh() }, [refresh])
 
+  React.useEffect(() => {
+    if (sourceFilter !== 'player' || Object.keys(ownerNames).length > 0) return
+    apiGet<{ ok: boolean; data: any[] }>('/api/user_accounts?limit=500')
+      .then((res) => setOwnerNames(Object.fromEntries((res.data || []).map((u: any) => [String(u.id || u._id), String(u.name || u.email || '')]))))
+      .catch(() => setOwnerNames({}))
+  }, [sourceFilter, ownerNames])
+
   const filtered = weapons.filter((weapon) => {
     if (weapon.source === 'player' && weapon.approvalStatus === 'rejected') return false
     const matchCategory = category === 'all' ? true : weapon.category === category
     const matchStatus = status === 'all' ? true : weapon.status === status
-    const matchSource = sourceFilter === 'all' ? true : weapon.source === sourceFilter
+    const matchSource = weapon.source === sourceFilter
     return matchCategory && matchStatus && matchSource
   })
 
@@ -369,32 +377,6 @@ export function AdminWeaponsPage() {
           <h1 className="text-3xl font-bold">Weapons</h1>
           <p className="mt-1 text-sm text-muted">Manage the weapon catalog, inspect conditions, and keep the maintenance queue current.</p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted">View source</div>
-          {[
-            { value: 'all', label: 'All' },
-            { value: 'business', label: 'Business' },
-            { value: 'player', label: 'Player' },
-          ].map((option) => (
-            <button
-              key={option.value}
-              onClick={() => setSourceFilter(option.value as 'all' | 'business' | 'player')}
-              className={
-                'rounded-full border px-3 py-2 text-sm transition ' +
-                (sourceFilter === option.value
-                  ? 'bg-accent/20 text-accent border-accent/40'
-                  : 'bg-white/5 text-muted hover:bg-white/8')
-              }
-            >
-              <span>{option.label}</span>
-              {option.value === 'player' && pendingPlayerWeaponsCount > 0 ? (
-                <span className="ml-1 rounded-full bg-warning/20 px-1.5 py-0.5 text-[10px] text-warning">
-                  {pendingPlayerWeaponsCount}
-                </span>
-              ) : null}
-            </button>
-          ))}
-        </div>
       </div>
 
       <div className="grid gap-4 md:grid-cols-3">
@@ -412,10 +394,20 @@ export function AdminWeaponsPage() {
         </Card>
       </div>
 
+      <div className="flex flex-wrap gap-2">
+        <button type="button" onClick={() => setSourceFilter('business')} className={`rounded-full px-3 py-1 text-xs font-semibold transition ${sourceFilter === 'business' ? 'bg-accent/20 text-accent' : 'bg-white/5 text-muted'}`}>Rental weapons</button>
+        <button type="button" onClick={() => setSourceFilter('player')} className={`rounded-full px-3 py-1 text-xs font-semibold transition ${sourceFilter === 'player' ? 'bg-accent/20 text-accent' : 'bg-white/5 text-muted'}`}>
+          Players' weapons
+          {pendingPlayerWeaponsCount > 0 ? (
+            <span className="ml-1 rounded-full bg-warning/20 px-1.5 py-0.5 text-[10px] text-warning">{pendingPlayerWeaponsCount}</span>
+          ) : null}
+        </button>
+      </div>
+
       <Card className="p-4">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
-            <div className="text-xs uppercase tracking-widest text-muted">{category === 'all' ? 'All categories' : category.replace('_', ' ').toUpperCase()}</div>
+            <div className="text-xs uppercase tracking-widest text-muted">{sourceFilter === 'player' ? "Players' registered weapons · " : ''}{category === 'all' ? 'All categories' : category.replace('_', ' ').toUpperCase()}</div>
             <div className="mt-2 text-sm text-muted">{activeCategoryMeta?.subtitle || 'All weapon categories'}</div>
           </div>
 
@@ -490,7 +482,7 @@ export function AdminWeaponsPage() {
           </div>
         ) : null}
 
-        <ModelSummaryStrip models={models} unit="piece" />
+        {sourceFilter === 'business' ? <ModelSummaryStrip models={models} unit="piece" /> : null}
 
         <div className="mt-4 overflow-x-auto rounded-2xl border border-white/5">
           <div className="min-w-[920px]">
@@ -522,6 +514,11 @@ export function AdminWeaponsPage() {
                       ) : null}
                     </div>
                     <div className="mt-1 text-xs text-muted">{weapon.description || weapon.note}</div>
+                    {weapon.source === 'player' ? (
+                      <div className="mt-1 text-xs text-muted">
+                        Owner: {ownerNames[String(weapon.submittedBy)] || weapon.submittedBy || 'Unknown'} · <span className="capitalize">{weapon.approvalStatus}</span>
+                      </div>
+                    ) : null}
                   </div>
                   <div className="col-span-1 text-right text-sm font-semibold">{weapon.source === 'player' || !weapon.unitNumber ? '—' : `#${weapon.unitNumber}`}</div>
                   <div className="col-span-1 text-right text-sm text-muted">₱{weapon.price}</div>
@@ -570,6 +567,7 @@ export function AdminWeaponsPage() {
           </div>
         </div>
 
+        {sourceFilter === 'business' ? (
         <div className="mt-4 grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
           <Card className="p-4 bg-white/5/60">
             <div className="text-xs uppercase tracking-widest text-muted">{selectedWeaponId ? `Edit ${selectedWeaponId}` : 'Add weapons'}</div>
@@ -752,6 +750,7 @@ export function AdminWeaponsPage() {
             </div>
           </Card>
         </div>
+        ) : null}
       </Card>
       {rejectionTargetId ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" role="dialog" aria-modal="true" aria-labelledby="weapon-rejection-title">
