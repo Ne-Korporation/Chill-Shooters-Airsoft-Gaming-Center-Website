@@ -72,9 +72,11 @@ export async function getBookingInventoryRequirements({ db, payload, players, fi
     }
   }
 
-  let remainingWeaponQuantity = mode === 'custom'
+  const neededWeapons = mode === 'custom'
     ? Math.max(0, weaponIds.length * players - ownWeaponCount)
     : weaponQuantity
+  let remainingWeaponQuantity = neededWeapons
+  let availableWeapons = 0
   // Own weapons reduce custom rentals evenly, starting with the first selected weapon.
   const ownPerWeapon = weaponIds.length ? Math.floor(Math.min(ownWeaponCount, weaponIds.length * players) / weaponIds.length) : 0
   let ownExtra = weaponIds.length ? Math.min(ownWeaponCount, weaponIds.length * players) % weaponIds.length : 0
@@ -83,14 +85,20 @@ export async function getBookingInventoryRequirements({ db, payload, players, fi
     if (!item || String(item.status || 'available').toLowerCase() !== 'available') {
       throw new Error('One or more selected weapons are unavailable.')
     }
+    const available = availableUnits(item, 'weapons', id)
+    availableWeapons += available
     let customQuantity = players - ownPerWeapon
     if (ownExtra > 0) {
       customQuantity -= 1
       ownExtra -= 1
     }
+    customQuantity = Math.max(0, customQuantity)
+    if (mode === 'custom' && customQuantity > available) {
+      throw new Error(`There is not enough available weapon stock for this booking: ${item.name || id} has ${available} unit(s) left for this slot, but ${customQuantity} are needed.`)
+    }
     const quantity = mode === 'custom'
-      ? Math.max(0, customQuantity)
-      : Math.min(remainingWeaponQuantity, stockQuantity(item, 'weapons'))
+      ? customQuantity
+      : Math.min(remainingWeaponQuantity, available)
     if (quantity > 0) {
       requirements.push({
         itemId: id,

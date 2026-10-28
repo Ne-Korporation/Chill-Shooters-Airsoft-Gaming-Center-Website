@@ -6,6 +6,7 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 // Routers are dynamically imported after loading environment variables
 import { getDb, startDbSession } from './db/mongo.js'
+import { ensureDatabaseSetup } from './db/setup.js'
 import { requireAuth, requireRole } from './middleware/auth.js'
 
 const __filename = fileURLToPath(import.meta.url)

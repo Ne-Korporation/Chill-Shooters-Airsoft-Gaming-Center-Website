@@ -86,7 +86,18 @@ function generateWeaponId(name: string, existingIds: string[]): string {
   return `W-${prefix}-${String(nextSeq).padStart(3, '0')}`
 }
 
-const emptyForm = () => ({ name: '', description: '', category: 'rifles' as WeaponCategory, status: 'available' as WeaponStatus, price: '0', partnerId: '', fpsClass: '', fpsLimit: '' })
+const emptyForm = () => ({ name: '', description: '', category: 'rifles' as WeaponCategory, status: 'available' as WeaponStatus, price: '0', quantity: '1', partnerId: '', fpsClass: '', fpsLimit: '' })
+
+// Rental units of this model on hand; legacy records without a count are one unit.
+function readQuantity(d: any) {
+  const value = Number(d.quantity ?? d.qty ?? d.stock ?? 1)
+  return Number.isInteger(value) && value >= 0 ? value : 0
+}
+
+function parseQuantityInput(value: string) {
+  const quantity = Number(value)
+  return Number.isInteger(quantity) && quantity >= 0 ? quantity : null
+}
 
 // Blank class follows the category (snipers are sniper class); blank limit uses the class default.
 function fpsFields(form: { fpsClass: string; fpsLimit: string }) {

@@ -6,6 +6,7 @@ import { requireAuth, requireRole } from '../middleware/auth.js'
 import { ALLOWED_COLLECTIONS } from './collections.js'
 import { calculateBookingPrice } from '../utils/bookingPricing.js'
 import { getBookingInventoryRequirements, getHeldQuantities, holdBookingInventory, stockQuantity } from '../utils/inventoryHolds.js'
+import { canonicalEmail, normalizeEmail, sameEmailFilter } from '../utils/emails.js'
 import { submitGcashPayment } from '../utils/gcashPayments.js'
 import { nextShortId } from '../utils/shortIds.js'
 import { emailGearReviewEvent, emailReservationEvent, emailSplitShareRequest } from '../services/notificationEmails.js'
@@ -80,31 +81,72 @@ router.get('/team-directory/lookup', requireAuth, requireRole('user'), async (re
 
   try {
     const db = await getDb()
-    const players = await db.collection('user_accounts')
-      .find({ role: 'user', emailVerified: true }, { projection: { id: 1, name: 1, email: 1 } })
-      .limit(500)
-      .toArray()
+    const player = await db.collection('user_accounts').findOne(
+      { $and: [sameEmailFilter(email), { role: { $in: ['user', null] } }] },
+      { projection: { id: 1, name: 1, email: 1, emailVerified: 1 } },
+    )
+    if (!player) {
+      return res.status(404).json({ ok: false, error: 'No registered player uses that email. They can join as a walk-in instead.' })
+    }
+    const playerId = String(player.id || player._id)
+    if (playerId === String(req.user.id)) {
+      return res.status(400).json({ ok: false, error: 'You are already counted as the team captain.' })
+    }
+    if (player.emailVerified === false) {
+      return res.status(409).json({ ok: false, error: 'That player has not verified their email yet.' })
+    }
 
-    // Players can only read their own waivers, so report each teammate's approval
-    // here as a flag instead of exposing other players' waiver records.
-    const approvedWaivers = await db.collection('waivers')
-      .find({ status: { $regex: '^approved$', $options: 'i' } }, { projection: { userId: 1, playerId: 1, accountId: 1 } })
-      .toArray()
-    const approvedIds = new Set(approvedWaivers
-      .flatMap((waiver) => [waiver.userId, waiver.playerId, waiver.accountId])
-      .map((value) => String(value || '').trim())
-      .filter(Boolean))
-    const weaponOwnerIds = await getApprovedWeaponOwnerIds(db)
+    const approvedWaiver = await db.collection('waivers').findOne(
+      {
+        status: { $regex: '^approved$', $options: 'i' },
+        $or: [{ userId: playerId }, { playerId }, { accountId: playerId }],
+      },
+      { projection: { _id: 1 } },
+    )
+    const weaponOwnerIds = await getApprovedWeaponOwnerIds(db, [playerId])
 
     return res.json({
       ok: true,
-      data: players.map((player) => ({
-        ...player,
-        waiverApproved: approvedIds.has(String(player.id || '')) || approvedIds.has(String(player._id || '')),
+      data: {
+        id: playerId,
+        name: player.name || '',
+        email: player.email,
+        waiverApproved: Boolean(approvedWaiver),
         // Only a yes/no flag: teammates don't see each other's registered gear.
-        hasApprovedWeapon: weaponOwnerIds.has(String(player.id || '')) || weaponOwnerIds.has(String(player._id || '')),
-      })),
+        hasApprovedWeapon: weaponOwnerIds.has(playerId),
+      },
     })
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: String(err) })
+  }
+})
+
+// GET /api/inventory-availability?date=YYYY-MM-DD&slot=morning
+// Rental stock left for one date/slot after existing booking holds.
+router.get('/inventory-availability', requireAuth, async (req, res) => {
+  const reservationDate = String(req.query.date || '').trim()
+  const reservationTime = String(req.query.slot || '').trim().toLowerCase()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(reservationDate) || !SLOT_NAMES.includes(reservationTime)) {
+    return res.status(400).json({ ok: false, error: 'date (YYYY-MM-DD) and slot are required' })
+  }
+
+  try {
+    const db = await getDb()
+    const held = await getHeldQuantities(db, { reservationDate, reservationTime })
+    const summarize = async (collection) => {
+      const items = await db.collection(collection)
+        .find({}, { projection: { id: 1, qty: 1, quantity: 1, stock: 1, status: 1 } })
+        .toArray()
+      return Object.fromEntries(items.map((item) => {
+        const id = String(item.id || item._id)
+        const stock = stockQuantity(item, collection)
+        const heldUnits = Number(held.get(`${collection}:${id}`) || 0)
+        const usable = String(item.status || 'available').toLowerCase() === 'available'
+        return [id, { stock, held: heldUnits, available: usable ? Math.max(0, stock - heldUnits) : 0 }]
+      }))
+    }
+    const [weapons, equipments] = await Promise.all([summarize('weapons'), summarize('equipments')])
+    return res.json({ ok: true, data: { reservationDate, reservationTime, weapons, equipments } })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
   }

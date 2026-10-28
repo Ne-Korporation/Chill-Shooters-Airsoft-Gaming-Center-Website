@@ -479,44 +479,30 @@ export function ReservationCalendarPage() {
       setTeamLookup({ status: 'error', error: 'Enter a valid email address.' })
       return
     }
-
-    let cancelled = false
-
-    const fetchTeamMembers = async () => {
-      try {
-        setLoadingTeamMembers(true)
-        const res = await apiGet<{ ok: boolean; data: any[] }>('/api/team-directory')
-        if (cancelled) return
-
-        const docs = Array.isArray(res?.data) ? res.data : []
-        const normalized = docs
-          .filter((doc: any) => String(doc.role || 'user').toLowerCase() === 'user')
-          .map((doc: any) => {
-            const emailVerified = doc.emailVerified === true
-            const status = String(doc.status || '').toLowerCase()
-            const derivedStatus = status === 'active' || status === 'pending' || status === 'suspended'
-              ? status
-              : emailVerified
-                ? 'active'
-                : 'pending'
-
-            return {
-              id: String(doc.id ?? doc.playerId ?? doc.accountId ?? doc._id ?? ''),
-              name: String(doc.name || doc.fullName || 'Unnamed player'),
-              email: String(doc.email || ''),
-              status: derivedStatus,
-              waiverSubmitted: doc.waiverApproved === true,
-              hasApprovedWeapon: doc.hasApprovedWeapon === true,
-            }
-          })
-          .filter((doc: TeamMember) => doc.id && doc.id !== user.id && doc.status === 'active')
-
-        setTeamMembers(normalized)
-      } catch {
-        if (!cancelled) setTeamMembers([])
-      } finally {
-        if (!cancelled) setLoadingTeamMembers(false)
-      }
+    if (user?.email && email === user.email.toLowerCase()) {
+      setTeamLookup({ status: 'error', error: 'You are already counted as the team captain.' })
+      return
+    }
+    setTeamLookup({ status: 'searching' })
+    try {
+      const res = await apiGet<{
+        ok: boolean
+        data: { id: string; name: string; email: string; waiverApproved: boolean; hasApprovedWeapon: boolean }
+      }>(`/api/team-directory/lookup?email=${encodeURIComponent(email)}`)
+      const found = res.data
+      setTeamLookup({
+        status: 'found',
+        member: {
+          id: String(found.id),
+          name: found.name || found.email,
+          email: found.email,
+          status: 'active',
+          waiverSubmitted: found.waiverApproved === true,
+          hasApprovedWeapon: found.hasApprovedWeapon === true,
+        },
+      })
+    } catch (err: any) {
+      setTeamLookup({ status: 'error', error: err?.message || 'Could not look up that player.' })
     }
   }
 
@@ -701,11 +687,45 @@ export function ReservationCalendarPage() {
   // Only players with an approved weapon on file count; the rest are charged a rental weapon.
   const captainBringsOwnWeapon = selectedOwnWeaponIds.length > 0
   const verifiedTeammateBringers = useMemo(
-    () => teamMembers.filter((member) => teammateOwnWeaponIds.includes(member.id) && member.hasApprovedWeapon),
-    [teamMembers, teammateOwnWeaponIds],
+    () => selectedTeammates.filter((member) => teammateOwnWeaponIds.includes(member.id) && member.hasApprovedWeapon),
+    [selectedTeammates, teammateOwnWeaponIds],
   )
   const verifiedOwnWeaponCount = Math.min(players, (captainBringsOwnWeapon ? 1 : 0) + verifiedTeammateBringers.length)
   const ownWeaponShortfall = Math.max(0, ownWeaponTarget - verifiedOwnWeaponCount)
+
+  // Rental stock left for the chosen date/slot, so players see shortages here
+  // instead of hitting them when the reservation is submitted at payment.
+  const [slotStock, setSlotStock] = useState<SlotStock | null>(null)
+  const [loadingSlotStock, setLoadingSlotStock] = useState(false)
+  useEffect(() => {
+    if (!dateISO || !slot) return
+    let cancelled = false
+    setLoadingSlotStock(true)
+    apiGet<{ ok: boolean; data: SlotStock }>(`/api/inventory-availability?date=${encodeURIComponent(dateISO)}&slot=${encodeURIComponent(slot)}`)
+      .then((res) => { if (!cancelled) setSlotStock(res?.data ?? null) })
+      .catch(() => { if (!cancelled) setSlotStock(null) })
+      .finally(() => { if (!cancelled) setLoadingSlotStock(false) })
+    return () => { cancelled = true }
+  }, [dateISO, slot, step])
+
+  const weaponAvailable = useCallback(
+    (weaponId: string) => slotStock?.weapons?.[weaponId]?.available ?? null,
+    [slotStock],
+  )
+  const equipmentAvailable = useCallback(
+    (item: EquipmentItemDetails) => slotStock?.equipments?.[item.id]?.available ?? Math.max(0, Number(item.qty ?? 0)),
+    [slotStock],
+  )
+
+  // Mirrors the server: a package rents weaponCount × players units, minus verified
+  // own weapons, drawn from its weapons.
+  const packageWeaponStock = useCallback((pkg: RentalPackage) => {
+    const needed = Math.max(0, Math.round(pkg.weaponCount || pkg.weaponIds.length) * players - verifiedOwnWeaponCount)
+    const known = pkg.weaponIds.map(weaponAvailable)
+    if (known.some((value) => value === null)) return { needed, available: null as number | null, ok: true }
+    const available = (known as number[]).reduce((sum, value) => sum + value, 0)
+    return { needed, available, ok: available >= needed }
+  }, [players, verifiedOwnWeaponCount, weaponAvailable])
 
   const cheapestPackage = useMemo(() => {
     if (packages.length === 0) return undefined
@@ -2761,95 +2781,54 @@ export function ReservationCalendarPage() {
                       <span className="text-[10px] uppercase tracking-[0.18em] text-gold">Captain</span>
                     </div>
 
-                    {selectedTeammates.map((member) => (
-                      <div key={member.id} className="flex items-center justify-between gap-3 rounded-2xl border border-accent/30 bg-accent/10 p-3">
-                        <div className="min-w-0">
-                          <div className="truncate text-sm font-bold">{member.name}</div>
-                          <div className="truncate text-xs text-muted">{member.email}</div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setSelectedTeammates((current) => current.filter((m) => m.id !== member.id))}
-                          className="inline-flex items-center gap-1 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-muted transition hover:bg-white/10"
-                          aria-label={`Remove ${member.name}`}
-                        >
-                          <FiX /> Remove
-                        </button>
-                      </div>
-                    ))}
-
-                        return (
+                    {selectedTeammates.map((member) => {
+                      const bringsOwn = teammateOwnWeaponIds.includes(member.id)
+                      return (
+                        <div key={member.id} className="flex items-start justify-between gap-3 rounded-2xl border border-accent/30 bg-accent/10 p-3">
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-bold">{member.name}</div>
+                            <div className="truncate text-xs text-muted">{member.email}</div>
+                            {ownWeaponTarget > 0 ? (
+                              <button
+                                type="button"
+                                role="checkbox"
+                                aria-checked={bringsOwn}
+                                onClick={() => toggleTeammateOwnWeapon(member)}
+                                className={[
+                                  'mt-2 inline-flex items-center gap-1.5 rounded-xl border px-2 py-1 text-[11px] font-semibold',
+                                  bringsOwn
+                                    ? member.hasApprovedWeapon
+                                      ? 'border-success/30 bg-success/10 text-success'
+                                      : 'border-warning/30 bg-warning/10 text-warning'
+                                    : 'border-white/10 bg-white/5 text-muted',
+                                ].join(' ')}
+                              >
+                                <FiCrosshair className="h-3 w-3" />
+                                {bringsOwn
+                                  ? member.hasApprovedWeapon ? 'Brings own weapon' : 'No registered weapon'
+                                  : 'Brings own weapon?'}
+                              </button>
+                            ) : null}
+                          </div>
                           <button
-                            key={member.id}
                             type="button"
-                            disabled={disabled}
                             onClick={() => {
-                              if (noWaiver) {
-                                toast.error(`${member.name}'s waiver isn't approved yet.`)
-                                return
-                              }
-                              setSelectedTeammateIds((current) => {
-                                if (current.includes(member.id)) {
-                                  return current.filter((id) => id !== member.id)
-                                }
-                                if (current.length >= maxTeammates) return current
-                                return [...current, member.id]
-                              })
+                              setSelectedTeammates((current) => current.filter((m) => m.id !== member.id))
+                              setTeammateOwnWeaponIds((current) => current.filter((id) => id !== member.id))
                             }}
-                            className={[
-                              'w-full rounded-2xl border p-3 text-left transition',
-                              active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
-                              disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer',
-                            ].join(' ')}
+                            className="inline-flex shrink-0 items-center gap-1 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-muted transition hover:bg-white/10"
+                            aria-label={`Remove ${member.name}`}
                           >
-                            <div className="flex items-start justify-between gap-3">
-                              <div>
-                                <div className="text-sm font-bold">{member.name}</div>
-                                <div className="mt-1 text-xs text-muted">{member.email || member.id}</div>
-                                {active && ownWeaponTarget > 0 ? (
-                                  <span
-                                    role="checkbox"
-                                    aria-checked={teammateOwnWeaponIds.includes(member.id)}
-                                    tabIndex={0}
-                                    onClick={(event) => {
-                                      event.stopPropagation()
-                                      toggleTeammateOwnWeapon(member)
-                                    }}
-                                    onKeyDown={(event) => {
-                                      if (event.key !== 'Enter' && event.key !== ' ') return
-                                      event.preventDefault()
-                                      event.stopPropagation()
-                                      toggleTeammateOwnWeapon(member)
-                                    }}
-                                    className={[
-                                      'mt-2 inline-flex items-center gap-1.5 rounded-xl border px-2 py-1 text-[11px] font-semibold',
-                                      teammateOwnWeaponIds.includes(member.id)
-                                        ? member.hasApprovedWeapon
-                                          ? 'border-success/30 bg-success/10 text-success'
-                                          : 'border-warning/30 bg-warning/10 text-warning'
-                                        : 'border-white/10 bg-white/5 text-muted',
-                                    ].join(' ')}
-                                  >
-                                    <FiCrosshair className="h-3 w-3" />
-                                    {teammateOwnWeaponIds.includes(member.id)
-                                      ? member.hasApprovedWeapon ? 'Brings own weapon' : 'No registered weapon'
-                                      : 'Brings own weapon?'}
-                                  </span>
-                                ) : null}
-                              </div>
-                              <div className="flex items-center gap-1 text-[10px] uppercase tracking-[0.18em] text-muted">
-                                {noWaiver ? (
-                                  <span className="text-warning">Waiver not approved</span>
-                                ) : active ? (
-                                  <><FiCheck className="text-gold" /> Selected</>
-                                ) : (
-                                  'Tap to add'
-                                )}
-                              </div>
-                            </div>
+                            <FiX /> Remove
                           </button>
-                        )
-                      })
+                        </div>
+                      )
+                    })}
+
+                    {selectedTeammates.length === 0 && maxTeammates > 0 && (
+                      <div className="rounded-2xl border border-dashed border-white/10 bg-black/20 p-3 text-xs text-muted">
+                        No teammates added yet. Find a teammate by email above.
+                      </div>
                     )}
                   </div>
                 </div>
