@@ -4,13 +4,10 @@ import transporter from '../services/mailService.js'
 import { getDb, getUserAccountsCollection, USER_ACCOUNTS_COLLECTION } from '../db/mongo.js'
 import { createAuthToken, requireAuth, requireRole } from '../middleware/auth.js'
 import { nextShortId } from '../utils/shortIds.js'
+import { canonicalEmail, normalizeEmail, sameEmailFilter } from '../utils/emails.js'
+import { verifyFirebaseIdToken } from '../utils/firebaseTokens.js'
 
 const router = express.Router()
-
-
-function normalizeEmail(email) {
-  return String(email || '').trim().toLowerCase()
-}
 
 export function validatePasswordRequirements(password) {
   const value = typeof password === 'string' ? password : ''
@@ -61,33 +58,31 @@ export function validateGoogleLoginEligibility(user) {
   }
 }
 
-// The Firebase web API key is public (it ships in the client bundle); it only
-// identifies the project when asking Firebase to look up a sign-in token.
-const FIREBASE_WEB_API_KEY = process.env.FIREBASE_API_KEY || 'AIzaSyAWZ97DTTBq6FZSorJbn-NtzCzKCIxWf9E'
-
-// Confirms a Firebase ID token with Google and returns the verified email/name,
-// so the social endpoints never trust an email address typed by the client.
+// Confirms a Firebase ID token and returns the verified email/name, so the
+// social endpoints never trust an email address typed by the client.
 async function verifyGoogleIdToken(idToken) {
-  if (!idToken || typeof idToken !== 'string') return null
-  try {
-    const response = await fetch(
-      `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${FIREBASE_WEB_API_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ idToken }),
-        signal: AbortSignal.timeout(10000),
-      },
-    )
-    if (!response.ok) return null
-    const payload = await response.json()
-    const account = payload?.users?.[0]
-    if (!account?.email || account.emailVerified === false) return null
-    return { email: normalizeEmail(account.email), name: account.displayName || '' }
-  } catch (err) {
-    console.error('Google token verification failed', err && (err.message || err))
-    return null
+  const verified = await verifyFirebaseIdToken(idToken)
+  return verified ? { email: normalizeEmail(verified.email), name: verified.name } : null
+}
+
+// Creates the player account for a first-time Google sign-in.
+async function createGoogleAccount(userAccounts, normalizedEmail, name) {
+  const db = await getDb()
+  const newDoc = {
+    id: await nextShortId(db, 'user_accounts', 'P'),
+    name: name || normalizedEmail.split('@')[0],
+    email: normalizedEmail,
+    emailCanonical: canonicalEmail(normalizedEmail),
+    password: null,
+    authProvider: 'google',
+    role: 'user',
+    experience: 0,
+    emailVerified: true,
+    identityVerificationStatus: 'not_submitted',
+    createdAtISO: new Date().toISOString(),
   }
+  const result = await userAccounts.insertOne(newDoc)
+  return { newDoc, insertedId: result.insertedId }
 }
 
 function generateOtp() {
@@ -171,7 +166,7 @@ router.post('/admin/add-player', requireAuth, requireRole('admin', 'marshal', 'r
     const db = await getDb()
     const userAccounts = await getUserAccountsCollection()
 
-    const existing = await userAccounts.findOne({ email: normalizedEmail })
+    const existing = await userAccounts.findOne(sameEmailFilter(normalizedEmail))
     if (existing) {
       return res.status(409).json({ ok: false, error: 'email already registered' })
     }
@@ -183,6 +178,7 @@ router.post('/admin/add-player', requireAuth, requireRole('admin', 'marshal', 'r
       id: nextId,
       name: name.trim(),
       email: normalizedEmail,
+      emailCanonical: canonicalEmail(normalizedEmail),
       password: hashedPassword,
       role: 'user',
       experience: skillLevel || 'Beginner',
@@ -256,7 +252,7 @@ router.post('/admin/add-staff', requireAuth, requireRole('admin'), async (req, r
     const db = await getDb()
     const userAccounts = await getUserAccountsCollection()
 
-    const existing = await userAccounts.findOne({ email: normalizedEmail })
+    const existing = await userAccounts.findOne(sameEmailFilter(normalizedEmail))
     if (existing) {
       return res.status(409).json({ ok: false, error: 'email already registered' })
     }
@@ -268,6 +264,7 @@ router.post('/admin/add-staff', requireAuth, requireRole('admin'), async (req, r
       id: nextId,
       name: name.trim(),
       email: normalizedEmail,
+      emailCanonical: canonicalEmail(normalizedEmail),
       password: hashedPassword,
       role: normalizedRole,
       experience: 0,
@@ -413,7 +410,7 @@ router.post('/register', async (req, res) => {
     const db = await getDb()
     const userAccounts = await getUserAccountsCollection()
 
-    const existing = await userAccounts.findOne({ email: normalizedEmail })
+    const existing = await userAccounts.findOne(sameEmailFilter(normalizedEmail))
     if (existing) {
       return res.status(409).json({ ok: false, error: 'email already registered' })
     }
@@ -429,6 +426,7 @@ router.post('/register', async (req, res) => {
       id: nextId,
       name: name.trim(),
       email: normalizedEmail,
+      emailCanonical: canonicalEmail(normalizedEmail),
       password: hashedPassword,
       role: 'user',
       experience: 0,
@@ -630,13 +628,13 @@ router.post('/social-login', async (req, res) => {
 
   try {
     const userAccounts = await getUserAccountsCollection()
-    const user = await userAccounts.findOne({ email: normalizedEmail })
+    let user = await userAccounts.findOne(sameEmailFilter(normalizedEmail))
 
+    // "Continue with Google" on the login page also works for a first visit:
+    // Google has verified the address, so create the player account.
     if (!user) {
-      return res.status(403).json({
-        ok: false,
-        error: 'This email is not registered. Please sign in with a registered account or contact support.',
-      })
+      const trimmedName = verified.name || (typeof name === 'string' ? name.trim() : '')
+      user = (await createGoogleAccount(userAccounts, normalizedEmail, trimmedName)).newDoc
     }
 
     const eligibility = validateGoogleLoginEligibility(user)
@@ -675,7 +673,7 @@ router.post('/social-register', async (req, res) => {
 
   try {
     const userAccounts = await getUserAccountsCollection()
-    const existing = await userAccounts.findOne({ email: normalizedEmail })
+    const existing = await userAccounts.findOne(sameEmailFilter(normalizedEmail))
 
     if (existing) {
       if (existing.password !== null && existing.password !== undefined && existing.authProvider !== 'google') {
@@ -702,23 +700,7 @@ router.post('/social-register', async (req, res) => {
       })
     }
 
-    const db = await getDb()
-    const nextId = await nextShortId(db, 'user_accounts', 'P')
-
-    const newDoc = {
-      id: nextId,
-      name: trimmedName || normalizedEmail.split('@')[0],
-      email: normalizedEmail,
-      password: null,
-      authProvider: 'google',
-      role: 'user',
-      experience: 0,
-      emailVerified: true,
-      identityVerificationStatus: 'not_submitted',
-      createdAtISO: new Date().toISOString(),
-    }
-
-    const result = await userAccounts.insertOne(newDoc)
+    const { newDoc, insertedId } = await createGoogleAccount(userAccounts, normalizedEmail, trimmedName)
     const authUser = {
       id: newDoc.id,
       name: newDoc.name,
@@ -728,7 +710,7 @@ router.post('/social-register', async (req, res) => {
 
     return res.status(201).json({
       ok: true,
-      insertedId: result.insertedId,
+      insertedId,
       user: authUser,
       token: createAuthToken(authUser),
       created: true,

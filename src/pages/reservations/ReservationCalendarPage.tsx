@@ -13,11 +13,13 @@ import {
   FiMinus,
   FiPackage,
   FiPlus,
+  FiSearch,
   FiShield,
   FiSliders,
   FiTag,
   FiTool,
   FiUsers,
+  FiX,
 } from 'react-icons/fi'
 
 import { apiGet, apiPost } from '../../utils/apiClient'
@@ -120,6 +122,13 @@ type TeamMember = {
 }
 
 type PaymentMode = 'self' | 'split'
+
+type StockEntry = { stock: number; held: number; available: number }
+
+type SlotStock = {
+  weapons: Record<string, StockEntry>
+  equipments: Record<string, StockEntry>
+}
 
 type WaiverRecord = {
   userId?: string
@@ -284,11 +293,12 @@ export function ReservationCalendarPage() {
   const [reservations, setReservations] = useState<ReservationRecord[]>([])
   const [loadingReservations, setLoadingReservations] = useState(true)
   const [serverCapacities, setServerCapacities] = useState<SlotCapacities | null>(null)
-  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([])
-  const [loadingTeamMembers, setLoadingTeamMembers] = useState(true)
   const [loadingWaiverEligibility, setLoadingWaiverEligibility] = useState(true)
-  const [teamSearch, setTeamSearch] = useState('')
-  const [selectedTeammateIds, setSelectedTeammateIds] = useState<string[]>([])
+  // Teammates are found one at a time by email rather than from a list of every player.
+  const [selectedTeammates, setSelectedTeammates] = useState<TeamMember[]>([])
+  const selectedTeammateIds = useMemo(() => selectedTeammates.map((member) => member.id), [selectedTeammates])
+  const [teamEmail, setTeamEmail] = useState('')
+  const [teamLookup, setTeamLookup] = useState<{ status: 'idle' | 'searching' | 'found' | 'error'; member?: TeamMember; error?: string }>({ status: 'idle' })
   const [paymentMode, setPaymentMode] = useState<PaymentMode>('self')
   const [waiverEligibleUserIds, setWaiverEligibleUserIds] = useState<string[]>([])
   // Status of the logged-in user's own waiver: none = never submitted
@@ -460,55 +470,55 @@ export function ReservationCalendarPage() {
   const [selectedOwnWeaponIds, setSelectedOwnWeaponIds] = useState<string[]>([])
   const [selectedOwnEquipmentIds, setSelectedOwnEquipmentIds] = useState<string[]>([])
 
-  // Fetch the list of active players that can be added as teammates
-  useEffect(() => {
-    if (!user?.id) {
-      setTeamMembers([])
-      setLoadingTeamMembers(false)
+  const findTeammate = async () => {
+    const email = teamEmail.trim().toLowerCase()
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setTeamLookup({ status: 'error', error: 'Enter a valid email address.' })
       return
     }
-
-    let cancelled = false
-
-    const fetchTeamMembers = async () => {
-      try {
-        setLoadingTeamMembers(true)
-        const res = await apiGet<{ ok: boolean; data: any[] }>('/api/team-directory')
-        if (cancelled) return
-
-        const docs = Array.isArray(res?.data) ? res.data : []
-        const normalized = docs
-          .filter((doc: any) => String(doc.role || 'user').toLowerCase() === 'user')
-          .map((doc: any) => {
-            const emailVerified = doc.emailVerified === true
-            const status = String(doc.status || '').toLowerCase()
-            const derivedStatus = status === 'active' || status === 'pending' || status === 'suspended'
-              ? status
-              : emailVerified
-                ? 'active'
-                : 'pending'
-
-            return {
-              id: String(doc.id ?? doc.playerId ?? doc.accountId ?? doc._id ?? ''),
-              name: String(doc.name || doc.fullName || 'Unnamed player'),
-              email: String(doc.email || ''),
-              status: derivedStatus,
-              waiverSubmitted: doc.waiverApproved === true,
-            }
-          })
-          .filter((doc: TeamMember) => doc.id && doc.id !== user.id && doc.status === 'active')
-
-        setTeamMembers(normalized)
-      } catch {
-        if (!cancelled) setTeamMembers([])
-      } finally {
-        if (!cancelled) setLoadingTeamMembers(false)
-      }
+    if (user?.email && email === user.email.toLowerCase()) {
+      setTeamLookup({ status: 'error', error: 'You are already counted as the team captain.' })
+      return
     }
+    setTeamLookup({ status: 'searching' })
+    try {
+      const res = await apiGet<{ ok: boolean; data: { id: string; name: string; email: string; waiverApproved: boolean } }>(
+        `/api/team-directory/lookup?email=${encodeURIComponent(email)}`,
+      )
+      const found = res.data
+      setTeamLookup({
+        status: 'found',
+        member: {
+          id: String(found.id),
+          name: found.name || found.email,
+          email: found.email,
+          status: 'active',
+          waiverSubmitted: found.waiverApproved === true,
+        },
+      })
+    } catch (err: any) {
+      setTeamLookup({ status: 'error', error: err?.message || 'Could not look up that player.' })
+    }
+  }
 
-    fetchTeamMembers()
-    return () => { cancelled = true }
-  }, [user?.id])
+  const addTeammate = (member: TeamMember) => {
+    if (!member.waiverSubmitted) {
+      toast.error(`${member.name}'s waiver isn't approved yet.`)
+      return
+    }
+    if (selectedTeammateIds.includes(member.id)) {
+      toast.error(`${member.name} is already on your team.`)
+      return
+    }
+    if (selectedTeammates.length >= Math.max(0, players - 1)) {
+      toast.error('Your team is full for this many players. Increase the player count to add more.')
+      return
+    }
+    setSelectedTeammates((current) => [...current, member])
+    setTeamEmail('')
+    setTeamLookup({ status: 'idle' })
+    toast.success(`${member.name} added to your team.`)
+  }
 
   // Fetch waiver submissions so only players who completed the waiver can be added
   useEffect(() => {
@@ -561,24 +571,11 @@ export function ReservationCalendarPage() {
 
   const waiverEligibleSet = useMemo(() => new Set(waiverEligibleUserIds), [waiverEligibleUserIds])
 
-  useEffect(() => {
-    setTeamMembers((current) => current.map((member) => ({
-      ...member,
-      waiverSubmitted: member.waiverSubmitted || waiverEligibleSet.has(member.id),
-    })))
-  }, [waiverEligibleSet])
-
   // Keep selected teammates within the headcount (players - 1, since the booker is one of them)
   useEffect(() => {
-    const availableIds = new Set(teamMembers.filter((member) => member.waiverSubmitted).map((member) => member.id))
     const limit = Math.max(0, players - 1)
-
-    setSelectedTeammateIds((current) => {
-      const filtered = current.filter((id) => availableIds.has(id)).slice(0, limit)
-      const unchanged = filtered.length === current.length && filtered.every((id, index) => id === current[index])
-      return unchanged ? current : filtered
-    })
-  }, [players, teamMembers])
+    setSelectedTeammates((current) => (current.length > limit ? current.slice(0, limit) : current))
+  }, [players])
 
   // Fetch real packages, weapons, and equipment from API
   useEffect(() => {
@@ -674,6 +671,39 @@ export function ReservationCalendarPage() {
     })()
     return () => { cancelled = true }
   }, [user?.id])
+
+  // Rental stock left for the chosen date/slot, so players see shortages here
+  // instead of hitting them when the reservation is submitted at payment.
+  const [slotStock, setSlotStock] = useState<SlotStock | null>(null)
+  const [loadingSlotStock, setLoadingSlotStock] = useState(false)
+  useEffect(() => {
+    if (!dateISO || !slot) return
+    let cancelled = false
+    setLoadingSlotStock(true)
+    apiGet<{ ok: boolean; data: SlotStock }>(`/api/inventory-availability?date=${encodeURIComponent(dateISO)}&slot=${encodeURIComponent(slot)}`)
+      .then((res) => { if (!cancelled) setSlotStock(res?.data ?? null) })
+      .catch(() => { if (!cancelled) setSlotStock(null) })
+      .finally(() => { if (!cancelled) setLoadingSlotStock(false) })
+    return () => { cancelled = true }
+  }, [dateISO, slot, step])
+
+  const weaponAvailable = useCallback(
+    (weaponId: string) => slotStock?.weapons?.[weaponId]?.available ?? null,
+    [slotStock],
+  )
+  const equipmentAvailable = useCallback(
+    (item: EquipmentItemDetails) => slotStock?.equipments?.[item.id]?.available ?? Math.max(0, Number(item.qty ?? 0)),
+    [slotStock],
+  )
+
+  // Mirrors the server: a package rents weaponCount × players units, drawn from its weapons.
+  const packageWeaponStock = useCallback((pkg: RentalPackage) => {
+    const needed = Math.max(0, Math.round(pkg.weaponCount || pkg.weaponIds.length)) * players
+    const known = pkg.weaponIds.map(weaponAvailable)
+    if (known.some((value) => value === null)) return { needed, available: null as number | null, ok: true }
+    const available = (known as number[]).reduce((sum, value) => sum + value, 0)
+    return { needed, available, ok: available >= needed }
+  }, [players, weaponAvailable])
 
   const cheapestPackage = useMemo(() => {
     if (packages.length === 0) return undefined
@@ -891,15 +921,27 @@ export function ReservationCalendarPage() {
     return equipment.filter((e) => customEquipmentIds.includes(e.id))
   }, [equipment, customEquipmentIds])
 
+  // Covers rental weapons as well as equipment for the selected date/slot.
   const equipmentStockCheck = useMemo(() => {
     const selectedEquipment = selectionMode === 'package' ? packageEquipment : customSelectedEquipment
-    return selectedEquipment.map((item) => ({
-      name: item.name,
-      available: Math.max(0, Number(item.qty ?? 0)),
-      required: players,
-      ok: Math.max(0, Number(item.qty ?? 0)) >= players,
-    }))
-  }, [selectionMode, packageEquipment, customSelectedEquipment, players])
+    const checks = selectedEquipment.map((item) => {
+      const available = equipmentAvailable(item)
+      return { name: item.name, available, required: players, ok: available >= players }
+    })
+    if (selectionMode === 'package' && selectedPackage && selectedPackage.weaponIds.length > 0) {
+      const weaponStock = packageWeaponStock(selectedPackage)
+      if (weaponStock.available !== null) {
+        checks.push({ name: 'Rental weapons', available: weaponStock.available, required: weaponStock.needed, ok: weaponStock.ok })
+      }
+    }
+    if (selectionMode === 'custom') {
+      for (const weapon of customSelectedWeapons) {
+        const available = weaponAvailable(weapon.id)
+        if (available !== null) checks.push({ name: weapon.name, available, required: players, ok: available >= players })
+      }
+    }
+    return checks
+  }, [selectionMode, packageEquipment, customSelectedEquipment, customSelectedWeapons, players, selectedPackage, packageWeaponStock, equipmentAvailable, weaponAvailable])
 
   const hasInsufficientEquipmentStock = equipmentStockCheck.some((item) => !item.ok)
 
@@ -1051,17 +1093,6 @@ export function ReservationCalendarPage() {
 
   const maxTeammates = Math.max(0, players - 1)
   const hasCurrentUserWaiver = !user?.id ? false : waiverEligibleSet.has(String(user.id))
-  const selectedTeammates = useMemo(
-    () => teamMembers.filter((member) => selectedTeammateIds.includes(member.id)),
-    [selectedTeammateIds, teamMembers],
-  )
-  const filteredTeamMembers = useMemo(() => {
-    const query = teamSearch.trim().toLowerCase()
-    return teamMembers.filter((member) => {
-      if (!query) return true
-      return [member.name, member.email, member.id].some((value) => value.toLowerCase().includes(query))
-    })
-  }, [teamMembers, teamSearch])
   // Teammates are optional: any spots not filled with registered players are walk-ins.
   const teamSelectionComplete = maxTeammates === 0 || selectedTeammateIds.length === maxTeammates
   const walkInSpots = Math.max(0, maxTeammates - selectedTeammateIds.length)
@@ -1917,6 +1948,20 @@ export function ReservationCalendarPage() {
                               })()}
                             </div>
 
+                            {pkg.weaponIds.length > 0 && (() => {
+                              const stock = packageWeaponStock(pkg)
+                              if (stock.available === null) {
+                                return <div className="mt-3 text-xs text-muted">{loadingSlotStock ? 'Checking weapon stock…' : 'Weapon stock unavailable'}</div>
+                              }
+                              return (
+                                <div className={['mt-3 rounded-xl border px-3 py-2 text-xs', stock.ok ? 'border-success/20 bg-success/10 text-success' : 'border-danger/30 bg-danger/10 text-danger'].join(' ')}>
+                                  {stock.ok
+                                    ? `${stock.available} rental weapon${stock.available === 1 ? '' : 's'} free this slot · needs ${stock.needed}`
+                                    : `Not enough weapons: needs ${stock.needed}, only ${stock.available} free this slot`}
+                                </div>
+                              )
+                            })()}
+
                             <div className="mt-3 flex items-center justify-between">
                               <div className="text-xs text-muted">Base price (per player)</div>
                               <div className="text-sm font-bold text-accent">{formatCurrency(pkg.basePrice)}</div>
@@ -1944,7 +1989,9 @@ export function ReservationCalendarPage() {
                             <div key={w.id} className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
                               <div>
                                 <div className="text-sm font-bold">{w.name}</div>
-                                <div className="mt-1 text-xs text-muted">{w.category.toUpperCase()} • Qty: 1 per player</div>
+                                <div className="mt-1 text-xs text-muted">
+                                  {w.category.toUpperCase()} • {weaponAvailable(w.id) === null ? 'Stock: —' : `${weaponAvailable(w.id)} free this slot`}
+                                </div>
                               </div>
                               <div className="text-xs font-semibold text-accent">₱{w.price}/player</div>
                             </div>
@@ -1961,7 +2008,7 @@ export function ReservationCalendarPage() {
                             <div key={e.id} className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
                               <div>
                                 <div className="text-sm font-bold">{e.name}</div>
-                                <div className="mt-1 text-xs text-muted">{e.category.toUpperCase()} • Stock: {e.qty} • Qty: 1 per player</div>
+                                <div className="mt-1 text-xs text-muted">{e.category.toUpperCase()} • {equipmentAvailable(e)} free this slot • 1 per player</div>
                               </div>
                               <div className="text-xs font-semibold text-accent">₱{e.price}/player</div>
                             </div>
@@ -1987,17 +2034,21 @@ export function ReservationCalendarPage() {
                     <div className="mt-4 grid gap-2 md:grid-cols-2">
                       {weapons.map((w) => {
                         const active = customWeaponIds.includes(w.id)
+                        const available = weaponAvailable(w.id)
+                        const short = available !== null && available < players
                         return (
                           <label
                             key={w.id}
                             className={[
                               'flex items-start gap-3 rounded-2xl border p-3 cursor-pointer transition',
                               active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
+                              short && !active ? 'opacity-60 cursor-not-allowed' : '',
                             ].join(' ')}
                           >
                             <input
                               type="checkbox"
                               checked={active}
+                              disabled={short && !active}
                               onChange={() => {
                                 setCustomWeaponIds((prev) =>
                                   prev.includes(w.id) ? prev.filter((id) => id !== w.id) : [...prev, w.id]
@@ -2007,7 +2058,9 @@ export function ReservationCalendarPage() {
                             />
                             <div className="flex-1 min-w-0">
                               <div className="text-sm font-bold truncate">{w.name}</div>
-                              <div className="text-xs text-muted">{w.category.toUpperCase()} • Qty: 1 per player</div>
+                              <div className={['text-xs', short ? 'text-danger' : 'text-muted'].join(' ')}>
+                                {w.category.toUpperCase()} • {available === null ? 'Stock: —' : `${available} free this slot`} • 1 per player
+                              </div>
                             </div>
                             <div className="text-xs font-semibold text-accent">₱{w.price}/player</div>
                           </label>
@@ -2030,22 +2083,24 @@ export function ReservationCalendarPage() {
                     <div className="mt-4 grid gap-2 md:grid-cols-2">
                       {equipment.map((e) => {
                         const active = customEquipmentIds.includes(e.id)
+                        const available = equipmentAvailable(e)
+                        const short = available < players
                         return (
                           <label
                             key={e.id}
                             className={[
                               'flex items-start gap-3 rounded-2xl border p-3 cursor-pointer transition',
                               active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
-                              Number(e.qty ?? 0) < players ? 'opacity-60 cursor-not-allowed' : '',
+                              short && !active ? 'opacity-60 cursor-not-allowed' : '',
                             ].join(' ')}
                           >
                             <input
                               type="checkbox"
                               checked={active}
-                              disabled={Number(e.qty ?? 0) < players}
+                              disabled={short && !active}
                               onChange={() => {
-                                if (Number(e.qty ?? 0) < players) {
-                                  toast.error(`${e.name} has only ${e.qty} item(s) available, which is not enough for ${players} players.`)
+                                if (short && !active) {
+                                  toast.error(`${e.name} has only ${available} item(s) free this slot, which is not enough for ${players} players.`)
                                   return
                                 }
                                 setCustomEquipmentIds((prev) =>
@@ -2056,7 +2111,7 @@ export function ReservationCalendarPage() {
                             />
                             <div className="flex-1 min-w-0">
                               <div className="text-sm font-bold truncate">{e.name}</div>
-                              <div className="text-xs text-muted">{e.category.toUpperCase()} • Stock: {e.qty} • Qty: 1 per player</div>
+                              <div className={['text-xs', short ? 'text-danger' : 'text-muted'].join(' ')}>{e.category.toUpperCase()} • {available} free this slot • 1 per player</div>
                             </div>
                             <div className="text-xs font-semibold text-accent">₱{e.price}/player</div>
                           </label>
@@ -2196,12 +2251,13 @@ export function ReservationCalendarPage() {
 
                 {hasInsufficientEquipmentStock && (
                   <div className="rounded-2xl border border-danger/30 bg-danger/10 p-4">
-                    <div className="text-sm font-bold text-danger">Insufficient equipment stock</div>
+                    <div className="text-sm font-bold text-danger">Not enough rental stock for this slot</div>
                     <div className="mt-2 space-y-1 text-xs text-muted">
                       {equipmentStockCheck.filter((item) => !item.ok).map((item) => (
-                        <div key={item.name}>• {item.name}: only {item.available} available, needs {item.required} for this group.</div>
+                        <div key={item.name}>• {item.name}: only {item.available} free, needs {item.required} for this group.</div>
                       ))}
                     </div>
+                    <div className="mt-2 text-xs text-muted">Reduce players, pick another package or slot, or bring your own gear.</div>
                   </div>
                 )}
 
@@ -2229,13 +2285,15 @@ export function ReservationCalendarPage() {
                   )}
                 </div>
 
-                <div className="grid gap-3 md:grid-cols-2">
-                  <label className="block">
+                {/* Single column: this panel is a narrow sidebar, and two columns cut off longer mode names. */}
+                <div className="grid gap-3">
+                  <label className="block min-w-0">
                     <div className="mb-2 text-sm font-semibold text-text">Preferred game mode</div>
                     <select
                       value={gameModePreference}
                       onChange={(e) => setGameModePreference(e.target.value)}
-                      className="w-full rounded-xl border border-white/10 bg-background px-4 py-3 text-sm text-text focus:outline-none focus:ring-2 focus:ring-accent/40 [&>option]:bg-background"
+                      title={gameModePreference}
+                      className="w-full min-w-0 truncate rounded-xl border border-white/10 bg-background py-3 pl-4 pr-10 text-sm text-text focus:outline-none focus:ring-2 focus:ring-accent/40"
                     >
                       {GAME_MODES.map((mode) => <option key={mode} value={mode}>{mode}</option>)}
                     </select>
@@ -2271,7 +2329,7 @@ export function ReservationCalendarPage() {
                   onClick={() => {
                     if (hasInsufficientEquipmentStock) {
                       const shortage = equipmentStockCheck.find((item) => !item.ok)
-                      toast.error(`${shortage?.name || 'Equipment'} stock is insufficient for ${players} players. Available: ${shortage?.available ?? 0}.`)
+                      toast.error(`${shortage?.name || 'Equipment'}: needs ${shortage?.required ?? players}, only ${shortage?.available ?? 0} free this slot.`)
                       return
                     }
                     setStep(3)
@@ -2515,16 +2573,66 @@ export function ReservationCalendarPage() {
                 <FiUsers /> <span>Select Your Teammates</span>
               </div>
               <p className="mt-1 text-xs text-muted">
-                Optionally add registered players joining this reservation (up to {maxTeammates}). You are already counted, and any spots you don't fill are treated as walk-in players. Only players with an approved waiver can be added.
+                Optionally add registered players joining this reservation (up to {maxTeammates}). Find each one by the email on their account. You are already counted, and any spots you don't fill are treated as walk-in players. Only players with an approved waiver can be added.
               </p>
 
               <div className="mt-4 space-y-4">
-                <Input
-                  label="Search players"
-                  value={teamSearch}
-                  onChange={(e) => setTeamSearch(e.target.value)}
-                  placeholder="Search by name, email, or player ID"
-                />
+                <form
+                  className="flex flex-col gap-2 sm:flex-row sm:items-end"
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    void findTeammate()
+                  }}
+                >
+                  <div className="min-w-0 flex-1">
+                    <Input
+                      label="Teammate email"
+                      type="email"
+                      value={teamEmail}
+                      onChange={(e) => {
+                        setTeamEmail(e.target.value)
+                        if (teamLookup.status !== 'idle') setTeamLookup({ status: 'idle' })
+                      }}
+                      placeholder="teammate@gmail.com"
+                      disabled={!hasCurrentUserWaiver || selectedTeammates.length >= maxTeammates}
+                    />
+                  </div>
+                  <Button
+                    type="submit"
+                    variant="primary"
+                    disabled={!teamEmail.trim() || teamLookup.status === 'searching' || !hasCurrentUserWaiver || selectedTeammates.length >= maxTeammates}
+                  >
+                    <FiSearch /> {teamLookup.status === 'searching' ? 'Finding…' : 'Find'}
+                  </Button>
+                </form>
+
+                {teamLookup.status === 'error' && (
+                  <div className="rounded-2xl border border-danger/30 bg-danger/10 p-3 text-sm text-danger">{teamLookup.error}</div>
+                )}
+
+                {teamLookup.status === 'found' && teamLookup.member && (() => {
+                  const member = teamLookup.member
+                  const alreadyAdded = selectedTeammateIds.includes(member.id)
+                  return (
+                    <div className="flex flex-col gap-3 rounded-2xl border border-accent/30 bg-accent/5 p-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-bold">{member.name}</div>
+                        <div className="truncate text-xs text-muted">{member.email}</div>
+                        {!member.waiverSubmitted && (
+                          <div className="mt-1 text-xs font-semibold text-warning">Waiver not approved yet — they can't be added until it is.</div>
+                        )}
+                      </div>
+                      <Button
+                        type="button"
+                        variant="primary"
+                        disabled={alreadyAdded || !member.waiverSubmitted}
+                        onClick={() => addTeammate(member)}
+                      >
+                        {alreadyAdded ? <><FiCheck /> Added</> : <><FiPlus /> Add</>}
+                      </Button>
+                    </div>
+                  )
+                })()}
 
                 {loadingWaiverEligibility ? (
                   <div className="rounded-2xl border border-dashed border-white/10 bg-black/20 p-4 text-sm text-muted">
@@ -2538,74 +2646,49 @@ export function ReservationCalendarPage() {
 
                 <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
                   <div className="flex items-center justify-between gap-3 text-xs uppercase tracking-[0.18em] text-muted">
-                    <span>Players</span>
-                    <span>{selectedTeammateIds.length}/{maxTeammates} teammates</span>
+                    <span>Your team</span>
+                    <span>{selectedTeammates.length}/{maxTeammates} teammates</span>
                   </div>
 
-                  <div className="mt-3 max-h-96 space-y-2 overflow-y-auto pr-1">
-                    {loadingTeamMembers || loadingWaiverEligibility ? (
-                      <div className="rounded-2xl border border-dashed border-white/10 bg-black/20 p-4 text-sm text-muted">
-                        Loading players...
+                  <div className="mt-3 space-y-2">
+                    <div className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/10 p-3">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-bold">{user?.name || 'You'}</div>
+                        <div className="truncate text-xs text-muted">{user?.email}</div>
                       </div>
-                    ) : filteredTeamMembers.length === 0 ? (
-                      <div className="rounded-2xl border border-dashed border-white/10 bg-black/20 p-4 text-sm text-muted">
-                        No active players found.
-                      </div>
-                    ) : (
-                      filteredTeamMembers.map((member) => {
-                        const active = selectedTeammateIds.includes(member.id)
-                        const noWaiver = !member.waiverSubmitted
-                        const disabled = noWaiver || (!active && selectedTeammateIds.length >= maxTeammates)
+                      <span className="text-[10px] uppercase tracking-[0.18em] text-gold">Captain</span>
+                    </div>
 
-                        return (
-                          <button
-                            key={member.id}
-                            type="button"
-                            disabled={disabled}
-                            onClick={() => {
-                              if (noWaiver) {
-                                toast.error(`${member.name}'s waiver isn't approved yet.`)
-                                return
-                              }
-                              setSelectedTeammateIds((current) => {
-                                if (current.includes(member.id)) {
-                                  return current.filter((id) => id !== member.id)
-                                }
-                                if (current.length >= maxTeammates) return current
-                                return [...current, member.id]
-                              })
-                            }}
-                            className={[
-                              'w-full rounded-2xl border p-3 text-left transition',
-                              active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
-                              disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer',
-                            ].join(' ')}
-                          >
-                            <div className="flex items-start justify-between gap-3">
-                              <div>
-                                <div className="text-sm font-bold">{member.name}</div>
-                                <div className="mt-1 text-xs text-muted">{member.email || member.id}</div>
-                              </div>
-                              <div className="flex items-center gap-1 text-[10px] uppercase tracking-[0.18em] text-muted">
-                                {noWaiver ? (
-                                  <span className="text-warning">Waiver not approved</span>
-                                ) : active ? (
-                                  <><FiCheck className="text-gold" /> Selected</>
-                                ) : (
-                                  'Tap to add'
-                                )}
-                              </div>
-                            </div>
-                          </button>
-                        )
-                      })
+                    {selectedTeammates.map((member) => (
+                      <div key={member.id} className="flex items-center justify-between gap-3 rounded-2xl border border-accent/30 bg-accent/10 p-3">
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-bold">{member.name}</div>
+                          <div className="truncate text-xs text-muted">{member.email}</div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedTeammates((current) => current.filter((m) => m.id !== member.id))}
+                          className="inline-flex items-center gap-1 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-muted transition hover:bg-white/10"
+                          aria-label={`Remove ${member.name}`}
+                        >
+                          <FiX /> Remove
+                        </button>
+                      </div>
+                    ))}
+
+                    {selectedTeammates.length === 0 && maxTeammates > 0 && (
+                      <div className="rounded-2xl border border-dashed border-white/10 bg-black/20 p-3 text-xs text-muted">
+                        No teammates added yet. Find a teammate by email above.
+                      </div>
                     )}
                   </div>
                 </div>
 
-                {!teamSelectionComplete && maxTeammates > 0 && (
+                {maxTeammates > 0 && (
                   <div className="rounded-2xl border border-white/10 bg-white/5 p-3 text-xs text-muted">
-                    {walkInSpots} of {players} spot{walkInSpots === 1 ? '' : 's'} will be walk-in player{walkInSpots === 1 ? '' : 's'} without an account. They'll sign their waiver at the field.
+                    {walkInSpots === 0
+                      ? `All ${players} players have accounts.`
+                      : `${walkInSpots} of ${players} player${players === 1 ? '' : 's'} will be walk-in${walkInSpots === 1 ? '' : 's'} without an account. They'll sign their waiver at the field.`}
                   </div>
                 )}
               </div>

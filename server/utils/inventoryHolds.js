@@ -1,4 +1,4 @@
-function stockQuantity(item, collection) {
+export function stockQuantity(item, collection) {
   const candidates = collection === 'weapons'
     ? [item.quantity, item.qty, item.stock]
     : [item.qty, item.quantity, item.stock]
@@ -8,7 +8,29 @@ function stockQuantity(item, collection) {
   return Number.isInteger(quantity) && quantity >= 0 ? quantity : 0
 }
 
-export async function getBookingInventoryRequirements({ db, payload, players, findDocumentById }) {
+function holdKey(collection, itemId) {
+  return `${collection}:${itemId}`
+}
+
+// Holds only block the same date and time slot: a rifle rented for Saturday
+// morning is free again for Saturday afternoon or any other day.
+function slotHoldMatch({ reservationDate, reservationTime }) {
+  return { reservationDate: String(reservationDate || ''), reservationTime: String(reservationTime || '') }
+}
+
+// Returns a Map of "collection:itemId" -> units already held for that date/slot.
+export async function getHeldQuantities(db, { reservationDate, reservationTime }, session) {
+  const rows = await db.collection('inventory_holds').aggregate(
+    [
+      { $match: { status: 'held', ...slotHoldMatch({ reservationDate, reservationTime }) } },
+      { $group: { _id: { collection: '$collection', itemId: '$itemId' }, quantity: { $sum: '$quantity' } } },
+    ],
+    session ? { session } : {},
+  ).toArray()
+  return new Map(rows.map((row) => [holdKey(row._id.collection, row._id.itemId), Number(row.quantity || 0)]))
+}
+
+export async function getBookingInventoryRequirements({ db, payload, players, findDocumentById, heldQuantities = new Map() }) {
   const mode = String(payload.selectionMode || '').toLowerCase()
   let weaponIds = []
   let equipmentIds = []
@@ -27,6 +49,9 @@ export async function getBookingInventoryRequirements({ db, payload, players, fi
     throw new Error('Select a package or choose custom/own gear.')
   }
 
+  const availableUnits = (item, collection, id) =>
+    Math.max(0, stockQuantity(item, collection) - Number(heldQuantities.get(holdKey(collection, id)) || 0))
+
   const requirements = []
   for (const id of equipmentIds) {
     const item = await findDocumentById(db, 'equipments', id)
@@ -40,20 +65,28 @@ export async function getBookingInventoryRequirements({ db, payload, players, fi
       capacity: stockQuantity(item, 'equipments'),
       name: item.name || id,
     })
-    if (players > stockQuantity(item, 'equipments')) {
-      throw new Error(`${item.name || id} does not have enough available stock.`)
+    const available = availableUnits(item, 'equipments', id)
+    if (players > available) {
+      throw new Error(`${item.name || id} has only ${available} unit(s) available for this slot, but ${players} players need one each.`)
     }
   }
 
-  let remainingWeaponQuantity = mode === 'custom' ? weaponIds.length * players : weaponQuantity
+  const neededWeapons = mode === 'custom' ? weaponIds.length * players : weaponQuantity
+  let remainingWeaponQuantity = neededWeapons
+  let availableWeapons = 0
   for (const id of weaponIds) {
     const item = await findDocumentById(db, 'weapons', id)
     if (!item || String(item.status || 'available').toLowerCase() !== 'available') {
       throw new Error('One or more selected weapons are unavailable.')
     }
+    const available = availableUnits(item, 'weapons', id)
+    availableWeapons += available
+    if (mode === 'custom' && players > available) {
+      throw new Error(`There is not enough available weapon stock for this booking: ${item.name || id} has ${available} unit(s) left for this slot, but ${players} players need one each.`)
+    }
     const quantity = mode === 'custom'
       ? players
-      : Math.min(remainingWeaponQuantity, stockQuantity(item, 'weapons'))
+      : Math.min(remainingWeaponQuantity, available)
     if (quantity > 0) {
       requirements.push({
         itemId: id,
@@ -67,19 +100,15 @@ export async function getBookingInventoryRequirements({ db, payload, players, fi
   }
 
   if (remainingWeaponQuantity > 0) {
-    throw new Error('There is not enough available weapon stock for this booking.')
-  }
-  if (requirements.some((requirement) =>
-    requirement.collection === 'weapons' && requirement.quantity > requirement.capacity
-  )) {
-    throw new Error('There is not enough available weapon stock for this booking.')
+    throw new Error(`There is not enough available weapon stock for this booking: it needs ${neededWeapons} rental weapon(s) but only ${availableWeapons} are available for this slot. Reduce the number of players or choose another package or slot.`)
   }
 
   return requirements
 }
 
-export async function holdBookingInventory({ db, session, reservationId, requirements }) {
+export async function holdBookingInventory({ db, session, reservationId, requirements, reservationDate, reservationTime }) {
   const inventoryHolds = db.collection('inventory_holds')
+  const slot = slotHoldMatch({ reservationDate, reservationTime })
   for (const requirement of [...requirements].sort((a, b) => a.itemId.localeCompare(b.itemId))) {
     await db.collection('inventory_item_locks').updateOne(
       { _id: `${requirement.collection}:${requirement.itemId}` },
@@ -89,7 +118,7 @@ export async function holdBookingInventory({ db, session, reservationId, require
 
     const existing = await inventoryHolds.aggregate(
       [
-        { $match: { itemId: requirement.itemId, collection: requirement.collection, status: 'held' } },
+        { $match: { itemId: requirement.itemId, collection: requirement.collection, status: 'held', ...slot } },
         { $group: { _id: null, quantity: { $sum: '$quantity' } } },
       ],
       { session },
@@ -106,6 +135,7 @@ export async function holdBookingInventory({ db, session, reservationId, require
       itemId: requirement.itemId,
       collection: requirement.collection,
       quantity: requirement.quantity,
+      ...slot,
       status: 'held',
       createdAtISO: new Date().toISOString(),
     }, { session })

@@ -17,6 +17,17 @@ type PaymentItem = {
   status: PaymentStatus
   date: string
   note: string
+  receiptUrl: string
+  stripe: boolean
+}
+
+const KNOWN_STATUSES: PaymentStatus[] = ['paid', 'pending', 'failed', 'review', 'confirmed']
+
+function normalizePaymentStatus(value: unknown): PaymentStatus {
+  const lower = String(value || 'pending').toLowerCase()
+  if (lower === 'rejected') return 'failed'
+  if (lower === 'submitted') return 'pending'
+  return (KNOWN_STATUSES as string[]).includes(lower) ? (lower as PaymentStatus) : 'pending'
 }
 
 type GcashQrSettings = {
@@ -74,9 +85,11 @@ export function AdminPaymentsPage() {
           player: d.userId ? String(d.userId) : d.player ?? '—',
           amount: Number(d.amount ?? d.totalPHP ?? 0),
           method: d.paymentMethod ?? d.method ?? '—',
-          status: d.paymentStatus ?? d.status ?? 'pending',
+          status: normalizePaymentStatus(d.paymentStatus ?? d.status),
           date: d.createdAtISO ?? d.createdAt ?? d.submittedAtISO ?? '—',
           note: d.transactionReference ?? d.refNo ?? d.note ?? '',
+          receiptUrl: d.gcashImageUrl ?? d.proofUrl ?? d.receiptUrl ?? '',
+          stripe: Boolean(d.stripePaymentIntentId),
         }))
       )
     } catch (e: any) {
@@ -184,9 +197,12 @@ export function AdminPaymentsPage() {
   const reviewCount = payments.filter((payment) => payment.status === 'review').length
   const pendingValue = payments.filter((payment) => payment.status === 'pending').reduce((sum, p) => sum + p.amount, 0)
 
-  const updateStatus = async (id: string, nextStatus: PaymentStatus) => {
+  const [updatingId, setUpdatingId] = useState('')
+
+  const updateStatus = async (id: string, nextStatus: PaymentStatus, reason = '') => {
+    setUpdatingId(id)
     try {
-      await apiPut(`/api/payments/${id}/verify`, { paymentStatus: nextStatus })
+      await apiPut(`/api/payments/${encodeURIComponent(id)}/verify`, { paymentStatus: nextStatus, reason })
       sendRoleNotifications(addNotification, {
         roles: ['admin', 'registrar', 'marshal'],
         type: 'payment_verified',
@@ -195,10 +211,22 @@ export function AdminPaymentsPage() {
         linkedResourceId: id,
       })
       await load()
-      toast.success('Payment updated')
+      toast.success(nextStatus === 'paid' ? 'Payment approved' : nextStatus === 'failed' ? 'Payment sent back to the player' : 'Payment updated')
     } catch (e: any) {
       toast.error(String(e?.message || e))
+    } finally {
+      setUpdatingId('')
     }
+  }
+
+  const sendBack = (payment: PaymentItem) => {
+    const reason = window.prompt('Why is this payment being sent back? The player sees this reason and can submit a corrected payment.')
+    if (reason === null) return
+    if (!reason.trim()) {
+      toast.error('Enter a reason so the player knows what to fix.')
+      return
+    }
+    void updateStatus(payment.id, 'failed', reason.trim())
   }
 
 
@@ -422,23 +450,50 @@ export function AdminPaymentsPage() {
                   </div>
                   <div className="lg:col-span-2 lg:text-right">
                     <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-                      <button className="rounded-xl border border-white/5 bg-white/5 px-3 py-2 text-xs text-muted transition hover:bg-white/6">
-                        Receipt
-                      </button>
-                      {payment.status === 'review' ? (
-                        <button
-                          onClick={() => updateStatus(payment.id, 'paid')}
-                          className="rounded-xl border border-success/30 bg-success/20 px-3 py-2 text-xs font-semibold text-success transition hover:bg-success/25"
+                      {payment.receiptUrl ? (
+                        <a
+                          href={payment.receiptUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-text transition hover:bg-white/10"
                         >
-                          Approve
-                        </button>
+                          Receipt
+                        </a>
                       ) : (
-                        <button
-                          onClick={() => updateStatus(payment.id, 'review')}
-                          className="rounded-xl border border-accent/30 bg-accent/20 px-3 py-2 text-xs font-semibold text-accent transition hover:bg-accent/25"
-                        >
-                          Send back
-                        </button>
+                        <span className="rounded-xl border border-white/5 px-3 py-2 text-xs text-muted">No receipt</span>
+                      )}
+                      {payment.status === 'paid' || payment.status === 'confirmed' ? (
+                        <span className="px-1 text-xs font-semibold text-success">Verified</span>
+                      ) : payment.status === 'failed' ? (
+                        <span className="px-1 text-xs text-muted">Sent back</span>
+                      ) : payment.stripe ? (
+                        <span className="px-1 text-xs text-muted">Verified by Stripe</span>
+                      ) : (
+                        <>
+                          <button
+                            disabled={updatingId === payment.id}
+                            onClick={() => updateStatus(payment.id, 'paid')}
+                            className="rounded-xl border border-success/30 bg-success/20 px-3 py-2 text-xs font-semibold text-success transition hover:bg-success/25 disabled:opacity-50"
+                          >
+                            Approve
+                          </button>
+                          <button
+                            disabled={updatingId === payment.id}
+                            onClick={() => sendBack(payment)}
+                            className="rounded-xl border border-danger/30 bg-danger/15 px-3 py-2 text-xs font-semibold text-danger transition hover:bg-danger/25 disabled:opacity-50"
+                          >
+                            Send back
+                          </button>
+                          {payment.status === 'pending' && (
+                            <button
+                              disabled={updatingId === payment.id}
+                              onClick={() => updateStatus(payment.id, 'review')}
+                              className="rounded-xl border border-accent/30 bg-accent/15 px-3 py-2 text-xs font-semibold text-accent transition hover:bg-accent/25 disabled:opacity-50"
+                            >
+                              Flag for review
+                            </button>
+                          )}
+                        </>
                       )}
                     </div>
                   </div>

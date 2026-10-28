@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom'
 import { apiBase, apiGet, apiPost, getApiAuthHeaders } from '../../utils/apiClient'
 import toast from 'react-hot-toast'
 import { useAuth } from '../../context/AuthContext'
+import { useTheme } from '../../context/ThemeContext'
 
 import { motion } from 'framer-motion'
 import { FiCheck, FiChevronRight, FiFileText, FiInfo, FiLock, FiUpload } from 'react-icons/fi'
@@ -73,6 +74,21 @@ class PaymentPageErrorBoundary extends React.Component<{ children: React.ReactNo
 }
 
 function CardPaymentField({ onChange }: { onChange: (complete: boolean) => void }) {
+  const { theme } = useTheme()
+
+  // Without a publishable key the Stripe field never mounts, which used to
+  // leave an empty box that looked like a form but did nothing.
+  if (!stripePromise) {
+    return (
+      <div className="rounded-[1.75rem] border border-warning/30 bg-warning/10 p-4 text-sm text-warning">
+        <div className="font-bold">Card payments are not set up yet</div>
+        <div className="mt-1 text-xs text-muted">
+          This site has no Stripe publishable key (VITE_STRIPE_PUBLISHABLE_KEY). Please pay with GCash for now.
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="rounded-[1.75rem] border border-white/10 bg-white/5 p-4">
       <div className="flex items-center justify-between gap-3 text-xs uppercase tracking-widest text-muted">
@@ -86,7 +102,7 @@ function CardPaymentField({ onChange }: { onChange: (complete: boolean) => void 
             hidePostalCode: true,
             style: {
               base: {
-                color: '#ffffff',
+                color: theme === 'dark' ? '#ffffff' : '#0a1423',
                 fontFamily: 'system-ui, sans-serif',
                 fontSize: '16px',
                 '::placeholder': { color: '#9ca3af' },
@@ -405,7 +421,9 @@ function PaymentPageContent() {
               ].join(' ')}
             >
               <div className="text-sm font-bold">Card Payment</div>
-              <div className="mt-1 text-xs text-muted">Pay instantly with a secure checkout form</div>
+              <div className="mt-1 text-xs text-muted">
+                {stripePromise ? 'Pay instantly with a secure checkout form' : 'Not available yet — use GCash'}
+              </div>
             </button>
           </div>
 

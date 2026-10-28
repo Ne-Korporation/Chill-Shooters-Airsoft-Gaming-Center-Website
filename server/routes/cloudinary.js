@@ -15,6 +15,11 @@ function initCloudinary() {
   return cloudinary.v2
 }
 
+export function isCloudinaryConfigured() {
+  const { CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET } = process.env
+  return Boolean(CLOUDINARY_CLOUD_NAME && CLOUDINARY_API_KEY && CLOUDINARY_API_SECRET)
+}
+
 export function requireCloudinary() {
   const cl = initCloudinary()
   if (!cl) {

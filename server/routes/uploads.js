@@ -2,8 +2,10 @@ import express from 'express'
 import multer from 'multer'
 import { Readable } from 'stream'
 import axios from 'axios'
-import { requireCloudinary } from './cloudinary.js'
-import { getUserAccountsCollection } from '../db/mongo.js'
+import { randomUUID } from 'crypto'
+import { Binary } from 'mongodb'
+import { isCloudinaryConfigured, requireCloudinary } from './cloudinary.js'
+import { getDb, getUserAccountsCollection } from '../db/mongo.js'
 import { requireAuth } from '../middleware/auth.js'
 
 const router = express.Router()
@@ -18,6 +20,47 @@ const upload = multer({
     }
     cb(null, true)
   },
+})
+
+function publicBaseUrl(req) {
+  const proto = String(req.get('x-forwarded-proto') || req.protocol || 'https').split(',')[0].trim()
+  return `${proto}://${req.get('host')}`
+}
+
+// Without Cloudinary credentials, keep the image in MongoDB and serve it from
+// GET /api/files/:id so uploads still work on a fresh deployment.
+async function storeInDatabase(req, fileBuffer, filename, mimetype) {
+  const db = await getDb()
+  const id = randomUUID()
+  await db.collection('uploaded_files').insertOne({
+    _id: id,
+    filename: String(filename || 'upload').slice(0, 200),
+    contentType: mimetype || 'application/octet-stream',
+    size: fileBuffer.length,
+    data: new Binary(fileBuffer),
+    uploadedBy: String(req.user?.id || ''),
+    createdAtISO: new Date().toISOString(),
+  })
+  return `${publicBaseUrl(req)}/api/files/${id}`
+}
+
+async function storeUpload(req, fileBuffer, filename, mimetype) {
+  if (!isCloudinaryConfigured()) return storeInDatabase(req, fileBuffer, filename, mimetype)
+  return uploadToCloudinary(fileBuffer, filename)
+}
+
+router.get('/files/:id', async (req, res) => {
+  try {
+    const db = await getDb()
+    const file = await db.collection('uploaded_files').findOne({ _id: String(req.params.id) })
+    if (!file) return res.status(404).json({ ok: false, error: 'file not found' })
+    res.set('Content-Type', file.contentType)
+    res.set('Cache-Control', 'public, max-age=31536000, immutable')
+    res.set('X-Content-Type-Options', 'nosniff')
+    return res.send(Buffer.from(file.data.buffer))
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: String(err) })
+  }
 })
 
 async function uploadToCloudinary(fileBuffer, filename) {
@@ -57,7 +100,7 @@ router.post('/upload-image', requireAuth, (req, res, next) => {
   }
 
   try {
-    const url = await uploadToCloudinary(req.file.buffer, req.file.originalname || 'upload')
+    const url = await storeUpload(req, req.file.buffer, req.file.originalname || 'upload', req.file.mimetype)
     return res.json({ ok: true, url })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
@@ -80,7 +123,7 @@ router.post('/scan-id', requireAuth, upload.single('file'), async (req, res) => 
   if (!userId) return res.status(400).json({ ok: false, error: 'userId is required' })
 
   try {
-    const imageUrl = await uploadToCloudinary(req.file.buffer, req.file.originalname || 'id-scan')
+    const imageUrl = await storeUpload(req, req.file.buffer, req.file.originalname || 'id-scan', req.file.mimetype)
 
     let scanResult = null
     const endpoint = process.env.AZURE_VISION_ENDPOINT

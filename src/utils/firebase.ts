@@ -14,9 +14,35 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig)
 const auth = getAuth(app)
 const googleProvider = new GoogleAuthProvider()
+googleProvider.setCustomParameters({ prompt: 'select_account' })
+
+// Firebase error codes are cryptic; translate the ones players actually hit.
+function describeFirebaseError(err: any): string {
+  const code = String(err?.code || '')
+  switch (code) {
+    case 'auth/unauthorized-domain':
+      return `Google sign-in is not enabled for ${window.location.hostname}. An admin must add this domain under Firebase Console → Authentication → Settings → Authorized domains.`
+    case 'auth/popup-blocked':
+      return 'Your browser blocked the Google sign-in window. Allow pop-ups for this site and try again.'
+    case 'auth/popup-closed-by-user':
+    case 'auth/cancelled-popup-request':
+      return 'Google sign-in was cancelled.'
+    case 'auth/operation-not-allowed':
+      return 'Google sign-in is turned off for this project. Enable the Google provider in Firebase Console → Authentication → Sign-in method.'
+    case 'auth/network-request-failed':
+      return 'Could not reach Google. Check your connection and try again.'
+    default:
+      return err?.message || 'Google sign-in failed.'
+  }
+}
 
 export async function signInWithGoogle() {
-  const result = await signInWithPopup(auth, googleProvider)
+  let result
+  try {
+    result = await signInWithPopup(auth, googleProvider)
+  } catch (err) {
+    throw new Error(describeFirebaseError(err))
+  }
   const user = result.user
   return {
     name: user.displayName || '',

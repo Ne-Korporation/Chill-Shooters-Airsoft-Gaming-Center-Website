@@ -22,3 +22,14 @@ services:
         sync: false
       - key: TO_EMAIL
         value: support@chillshooters.com
+      # Image uploads (announcements, GCash proofs, IDs). Without these the API
+      # stores uploads in MongoDB instead, which works but is slower.
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      # Card payments. The frontend also needs VITE_STRIPE_PUBLISHABLE_KEY (Vercel).
+      - key: STRIPE_SECRET_KEY
+        sync: false

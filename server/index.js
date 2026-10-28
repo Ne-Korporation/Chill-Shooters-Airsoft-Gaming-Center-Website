@@ -6,6 +6,7 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 // Routers are dynamically imported after loading environment variables
 import { getDb } from './db/mongo.js'
+import { ensureDatabaseSetup } from './db/setup.js'
 import { requireAuth, requireRole } from './middleware/auth.js'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -45,7 +46,14 @@ app.get('/api/public/metrics', async (_req, res) => {
 })
 
 getDb()
-  .then(() => console.log('MongoDB connected'))
+  .then(async (db) => {
+    console.log('MongoDB connected')
+    try {
+      await ensureDatabaseSetup(db)
+    } catch (err) {
+      console.error('Database setup failed:', err)
+    }
+  })
   .catch((err) => console.warn('MongoDB not connected yet:', String(err)))
 
 let transporter
