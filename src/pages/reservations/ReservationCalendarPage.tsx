@@ -31,6 +31,8 @@ import { Button } from '../../components/ui/Button'
 import { calculatePackagePricing } from '../../utils/packagePricing'
 import { formatDiscountTargetLabel, resolvePackageDiscountConfig } from '../../utils/packagePricing'
 import { loadPackagePrefill } from '../../utils/packagePrefill'
+import { modelOf } from '../../utils/inventoryModels'
+import { PiecePicker, type PickerGroup } from '../../components/inventory/PiecePicker'
 
 // Slot holds last 15 minutes on the server; refresh well before that while the player is booking.
 const SLOT_HOLD_REFRESH_MS = 4 * 60 * 1000
@@ -67,10 +69,14 @@ type RentalPackage = {
   status: string
 }
 
+// Rental gear is one record per physical piece (e.g. "M4 Rifle #3"), grouped by model.
 type WeaponItem = {
   id: string
   _id?: any
   name: string
+  model: string
+  unitNumber: number
+  source?: string
   category: string
   status: string
   price: number
@@ -80,9 +86,11 @@ type EquipmentItemDetails = {
   id: string
   _id?: any
   name: string
+  model: string
+  unitNumber: number
+  source?: string
   category: string
   status: string
-  qty: number
   price: number
 }
 
@@ -631,6 +639,9 @@ export function ReservationCalendarPage() {
           id: d.id ?? (d._id ? String(d._id) : undefined),
           _id: d._id,
           name: d.name || 'Unnamed weapon',
+          model: modelOf(d),
+          unitNumber: Number(d.unitNumber) || 0,
+          source: d.source,
           category: d.category || 'rifles',
           status: d.status || 'available',
           price: typeof d.price === 'number' ? d.price : 0,
@@ -641,9 +652,11 @@ export function ReservationCalendarPage() {
           id: d.id ?? (d._id ? String(d._id) : undefined),
           _id: d._id,
           name: d.name || 'Unnamed equipment',
+          model: modelOf(d),
+          unitNumber: Number(d.unitNumber) || 0,
+          source: d.source,
           category: d.category || 'gear',
           status: d.status || 'available',
-          qty: typeof d.qty === 'number' ? d.qty : 1,
           price: typeof d.price === 'number' ? d.price : 0,
         })))
       } catch (e: any) {
@@ -708,24 +721,46 @@ export function ReservationCalendarPage() {
     return () => { cancelled = true }
   }, [dateISO, slot, step])
 
-  const weaponAvailable = useCallback(
-    (weaponId: string) => slotStock?.weapons?.[weaponId]?.available ?? null,
-    [slotStock],
-  )
-  const equipmentAvailable = useCallback(
-    (item: EquipmentItemDetails) => slotStock?.equipments?.[item.id]?.available ?? Math.max(0, Number(item.qty ?? 0)),
-    [slotStock],
-  )
+  // A piece is free when it's in service and not reserved by another booking for this slot.
+  const pieceFree = useCallback((collection: 'weapons' | 'equipments', piece: { id: string; status: string }) => {
+    if (String(piece.status || 'available') !== 'available') return false
+    const entry = slotStock?.[collection]?.[piece.id]
+    return entry ? entry.available > 0 : true
+  }, [slotStock])
 
-  // Mirrors the server: a package rents weaponCount × players units, minus verified
-  // own weapons, drawn from its weapons.
+  const rentalWeapons = useMemo(() => weapons.filter((w) => w.source !== 'player'), [weapons])
+  const rentalEquipment = useMemo(() => equipment.filter((e) => e.source !== 'player'), [equipment])
+
+  const groupPieces = useCallback((collection: 'weapons' | 'equipments', items: Array<WeaponItem | EquipmentItemDetails>): PickerGroup[] => {
+    const groups = new Map<string, PickerGroup>()
+    for (const item of [...items].sort((a, b) => a.unitNumber - b.unitNumber || a.id.localeCompare(b.id))) {
+      const group = groups.get(item.model) || { model: item.model, category: item.category, price: item.price, pieces: [] }
+      group.pieces.push({ id: item.id, label: item.unitNumber ? `#${item.unitNumber}` : item.id, free: pieceFree(collection, item) })
+      groups.set(item.model, group)
+    }
+    return [...groups.values()].sort((a, b) => a.model.localeCompare(b.model))
+  }, [pieceFree])
+
+  const weaponGroups = useMemo(() => groupPieces('weapons', rentalWeapons), [groupPieces, rentalWeapons])
+  const equipmentGroups = useMemo(() => groupPieces('equipments', rentalEquipment), [groupPieces, rentalEquipment])
+
+  const freeOfModel = useCallback((groups: PickerGroup[], model: string) =>
+    groups.find((group) => group.model === model)?.pieces.filter((piece) => piece.free).length ?? 0,
+  [])
+
+  const modelsOfIds = useCallback((items: Array<{ id: string; model: string }>, ids: string[]) =>
+    [...new Set(ids.map((id) => items.find((item) => item.id === id)?.model).filter(Boolean) as string[])],
+  [])
+
+  // Mirrors the server: a package rents weaponCount × players weapons (minus verified own
+  // weapons) from the free pieces of its weapon models.
   const packageWeaponStock = useCallback((pkg: RentalPackage) => {
-    const needed = Math.max(0, Math.round(pkg.weaponCount || pkg.weaponIds.length) * players - verifiedOwnWeaponCount)
-    const known = pkg.weaponIds.map(weaponAvailable)
-    if (known.some((value) => value === null)) return { needed, available: null as number | null, ok: true }
-    const available = (known as number[]).reduce((sum, value) => sum + value, 0)
+    const models = modelsOfIds(rentalWeapons, pkg.weaponIds)
+    const needed = models.length ? Math.max(0, Math.round(pkg.weaponCount || models.length) * players - verifiedOwnWeaponCount) : 0
+    if (!slotStock) return { needed, available: null as number | null, ok: true }
+    const available = models.reduce((sum, model) => sum + freeOfModel(weaponGroups, model), 0)
     return { needed, available, ok: available >= needed }
-  }, [players, verifiedOwnWeaponCount, weaponAvailable])
+  }, [modelsOfIds, rentalWeapons, players, verifiedOwnWeaponCount, slotStock, freeOfModel, weaponGroups])
 
   const cheapestPackage = useMemo(() => {
     if (packages.length === 0) return undefined
@@ -935,6 +970,35 @@ export function ReservationCalendarPage() {
     return weaponPrices + equipmentPrices
   }, [packageWeapons, packageEquipment])
 
+  // Pieces the player picked for a package (optional; the rest are assigned automatically).
+  const [pickedUnitIds, setPickedUnitIds] = useState<string[]>([])
+  const packageWeaponModels = useMemo(() => (selectedPackage ? modelsOfIds(rentalWeapons, selectedPackage.weaponIds) : []), [selectedPackage, modelsOfIds, rentalWeapons])
+  const packageEquipmentModels = useMemo(() => (selectedPackage ? modelsOfIds(rentalEquipment, selectedPackage.equipmentIds) : []), [selectedPackage, modelsOfIds, rentalEquipment])
+  const packageWeaponGroups = useMemo(() => weaponGroups.filter((group) => packageWeaponModels.includes(group.model)), [weaponGroups, packageWeaponModels])
+  const packageEquipmentGroups = useMemo(() => equipmentGroups.filter((group) => packageEquipmentModels.includes(group.model)), [equipmentGroups, packageEquipmentModels])
+
+  // Drop picks that no longer apply (package, slot, or headcount changed).
+  useEffect(() => {
+    const allowed = new Set([...packageWeaponGroups, ...packageEquipmentGroups].flatMap((group) => group.pieces.filter((piece) => piece.free).map((piece) => piece.id)))
+    setPickedUnitIds((current) => {
+      const next = current.filter((id) => allowed.has(id))
+      return next.length === current.length ? current : next
+    })
+  }, [packageWeaponGroups, packageEquipmentGroups])
+
+  useEffect(() => {
+    const free = new Set([...weaponGroups, ...equipmentGroups].flatMap((group) => group.pieces.filter((piece) => piece.free).map((piece) => piece.id)))
+    setCustomWeaponIds((current) => (current.every((id) => free.has(id)) ? current : current.filter((id) => free.has(id))))
+    setCustomEquipmentIds((current) => (current.every((id) => free.has(id)) ? current : current.filter((id) => free.has(id))))
+  }, [weaponGroups, equipmentGroups])
+
+  const togglePickedUnit = (id: string) => {
+    setPickedUnitIds((current) => (current.includes(id) ? current.filter((unit) => unit !== id) : [...current, id]))
+  }
+
+  const packageWeaponsNeeded = selectedPackage ? packageWeaponStock(selectedPackage).needed : 0
+  const pickedPackageWeapons = pickedUnitIds.filter((id) => rentalWeapons.some((w) => w.id === id)).length
+
   const customSelectedWeapons = useMemo(() => {
     return weapons.filter((w) => customWeaponIds.includes(w.id))
   }, [weapons, customWeaponIds])
@@ -943,45 +1007,31 @@ export function ReservationCalendarPage() {
     return equipment.filter((e) => customEquipmentIds.includes(e.id))
   }, [equipment, customEquipmentIds])
 
-  // Covers rental weapons as well as equipment for the selected date/slot.
+  // Package shortages for the selected date/slot. Custom picks are individual free pieces.
   const equipmentStockCheck = useMemo(() => {
-    const selectedEquipment = selectionMode === 'package' ? packageEquipment : customSelectedEquipment
-    const checks = selectedEquipment.map((item) => {
-      const available = equipmentAvailable(item)
-      return { name: item.name, available, required: players, ok: available >= players }
+    if (selectionMode !== 'package' || !selectedPackage || !slotStock) return []
+    const checks = packageEquipmentModels.map((model) => {
+      const available = freeOfModel(equipmentGroups, model)
+      return { name: model, available, required: players, ok: available >= players }
     })
-    if (selectionMode === 'package' && selectedPackage && selectedPackage.weaponIds.length > 0) {
+    if (packageWeaponModels.length > 0) {
       const weaponStock = packageWeaponStock(selectedPackage)
       if (weaponStock.available !== null) {
         checks.push({ name: 'Rental weapons', available: weaponStock.available, required: weaponStock.needed, ok: weaponStock.ok })
       }
     }
-    if (selectionMode === 'custom') {
-      for (const weapon of customSelectedWeapons) {
-        const available = weaponAvailable(weapon.id)
-        if (available !== null) checks.push({ name: weapon.name, available, required: players, ok: available >= players })
-      }
-    }
     return checks
-  }, [selectionMode, packageEquipment, customSelectedEquipment, customSelectedWeapons, players, selectedPackage, packageWeaponStock, equipmentAvailable, weaponAvailable])
+  }, [selectionMode, selectedPackage, slotStock, packageEquipmentModels, packageWeaponModels, freeOfModel, equipmentGroups, players, packageWeaponStock])
 
   const hasInsufficientEquipmentStock = equipmentStockCheck.some((item) => !item.ok)
 
-  const customPerPlayerTotal = useMemo(() => {
-    const wp = customSelectedWeapons.reduce((sum, w) => sum + (w.price || 0), 0)
-    const ep = customSelectedEquipment.reduce((sum, e) => sum + (e.price || 0), 0)
-    return wp + ep + ENTRANCE_FEE_PER_PLAYER
-  }, [customSelectedWeapons, customSelectedEquipment])
-
-  // Matches the server: each verified own weapon replaces one rental at the average weapon price.
-  const customOwnWeaponsUsed = Math.min(verifiedOwnWeaponCount, customSelectedWeapons.length * players)
-  const customWeaponDeduction = customSelectedWeapons.length
-    ? Math.round((customSelectedWeapons.reduce((sum, w) => sum + (w.price || 0), 0) / customSelectedWeapons.length) * customOwnWeaponsUsed)
-    : 0
-
-  const customTotal = useMemo(() => {
-    return Math.max(0, customPerPlayerTotal * players - customWeaponDeduction)
-  }, [customPerPlayerTotal, players, customWeaponDeduction])
+  // Custom rentals are individual pieces: each chosen piece is rented once at its own price.
+  const customItemsTotal = useMemo(
+    () => [...customSelectedWeapons, ...customSelectedEquipment].reduce((sum, item) => sum + (item.price || 0), 0),
+    [customSelectedWeapons, customSelectedEquipment],
+  )
+  const customTotal = customItemsTotal + ENTRANCE_FEE_PER_PLAYER * players
+  const customPerPlayerTotal = Math.round(customTotal / Math.max(1, players))
 
   const basePricing = useMemo(() => {
     if (selectionMode === 'custom') {
@@ -1060,14 +1110,15 @@ export function ReservationCalendarPage() {
       }
       if (details.discountAmount > 0) itemizedBreakdown.push({ label: `Package discount (${details.discountSummary})`, amount: -details.discountAmount })
     } else if (selectionMode === 'custom') {
-      const weaponsCharge = customSelectedWeapons.reduce((sum, w) => sum + Number(w.price || 0) * players, 0) - customWeaponDeduction
-      const equipmentCharge = customSelectedEquipment.reduce((sum, item) => sum + Number(item.price || 0) * players, 0)
-      equipmentPrice = Math.max(0, weaponsCharge) + equipmentCharge
-      if (weaponsCharge > 0) itemizedBreakdown.push({ label: 'Custom rental weapons', amount: Math.max(0, weaponsCharge) })
-      if (customOwnWeaponsUsed > 0) itemizedBreakdown.push({ label: `Own weapons (${customOwnWeaponsUsed}) — no rental charge`, amount: 0 })
-      customSelectedEquipment.forEach((item) => {
-        itemizedBreakdown.push({ label: `${item.name} (1 per player)`, amount: Number(item.price || 0) * players })
-      })
+      equipmentPrice = customItemsTotal
+      const groups = new Map<string, { count: number; amount: number }>()
+      for (const item of [...customSelectedWeapons, ...customSelectedEquipment]) {
+        const group = groups.get(item.model) || { count: 0, amount: 0 }
+        groups.set(item.model, { count: group.count + 1, amount: group.amount + Number(item.price || 0) })
+      }
+      for (const [model, group] of groups) {
+        itemizedBreakdown.push({ label: `${model}${group.count > 1 ? ` × ${group.count}` : ''}`, amount: group.amount })
+      }
       itemizedBreakdown.push({ label: `Player entrance fee (${players} × ₱${ENTRANCE_FEE_PER_PLAYER})`, amount: entranceFee })
     }
 
@@ -1079,7 +1130,7 @@ export function ReservationCalendarPage() {
       total: dynamicPricing.total,
       itemizedBreakdown,
     }
-  }, [customOwnWeaponsUsed, customSelectedEquipment, customSelectedWeapons, customWeaponDeduction, dynamicPricing, packageEquipment, players, selectedPackage, selectionMode])
+  }, [customItemsTotal, customSelectedEquipment, customSelectedWeapons, dynamicPricing, packageEquipment, players, selectedPackage, selectionMode])
 
   const reservationSummary = useMemo(() => {
     const selectedFields = availableFields.filter((f) => selectedFieldIds.includes(f.id))
@@ -1323,6 +1374,7 @@ export function ReservationCalendarPage() {
         pendingReservation.selectedGameplayName = selectedPackage?.name
         pendingReservation.selectedOwnWeaponIds = selectedOwnWeaponIds
         pendingReservation.selectedOwnEquipmentIds = selectedOwnEquipmentIds
+        pendingReservation.selectedUnitIds = pickedUnitIds
       } else {
         pendingReservation.customWeaponIds = customWeaponIds
         pendingReservation.customEquipmentIds = customEquipmentIds
@@ -2033,16 +2085,11 @@ export function ReservationCalendarPage() {
                             </div>
 
                             <div className="mt-3 flex flex-wrap gap-2">
-                              {pkg.weaponIds.length > 0 && (
-                                <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-muted">
-                                  {pkg.weaponIds.length} weapon{pkg.weaponIds.length > 1 ? 's' : ''}
+                                {[...modelsOfIds(rentalWeapons, pkg.weaponIds), ...modelsOfIds(rentalEquipment, pkg.equipmentIds)].map((model) => (
+                                <div key={model} className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-muted">
+                                  {model}
                                 </div>
-                              )}
-                              {pkg.equipmentIds.length > 0 && (
-                                <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-muted">
-                                  {pkg.equipmentIds.length} equipment items
-                                </div>
-                              )}
+                              ))}
                               {(() => {
                                 const pkgDiscount = resolvePackageDiscountConfig(pkg)
                                 if (pkgDiscount.value <= 0) return null
@@ -2081,152 +2128,61 @@ export function ReservationCalendarPage() {
                   )}
                 </Card>
 
-                {/* Equipment Details */}
-                {selectedPackage && (packageWeapons.length > 0 || packageEquipment.length > 0) && (
+                {/* Included items: each player gets a piece of every model; the player may pick which pieces */}
+                {selectedPackage && (packageWeaponGroups.length > 0 || packageEquipmentGroups.length > 0) && (
                   <Card className="p-4 md:p-6">
                     <div className="flex items-center gap-2 text-sm font-bold">
-                      <FiShield /> <span>Included Weapons & Equipment</span>
+                      <FiShield /> <span>Included Weapons &amp; Equipment</span>
                     </div>
-                    <p className="mt-1 text-xs text-muted">From the admin inventory — prices are per item rental.</p>
-
-                    {packageWeapons.length > 0 && (
-                      <div className="mt-4">
-                        <div className="text-[11px] uppercase tracking-widest text-muted mb-2">Weapons</div>
-                        <div className="grid gap-2 md:grid-cols-2">
-                          {packageWeapons.map((w) => (
-                            <div key={w.id} className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
-                              <div>
-                                <div className="text-sm font-bold">{w.name}</div>
-                                <div className="mt-1 text-xs text-muted">
-                                  {w.category.toUpperCase()} • {weaponAvailable(w.id) === null ? 'Stock: —' : `${weaponAvailable(w.id)} free this slot`}
-                                </div>
-                              </div>
-                              <div className="text-xs font-semibold text-accent">₱{w.price}/player</div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {packageEquipment.length > 0 && (
-                      <div className="mt-4">
-                        <div className="text-[11px] uppercase tracking-widest text-muted mb-2">Equipment</div>
-                        <div className="grid gap-2 md:grid-cols-2">
-                          {packageEquipment.map((e) => (
-                            <div key={e.id} className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
-                              <div>
-                                <div className="text-sm font-bold">{e.name}</div>
-                                <div className="mt-1 text-xs text-muted">{e.category.toUpperCase()} • {equipmentAvailable(e)} free this slot • 1 per player</div>
-                              </div>
-                              <div className="text-xs font-semibold text-accent">₱{e.price}/player</div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
+                    <p className="mt-1 text-xs text-muted">
+                      Each player gets one of every item below. Optionally pick the exact pieces you want; any you don't pick are assigned automatically from what's free.
+                    </p>
+                    <PiecePicker
+                      groups={[...packageWeaponGroups, ...packageEquipmentGroups]}
+                      selected={pickedUnitIds}
+                      onToggle={togglePickedUnit}
+                      limitFor={(model) => {
+                        if (packageEquipmentModels.includes(model)) return players
+                        // Weapons share one allowance across the package's weapon models.
+                        const pickedHere = pickedUnitIds.filter((id) => rentalWeapons.find((w) => w.id === id)?.model === model).length
+                        return pickedHere + Math.max(0, packageWeaponsNeeded - pickedPackageWeapons)
+                      }}
+                      note={(group) => (packageEquipmentModels.includes(group.model)
+                        ? `${players} needed (1 per player)`
+                        : `${packageWeaponsNeeded} rental weapon${packageWeaponsNeeded === 1 ? '' : 's'} needed for the group`)}
+                    />
                   </Card>
                 )}
               </>
             ) : (
               <>
-                {/* Custom mode - select weapons */}
+                {/* Custom mode: pick individual pieces */}
                 <Card className="p-4 md:p-6">
                   <div className="flex items-center gap-2 text-sm font-bold">
-                    <FiCrosshair /> <span>Select Weapons to Rent</span>
+                    <FiCrosshair /> <span>Pick Weapons to Rent</span>
                   </div>
-                  <p className="mt-1 text-xs text-muted">Choose from the admin inventory. Price is per item per player.</p>
-
-                  {weapons.length === 0 ? (
-                    <div className="mt-4 text-sm text-muted">No weapons available in inventory.</div>
-                  ) : (
-                    <div className="mt-4 grid gap-2 md:grid-cols-2">
-                      {weapons.map((w) => {
-                        const active = customWeaponIds.includes(w.id)
-                        const available = weaponAvailable(w.id)
-                        const short = available !== null && available < players
-                        return (
-                          <label
-                            key={w.id}
-                            className={[
-                              'flex items-start gap-3 rounded-2xl border p-3 cursor-pointer transition',
-                              active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
-                              short && !active ? 'opacity-60 cursor-not-allowed' : '',
-                            ].join(' ')}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={active}
-                              disabled={short && !active}
-                              onChange={() => {
-                                setCustomWeaponIds((prev) =>
-                                  prev.includes(w.id) ? prev.filter((id) => id !== w.id) : [...prev, w.id]
-                                )
-                              }}
-                              className="mt-1 h-4 w-4 accent-accent"
-                            />
-                            <div className="flex-1 min-w-0">
-                              <div className="text-sm font-bold truncate">{w.name}</div>
-                              <div className={['text-xs', short ? 'text-danger' : 'text-muted'].join(' ')}>
-                                {w.category.toUpperCase()} • {available === null ? 'Stock: —' : `${available} free this slot`} • 1 per player
-                              </div>
-                            </div>
-                            <div className="text-xs font-semibold text-accent">₱{w.price}/player</div>
-                          </label>
-                        )
-                      })}
-                    </div>
-                  )}
+                  <p className="mt-1 text-xs text-muted">
+                    Every weapon is a separate piece. Pick one for each player who needs a rental; each piece is charged once. Crossed-out pieces are taken for this slot.
+                  </p>
+                  <PiecePicker
+                    groups={weaponGroups}
+                    selected={customWeaponIds}
+                    onToggle={(id) => setCustomWeaponIds((prev) => (prev.includes(id) ? prev.filter((unit) => unit !== id) : [...prev, id]))}
+                    emptyText="No rental weapons in inventory."
+                  />
                 </Card>
 
-                {/* Custom mode - select equipment */}
                 <Card className="p-4 md:p-6">
                   <div className="flex items-center gap-2 text-sm font-bold">
-                    <FiShield /> <span>Select Equipment to Rent</span>
+                    <FiShield /> <span>Pick Equipment to Rent</span>
                   </div>
-                  <p className="mt-1 text-xs text-muted">Choose from the admin inventory. Price is per item per player.</p>
-
-                  {equipment.length === 0 ? (
-                    <div className="mt-4 text-sm text-muted">No equipment available in inventory.</div>
-                  ) : (
-                    <div className="mt-4 grid gap-2 md:grid-cols-2">
-                      {equipment.map((e) => {
-                        const active = customEquipmentIds.includes(e.id)
-                        const available = equipmentAvailable(e)
-                        const short = available < players
-                        return (
-                          <label
-                            key={e.id}
-                            className={[
-                              'flex items-start gap-3 rounded-2xl border p-3 cursor-pointer transition',
-                              active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
-                              short && !active ? 'opacity-60 cursor-not-allowed' : '',
-                            ].join(' ')}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={active}
-                              disabled={short && !active}
-                              onChange={() => {
-                                if (short && !active) {
-                                  toast.error(`${e.name} has only ${available} item(s) free this slot, which is not enough for ${players} players.`)
-                                  return
-                                }
-                                setCustomEquipmentIds((prev) =>
-                                  prev.includes(e.id) ? prev.filter((id) => id !== e.id) : [...prev, e.id]
-                                )
-                              }}
-                              className="mt-1 h-4 w-4 accent-accent"
-                            />
-                            <div className="flex-1 min-w-0">
-                              <div className="text-sm font-bold truncate">{e.name}</div>
-                              <div className={['text-xs', short ? 'text-danger' : 'text-muted'].join(' ')}>{e.category.toUpperCase()} • {available} free this slot • 1 per player</div>
-                            </div>
-                            <div className="text-xs font-semibold text-accent">₱{e.price}/player</div>
-                          </label>
-                        )
-                      })}
-                    </div>
-                  )}
+                  <p className="mt-1 text-xs text-muted">Masks, vests, and other gear — each piece is charged once.</p>
+                  <PiecePicker
+                    groups={equipmentGroups}
+                    selected={customEquipmentIds}
+                    onToggle={(id) => setCustomEquipmentIds((prev) => (prev.includes(id) ? prev.filter((unit) => unit !== id) : [...prev, id]))}
+                    emptyText="No rental equipment in inventory."
+                  />
                 </Card>
               </>
             )}
@@ -2607,16 +2563,19 @@ export function ReservationCalendarPage() {
               ) : (
                 <div className="mt-4 grid gap-3 md:grid-cols-2">
                   <div className="rounded-2xl border border-white/10 bg-white/5 p-4 md:col-span-2">
-                    <div className="text-xs text-muted">Selected rental items (per player)</div>
+                    <div className="text-xs text-muted">Rental pieces picked</div>
                     <div className="mt-2 text-sm font-bold">{customSelectedWeapons.length} weapons, {customSelectedEquipment.length} equipment</div>
+                    {customSelectedWeapons.length + customSelectedEquipment.length > 0 ? (
+                      <div className="mt-1 text-xs text-muted">{[...customSelectedWeapons, ...customSelectedEquipment].map((item) => item.name).join(', ')}</div>
+                    ) : null}
                   </div>
                   <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                    <div className="text-xs text-muted">Per player total</div>
-                    <div className="mt-2 text-sm font-bold">{formatCurrency(customPerPlayerTotal)}</div>
+                    <div className="text-xs text-muted">Pieces total</div>
+                    <div className="mt-2 text-sm font-bold">{formatCurrency(customItemsTotal)}</div>
                   </div>
                   <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                    <div className="text-xs text-muted">× Players</div>
-                    <div className="mt-2 text-sm font-bold">{players}</div>
+                    <div className="text-xs text-muted">Entrance ({players} × ₱{ENTRANCE_FEE_PER_PLAYER})</div>
+                    <div className="mt-2 text-sm font-bold">{formatCurrency(ENTRANCE_FEE_PER_PLAYER * players)}</div>
                   </div>
                   {(reservationSummary.ownWeapons || reservationSummary.ownEquipment) && (
                     <div className="rounded-2xl border border-white/10 bg-white/5 p-4 md:col-span-2">

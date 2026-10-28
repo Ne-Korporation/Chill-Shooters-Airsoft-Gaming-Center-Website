@@ -4,6 +4,7 @@ import { DashboardPostsPanel } from '../../components/dashboard/DashboardPostsPa
 import { PaymentCompletePanel } from '../../components/dashboard/PaymentCompletePanel'
 import { ActionRow, ActivityList, DashboardHeader, Panel, StatTile, type ActivityTone } from '../../components/dashboard/DashboardParts'
 import { apiGet } from '../../utils/apiClient'
+import { equipmentAlerts } from '../../utils/inventoryModels'
 
 
 type ActivityItem = {
@@ -76,11 +77,7 @@ export function AdminDashboardPage() {
           return status === 'pending' || status === 'needs review' || status === 'needs_review' || status === 'review'
         }).length
 
-        const equipmentAlerts = equipment.filter((item) => {
-          const status = String(item?.status || '').trim().toLowerCase()
-          const qty = Number(item?.qty ?? 0)
-          return status === 'maintenance' || qty <= 1
-        }).length
+        const equipmentAlertCount = equipmentAlerts(equipment).count
 
         const reviewQueue = payments.filter((payment) => {
           const status = String(payment?.paymentStatus || payment?.status || '').trim().toLowerCase()
@@ -123,7 +120,7 @@ export function AdminDashboardPage() {
           players: users.filter((user) => String(user?.role || '').trim().toLowerCase() === 'user').length || users.length,
           payments: payments.length,
           pendingApprovals,
-          equipmentAlerts,
+          equipmentAlerts: equipmentAlertCount,
           reviewQueue,
           recentActivity: activityRows.slice(0, 3),
         }

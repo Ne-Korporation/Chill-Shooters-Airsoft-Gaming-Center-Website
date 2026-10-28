@@ -3,6 +3,7 @@ import { FiDownload, FiPrinter } from 'react-icons/fi'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { apiGet } from '../../utils/apiClient'
+import { equipmentAlerts } from '../../utils/inventoryModels'
 
 type Metric = { label: string; value: string; tone: 'accent' | 'success' | 'danger' }
 
@@ -221,8 +222,7 @@ export function AdminReportsPage() {
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([key, values]) => ({ key, ...values }))
 
-    const equipmentAlerts = equipment.filter((item) =>
-      String(item.status || '').trim().toLowerCase() === 'maintenance' || Number(item.qty ?? 0) <= 1).length
+    const equipmentAlertCount = equipmentAlerts(equipment).count
 
     const metrics: Metric[] = [
       { label: 'Reservations', value: String(periodReservations.length), tone: 'accent' },
@@ -233,7 +233,7 @@ export function AdminReportsPage() {
       { label: 'Payments awaiting review', value: `${pendingPayments.length} · ${formatCurrency(pendingAmount)}`, tone: 'danger' },
       { label: 'Pending approvals', value: String(pendingApprovals), tone: 'danger' },
       { label: 'Waivers submitted', value: String(periodWaivers.length), tone: 'accent' },
-      { label: 'Equipment alerts (current)', value: String(equipmentAlerts), tone: 'danger' },
+      { label: 'Equipment alerts (current)', value: String(equipmentAlertCount), tone: 'danger' },
     ]
 
     return { metrics, breakdown, periodPayments, collected, players }

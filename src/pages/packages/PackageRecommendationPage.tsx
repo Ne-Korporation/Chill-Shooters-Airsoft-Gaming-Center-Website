@@ -21,6 +21,7 @@ import { Button } from '../../components/ui/Button'
 import { apiGet } from '../../utils/apiClient'
 import { calculatePackagePricing, resolvePackageDiscountConfig } from '../../utils/packagePricing'
 import { savePackagePrefill, type PackageRecommendationPrefill } from '../../utils/packagePrefill'
+import { modelOf } from '../../utils/inventoryModels'
 
 const ENTRANCE_FEE_PER_PLAYER = 150
 const MAX_PLAYERS = 40
@@ -185,7 +186,8 @@ function buildRows<T extends { id: string; name: string; category: string; price
     if (!found) continue
     const existing = map.get(id)
     if (existing) existing.qty += 1
-    else map.set(id, { item: found, qty: 1 })
+    // Packages name a kind of item; show the model ("M4 Rifle"), not the sample piece ("M4 Rifle #1").
+    else map.set(id, { item: { ...found, name: modelOf(found) }, qty: 1 })
   }
   return Array.from(map.values())
 }
