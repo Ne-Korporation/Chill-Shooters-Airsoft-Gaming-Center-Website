@@ -16,6 +16,7 @@ import { signInWithGoogle } from '../../utils/firebase'
 type FormValues = {
   email: string
   password: string
+  remember: boolean
 }
 
 export function LoginPage() {
@@ -29,8 +30,9 @@ export function LoginPage() {
   const {
     register,
     handleSubmit,
+    getValues,
     formState: { errors, isSubmitting },
-  } = useForm<FormValues>({ defaultValues: { email: '', password: '' } })
+  } = useForm<FormValues>({ defaultValues: { email: '', password: '', remember: false } })
 
   const { theme } = useTheme()
 
@@ -67,7 +69,7 @@ export function LoginPage() {
   async function handleGoogleSignIn() {
     try {
       const profile = await signInWithGoogle()
-      const user = await loginWithGoogle({ name: profile.name, email: profile.email, idToken: profile.idToken })
+      const user = await loginWithGoogle({ name: profile.name, email: profile.email, idToken: profile.idToken, remember: getValues('remember') })
       toast.success('Signed in with Google.')
       navigate(getRedirectRoute(user.role))
     } catch (err: any) {
@@ -154,6 +156,11 @@ export function LoginPage() {
                   <p className="mt-1 text-xs text-danger">{errors.password.message}</p>
                 )}
               </div>
+
+              <label className="flex cursor-pointer items-center gap-2 text-sm text-muted">
+                <input type="checkbox" className="h-4 w-4 accent-[var(--color-accent)]" {...register('remember')} />
+                Remember me (stay logged in)
+              </label>
 
               <Button type="submit" disabled={isSubmitting} className="w-full">
                 {isSubmitting ? 'Verifying...' : 'Sign In'}

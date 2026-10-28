@@ -1,4 +1,39 @@
-export function getGcashAmountDue(reservation, payments) {
+function isActivePayment(payment) {
+  return !['failed', 'rejected'].includes(String(payment.paymentStatus || payment.status || '').toLowerCase())
+}
+
+// Captain first, then the registered teammates who share a split payment.
+export function getSplitPayerIds(reservation) {
+  const ids = [reservation?.userId, ...(Array.isArray(reservation?.splitPayerIds) ? reservation.splitPayerIds : [])]
+  return [...new Set(ids.map((id) => String(id || '').trim()).filter(Boolean))]
+}
+
+// Submitted (not failed/rejected) amount against the online amount due (the deposit).
+// A reservation is finalized once every share is in; staff still verify each proof.
+export function getPaymentProgress(reservation, payments) {
+  const target = Math.max(0, Number(reservation?.depositAmount) || 0)
+  const active = payments.filter(isActivePayment)
+  const submitted = Math.round(active.reduce((sum, payment) => sum + Number(payment.amount || 0), 0) * 100) / 100
+  const verified = Math.round(active
+    .filter((payment) => ['paid', 'confirmed', 'verified', 'approved'].includes(String(payment.paymentStatus || payment.status || '').toLowerCase()))
+    .reduce((sum, payment) => sum + Number(payment.amount || 0), 0) * 100) / 100
+  const paidUserIds = new Set(active.map((payment) => String(payment.userId || '')))
+  const payerIds = String(reservation?.paymentMode || 'self').toLowerCase() === 'split'
+    ? getSplitPayerIds(reservation)
+    : [String(reservation?.userId || '')]
+  const finalized = target > 0 && submitted >= target - 0.01
+  return {
+    target,
+    submitted,
+    verified,
+    remaining: Math.max(0, Math.round((target - submitted) * 100) / 100),
+    paidPayerIds: payerIds.filter((id) => paidUserIds.has(id)),
+    pendingPayerIds: payerIds.filter((id) => !paidUserIds.has(id)),
+    state: finalized ? 'finalized' : submitted > 0 ? 'partial' : 'awaiting',
+  }
+}
+
+export function getGcashAmountDue(reservation, payments, payerId) {
   const depositAmount = Number(reservation?.depositAmount)
   if (!Number.isFinite(depositAmount) || depositAmount <= 0) {
     const invalidDeposit = new Error('Reservation has no valid deposit due.')
@@ -26,7 +61,21 @@ export function getGcashAmountDue(reservation, payments) {
     invalidSplit.statusCode = 400
     throw invalidSplit
   }
-  return Math.min(Math.round((depositAmount / teamSize) * 100) / 100, remainingDeposit)
+  const share = Math.round((depositAmount / teamSize) * 100) / 100
+  // Older reservations have no recorded payer list; keep their one-share-at-a-time rule.
+  if (!payerId || !Array.isArray(reservation.splitPayerIds)) return Math.min(share, remainingDeposit)
+
+  // Each payer settles one share; whoever pays last covers the rounding remainder.
+  const payer = String(payerId)
+  if (!getSplitPayerIds(reservation).includes(payer)) {
+    const notPayer = new Error('You are not part of this split payment.')
+    notPayer.statusCode = 403
+    throw notPayer
+  }
+  const active = payments.filter(isActivePayment)
+  if (active.some((payment) => String(payment.userId || '') === payer)) return 0
+  const unpaid = getSplitPayerIds(reservation).filter((id) => !active.some((payment) => String(payment.userId || '') === id))
+  return unpaid.length <= 1 ? remainingDeposit : Math.min(share, remainingDeposit)
 }
 
 export function normalizeGcashReference(value) {
@@ -44,9 +93,7 @@ export function paymentAmountMatchesDue(amount, due) {
 }
 
 export function hasActivePayment(payments) {
-  return payments.some((payment) =>
-    !['failed', 'rejected'].includes(String(payment.paymentStatus || payment.status || '').toLowerCase()),
-  )
+  return payments.some(isActivePayment)
 }
 
 export function stripeIntentMatchesReservation(intent, reservation, reservationId) {

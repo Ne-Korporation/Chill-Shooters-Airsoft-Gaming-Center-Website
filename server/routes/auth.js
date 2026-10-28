@@ -610,7 +610,7 @@ router.post('/login', async (req, res) => {
     return res.json({
       ok: true,
       user: authUser,
-      token: createAuthToken(authUser),
+      token: createAuthToken(authUser, { remember: body.remember === true }),
     })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
@@ -654,7 +654,7 @@ router.post('/social-login', async (req, res) => {
     return res.json({
       ok: true,
       user: authUser,
-      token: createAuthToken(authUser),
+      token: createAuthToken(authUser, { remember: body.remember === true }),
     })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })

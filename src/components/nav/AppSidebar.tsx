@@ -1,8 +1,10 @@
-import React from 'react'
-import { NavLink, useNavigate } from 'react-router-dom'
+import React, { useEffect, useState } from 'react'
+import { NavLink } from 'react-router-dom'
 import type { IconType } from 'react-icons'
 import { useAuth } from '../../context/AuthContext'
 import { useNotifications } from '../../context/NotificationContext'
+import { apiGet } from '../../utils/apiClient'
+import { SPLIT_PAYMENTS_CHANGED_EVENT } from '../../pages/payments/SplitPaymentPage'
 import {
   FiGrid,
   FiCalendar,
@@ -26,6 +28,10 @@ import {
   FiTarget,
   FiBriefcase,
   FiMessageSquare,
+  FiDollarSign,
+  FiShuffle,
+  FiShoppingBag,
+  FiLogOut,
 } from 'react-icons/fi'
 
 type Role = 'user' | 'admin' | 'marshal' | 'registrar'
@@ -55,6 +61,9 @@ const marshalItems: Item[] = [
   { label: 'Equipment', to: '/app/admin/equipment', icon: FiTool, roles: ['marshal'] },
   { label: 'Weapons', to: '/app/admin/weapons', icon: FiTruck, roles: ['marshal'] },
   { label: 'Safety Logs', to: '/app/safety', icon: FiAlertTriangle, roles: ['marshal'] },
+  { label: 'Team Grouping', to: '/app/team-grouping', icon: FiShuffle, roles: ['marshal'] },
+  { label: 'Rental Check-out', to: '/app/rentals', icon: FiLogOut, roles: ['marshal'] },
+  { label: 'Repairs', to: '/app/repairs', icon: FiTool, roles: ['marshal'] },
 ]
 
 
@@ -67,6 +76,10 @@ const adminItems: Item[] = [
   { label: 'Equipment', to: '/app/admin/equipment', icon: FiTool, roles: ['admin'] },
   { label: 'Weapons', to: '/app/admin/weapons', icon: FiTruck, roles: ['admin'] },
   { label: 'Safety Logs', to: '/app/safety', icon: FiAlertTriangle, roles: ['admin'] },
+  { label: 'Counter', to: '/app/counter', icon: FiShoppingBag, roles: ['admin'] },
+  { label: 'Team Grouping', to: '/app/team-grouping', icon: FiShuffle, roles: ['admin'] },
+  { label: 'Rental Check-out', to: '/app/rentals', icon: FiLogOut, roles: ['admin'] },
+  { label: 'Repairs', to: '/app/repairs', icon: FiTool, roles: ['admin'] },
   { label: 'Waivers', to: '/app/admin/waivers', icon: FiShield, roles: ['admin'] },
   { label: 'Package Recommendation', to: '/app/admin/rental-packages', icon: FiPackage, roles: ['admin'] },
   { label: 'Payments', to: '/app/admin/payments', icon: FiCreditCard, roles: ['admin'] },
@@ -78,6 +91,8 @@ const adminItems: Item[] = [
 
 const registrarItems: Item[] = [
   { label: 'Reservations', to: '/app/registrar/reservations', icon: FiCalendar, roles: ['registrar'] },
+  { label: 'Counter', to: '/app/counter', icon: FiShoppingBag, roles: ['registrar'] },
+  { label: 'Rental Check-out', to: '/app/rentals', icon: FiLogOut, roles: ['registrar'] },
   { label: 'Games', to: '/app/registrar/games', icon: FiZap, roles: ['registrar'] },
   { label: 'Availed Packages', to: '/app/registrar/availed-packages', icon: FiPackage, roles: ['registrar'] },
   { label: 'Submitted Waivers', to: '/app/registrar/waivers', icon: FiShield, roles: ['registrar'] },
@@ -85,6 +100,34 @@ const registrarItems: Item[] = [
 ]
 
 
+
+// Players see the Split Payment module only while they owe a share or, as captain, are waiting on the team.
+function useHasOpenSplitPayment(enabled: boolean) {
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    if (!enabled) {
+      setOpen(false)
+      return
+    }
+    let active = true
+    const check = () => {
+      apiGet<{ ok: boolean; data: unknown[] }>('/api/split-payments/mine')
+        .then((res) => { if (active) setOpen(Array.isArray(res?.data) && res.data.length > 0) })
+        .catch(() => { if (active) setOpen(false) })
+    }
+    check()
+    const timer = window.setInterval(check, 60_000)
+    window.addEventListener(SPLIT_PAYMENTS_CHANGED_EVENT, check)
+    window.addEventListener('focus', check)
+    return () => {
+      active = false
+      window.clearInterval(timer)
+      window.removeEventListener(SPLIT_PAYMENTS_CHANGED_EVENT, check)
+      window.removeEventListener('focus', check)
+    }
+  }, [enabled])
+  return open
+}
 
 export function AppSidebar({
   role,
@@ -99,6 +142,7 @@ export function AppSidebar({
   const { unreadCount, getNotificationsForRole } = useNotifications()
   const userUnread = user?.role ? getNotificationsForRole(user.role, user.id).filter((n) => !n.read).length : 0
   const profilePath = user?.id ? `/app/players/${encodeURIComponent(user.id)}` : '/app/players/1'
+  const hasOpenSplitPayment = useHasOpenSplitPayment(role === 'user' && !!user?.id)
 
   const items = [
     ...(role === 'user' || role === 'registrar' || role === 'marshal'
@@ -107,6 +151,9 @@ export function AppSidebar({
         ]
       : []),
     ...baseItems.filter((it) => !it.roles || it.roles.includes(role)),
+    ...(hasOpenSplitPayment
+      ? [{ label: 'Split Payment', to: '/app/split-payments', icon: FiDollarSign, roles: ['user'] }]
+      : []),
     ...(role === 'user' || role === 'registrar' || role === 'marshal'
       ? [
           { label: 'My Weapons & Equipment', to: `/app/players/${encodeURIComponent(user?.id || '1')}/weapons-and-equipment`, icon: FiTarget, roles: ['user'] },

@@ -1,4 +1,5 @@
 import { releaseBookingInventory } from './inventoryHolds.js'
+import { getPaymentProgress } from './paymentRules.js'
 
 export async function updateReservationStatusAtomically({
   db,
@@ -7,6 +8,7 @@ export async function updateReservationStatusAtomically({
   reservationId,
   nextStatus,
   actor,
+  reason = '',
 }) {
   const session = startSession()
   let updatedReservation
@@ -29,6 +31,17 @@ export async function updateReservationStatusAtomically({
         throw conflict
       }
 
+      // No-cancellation policy: once every share of the payment is in, the booking stands.
+      if (nextStatus === 'cancelled' && String(current.reservationStatus || '').toLowerCase() !== 'cancelled') {
+        const reservationIds = [current.id, current._id].filter(Boolean).map(String)
+        const payments = await db.collection('payments').find({ reservationId: { $in: reservationIds } }, { session }).toArray()
+        if (getPaymentProgress(current, payments).state === 'finalized') {
+          const locked = new Error('This reservation is fully paid and can no longer be cancelled (no-cancellation policy).')
+          locked.statusCode = 409
+          throw locked
+        }
+      }
+
       if (String(current.reservationStatus || '').toLowerCase() === nextStatus) {
         updatedReservation = current
         return
@@ -40,11 +53,16 @@ export async function updateReservationStatusAtomically({
         changedBy: String(actor.id),
         changedByRole: actor.role,
         changedAtISO,
+        ...(reason ? { reason: String(reason).slice(0, 200) } : {}),
       }
       await db.collection('reservations').updateOne(
         reservationFilter,
         {
-          $set: { reservationStatus: nextStatus, updatedAtISO: changedAtISO },
+          $set: {
+            reservationStatus: nextStatus,
+            updatedAtISO: changedAtISO,
+            ...(nextStatus === 'cancelled' && reason ? { cancellationReason: String(reason).slice(0, 200) } : {}),
+          },
           $push: { statusHistory: statusEvent },
         },
         { session },

@@ -3,6 +3,7 @@ import toast from 'react-hot-toast'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { apiGet, apiPost, apiPut } from '../../utils/apiClient'
+import { PlayerStatsCard } from '../../components/players/PlayerStatsCard'
 
 export function PlayerManagementPage() {
   const [activeView, setActiveView] = React.useState<'players' | 'staff'>('players')
@@ -488,7 +489,7 @@ export function PlayerManagementPage() {
       </Card>
       {selectedPlayer ? (
         <div onClick={() => setSelectedPlayer(null)} className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/70 p-4">
-          <div onClick={(e) => e.stopPropagation()} className="w-full max-w-3xl rounded-3xl border border-white/10 bg-background p-4 shadow-[0_30px_80px_rgba(0,0,0,0.75)]">
+          <div onClick={(e) => e.stopPropagation()} className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-3xl border border-white/10 bg-background p-4 shadow-[0_30px_80px_rgba(0,0,0,0.75)]">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <div className="text-lg font-semibold">{selectedPlayer.name}</div>
@@ -549,6 +550,11 @@ export function PlayerManagementPage() {
                 <div className="mt-2 text-sm">{selectedPlayer.email}</div>
               </div>
             </div>
+            {selectedPlayer.id ? (
+              <div className="mt-4">
+                <PlayerStatsCard playerId={String(selectedPlayer.id)} canAdjust />
+              </div>
+            ) : null}
             <div className="mt-4 rounded-3xl border border-white/10 bg-white/5 p-4 text-center">
               {selectedPlayer.identityDocumentUrl ? (
                 <img src={selectedPlayer.identityDocumentUrl} alt="Submitted ID" className="mx-auto max-h-[420px] w-auto rounded-3xl object-contain" />

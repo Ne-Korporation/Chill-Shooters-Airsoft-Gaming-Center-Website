@@ -17,9 +17,11 @@ function createFakeDatabase({ reservation, payments = [] }) {
         return {
           findOne: async (filter, options) => {
             assert.ok(options.session)
-            const ownerId = filter.$and[0].userId
+            const payerId = filter.$and[0].$or[0].userId
             const requestedId = filter.$and[1].$or[0].id
-            return state.reservation?.id === requestedId && state.reservation.userId === ownerId
+            const isPayer = state.reservation?.userId === payerId ||
+              (state.reservation?.splitPayerIds || []).includes(payerId)
+            return state.reservation?.id === requestedId && isPayer
               ? state.reservation
               : null
           },
@@ -161,4 +163,58 @@ test('split payment submission charges one remaining server-calculated share', a
     transactionReference: 'split-1234',
   })
   assert.equal(result.payment.amount, 93.75)
+})
+
+test('split payers each pay one share; the last payer covers the remainder and repeats are refused', async () => {
+  const reservation = {
+    id: 'R-3',
+    userId: 'captain',
+    splitPayerIds: ['mate-1', 'mate-2'],
+    pricingVerified: true,
+    depositAmount: 100,
+    paymentMode: 'split',
+    teamSize: 3,
+    numberOfPlayers: 5,
+  }
+  const fake = createFakeDatabase({
+    reservation,
+    payments: [
+      { reservationId: 'R-3', userId: 'captain', amount: 33.33, paymentStatus: 'pending' },
+      { reservationId: 'R-3', userId: 'mate-1', amount: 33.33, paymentStatus: 'pending' },
+    ],
+  })
+
+  const last = await submitGcashPayment({
+    db: fake.db,
+    startSession: fake.startSession,
+    reservationId: 'R-3',
+    userId: 'mate-2',
+    amount: 33.34,
+    transactionReference: 'split-last-1',
+  })
+  assert.equal(last.payment.amount, 33.34)
+
+  await assert.rejects(
+    submitGcashPayment({
+      db: fake.db,
+      startSession: fake.startSession,
+      reservationId: 'R-3',
+      userId: 'mate-1',
+      amount: 33.33,
+      transactionReference: 'split-again-1',
+    }),
+    { statusCode: 409 },
+  )
+
+  await assert.rejects(
+    submitGcashPayment({
+      db: fake.db,
+      startSession: fake.startSession,
+      reservationId: 'R-3',
+      userId: 'stranger',
+      amount: 33.33,
+      transactionReference: 'split-stranger',
+    }),
+    { statusCode: 409 },
+  )
 })

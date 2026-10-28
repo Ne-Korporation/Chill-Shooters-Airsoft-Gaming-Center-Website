@@ -20,6 +20,7 @@ import { Input } from '../../components/ui/Input'
 import { Button } from '../../components/ui/Button'
 import { apiGet } from '../../utils/apiClient'
 import { calculatePackagePricing, resolvePackageDiscountConfig } from '../../utils/packagePricing'
+import { savePackagePrefill, type PackageRecommendationPrefill } from '../../utils/packagePrefill'
 
 const ENTRANCE_FEE_PER_PLAYER = 150
 const MAX_PLAYERS = 40
@@ -355,6 +356,21 @@ export function PackageRecommendationPage() {
   const scored = useMemo(() => priced.filter((item) => item.affordable), [priced])
   const closestOver = useMemo(() => priced.find((item) => !item.affordable), [priced])
 
+  // Packages hidden only because the group size doesn't fit, so the empty state can say why
+  const blockedByPlayers = useMemo(() => {
+    return packages
+      .filter((pkg) => {
+        const playersOk = pkg.players > 0 ? pkg.players === playerSafe : playerSafe >= pkg.minPlayers
+        // Judge weapons at the player count the hint will suggest (same per-player rule as above)
+        const suggestedPlayers = pkg.players > 0 ? pkg.players : Math.max(playerSafe, pkg.minPlayers)
+        const totalWeapons = pkg.settledAmount > 0 ? pkg.weaponCount : pkg.weaponCount * suggestedPlayers
+        const weaponsOk = totalWeapons >= rentalWeaponsNeeded && (weaponsWantedSafe <= 0 || totalWeapons >= weaponsWantedSafe)
+        return !playersOk && weaponsOk
+      })
+      .sort((a, b) => Math.abs((a.players || a.minPlayers) - playerSafe) - Math.abs((b.players || b.minPlayers) - playerSafe))
+  }, [packages, playerSafe, rentalWeaponsNeeded, weaponsWantedSafe])
+  const nearestByPlayers = blockedByPlayers[0]
+
   const best = scored[0]
   const [selectedPackageId, setSelectedPackageId] = useState<string | undefined>(best?.pkg.id)
 
@@ -650,7 +666,11 @@ export function PackageRecommendationPage() {
                 <div className="mt-1 text-xs">
                   {closestOver
                     ? `The closest match is "${closestOver.pkg.name}" at ₱${closestOver.pricing.total.toLocaleString()} for ${playerSafe} player${playerSafe === 1 ? '' : 's'} — increase your budget by ₱${(closestOver.pricing.total - budgetSafe).toLocaleString()} to see it.`
-                    : 'Try a different number of players or fewer weapons.'}
+                    : nearestByPlayers
+                      ? nearestByPlayers.players > 0
+                        ? `"${nearestByPlayers.name}" is set for exactly ${nearestByPlayers.players} players — change players to ${nearestByPlayers.players} to see it.`
+                        : `"${nearestByPlayers.name}" needs at least ${nearestByPlayers.minPlayers} players — increase players to ${nearestByPlayers.minPlayers} to see it.`
+                      : 'Try a different number of players or fewer weapons.'}
                 </div>
               </div>
             ) : (
@@ -895,22 +915,24 @@ export function PackageRecommendationPage() {
                     disabled={!canSubmit}
                     onClick={() => {
                       if (!selectedPackage || !canSubmit) return
-                      navigate('/app/reservations', {
-                        state: {
-                          fromPackageRecommendation: true,
-                          players: playerSafe,
-                          sessionType: budgetModel,
-                          selectedPackageId: selectedPackage.id,
-                          weaponsWanted: weaponsWantedSafe,
-                        },
-                      })
+                      const prefill: PackageRecommendationPrefill = {
+                        fromPackageRecommendation: true,
+                        players: playerSafe,
+                        sessionType: budgetModel,
+                        selectedPackageId: selectedPackage.id,
+                        selectedPackageName: selectedPackage.name,
+                        weaponsWanted: weaponsWantedSafe,
+                        ownWeapons: ownWeaponsSafe,
+                      }
+                      savePackagePrefill(prefill)
+                      navigate('/app/reservations', { state: prefill })
                     }}
                   >
                     Select package
                     <FiChevronRight />
                   </Button>
                   <div className="mt-2 text-[11px] text-muted">
-                    In the full capstone flow, this selection feeds reservation calendar pricing.
+                    Your package, group size, and own-weapon count carry over to the reservation.
                   </div>
                 </div>
               </div>
