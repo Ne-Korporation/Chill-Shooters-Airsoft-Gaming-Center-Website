@@ -4,6 +4,8 @@ import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { Input } from '../../components/ui/Input'
 import { apiGet, apiPost, apiPut, apiDelete } from '../../utils/apiClient'
+import { ModelSummaryStrip } from '../../components/inventory/ModelSummaryStrip'
+import { modelOf, summarizeModels } from '../../utils/inventoryModels'
 import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
 
 type EquipmentCategory = 'masks' | 'vests' | 'gloves' | 'gear' | 'ammo' | 'optics' | 'consumables'
@@ -17,7 +19,8 @@ type InventoryItem = {
   name: string
   category: EquipmentCategory
   status: EquipmentStatus
-  qty: number
+  model: string
+  unitNumber: number
   price: number
   note: string
   description?: string
@@ -53,34 +56,7 @@ const StatusBadge = ({ status }: { status: EquipmentStatus }) => {
   )
 }
 
-function generateEquipmentId(name: string, existingIds: string[]): string {
-  // Extract first letter of each word in the name (up to 2 letters)
-  // e.g. "Tactical Helmet" → "TH", "Vest" → "V", "Full Face Mask" → "FF"
-  const words = (name || '').trim().split(/\s+/).filter(Boolean)
-  let prefix = ''
-  if (words.length >= 2) {
-    prefix = (words[0].charAt(0) + words[1].charAt(0)).toUpperCase()
-  } else if (words.length === 1) {
-    prefix = words[0].charAt(0).toUpperCase()
-  }
-  if (!prefix || !/[A-Z]/.test(prefix)) return `EQ-XX-001`
-
-  // Find the highest sequence number for this prefix (e.g. EQ-TH-XXX)
-  let maxSeq = 0
-  const pattern = new RegExp(`^EQ-${prefix}-(\\d{3})$`)
-  for (const existingId of existingIds) {
-    const match = existingId.match(pattern)
-    if (match) {
-      const seq = parseInt(match[1], 10)
-      if (seq > maxSeq) maxSeq = seq
-    }
-  }
-
-  const nextSeq = maxSeq + 1
-  return `EQ-${prefix}-${String(nextSeq).padStart(3, '0')}`
-}
-
-const emptyForm = () => ({ name: '', description: '', qty: '1', price: '0', status: 'available' as EquipmentStatus, category: 'gear' as EquipmentCategory, partnerId: '' })
+const emptyForm = () => ({ name: '', description: '', pieces: '1', applyToModel: true, price: '0', status: 'available' as EquipmentStatus, category: 'gear' as EquipmentCategory, partnerId: '' })
 
 export function AdminEquipmentPage() {
   const [activeCategory, setActiveCategory] = React.useState<EquipmentCategory | 'all'>('all')
@@ -106,7 +82,8 @@ export function AdminEquipmentPage() {
         name: d.name || 'Unnamed equipment',
         category: (d.category || 'gear') as EquipmentCategory,
         status: (d.status || 'available') as EquipmentStatus,
-        qty: typeof d.qty === 'number' ? d.qty : 1,
+        model: modelOf(d),
+        unitNumber: Number(d.unitNumber) || 0,
         price: typeof d.price === 'number' ? d.price : 0,
         note: d.note || d.description || '',
         description: d.description || d.note || '',
@@ -137,42 +114,40 @@ export function AdminEquipmentPage() {
     return matchesCategory && matchesStatus && matchesSource
   })
 
-  const totalInStock = inventory.reduce((sum, item) => sum + item.qty, 0)
+  const rentalPieces = inventory.filter((item) => item.source !== 'player')
+  const totalInStock = rentalPieces.length
+  const models = summarizeModels(inventory)
   const maintenanceCount = inventory.filter((item) => item.status === 'maintenance').length
   const rentedCount = inventory.filter((item) => item.status === 'rented').length
   const pendingPlayerItems = inventory.filter((item) => item.source === 'player' && item.approvalStatus === 'pending')
   const pendingPlayerItemsCount = pendingPlayerItems.length
 
-  const existingIds = inventory.map((item) => item.id).filter(Boolean) as string[]
-
+  // Each physical item is its own record: adding 5 masks creates Mask #1 … #5 with their own IDs.
   const handleCreate = async () => {
     if (!form.name.trim()) {
       toast.error('Item name is required')
       return
     }
+    const count = Number(form.pieces)
+    if (!Number.isInteger(count) || count < 1 || count > 200) {
+      toast.error('Add between 1 and 200 pieces at a time.')
+      return
+    }
 
     setSaving(true)
     try {
-      const newId = generateEquipmentId(form.name, existingIds)
-      const newItem = {
-        id: newId,
-        name: form.name.trim(),
+      const res = await apiPost<{ ok: boolean; data: Array<{ id: string }> }>('/api/inventory/equipments/pieces', {
+        model: form.name.trim(),
+        count,
         category: form.category,
         status: form.status,
-        qty: Number(form.qty) || 1,
         price: Number(form.price) || 0,
         description: form.description.trim(),
         note: form.description.trim() || 'Newly entered from admin inventory.',
-        createdAtISO: new Date().toISOString(),
-        source: 'business',
-        approvalStatus: 'approved',
         partnerId: form.partnerId,
-      }
-
-      const res = await apiPost<any>('/api/equipments', newItem)
-      if (!res?.ok) throw new Error(res?.error || 'Failed to create equipment')
-
-      toast.success(`Equipment "${form.name.trim()}" created as ${newId}`)
+      })
+      const ids = res.data.map((piece) => piece.id)
+      toast.success(count === 1 ? `Added ${ids[0]}` : `Added ${count} pieces (${ids[0]} – ${ids[ids.length - 1]})`)
       setForm(emptyForm())
       await refresh()
     } catch (e: any) {
@@ -187,7 +162,8 @@ export function AdminEquipmentPage() {
     setForm({
       name: item.name,
       description: item.description || item.note || '',
-      qty: String(item.qty),
+      pieces: '1',
+      applyToModel: true,
       price: String(item.price),
       status: item.status,
       category: item.category,
@@ -289,26 +265,27 @@ export function AdminEquipmentPage() {
       return
     }
 
-    if (!form.name.trim()) {
-      toast.error('Item name is required')
-      return
-    }
-
+    const piece = inventory.find((item) => item.id === selectedItemId)
     setSaving(true)
     try {
-      // Only update fields that are editable: name, qty, status, description
+      // Status and notes belong to this one piece.
       await apiPut<any>(`/api/equipments/${encodeURIComponent(selectedItemId)}`, {
-        name: form.name.trim(),
-        qty: Number(form.qty) || 1,
-        price: Number(form.price) || 0,
-        category: form.category,
         status: form.status,
         description: form.description.trim(),
         note: form.description.trim() || 'Updated from admin inventory.',
-        partnerId: form.partnerId,
+        ...(form.applyToModel ? {} : { price: Number(form.price) || 0, category: form.category, partnerId: form.partnerId }),
         updatedAtISO: new Date().toISOString(),
       })
-      toast.success('Equipment updated')
+      // Price, category, and owner are shared by every piece of the model.
+      if (form.applyToModel && piece) {
+        await apiPut<any>('/api/inventory/equipments/models', {
+          model: piece.model,
+          price: Number(form.price) || 0,
+          category: form.category,
+          partnerId: form.partnerId,
+        })
+      }
+      toast.success(form.applyToModel && piece ? `Updated ${piece.name} and all ${piece.model} pieces` : 'Equipment updated')
       setSelectedItemId(null)
       setForm(emptyForm())
       await refresh()
@@ -362,7 +339,7 @@ export function AdminEquipmentPage() {
 
       <div className="grid gap-4 md:grid-cols-3">
         <Card className="p-4">
-          <div className="text-xs uppercase tracking-widest text-muted">Units in stock</div>
+          <div className="text-xs uppercase tracking-widest text-muted">Rental pieces</div>
           <div className="mt-2 text-2xl font-bold text-accent">{totalInStock}</div>
         </Card>
         <Card className="p-4">
@@ -453,11 +430,13 @@ export function AdminEquipmentPage() {
           </div>
         ) : null}
 
+        <ModelSummaryStrip models={models} unit="piece" />
+
         <div className="mt-4 overflow-hidden rounded-2xl border border-white/5">
           <div className="grid grid-cols-12 bg-white/5 px-3 py-2 text-xs uppercase tracking-widest text-muted">
             <div className="col-span-2">ID</div>
             <div className="col-span-3">Equipment</div>
-            <div className="col-span-1 text-right">Qty</div>
+            <div className="col-span-1 text-right">Piece</div>
             <div className="col-span-2 text-right">Price</div>
             <div className="col-span-2 text-right">Status</div>
             <div className="col-span-2 text-right">Actions</div>
@@ -491,7 +470,7 @@ export function AdminEquipmentPage() {
                     </div>
                     <div className="mt-1 truncate text-xs text-muted">{item.description || item.note}</div>
                   </div>
-                  <div className="col-span-1 text-right text-sm font-semibold">{item.qty}</div>
+                  <div className="col-span-1 text-right text-sm font-semibold">{item.source === 'player' || !item.unitNumber ? '—' : `#${item.unitNumber}`}</div>
                   <div className="col-span-2 text-right text-sm text-accent">₱{item.price}</div>
                   <div className="col-span-2 flex justify-end">
                     <StatusBadge status={item.status} />
@@ -533,24 +512,43 @@ export function AdminEquipmentPage() {
 
         <div className="mt-4 grid gap-4 md:grid-cols-[1.2fr_0.8fr]">
           <Card className="p-4 bg-white/5/60">
-            <div className="text-xs uppercase tracking-widest text-muted">Add or update stock</div>
-            <div className="mt-2 text-sm text-muted">Create new inventory entries with clear status and quantity notes.</div>
+            <div className="text-xs uppercase tracking-widest text-muted">{selectedItemId ? `Edit ${selectedItemId}` : 'Add equipment'}</div>
+            <div className="mt-2 text-sm text-muted">
+              {selectedItemId ? 'Update this piece, or every piece of the same model.' : 'Every physical item is its own piece with its own ID (e.g. Mask #1, Mask #2).'}
+            </div>
 
             <div className="mt-4 grid gap-3 md:grid-cols-2">
               <Input
                 ref={nameRef}
                 label="Item name"
                 value={form.name}
+                readOnly={Boolean(selectedItemId)}
                 onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
-                placeholder="e.g. Tactical Helmet"
+                placeholder="e.g. Mask"
               />
-              <Input
-                label="Quantity"
-                type="number"
-                min="1"
-                value={form.qty}
-                onChange={(event) => setForm((prev) => ({ ...prev, qty: event.target.value }))}
-              />
+              {selectedItemId ? (
+                <label className="flex items-start gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-3 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={form.applyToModel}
+                    onChange={(event) => setForm((prev) => ({ ...prev, applyToModel: event.target.checked }))}
+                    className="mt-0.5 h-4 w-4 accent-[var(--color-accent)]"
+                  />
+                  <span>
+                    Apply price, category, and owner to every {inventory.find((item) => item.id === selectedItemId)?.model || 'matching'} piece
+                    <span className="block text-xs text-muted">Status and notes change only this piece.</span>
+                  </span>
+                </label>
+              ) : (
+                <Input
+                  label="Pieces to add"
+                  type="number"
+                  min="1"
+                  max="200"
+                  value={form.pieces}
+                  onChange={(event) => setForm((prev) => ({ ...prev, pieces: event.target.value }))}
+                />
+              )}
             </div>
 
             <div className="mt-3">
@@ -629,7 +627,7 @@ export function AdminEquipmentPage() {
                 </>
               ) : (
                 <Button onClick={handleCreate} disabled={saving}>
-                  {saving ? 'Saving...' : 'Save inventory item'}
+                  {saving ? 'Saving...' : Number(form.pieces) > 1 ? `Add ${form.pieces} pieces` : 'Add item'}
                 </Button>
               )}
             </div>

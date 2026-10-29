@@ -6,79 +6,97 @@ import {
   releaseBookingInventory,
 } from '../utils/inventoryHolds.js'
 
+// Every rental piece is its own record with a model.
 const records = {
   packages: [
-    { id: 'package', weaponIds: ['rifle'], equipmentIds: ['vest'], weaponCount: 2 },
+    { id: 'package', weaponIds: ['RF-1'], equipmentIds: ['VS-1'], weaponCount: 2 },
   ],
-  weapons: [
-    { id: 'rifle', name: 'Rifle', quantity: 8, status: 'available' },
-  ],
-  equipments: [
-    { id: 'vest', name: 'Vest', qty: 10, status: 'available' },
-  ],
+  weapons: [1, 2, 3, 4, 5, 6, 7, 8].map((n) => ({ id: `RF-${n}`, name: `Rifle #${n}`, model: 'Rifle', unitNumber: n, quantity: 1, status: 'available' })),
+  equipments: [1, 2, 3, 4].map((n) => ({ id: `VS-${n}`, name: `Vest #${n}`, model: 'Vest', unitNumber: n, qty: 1, status: 'available' })),
 }
 
 async function findDocumentById(_db, collection, id) {
   return records[collection]?.find((record) => record.id === id) || null
 }
 
-test('package requirements reserve the configured count for every player', async () => {
+async function listPieces(_db, collection, model) {
+  return records[collection].filter((record) => record.model === model)
+}
+
+const ids = (requirements) => requirements.map((r) => r.itemId)
+
+test('packages reserve one piece per player for equipment and weaponCount per player for weapons', async () => {
   const requirements = await getBookingInventoryRequirements({
     db: {},
-    payload: {
-      selectionMode: 'package',
-      selectedPackageId: 'package',
-      ownWeapons: 999,
-    },
+    payload: { selectionMode: 'package', selectedPackageId: 'package', ownWeapons: 999 },
     players: 3,
     findDocumentById,
+    listPieces,
   })
 
-  assert.deepEqual(requirements, [
-    { itemId: 'vest', collection: 'equipments', quantity: 3, capacity: 10, name: 'Vest' },
-    { itemId: 'rifle', collection: 'weapons', quantity: 6, capacity: 8, name: 'Rifle' },
-  ])
+  assert.deepEqual(ids(requirements), ['VS-1', 'VS-2', 'VS-3', 'RF-1', 'RF-2', 'RF-3', 'RF-4', 'RF-5', 'RF-6'])
+  assert.ok(requirements.every((r) => r.quantity === 1 && r.capacity === 1))
 })
 
-test('custom selections are deduplicated and reserve one selected item per player', async () => {
+test('packages use the pieces the player picked first, skip held pieces, and deduct own weapons', async () => {
   const requirements = await getBookingInventoryRequirements({
     db: {},
-    payload: {
-      selectionMode: 'custom',
-      customWeaponIds: ['rifle', 'rifle'],
-      customEquipmentIds: ['vest', 'vest'],
-    },
+    payload: { selectionMode: 'package', selectedPackageId: 'package', selectedUnitIds: ['RF-8', 'VS-4'], verifiedOwnWeaponCount: 3 },
     players: 2,
     findDocumentById,
+    listPieces,
+    heldQuantities: new Map([['weapons:RF-1', 1]]),
   })
 
-  assert.deepEqual(requirements, [
-    { itemId: 'vest', collection: 'equipments', quantity: 2, capacity: 10, name: 'Vest' },
-    { itemId: 'rifle', collection: 'weapons', quantity: 2, capacity: 8, name: 'Rifle' },
-  ])
+  // 2 players × 2 weapons − 3 own = 1 rifle, the chosen RF-8; vests: chosen VS-4, then VS-1
+  assert.deepEqual(ids(requirements), ['VS-4', 'VS-1', 'RF-8'])
 })
 
-test('inventory requirement derivation rejects unavailable and insufficient stock', async () => {
-  records.weapons.push({ id: 'maintenance-rifle', name: 'Maintenance Rifle', quantity: 5, status: 'maintenance' })
-  records.weapons.push({ id: 'limited-rifle', name: 'Limited Rifle', quantity: 1, status: 'available' })
+test('custom selections reserve exactly the chosen pieces, once each', async () => {
+  const requirements = await getBookingInventoryRequirements({
+    db: {},
+    payload: { selectionMode: 'custom', customWeaponIds: ['RF-2', 'RF-2', 'RF-3'], customEquipmentIds: ['VS-1'] },
+    players: 5,
+    findDocumentById,
+    listPieces,
+  })
+
+  assert.deepEqual(ids(requirements), ['VS-1', 'RF-2', 'RF-3'])
+})
+
+test('unavailable, already-reserved, or too few pieces are rejected', async () => {
+  records.weapons.push({ id: 'RF-X', name: 'Rifle #9', model: 'Rifle', quantity: 1, status: 'maintenance' })
 
   await assert.rejects(
     getBookingInventoryRequirements({
       db: {},
-      payload: { selectionMode: 'custom', customWeaponIds: ['maintenance-rifle'], customEquipmentIds: [] },
+      payload: { selectionMode: 'custom', customWeaponIds: ['RF-X'], customEquipmentIds: [] },
       players: 1,
       findDocumentById,
+      listPieces,
     }),
     /unavailable/,
   )
   await assert.rejects(
     getBookingInventoryRequirements({
       db: {},
-      payload: { selectionMode: 'custom', customWeaponIds: ['limited-rifle'], customEquipmentIds: [] },
-      players: 2,
+      payload: { selectionMode: 'custom', customWeaponIds: ['RF-1'], customEquipmentIds: [] },
+      players: 1,
       findDocumentById,
+      listPieces,
+      heldQuantities: new Map([['weapons:RF-1', 1]]),
     }),
-    /not enough available weapon stock/,
+    /already reserved/,
+  )
+  await assert.rejects(
+    getBookingInventoryRequirements({
+      db: {},
+      payload: { selectionMode: 'package', selectedPackageId: 'package' },
+      players: 5,
+      findDocumentById,
+      listPieces,
+    }),
+    /Vest has only 4 piece/,
   )
 })
 
