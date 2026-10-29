@@ -1,4 +1,5 @@
 import React from 'react'
+import { FiCheck, FiEdit2, FiTrash2, FiX } from 'react-icons/fi'
 import toast from 'react-hot-toast'
 import { ActionGroup, Button } from '../../components/ui/Button'
 import { FilterTabs } from '../../components/ui/FilterTabs'
@@ -192,6 +193,8 @@ export function AdminEquipmentPage() {
   }, [selectedItemId])
 
   const handleRemove = async (id: string) => {
+    const name = inventory.find((item) => item.id === id)?.name || id
+    if (!window.confirm(`Remove "${name}" from the equipment list? This cannot be undone.`)) return
     try {
       await apiDelete(`/api/equipments/${encodeURIComponent(id)}`)
       toast.success('Equipment removed')
@@ -398,10 +401,10 @@ export function AdminEquipmentPage() {
                     <div className="text-sm font-semibold">{item.name}</div>
                     <ActionGroup>
                       <Button size="xs" variant="success-soft" onClick={(e) => { e.stopPropagation(); handleApprovePlayerItem(item.id) }}>
-                        Approve
+                        <FiCheck /> Approve
                       </Button>
                       <Button size="xs" variant="danger-soft" onClick={(e) => { e.stopPropagation(); openRejectDialog(item.id) }}>
-                        Reject
+                        <FiX /> Reject
                       </Button>
                     </ActionGroup>
                   </div>
@@ -460,20 +463,20 @@ export function AdminEquipmentPage() {
                   <div className="col-span-3">
                     <ActionGroup>
                       <Button size="xs" variant="ghost" onClick={(e) => { e.stopPropagation(); handleSelect(item) }}>
-                        Edit
+                        <FiEdit2 /> Edit
                       </Button>
                       {item.source === 'player' && item.approvalStatus === 'pending' ? (
                         <>
                           <Button size="xs" variant="success-soft" onClick={(e) => { e.stopPropagation(); handleApprovePlayerItem(item.id) }}>
-                            Approve
+                            <FiCheck /> Approve
                           </Button>
                           <Button size="xs" variant="danger-soft" onClick={(e) => { e.stopPropagation(); openRejectDialog(item.id) }}>
-                            Reject
+                            <FiX /> Reject
                           </Button>
                         </>
                       ) : null}
                       <Button size="xs" variant="danger-soft" onClick={(e) => { e.stopPropagation(); handleRemove(item.id) }}>
-                        Remove
+                        <FiTrash2 /> Remove
                       </Button>
                     </ActionGroup>
                   </div>

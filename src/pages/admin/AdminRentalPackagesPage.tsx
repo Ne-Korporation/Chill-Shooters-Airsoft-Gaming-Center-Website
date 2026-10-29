@@ -1,4 +1,5 @@
 import React from 'react'
+import { FiEdit2 } from 'react-icons/fi'
 import toast from 'react-hot-toast'
 import { ActionGroup, Button } from '../../components/ui/Button'
 import { FilterTabs, titleCaseLabel } from '../../components/ui/FilterTabs'
@@ -441,6 +442,7 @@ export function AdminRentalPackagesPage() {
   }
 
   const handleArchive = async (pkg: RentalPackage) => {
+    if (!window.confirm(`Archive "${pkg.name}"? Players will no longer be able to book it.`)) return
     try {
       await apiPut<any>(`/api/packages/${getApiId(pkg)}`, {
         status: 'archived',
@@ -631,7 +633,7 @@ export function AdminRentalPackagesPage() {
                               setForm(formFromPackage(pkg))
                             }}
                           >
-                            Manage
+                            <FiEdit2 /> Manage
                           </Button>
                         </div>
                       </div>

@@ -1,4 +1,5 @@
 import React from 'react'
+import { FiCheck, FiEdit2, FiTrash2, FiX } from 'react-icons/fi'
 import toast from 'react-hot-toast'
 import { ActionGroup, Button } from '../../components/ui/Button'
 import { FilterTabs } from '../../components/ui/FilterTabs'
@@ -303,6 +304,8 @@ export function AdminWeaponsPage() {
   }
 
   const handleRemove = async (id: string) => {
+    const name = weapons.find((weapon) => weapon.id === id)?.name || id
+    if (!window.confirm(`Remove "${name}" from the weapon list? This cannot be undone.`)) return
     try {
       await apiDelete(`/api/weapons/${encodeURIComponent(id)}`)
       toast.success('Weapon removed')
@@ -468,10 +471,10 @@ export function AdminWeaponsPage() {
                     <div className="text-sm font-semibold">{weapon.name}</div>
                     <ActionGroup>
                       <Button size="xs" variant="success-soft" onClick={(event) => { event.stopPropagation(); handleApprovePlayerWeapon(weapon.id) }}>
-                        Approve
+                        <FiCheck /> Approve
                       </Button>
                       <Button size="xs" variant="danger-soft" onClick={(event) => { event.stopPropagation(); openRejectDialog(weapon.id) }}>
-                        Reject
+                        <FiX /> Reject
                       </Button>
                     </ActionGroup>
                   </div>
@@ -528,15 +531,15 @@ export function AdminWeaponsPage() {
                   <div className="col-span-4">
                     <ActionGroup>
                       <Button size="xs" variant="ghost" onClick={(e) => { e.stopPropagation(); handleSelect(weapon) }}>
-                        Edit
+                        <FiEdit2 /> Edit
                       </Button>
                       {weapon.source === 'player' && weapon.approvalStatus === 'pending' ? (
                         <>
                           <Button size="xs" variant="success-soft" onClick={(event) => { event.stopPropagation(); handleApprovePlayerWeapon(weapon.id) }}>
-                            Approve
+                            <FiCheck /> Approve
                           </Button>
                           <Button size="xs" variant="danger-soft" onClick={(event) => { event.stopPropagation(); openRejectDialog(weapon.id) }}>
-                            Reject
+                            <FiX /> Reject
                           </Button>
                         </>
                       ) : null}
@@ -544,7 +547,7 @@ export function AdminWeaponsPage() {
                         {weapon.status === 'needs-check' ? 'Unflag' : 'Flag'}
                       </Button>
                       <Button size="xs" variant="danger-soft" onClick={(e) => { e.stopPropagation(); handleRemove(weapon.id) }}>
-                        Remove
+                        <FiTrash2 /> Remove
                       </Button>
                     </ActionGroup>
                   </div>

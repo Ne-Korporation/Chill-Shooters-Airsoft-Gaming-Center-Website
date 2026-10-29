@@ -1,4 +1,5 @@
 import React from 'react'
+import { FiCheck, FiEye, FiRotateCcw, FiSlash, FiX } from 'react-icons/fi'
 import toast from 'react-hot-toast'
 import { ActionGroup, Button } from '../../components/ui/Button'
 import { FilterTabs } from '../../components/ui/FilterTabs'
@@ -30,6 +31,8 @@ export function PlayerManagementPage() {
   const [playerSearch, setPlayerSearch] = React.useState('')
   const [playerLevelFilter, setPlayerLevelFilter] = React.useState<'all' | 'Beginner' | 'Experienced'>('all')
   const [playerVerificationFilter, setPlayerVerificationFilter] = React.useState<'all' | 'verified' | 'pending_review' | 'not_submitted' | 'rejected'>('all')
+  const [playerAccountFilter, setPlayerAccountFilter] = React.useState<'all' | 'active' | 'suspended'>('all')
+  const [statusChangingId, setStatusChangingId] = React.useState<string | null>(null)
   const [staffSearch, setStaffSearch] = React.useState('')
   const [staffFilter, setStaffFilter] = React.useState<'all' | 'Marshal' | 'Admin' | 'Registrar'>('all')
   const [verifyingId, setVerifyingId] = React.useState<string | null>(null)
@@ -57,6 +60,8 @@ export function PlayerManagementPage() {
             verificationStatus,
             verificationLabel: verificationStatus === 'verified' ? 'Verified' : verificationStatus === 'pending_review' ? 'Pending review' : 'Not submitted',
             identityDocumentUrl: doc.identityDocumentUrl || null,
+            accountStatus: String(doc.status || '').toLowerCase() === 'suspended' ? 'suspended' : 'active',
+            suspensionReason: doc.suspensionReason || '',
             partnershipInstitution: doc.partnershipInstitution || '',
             partnershipEligibilityStatus: String(doc.partnershipEligibilityStatus || ''),
             partnershipProofUrl: doc.partnershipProofUrl || '',
@@ -137,6 +142,7 @@ export function PlayerManagementPage() {
   }
 
   const handleResetPassword = async (staffId: string) => {
+    if (!window.confirm('Reset this account to a new default password? They will be emailed the new password and their current one stops working.')) return
     setResettingId(staffId)
     try {
       const res = await apiPost<any>('/api/auth/admin/reset-password', { userId: staffId })
@@ -188,6 +194,43 @@ export function PlayerManagementPage() {
     await handleSetPlayerVerification(playerId, 'rejected')
   }
 
+  // Suspended players can't log in or book; reinstating restores access straight away.
+  const handleSetAccountStatus = async (player: any, status: 'suspended' | 'active') => {
+    let reason = ''
+    if (status === 'suspended') {
+      const answer = window.prompt(`Suspend ${player.name}? They won't be able to log in or book until reinstated.\n\nReason (shown in the audit log):`)
+      if (answer === null) return
+      reason = answer.trim()
+      if (!reason) {
+        toast.error('Enter a reason for the suspension.')
+        return
+      }
+    } else if (!window.confirm(`Reinstate ${player.name}? They will be able to log in and book again.`)) {
+      return
+    }
+    setStatusChangingId(player.id)
+    try {
+      await apiPut<any>(`/api/auth/admin/players/${encodeURIComponent(player.id)}/status`, { status, reason })
+      toast.success(status === 'suspended' ? `${player.name} was suspended.` : `${player.name} was reinstated.`)
+      setSelectedPlayer((current: any) => (current?.id === player.id ? { ...current, accountStatus: status, suspensionReason: reason } : current))
+      await fetchUsers()
+    } catch (e: any) {
+      toast.error(String(e?.message || e))
+    } finally {
+      setStatusChangingId(null)
+    }
+  }
+
+  const accountButton = (pl: any, size: 'xs' | 'sm' = 'xs') => pl.accountStatus === 'suspended' ? (
+    <Button variant="accent-soft" size={size} disabled={statusChangingId === pl.id} onClick={() => handleSetAccountStatus(pl, 'active')}>
+      <FiRotateCcw /> {statusChangingId === pl.id ? 'Updating…' : 'Reinstate'}
+    </Button>
+  ) : (
+    <Button variant="danger-soft" size={size} disabled={statusChangingId === pl.id} onClick={() => handleSetAccountStatus(pl, 'suspended')}>
+      <FiSlash /> {statusChangingId === pl.id ? 'Updating…' : 'Suspend'}
+    </Button>
+  )
+
   const playerList = loading ? (
     <div className="rounded-2xl border border-white/5 bg-white/5 px-4 py-3 text-sm text-muted">Loading accounts...</div>
   ) : error ? (
@@ -197,35 +240,41 @@ export function PlayerManagementPage() {
       const ms = String(pl.name || '').toLowerCase().includes(playerSearch.toLowerCase())
       const lm = playerLevelFilter === 'all' || pl.level === playerLevelFilter
       const vm = playerVerificationFilter === 'all' || pl.verificationStatus === playerVerificationFilter
-      return ms && lm && vm
+      const am = playerAccountFilter === 'all' || pl.accountStatus === playerAccountFilter
+      return ms && lm && vm && am
     }).map((pl, idx) => (
       <div key={pl.id || `player-${idx}`} className="flex flex-col gap-3 rounded-2xl border border-white/5 bg-white/5 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="text-sm font-semibold">{pl.name}</div>
           <div className="mt-1 text-xs text-muted">{pl.email}</div>
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            <span className="rounded-full border border-accent/30 bg-accent/20 px-3 py-1 text-[11px] font-semibold text-accent">{pl.status}</span>
+            {pl.accountStatus === 'suspended' ? (
+              <span className="rounded-full border border-danger/30 bg-danger/15 px-3 py-1 text-[11px] font-semibold text-danger" title={pl.suspensionReason || undefined}>Suspended</span>
+            ) : (
+              <span className="rounded-full border border-accent/30 bg-accent/20 px-3 py-1 text-[11px] font-semibold text-accent">{pl.status}</span>
+            )}
             <span className={`rounded-full border px-3 py-1 text-[11px] font-semibold ${pl.verificationStatus === 'verified' ? 'border-success/30 bg-success/20 text-success' : pl.verificationStatus === 'pending_review' ? 'border-accent/30 bg-accent/20 text-accent' : 'border-white/10 bg-white/5 text-muted'}`}>
               {pl.verificationLabel}
             </span>
           </div>
         </div>
         <ActionGroup>
-          <Button variant="ghost" size="xs" onClick={() => setSelectedPlayer(pl)}>View</Button>
+          <Button variant="ghost" size="xs" onClick={() => setSelectedPlayer(pl)}><FiEye /> View</Button>
           {pl.identityDocumentUrl && pl.verificationStatus === 'pending_review' ? (
             <>
               <Button variant="success-soft" size="xs" onClick={() => pl.id && handleVerifyPlayer(pl.id)} disabled={verifyingId === pl.id}>
-                {verifyingId === pl.id ? 'Verifying…' : 'Verify ID'}
+                <FiCheck /> {verifyingId === pl.id ? 'Verifying…' : 'Verify ID'}
               </Button>
               <Button variant="danger-soft" size="xs" onClick={() => pl.id && handleRejectPlayer(pl.id)} disabled={verifyingId === pl.id}>
-                {verifyingId === pl.id ? 'Rejecting…' : 'Reject ID'}
+                <FiX /> {verifyingId === pl.id ? 'Rejecting…' : 'Reject ID'}
               </Button>
             </>
           ) : pl.identityDocumentUrl && pl.verificationStatus === 'rejected' ? (
             <Button variant="accent-soft" size="xs" onClick={() => pl.id && handleSetPlayerVerification(pl.id, 'pending_review')} disabled={verifyingId === pl.id}>
-              {verifyingId === pl.id ? 'Updating…' : 'Reopen review'}
+              <FiRotateCcw /> {verifyingId === pl.id ? 'Updating…' : 'Reopen review'}
             </Button>
           ) : null}
+          {accountButton(pl)}
         </ActionGroup>
       </div>
     ))
@@ -297,8 +346,8 @@ export function PlayerManagementPage() {
                   ) : null}
                 </div>
                 <ActionGroup>
-                  <Button size="xs" variant="success-soft" disabled={verifyingId === p.id} onClick={() => reviewPartnership(p.id, 'verified')}>Verify</Button>
-                  <Button size="xs" variant="danger-soft" disabled={verifyingId === p.id} onClick={() => reviewPartnership(p.id, 'rejected')}>Reject</Button>
+                  <Button size="xs" variant="success-soft" disabled={verifyingId === p.id} onClick={() => reviewPartnership(p.id, 'verified')}><FiCheck /> Verify</Button>
+                  <Button size="xs" variant="danger-soft" disabled={verifyingId === p.id} onClick={() => reviewPartnership(p.id, 'rejected')}><FiX /> Reject</Button>
                 </ActionGroup>
               </div>
             ))}
@@ -390,7 +439,15 @@ export function PlayerManagementPage() {
                   placeholder="Search by name or email"
                 />
               </div>
-              <div className="grid gap-3 sm:grid-cols-2">
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div>
+                  <label className="block text-xs font-semibold text-muted mb-1">Filter by Account</label>
+                  <select value={playerAccountFilter} onChange={(e) => setPlayerAccountFilter(e.target.value as any)} className="w-full rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm text-text">
+                    <option value="all">All accounts</option>
+                    <option value="active">Active</option>
+                    <option value="suspended">Suspended</option>
+                  </select>
+                </div>
                 <div>
                   <label className="block text-xs font-semibold text-muted mb-1">Filter by Level</label>
                   <select value={playerLevelFilter} onChange={(e) => setPlayerLevelFilter(e.target.value as any)} className="w-full rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm text-text">
@@ -514,7 +571,7 @@ export function PlayerManagementPage() {
                         onClick={() => selectedPlayer.id && handleVerifyPlayer(selectedPlayer.id)}
                         disabled={verifyingId === selectedPlayer.id}
                       >
-                        {verifyingId === selectedPlayer.id ? 'Verifying…' : 'Verify ID'}
+                        <FiCheck /> {verifyingId === selectedPlayer.id ? 'Verifying…' : 'Verify ID'}
                       </Button>
                       <Button
                         variant="danger-soft"
@@ -522,7 +579,7 @@ export function PlayerManagementPage() {
                         onClick={() => selectedPlayer.id && handleRejectPlayer(selectedPlayer.id)}
                         disabled={verifyingId === selectedPlayer.id}
                       >
-                        {verifyingId === selectedPlayer.id ? 'Rejecting…' : 'Reject ID'}
+                        <FiX /> {verifyingId === selectedPlayer.id ? 'Rejecting…' : 'Reject ID'}
                       </Button>
                     </>
                   ) : selectedPlayer.verificationStatus === 'verified' ? (
@@ -541,10 +598,11 @@ export function PlayerManagementPage() {
                       onClick={() => selectedPlayer.id && handleSetPlayerVerification(selectedPlayer.id, 'pending_review')}
                       disabled={verifyingId === selectedPlayer.id}
                     >
-                      {verifyingId === selectedPlayer.id ? 'Updating…' : 'Reopen review'}
+                      <FiRotateCcw /> {verifyingId === selectedPlayer.id ? 'Updating…' : 'Reopen review'}
                     </Button>
                   ) : null
                 ) : null}
+                {accountButton(selectedPlayer, 'sm')}
                 <Button variant="ghost" size="sm" onClick={() => setSelectedPlayer(null)}>Close</Button>
               </div>
             </div>

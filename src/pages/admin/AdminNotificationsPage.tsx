@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react'
+import { FiTrash2 } from 'react-icons/fi'
 import { useNavigate } from 'react-router-dom'
 import { Button } from '../../components/ui/Button'
 import { FilterTabs } from '../../components/ui/FilterTabs'
@@ -102,6 +103,7 @@ export function AdminNotificationsPage() {
   }
 
   const handleDeleteNotification = (id: string) => {
+    if (!window.confirm('Delete this notification?')) return
     deleteNotification(id)
     toast.success('Notification deleted.')
   }
@@ -329,7 +331,7 @@ export function AdminNotificationsPage() {
                           handleDeleteNotification(draft.id)
                         }}
                       >
-                        Delete
+                        <FiTrash2 /> Delete
                       </Button>
                     ) : null}
                   </div>

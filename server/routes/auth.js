@@ -2,7 +2,7 @@ import express from 'express'
 import bcrypt from 'bcrypt'
 import transporter from '../services/mailService.js'
 import { getDb, getUserAccountsCollection, USER_ACCOUNTS_COLLECTION } from '../db/mongo.js'
-import { createAuthToken, requireAuth, requireRole } from '../middleware/auth.js'
+import { SUSPENDED_ACCOUNT_ERROR, createAuthToken, forgetSuspension, isSuspendedAccount, requireAuth, requireRole } from '../middleware/auth.js'
 import { nextShortId } from '../utils/shortIds.js'
 import { canonicalEmail, normalizeEmail, sameEmailFilter } from '../utils/emails.js'
 import { verifyFirebaseIdToken } from '../utils/firebaseTokens.js'
@@ -382,6 +382,59 @@ router.post('/admin/reset-password', requireAuth, requireRole('admin', 'marshal'
   }
 })
 
+// --- Admin: Suspend / reinstate a player ---
+// PUT /api/auth/admin/players/:id/status { status: 'suspended' | 'active', reason }
+// A suspended player cannot log in and their open sessions stop working (see requireAuth).
+router.put('/admin/players/:id/status', requireAuth, requireRole('admin'), async (req, res) => {
+  const nextStatus = String(req.body?.status || '').toLowerCase()
+  if (!['suspended', 'active'].includes(nextStatus)) {
+    return res.status(400).json({ ok: false, error: "status must be 'suspended' or 'active'" })
+  }
+  const reason = String(req.body?.reason || '').trim().slice(0, 300)
+  if (nextStatus === 'suspended' && !reason) {
+    return res.status(400).json({ ok: false, error: 'Give a reason for the suspension.' })
+  }
+
+  try {
+    const db = await getDb()
+    const userAccounts = await getUserAccountsCollection()
+    const player = await userAccounts.findOne({ id: String(req.params.id) })
+    if (!player) return res.status(404).json({ ok: false, error: 'Player not found' })
+    if (String(player.role || 'user').toLowerCase() !== 'user') {
+      return res.status(400).json({ ok: false, error: 'Only player accounts can be suspended here.' })
+    }
+
+    const nowISO = new Date().toISOString()
+    const event = { status: nextStatus, reason, actorId: String(req.user.id), atISO: nowISO }
+    await userAccounts.updateOne(
+      { _id: player._id },
+      {
+        $set: {
+          status: nextStatus,
+          ...(nextStatus === 'suspended' ? { suspendedAtISO: nowISO, suspensionReason: reason } : {}),
+          updatedAtISO: nowISO,
+        },
+        ...(nextStatus === 'active' ? { $unset: { suspendedAtISO: '', suspensionReason: '' } } : {}),
+        $push: { statusHistory: event },
+      },
+    )
+    forgetSuspension(player.id)
+    await db.collection('audit_logs').insertOne({
+      action: nextStatus === 'suspended' ? 'player_suspended' : 'player_reinstated',
+      resourceType: 'user_accounts',
+      resourceId: String(player.id),
+      actorId: String(req.user.id),
+      actorRole: req.user.role,
+      details: { reason, playerName: player.name || '', playerEmail: player.email || '' },
+      createdAtISO: nowISO,
+    }).catch((err) => console.error('Failed to write suspension audit log', err))
+
+    return res.json({ ok: true, data: { id: player.id, status: nextStatus, suspensionReason: nextStatus === 'suspended' ? reason : '' } })
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: String(err) })
+  }
+})
+
 // --- Self-Registration ---
 router.post('/register', async (req, res) => {
   const body = req.body || {}
@@ -597,6 +650,7 @@ router.post('/login', async (req, res) => {
     const passwordOk = looksLikeBcrypt ? await bcrypt.compare(password, stored) : stored === password
 
     if (!passwordOk) return res.status(401).json({ ok: false, error: 'invalid credentials' })
+    if (isSuspendedAccount(user)) return res.status(403).json({ ok: false, error: SUSPENDED_ACCOUNT_ERROR })
 
     const authUser = {
       id: user.id ?? (user._id ? String(user._id) : undefined),
@@ -641,6 +695,7 @@ router.post('/social-login', async (req, res) => {
     if (!eligibility.allowed) {
       return res.status(403).json({ ok: false, error: eligibility.error })
     }
+    if (isSuspendedAccount(user)) return res.status(403).json({ ok: false, error: SUSPENDED_ACCOUNT_ERROR })
 
     const authUser = {
       id: user.id ?? (user._id ? String(user._id) : undefined),
@@ -684,6 +739,7 @@ router.post('/social-register', async (req, res) => {
       if (!eligibility.allowed) {
         return res.status(409).json({ ok: false, error: eligibility.error })
       }
+      if (isSuspendedAccount(existing)) return res.status(403).json({ ok: false, error: SUSPENDED_ACCOUNT_ERROR })
 
       const authUser = {
         id: existing.id ?? (existing._id ? String(existing._id) : undefined),

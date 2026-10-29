@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
+import { FiCheck, FiCornerUpLeft, FiFileText, FiFlag } from 'react-icons/fi'
 import { ActionGroup, Button } from '../../components/ui/Button'
 import { FilterTabs, titleCaseLabel } from '../../components/ui/FilterTabs'
 import { Card } from '../../components/ui/Card'
@@ -487,9 +488,9 @@ export function AdminPaymentsPage() {
                           href={payment.receiptUrl}
                           target="_blank"
                           rel="noreferrer"
-                          className="surface hover-row inline-flex h-8 items-center rounded-xl px-3 text-xs font-semibold text-text"
+                          className="surface hover-row inline-flex h-8 items-center gap-1.5 rounded-xl px-3 text-xs font-semibold text-text"
                         >
-                          Receipt
+                          <FiFileText /> Receipt
                         </a>
                       ) : (
                         <span className="inline-flex h-8 items-center px-1 text-xs text-muted">No receipt</span>
@@ -503,15 +504,15 @@ export function AdminPaymentsPage() {
                       ) : (
                         <>
                           <Button size="xs" variant="success-soft" disabled={updatingId === payment.id} onClick={() => updateStatus(payment.id, 'paid')}>
-                            Approve
+                            <FiCheck /> Approve
                           </Button>
                           {payment.status === 'pending' && (
                             <Button size="xs" variant="accent-soft" disabled={updatingId === payment.id} onClick={() => updateStatus(payment.id, 'review')}>
-                              Flag for review
+                              <FiFlag /> Flag for review
                             </Button>
                           )}
                           <Button size="xs" variant="danger-soft" disabled={updatingId === payment.id} onClick={() => sendBack(payment)}>
-                            Send back
+                            <FiCornerUpLeft /> Send back
                           </Button>
                         </>
                       )}
