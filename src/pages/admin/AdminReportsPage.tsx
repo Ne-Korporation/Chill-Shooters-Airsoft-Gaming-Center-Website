@@ -4,6 +4,7 @@ import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { FilterTabs } from '../../components/ui/FilterTabs'
 import { apiGet } from '../../utils/apiClient'
+import { equipmentAlerts } from '../../utils/inventoryModels'
 
 type Metric = { label: string; value: string; tone: 'accent' | 'success' | 'danger' }
 
@@ -274,8 +275,7 @@ export function AdminReportsPage() {
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([key, values]) => ({ key, ...values }))
 
-    const equipmentAlerts = equipment.filter((item) =>
-      String(item.status || '').trim().toLowerCase() === 'maintenance' || Number(item.qty ?? 0) <= 1).length
+    const equipmentAlertCount = equipmentAlerts(equipment).count
 
     // Player registrations (player accounts created in the period).
     const registrations = accounts.filter((account) =>

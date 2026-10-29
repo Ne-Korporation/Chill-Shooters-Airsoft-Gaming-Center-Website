@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { Card } from '../../components/ui/Card'
 import { FilterTabs, titleCaseLabel } from '../../components/ui/FilterTabs'
 import { apiGet } from '../../utils/apiClient'
+import { equipmentAlerts } from '../../utils/inventoryModels'
 
 type AuditAction = 'RESERVATION' | 'PLAYER' | 'EQUIPMENT' | 'WEAPON' | 'PAYMENT' | 'NOTIFICATION'
 
@@ -134,14 +135,25 @@ export function AdminAuditLogsPage() {
           })
         })
 
-        equipment.filter((item) => String(item.status || '').toLowerCase() === 'maintenance' || Number(item.qty ?? 0) <= 1).slice(0, 2).forEach((item) => {
+        const alerts = equipmentAlerts(equipment)
+        alerts.maintenance.slice(0, 2).forEach((item) => {
           nextLogs.push({
             id: item.id || 'EQ-UNKNOWN',
             action: 'EQUIPMENT',
             severity: 'warning',
             actor: 'Inventory',
-            summary: `${item.name || 'Equipment'} needs attention with ${item.qty ?? 0} unit(s) left.`,
-            meta: formatRelativeTime(item.updatedAtISO || item.createdAtISO),
+            summary: `${item.name || 'Equipment'} is under maintenance.`,
+            meta: formatRelativeTime((item as any).updatedAtISO || (item as any).createdAtISO),
+          })
+        })
+        alerts.lowModels.slice(0, 2).forEach((group) => {
+          nextLogs.push({
+            id: `MODEL-${group.model}`,
+            action: 'EQUIPMENT',
+            severity: 'warning',
+            actor: 'Inventory',
+            summary: `${group.model} is low: ${group.available} of ${group.total} piece(s) available.`,
+            meta: 'inventory',
           })
         })
 

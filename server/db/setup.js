@@ -1,5 +1,6 @@
 import { canonicalEmail } from '../utils/emails.js'
 import { USER_ACCOUNTS_COLLECTION } from './mongo.js'
+import { splitStockIntoPieces } from '../utils/inventoryPieces.js'
 
 // MongoDB only creates a collection on its first insert, so admin pages such as
 // the REACH fund look empty in Atlas until something is written. Create every
@@ -23,9 +24,13 @@ const REQUIRED_COLLECTIONS = [
   'reach_fund_ledger',
   'reservation_slot_locks',
   'reservation_status_locks',
+  'rentals',
+  'repairs',
   'reservations',
   'settings',
   'site_settings',
+  'slot_holds',
+  'team_assignments',
   'uploaded_files',
   USER_ACCOUNTS_COLLECTION,
   'waivers',
@@ -87,4 +92,6 @@ export async function ensureDatabaseSetup(db) {
   await ensureCollections(db)
   await ensureUniqueEmails(db)
   await ensureInventoryIndexes(db)
+  // Rental gear is tracked one piece per record; convert any stock counts left from before.
+  await splitStockIntoPieces(db)
 }

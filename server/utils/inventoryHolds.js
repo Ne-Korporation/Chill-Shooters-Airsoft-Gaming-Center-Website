@@ -1,3 +1,5 @@
+import { isRentalPiece, modelFilter, modelOf } from './inventoryPieces.js'
+
 export function stockQuantity(item, collection) {
   const candidates = collection === 'weapons'
     ? [item.quantity, item.qty, item.stock]
@@ -30,89 +32,112 @@ export async function getHeldQuantities(db, { reservationDate, reservationTime }
   return new Map(rows.map((row) => [holdKey(row._id.collection, row._id.itemId), Number(row.quantity || 0)]))
 }
 
-export async function getBookingInventoryRequirements({ db, payload, players, findDocumentById, heldQuantities = new Map() }) {
+function isUsable(item) {
+  return Boolean(item) && String(item.status || 'available').toLowerCase() === 'available'
+}
+
+// Every rental piece of a model, in unit order. Injected in tests.
+async function listModelPieces(db, collection, model) {
+  return db.collection(collection).find(modelFilter(model)).sort({ unitNumber: 1, id: 1 }).toArray()
+}
+
+// Bookings reserve specific pieces (one unit each) for their date and slot.
+// Custom selections name the exact pieces. Packages name models: each player gets one piece of
+// every equipment model and `weaponCount` weapons (minus verified own weapons); the player's own
+// picks (payload.selectedUnitIds) are used first and the rest are assigned automatically.
+export async function getBookingInventoryRequirements({
+  db,
+  payload,
+  players,
+  findDocumentById,
+  heldQuantities = new Map(),
+  listPieces = listModelPieces,
+}) {
   const mode = String(payload.selectionMode || '').toLowerCase()
   const ownWeaponCount = Math.max(0, Math.round(Number(payload.verifiedOwnWeaponCount) || 0))
-  let weaponIds = []
-  let equipmentIds = []
-  let weaponQuantity = players
+  const freeUnits = (item, collection) =>
+    Math.max(0, stockQuantity(item, collection) - Number(heldQuantities.get(holdKey(collection, String(item.id || item._id))) || 0))
+  const requirement = (item, collection) => ({
+    itemId: String(item.id || item._id),
+    collection,
+    quantity: 1,
+    capacity: stockQuantity(item, collection),
+    name: item.name || String(item.id),
+  })
 
-  if (mode === 'package') {
-    const pkg = await findDocumentById(db, 'packages', String(payload.selectedPackageId || '').trim())
-    if (!pkg) throw new Error('The selected rental package is unavailable.')
-    weaponIds = Array.isArray(pkg.weaponIds) ? [...new Set(pkg.weaponIds.map(String))] : []
-    equipmentIds = Array.isArray(pkg.equipmentIds) ? [...new Set(pkg.equipmentIds.map(String))] : []
-    weaponQuantity = Math.max(0, Math.round(Number(pkg.weaponCount || weaponIds.length)) * players - ownWeaponCount)
-  } else if (mode === 'custom') {
-    weaponIds = Array.isArray(payload.customWeaponIds) ? [...new Set(payload.customWeaponIds.map(String))] : []
-    equipmentIds = Array.isArray(payload.customEquipmentIds) ? [...new Set(payload.customEquipmentIds.map(String))] : []
-  } else {
-    throw new Error('Select a package or choose custom/own gear.')
+  if (mode === 'custom') {
+    const requirements = []
+    for (const [collection, ids] of [
+      ['equipments', payload.customEquipmentIds],
+      ['weapons', payload.customWeaponIds],
+    ]) {
+      for (const id of [...new Set((Array.isArray(ids) ? ids : []).map(String))]) {
+        const item = await findDocumentById(db, collection, id)
+        if (!isUsable(item) || !isRentalPiece(item)) {
+          throw new Error(`${item?.name || 'One of the selected items'} is unavailable.`)
+        }
+        if (freeUnits(item, collection) < 1) {
+          throw new Error(`${item.name || id} is already reserved for this slot. Choose another piece.`)
+        }
+        requirements.push(requirement(item, collection))
+      }
+    }
+    return requirements
   }
 
-  const availableUnits = (item, collection, id) =>
-    Math.max(0, stockQuantity(item, collection) - Number(heldQuantities.get(holdKey(collection, id)) || 0))
+  if (mode !== 'package') throw new Error('Select a package or choose custom/own gear.')
+
+  const pkg = await findDocumentById(db, 'packages', String(payload.selectedPackageId || '').trim())
+  if (!pkg) throw new Error('The selected rental package is unavailable.')
+  const preferred = new Set((Array.isArray(payload.selectedUnitIds) ? payload.selectedUnitIds : []).map(String))
+  const taken = new Set()
+
+  // Free pieces of a model, the player's own picks first.
+  const freePiecesOf = async (collection, model) => {
+    const pieces = (await listPieces(db, collection, model))
+      .filter((piece) => isUsable(piece) && freeUnits(piece, collection) > 0 && !taken.has(String(piece.id)))
+    return [...pieces.filter((p) => preferred.has(String(p.id))), ...pieces.filter((p) => !preferred.has(String(p.id)))]
+  }
+  const modelsOf = async (collection, ids) => {
+    const models = []
+    for (const id of [...new Set((Array.isArray(ids) ? ids : []).map(String))]) {
+      const item = await findDocumentById(db, collection, id)
+      if (!item) throw new Error('The selected package references inventory that is no longer available.')
+      const model = modelOf(item)
+      if (!models.includes(model)) models.push(model)
+    }
+    return models
+  }
 
   const requirements = []
-  for (const id of equipmentIds) {
-    const item = await findDocumentById(db, 'equipments', id)
-    if (!item || String(item.status || 'available').toLowerCase() !== 'available') {
-      throw new Error('One or more selected equipment items are unavailable.')
+  for (const model of await modelsOf('equipments', pkg.equipmentIds)) {
+    const free = await freePiecesOf('equipments', model)
+    if (free.length < players) {
+      throw new Error(`${model} has only ${free.length} piece(s) free for this slot, but ${players} players need one each.`)
     }
-    requirements.push({
-      itemId: id,
-      collection: 'equipments',
-      quantity: players,
-      capacity: stockQuantity(item, 'equipments'),
-      name: item.name || id,
-    })
-    const available = availableUnits(item, 'equipments', id)
-    if (players > available) {
-      throw new Error(`${item.name || id} has only ${available} unit(s) available for this slot, but ${players} players need one each.`)
+    for (const piece of free.slice(0, players)) {
+      taken.add(String(piece.id))
+      requirements.push(requirement(piece, 'equipments'))
     }
   }
 
-  const neededWeapons = mode === 'custom'
-    ? Math.max(0, weaponIds.length * players - ownWeaponCount)
-    : weaponQuantity
-  let remainingWeaponQuantity = neededWeapons
-  let availableWeapons = 0
-  // Own weapons reduce custom rentals evenly, starting with the first selected weapon.
-  const ownPerWeapon = weaponIds.length ? Math.floor(Math.min(ownWeaponCount, weaponIds.length * players) / weaponIds.length) : 0
-  let ownExtra = weaponIds.length ? Math.min(ownWeaponCount, weaponIds.length * players) % weaponIds.length : 0
-  for (const id of weaponIds) {
-    const item = await findDocumentById(db, 'weapons', id)
-    if (!item || String(item.status || 'available').toLowerCase() !== 'available') {
-      throw new Error('One or more selected weapons are unavailable.')
-    }
-    const available = availableUnits(item, 'weapons', id)
-    availableWeapons += available
-    let customQuantity = players - ownPerWeapon
-    if (ownExtra > 0) {
-      customQuantity -= 1
-      ownExtra -= 1
-    }
-    customQuantity = Math.max(0, customQuantity)
-    if (mode === 'custom' && customQuantity > available) {
-      throw new Error(`There is not enough available weapon stock for this booking: ${item.name || id} has ${available} unit(s) left for this slot, but ${customQuantity} are needed.`)
-    }
-    const quantity = mode === 'custom'
-      ? customQuantity
-      : Math.min(remainingWeaponQuantity, available)
-    if (quantity > 0) {
-      requirements.push({
-        itemId: id,
-        collection: 'weapons',
-        quantity,
-        capacity: stockQuantity(item, 'weapons'),
-        name: item.name || id,
-      })
-      remainingWeaponQuantity -= quantity
+  const weaponModels = await modelsOf('weapons', pkg.weaponIds)
+  const neededWeapons = weaponModels.length
+    ? Math.max(0, Math.round(Number(pkg.weaponCount || weaponModels.length)) * players - ownWeaponCount)
+    : 0
+  let remaining = neededWeapons
+  let freeWeapons = 0
+  for (const model of weaponModels) {
+    const free = await freePiecesOf('weapons', model)
+    freeWeapons += free.length
+    for (const piece of free.slice(0, remaining)) {
+      taken.add(String(piece.id))
+      requirements.push(requirement(piece, 'weapons'))
+      remaining -= 1
     }
   }
-
-  if (remainingWeaponQuantity > 0) {
-    throw new Error(`There is not enough available weapon stock for this booking: it needs ${neededWeapons} rental weapon(s) but only ${availableWeapons} are available for this slot. Reduce the number of players or choose another package or slot.`)
+  if (remaining > 0) {
+    throw new Error(`There is not enough available weapon stock for this booking: it needs ${neededWeapons} rental weapon(s) but only ${freeWeapons} are free for this slot. Reduce the number of players or choose another package or slot.`)
   }
 
   return requirements

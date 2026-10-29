@@ -4,6 +4,8 @@ import { ActionGroup, Button } from '../../components/ui/Button'
 import { FilterTabs } from '../../components/ui/FilterTabs'
 import { Card } from '../../components/ui/Card'
 import { apiGet, apiPost, apiPut, apiDelete } from '../../utils/apiClient'
+import { ModelSummaryStrip } from '../../components/inventory/ModelSummaryStrip'
+import { modelOf, summarizeModels } from '../../utils/inventoryModels'
 import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
 
 type WeaponCategory = 'rifles' | 'gel_blasters' | 'pistols' | 'snipers' | 'mg' | 'shotguns' | 'grenades' | 'photoshoot'
@@ -22,7 +24,8 @@ type WeaponItem = {
   note: string
   description?: string
   price: number
-  quantity: number
+  model: string
+  unitNumber: number
   createdAtISO?: string
   submittedBy?: string
   source?: 'business' | 'player'
@@ -67,45 +70,11 @@ const StatusBadge = ({ status, onToggle }: { status: WeaponStatus; onToggle?: ()
   )
 }
 
-function generateWeaponId(name: string, existingIds: string[]): string {
-  // Extract first letter of each word in the name (up to 2 letters)
-  // e.g. "Rifle Alpha" → "RA", "Viper" → "V", "MG Atlas" → "MA"
-  const words = (name || '').trim().split(/\s+/).filter(Boolean)
-  let prefix = ''
-  if (words.length >= 2) {
-    prefix = (words[0].charAt(0) + words[1].charAt(0)).toUpperCase()
-  } else if (words.length === 1) {
-    prefix = words[0].charAt(0).toUpperCase()
-  }
-  if (!prefix || !/[A-Z]/.test(prefix)) return `W-XX-001`
+// Standard rental prices: a rifle is ₱500 (it comes with 2 magazines / 600 BBs). Picking the
+// category fills in the price; the admin can still change it.
+const DEFAULT_CATEGORY_PRICES: Partial<Record<WeaponCategory, number>> = { rifles: 500 }
 
-  // Find the highest sequence number for this prefix (e.g. W-RA-XXX)
-  let maxSeq = 0
-  const pattern = new RegExp(`^W-${prefix}-(\\d{3})$`)
-  for (const existingId of existingIds) {
-    const match = existingId.match(pattern)
-    if (match) {
-      const seq = parseInt(match[1], 10)
-      if (seq > maxSeq) maxSeq = seq
-    }
-  }
-
-  const nextSeq = maxSeq + 1
-  return `W-${prefix}-${String(nextSeq).padStart(3, '0')}`
-}
-
-const emptyForm = () => ({ name: '', description: '', category: 'rifles' as WeaponCategory, status: 'available' as WeaponStatus, price: '0', quantity: '1', partnerId: '', fpsClass: '', fpsLimit: '' })
-
-// Rental units of this model on hand; legacy records without a count are one unit.
-function readQuantity(d: any) {
-  const value = Number(d.quantity ?? d.qty ?? d.stock ?? 1)
-  return Number.isInteger(value) && value >= 0 ? value : 0
-}
-
-function parseQuantityInput(value: string) {
-  const quantity = Number(value)
-  return Number.isInteger(quantity) && quantity >= 0 ? quantity : null
-}
+const emptyForm = () => ({ name: '', description: '', category: 'rifles' as WeaponCategory, status: 'available' as WeaponStatus, price: String(DEFAULT_CATEGORY_PRICES.rifles), pieces: '1', applyToModel: true, partnerId: '', fpsClass: '', fpsLimit: '' })
 
 // Blank class follows the category (snipers are sniper class); blank limit uses the class default.
 function fpsFields(form: { fpsClass: string; fpsLimit: string }) {
@@ -115,7 +84,8 @@ function fpsFields(form: { fpsClass: string; fpsLimit: string }) {
 export function AdminWeaponsPage() {
   const [category, setCategory] = React.useState<WeaponCategory | 'all'>('all')
   const [status, setStatus] = React.useState<WeaponStatus | 'all'>('all')
-  const [sourceFilter, setSourceFilter] = React.useState<'all' | 'business' | 'player'>('all')
+  const [sourceFilter, setSourceFilter] = React.useState<'business' | 'player'>('business')
+  const [ownerNames, setOwnerNames] = React.useState<Record<string, string>>({})
   const [weapons, setWeapons] = React.useState<WeaponItem[]>([])
   const [loading, setLoading] = React.useState(true)
   const [saving, setSaving] = React.useState(false)
@@ -150,7 +120,8 @@ export function AdminWeaponsPage() {
         note: d.note || d.description || '',
         description: d.description || d.note || '',
         price: typeof d.price === 'number' ? d.price : 0,
-        quantity: readQuantity(d),
+        model: modelOf(d),
+        unitNumber: Number(d.unitNumber) || 0,
         createdAtISO: d.createdAtISO || null,
         submittedBy: d.submittedBy,
         source: (d.source || (d.submittedBy ? 'player' : 'business')) as 'business' | 'player',
@@ -171,11 +142,18 @@ export function AdminWeaponsPage() {
 
   React.useEffect(() => { refresh() }, [refresh])
 
+  React.useEffect(() => {
+    if (sourceFilter !== 'player' || Object.keys(ownerNames).length > 0) return
+    apiGet<{ ok: boolean; data: any[] }>('/api/user_accounts?limit=500')
+      .then((res) => setOwnerNames(Object.fromEntries((res.data || []).map((u: any) => [String(u.id || u._id), String(u.name || u.email || '')]))))
+      .catch(() => setOwnerNames({}))
+  }, [sourceFilter, ownerNames])
+
   const filtered = weapons.filter((weapon) => {
     if (weapon.source === 'player' && weapon.approvalStatus === 'rejected') return false
     const matchCategory = category === 'all' ? true : weapon.category === category
     const matchStatus = status === 'all' ? true : weapon.status === status
-    const matchSource = sourceFilter === 'all' ? true : weapon.source === sourceFilter
+    const matchSource = weapon.source === sourceFilter
     return matchCategory && matchStatus && matchSource
   })
 
@@ -185,42 +163,35 @@ export function AdminWeaponsPage() {
   const pendingPlayerWeapons = weapons.filter((weapon) => weapon.source === 'player' && weapon.approvalStatus === 'pending')
   const pendingPlayerWeaponsCount = pendingPlayerWeapons.length
 
-  const existingIds = weapons.map((w) => w.id).filter(Boolean) as string[]
+  const models = summarizeModels(weapons)
 
+  // Each physical weapon is its own record: adding 20 creates 20 pieces with their own IDs.
   const addWeapon = async () => {
     if (!form.name.trim()) {
       toast.error('Weapon name is required')
       return
     }
-    const quantity = parseQuantityInput(form.quantity)
-    if (quantity === null) {
-      toast.error('Stock must be a whole number (0 or more).')
+    const count = Number(form.pieces)
+    if (!Number.isInteger(count) || count < 1 || count > 200) {
+      toast.error('Add between 1 and 200 pieces at a time.')
       return
     }
 
     setSaving(true)
     try {
-      const newId = generateWeaponId(form.name, existingIds)
-      const newWeapon = {
-        id: newId,
-        name: form.name.trim(),
+      const res = await apiPost<{ ok: boolean; data: Array<{ id: string }> }>('/api/inventory/weapons/pieces', {
+        model: form.name.trim(),
+        count,
         category: form.category,
         status: form.status,
         price: Number(form.price) || 0,
-        quantity,
         description: form.description.trim(),
         note: form.description.trim() || 'Added through the admin inventory review.',
-        createdAtISO: new Date().toISOString(),
-        source: 'business',
-        approvalStatus: 'approved',
         partnerId: form.partnerId,
         ...fpsFields(form),
-      }
-
-      const res = await apiPost<any>('/api/weapons', newWeapon)
-      if (!res?.ok) throw new Error(res?.error || 'Failed to create weapon')
-
-      toast.success(`Weapon "${form.name.trim()}" created as ${newId}`)
+      })
+      const ids = res.data.map((piece) => piece.id)
+      toast.success(count === 1 ? `Added ${ids[0]}` : `Added ${count} pieces (${ids[0]} – ${ids[ids.length - 1]})`)
       setForm(emptyForm())
       await refresh()
     } catch (e: any) {
@@ -238,7 +209,8 @@ export function AdminWeaponsPage() {
       category: weapon.category,
       status: weapon.status,
       price: String(weapon.price),
-      quantity: String(weapon.quantity),
+      pieces: '1',
+      applyToModel: true,
       partnerId: weapon.partnerId || '',
       fpsClass: weapon.fpsClass || '',
       fpsLimit: weapon.fpsLimit ? String(weapon.fpsLimit) : '',
@@ -255,31 +227,28 @@ export function AdminWeaponsPage() {
       return
     }
 
-    if (!form.name.trim()) {
-      toast.error('Weapon name is required')
-      return
-    }
-    const quantity = parseQuantityInput(form.quantity)
-    if (quantity === null) {
-      toast.error('Stock must be a whole number (0 or more).')
-      return
-    }
-
+    const piece = weapons.find((w) => w.id === selectedWeaponId)
     setSaving(true)
     try {
+      // Status and notes belong to this one piece.
       await apiPut<any>(`/api/weapons/${encodeURIComponent(selectedWeaponId)}`, {
-        name: form.name.trim(),
-        category: form.category,
         status: form.status,
-        price: Number(form.price) || 0,
-        quantity,
         description: form.description.trim(),
         note: form.description.trim() || 'Updated from admin inventory.',
-        partnerId: form.partnerId,
-        ...fpsFields(form),
+        ...(form.applyToModel ? {} : { price: Number(form.price) || 0, category: form.category, partnerId: form.partnerId, ...fpsFields(form) }),
         updatedAtISO: new Date().toISOString(),
       })
-      toast.success('Weapon updated')
+      // Price, category, owner, and FPS rules are shared by every piece of the model.
+      if (form.applyToModel && piece) {
+        await apiPut<any>('/api/inventory/weapons/models', {
+          model: piece.model,
+          price: Number(form.price) || 0,
+          category: form.category,
+          partnerId: form.partnerId,
+          ...fpsFields(form),
+        })
+      }
+      toast.success(form.applyToModel && piece ? `Updated ${piece.name} and all ${piece.model} pieces` : 'Weapon updated')
       setSelectedWeaponId(null)
       setForm(emptyForm())
       await refresh()
@@ -414,19 +383,6 @@ export function AdminWeaponsPage() {
           <h1 className="text-3xl font-bold">Weapons</h1>
           <p className="mt-1 text-sm text-muted">Manage the weapon catalog, inspect conditions, and keep the maintenance queue current.</p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted">View source</div>
-          <FilterTabs
-            ariaLabel="Filter weapons by source"
-            value={sourceFilter}
-            onChange={setSourceFilter}
-            options={[
-              { value: 'all', label: 'All' },
-              { value: 'business', label: 'Business' },
-              { value: 'player', label: 'Player', ...(pendingPlayerWeaponsCount > 0 ? { count: pendingPlayerWeaponsCount } : {}) },
-            ]}
-          />
-        </div>
       </div>
 
       <div className="grid gap-4 md:grid-cols-3">
@@ -443,6 +399,16 @@ export function AdminWeaponsPage() {
           <div className="mt-2 text-2xl font-bold text-success">{maintenanceCount}</div>
         </Card>
       </div>
+
+      <FilterTabs
+        ariaLabel="Show rental weapons or players' weapons"
+        value={sourceFilter}
+        onChange={setSourceFilter}
+        options={[
+          { value: 'business', label: 'Rental weapons' },
+          { value: 'player', label: "Players' weapons", ...(pendingPlayerWeaponsCount > 0 ? { count: pendingPlayerWeaponsCount } : {}) },
+        ]}
+      />
 
       <Card className="p-4">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -516,12 +482,14 @@ export function AdminWeaponsPage() {
           </div>
         ) : null}
 
+        {sourceFilter === 'business' ? <ModelSummaryStrip models={models} unit="piece" /> : null}
+
         <div className="mt-4 overflow-x-auto rounded-2xl border border-white/5">
           <div className="min-w-[920px]">
             <div className="grid grid-cols-12 bg-white/5 px-3 py-2 text-xs uppercase tracking-widest text-muted">
               <div className="col-span-2">ID</div>
               <div className="col-span-3">Weapon</div>
-              <div className="col-span-1 text-right">Stock</div>
+              <div className="col-span-1 text-right">Piece</div>
               <div className="col-span-1 text-right">Price</div>
               <div className="col-span-1 text-right">Status</div>
               <div className="col-span-4 text-right">Actions</div>
@@ -546,8 +514,13 @@ export function AdminWeaponsPage() {
                       ) : null}
                     </div>
                     <div className="mt-1 text-xs text-muted">{weapon.description || weapon.note}</div>
+                    {weapon.source === 'player' ? (
+                      <div className="mt-1 text-xs text-muted">
+                        Owner: {ownerNames[String(weapon.submittedBy)] || weapon.submittedBy || 'Unknown'} · <span className="capitalize">{weapon.approvalStatus}</span>
+                      </div>
+                    ) : null}
                   </div>
-                  <div className="col-span-1 text-right text-sm font-semibold">{weapon.source === 'player' ? '—' : weapon.quantity}</div>
+                  <div className="col-span-1 text-right text-sm font-semibold">{weapon.source === 'player' || !weapon.unitNumber ? '—' : `#${weapon.unitNumber}`}</div>
                   <div className="col-span-1 text-right text-sm text-muted">₱{weapon.price}</div>
                   <div className="col-span-1 text-right">
                     <StatusBadge status={weapon.status} onToggle={() => handleStatusToggle(weapon.id)} />
@@ -582,19 +555,23 @@ export function AdminWeaponsPage() {
           </div>
         </div>
 
+        {sourceFilter === 'business' ? (
         <div className="mt-4 grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
           <Card className="p-4 bg-white/5/60">
-            <div className="text-xs uppercase tracking-widest text-muted">Add a weapon</div>
-            <div className="mt-2 text-sm text-muted">Create a new entry with the right category and readiness state.</div>
+            <div className="text-xs uppercase tracking-widest text-muted">{selectedWeaponId ? `Edit ${selectedWeaponId}` : 'Add weapons'}</div>
+            <div className="mt-2 text-sm text-muted">
+              {selectedWeaponId ? 'Update this piece, or every piece of the same model.' : 'Every physical weapon is its own piece with its own ID.'}
+            </div>
             <div className="mt-4 grid gap-3">
               <label className="block">
                 <div className="mb-2 text-sm font-semibold text-text">Weapon name</div>
                 <input
                   ref={nameRef}
                   value={form.name}
+                  readOnly={Boolean(selectedWeaponId)}
                   onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
-                  className="w-full rounded-xl border border-white/10 bg-transparent px-4 py-3 text-sm text-text placeholder:text-muted"
-                  placeholder="e.g. Rifle Delta"
+                  className="w-full rounded-xl border border-white/10 bg-transparent px-4 py-3 text-sm text-text placeholder:text-muted read-only:opacity-70"
+                  placeholder="e.g. M4 Rifle"
                 />
               </label>
 
@@ -610,19 +587,34 @@ export function AdminWeaponsPage() {
                 />
               </label>
 
-              <label className="block">
-                <div className="mb-2 text-sm font-semibold text-text">Stock (rental units)</div>
-                <input
-                  type="number"
-                  min="0"
-                  step="1"
-                  value={form.quantity}
-                  onChange={(event) => setForm((prev) => ({ ...prev, quantity: event.target.value }))}
-                  placeholder="e.g. 40"
-                  className="w-full rounded-xl border border-white/10 bg-transparent px-4 py-3 text-sm text-text placeholder:text-muted"
-                />
-                <div className="mt-1 text-xs text-muted">How many of this weapon can be rented out in the same time slot.</div>
-              </label>
+              {selectedWeaponId ? (
+                <label className="flex items-start gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-3 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={form.applyToModel}
+                    onChange={(event) => setForm((prev) => ({ ...prev, applyToModel: event.target.checked }))}
+                    className="mt-0.5 h-4 w-4 accent-[var(--color-accent)]"
+                  />
+                  <span>
+                    Apply price, category, owner, and FPS settings to every {weapons.find((w) => w.id === selectedWeaponId)?.model || 'matching'} piece
+                    <span className="block text-xs text-muted">Status and notes always change only this piece.</span>
+                  </span>
+                </label>
+              ) : (
+                <label className="block">
+                  <div className="mb-2 text-sm font-semibold text-text">Pieces to add</div>
+                  <input
+                    type="number"
+                    min="1"
+                    max="200"
+                    step="1"
+                    value={form.pieces}
+                    onChange={(event) => setForm((prev) => ({ ...prev, pieces: event.target.value }))}
+                    className="w-full rounded-xl border border-white/10 bg-transparent px-4 py-3 text-sm text-text placeholder:text-muted"
+                  />
+                  <div className="mt-1 text-xs text-muted">Each piece gets its own ID and number (e.g. M4 Rifle #1, #2, …) so players can pick a specific one.</div>
+                </label>
+              )}
 
               <label className="block">
                 <div className="mb-2 text-sm font-semibold text-text">Short description</div>
@@ -639,7 +631,15 @@ export function AdminWeaponsPage() {
                   <div className="mb-2 text-sm font-semibold text-text">Category</div>
                   <select
                     value={form.category}
-                    onChange={(event) => setForm((prev) => ({ ...prev, category: event.target.value as WeaponCategory }))}
+                    onChange={(event) => {
+                      const nextCategory = event.target.value as WeaponCategory
+                      const defaultPrice = DEFAULT_CATEGORY_PRICES[nextCategory]
+                      setForm((prev) => ({
+                        ...prev,
+                        category: nextCategory,
+                        ...(defaultPrice !== undefined ? { price: String(defaultPrice) } : {}),
+                      }))
+                    }}
                     className="w-full rounded-xl border border-white/10 glass px-4 py-3 text-sm text-text"
                   >
                     {categoryOptions.map((option) => (
@@ -713,7 +713,7 @@ export function AdminWeaponsPage() {
                 </div>
               ) : (
                 <Button onClick={addWeapon} disabled={saving}>
-                  {saving ? 'Saving...' : 'Register weapon'}
+                  {saving ? 'Saving...' : Number(form.pieces) > 1 ? `Add ${form.pieces} pieces` : 'Add weapon'}
                 </Button>
               )}
             </div>
@@ -738,6 +738,7 @@ export function AdminWeaponsPage() {
             </div>
           </Card>
         </div>
+        ) : null}
       </Card>
       {rejectionTargetId ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" role="dialog" aria-modal="true" aria-labelledby="weapon-rejection-title">
