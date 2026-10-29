@@ -316,6 +316,7 @@ export function MyWeaponsAndEquipmentPage() {
                   className="w-full rounded-xl bg-background border border-white/10 px-4 py-3 text-sm text-text focus:outline-none focus:ring-2 focus:ring-accent/40 [&>option]:bg-background [&>option]:text-text"
                 >
                   <option value="rifles">Rifles</option>
+                  <option value="gel_blasters">Gel blasters</option>
                   <option value="pistols">Pistols</option>
                   <option value="snipers">Snipers</option>
                   <option value="mg">MG</option>

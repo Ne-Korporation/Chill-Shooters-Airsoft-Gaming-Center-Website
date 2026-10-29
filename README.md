@@ -80,7 +80,7 @@ There are four user roles in the system:
 - MongoDB
 - Nodemailer
 - Cloudinary
-- Stripe (Optional)
+- Stripe (Optional, test mode only — PayMongo is the planned production gateway)
 
 ---
 
@@ -118,7 +118,7 @@ Create a `.env` file and add your credentials for:
 - MongoDB (shared URI, not `mongodb://localhost:27017/`)
 - Email (SMTP)
 - Firebase
-- Stripe (Optional)
+- Stripe (Optional, test mode only — PayMongo is the planned production gateway)
 - Cloudinary (Optional)
 
 ## 4. Start MongoDB

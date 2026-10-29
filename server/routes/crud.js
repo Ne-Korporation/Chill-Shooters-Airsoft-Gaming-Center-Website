@@ -379,7 +379,7 @@ const WALK_IN_LOCATION_NAMES = {
   langkaan: 'Delta Stronghold (Langkaan)',
   binan: 'LOMA Binan Laguna',
 }
-const ONSITE_PAYMENT_METHODS = { cash: 'Cash', gcash: 'GCash', bank_transfer: 'Bank transfer', card: 'Card' }
+const ONSITE_PAYMENT_METHODS = { cash: 'Cash', gcash: 'GCash', bank_transfer: 'Bank transfer' }
 
 // POST /api/walk-ins — the counter registers a walk-in group for today's public game: own-gear
 // players pay the entrance fee; rental walk-ins only get gear that is still free. Uses the same
@@ -1425,6 +1425,7 @@ router.post('/:collection', requireAuth, async (req, res) => {
           amount: payload.amount,
           transactionReference: payload.transactionReference,
           gcashImageUrl: payload.gcashImageUrl,
+          paymentMethod: payload.paymentMethod,
         })
         for (const key of Object.keys(doc)) delete doc[key]
         Object.assign(doc, submitted.payment)

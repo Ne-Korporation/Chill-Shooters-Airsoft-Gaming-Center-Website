@@ -5,7 +5,7 @@ import { Card } from '../../components/ui/Card'
 import { apiGet, apiPost, apiPut, apiDelete } from '../../utils/apiClient'
 import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
 
-type WeaponCategory = 'rifles' | 'pistols' | 'snipers' | 'mg' | 'shotguns'
+type WeaponCategory = 'rifles' | 'gel_blasters' | 'pistols' | 'snipers' | 'mg' | 'shotguns' | 'grenades' | 'photoshoot'
 
 type WeaponStatus = 'available' | 'rented' | 'needs-check'
 
@@ -29,13 +29,20 @@ type WeaponItem = {
   rejectionReason?: string
 }
 
-const categoryOptions: { key: WeaponCategory; subtitle: string }[] = [
-  { key: 'rifles', subtitle: 'Standard long-range platforms for regular bookings' },
-  { key: 'pistols', subtitle: 'Sidearms and compact builds for quick turns' },
-  { key: 'snipers', subtitle: 'Precision class weapons with heavier upkeep' },
-  { key: 'mg', subtitle: 'Support weapons with limited stock and stricter control' },
-  { key: 'shotguns', subtitle: 'Close-quarters spread style gear' },
+// Mirrors the center's rental inventory: rifles, gel blasters, pistols, snipers, a machine
+// gun, a shotgun, single-use grenades/bombs, and privately owned photoshoot rifles.
+const categoryOptions: { key: WeaponCategory; label: string; subtitle: string }[] = [
+  { key: 'rifles', label: 'Rifles', subtitle: 'Standard long-range platforms for regular bookings' },
+  { key: 'gel_blasters', label: 'Gel blasters', subtitle: 'Gel-ball blasters for casual and younger players' },
+  { key: 'pistols', label: 'Pistols', subtitle: 'Sidearms and compact builds for quick turns' },
+  { key: 'snipers', label: 'Snipers', subtitle: 'Precision class weapons with heavier upkeep' },
+  { key: 'mg', label: 'Machine guns', subtitle: 'Support weapons with limited stock and stricter control' },
+  { key: 'shotguns', label: 'Shotguns', subtitle: 'Close-quarters spread style gear' },
+  { key: 'grenades', label: 'Grenades / bombs', subtitle: 'Single-use pyrotechnics; stock is used up, not returned' },
+  { key: 'photoshoot', label: 'Photoshoot rifles', subtitle: 'Privately owned display rifles for photoshoots' },
 ]
+
+const categoryLabel = (key: string) => categoryOptions.find((option) => option.key === key)?.label || key
 
 const StatusBadge = ({ status, onToggle }: { status: WeaponStatus; onToggle?: () => void }) => {
   const cls =
@@ -452,7 +459,7 @@ export function AdminWeaponsPage() {
       <Card className="p-4">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
-            <div className="text-xs uppercase tracking-widest text-muted">{category === 'all' ? 'All categories' : category.toUpperCase()}</div>
+            <div className="text-xs uppercase tracking-widest text-muted">{category === 'all' ? 'All categories' : categoryLabel(category).toUpperCase()}</div>
             <div className="mt-2 text-sm text-muted">{activeCategoryMeta?.subtitle || 'All weapon categories'}</div>
           </div>
 
@@ -467,7 +474,7 @@ export function AdminWeaponsPage() {
                 <option value="all">All categories</option>
                 {categoryOptions.map((option) => (
                   <option key={option.key} value={option.key}>
-                    {option.key.charAt(0).toUpperCase() + option.key.slice(1)}
+                    {option.label}
                   </option>
                 ))}
               </select>
@@ -666,7 +673,7 @@ export function AdminWeaponsPage() {
                     className="w-full rounded-xl border border-white/10 glass px-4 py-3 text-sm text-text"
                   >
                     {categoryOptions.map((option) => (
-                      <option key={option.key} value={option.key}>{option.key.toUpperCase()}</option>
+                      <option key={option.key} value={option.key}>{option.label}</option>
                     ))}
                   </select>
                 </label>

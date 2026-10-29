@@ -30,6 +30,7 @@ services:
         sync: false
       - key: CLOUDINARY_API_SECRET
         sync: false
-      # Card payments. The frontend also needs VITE_STRIPE_PUBLISHABLE_KEY (Vercel).
+      # Online card payments, Stripe test mode only (sk_test_…); live keys are refused.
+      # The frontend also needs VITE_STRIPE_PUBLISHABLE_KEY=pk_test_… on Vercel.
       - key: STRIPE_SECRET_KEY
         sync: false
