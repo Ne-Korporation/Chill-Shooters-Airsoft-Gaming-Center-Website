@@ -1,6 +1,8 @@
 import React, { useMemo, useState } from 'react'
+import { FiTrash2 } from 'react-icons/fi'
 import { useNavigate } from 'react-router-dom'
 import { Button } from '../../components/ui/Button'
+import { FilterTabs } from '../../components/ui/FilterTabs'
 import { useAuth } from '../../context/AuthContext'
 import { useNotifications } from '../../context/NotificationContext'
 import { resolveNotificationRoute } from '../../utils/notificationRoutes'
@@ -101,6 +103,7 @@ export function AdminNotificationsPage() {
   }
 
   const handleDeleteNotification = (id: string) => {
+    if (!window.confirm('Delete this notification?')) return
     deleteNotification(id)
     toast.success('Notification deleted.')
   }
@@ -126,10 +129,11 @@ export function AdminNotificationsPage() {
         <div className="flex items-center gap-2 self-end">
           {!isAdmin ? (
             <>
-              <Button variant="ghost" onClick={() => user?.id ? markAllAsRead(user.id, user.role) : null}>Mark all as read</Button>
+              <Button size="sm" variant="ghost" onClick={() => user?.id ? markAllAsRead(user.id, user.role) : null}>Mark all as read</Button>
               <Button
                 type="button"
-                variant="danger"
+                size="sm"
+                variant="danger-soft"
                 onClick={async () => {
                   if (!window.confirm('Clear all notifications visible to you? This cannot be undone.')) return
 
@@ -147,10 +151,20 @@ export function AdminNotificationsPage() {
           ) : null}
 
           {isAdmin ? (
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap items-center gap-3">
+              <FilterTabs
+                ariaLabel="Filter sent notifications by audience"
+                value={feedAudience}
+                onChange={setFeedAudience}
+                options={(['all', 'users', 'admins', 'registrars', 'marshals'] as Audience[]).map((item) => ({
+                  value: item,
+                  label: item.charAt(0).toUpperCase() + item.slice(1),
+                }))}
+              />
               <Button
                 type="button"
-                variant="danger"
+                size="sm"
+                variant="danger-soft"
                 onClick={async () => {
                   if (window.confirm('Clear all notifications from the database? This cannot be undone.')) {
                     try {
@@ -164,20 +178,6 @@ export function AdminNotificationsPage() {
               >
                 Clear all
               </Button>
-              {(['all', 'users', 'admins', 'registrars', 'marshals'] as Audience[]).map((item) => (
-                <button
-                  key={item}
-                  onClick={() => setFeedAudience(item)}
-                  className={
-                    'rounded-xl border px-3 py-2 text-sm transition ' +
-                    (feedAudience === item
-                      ? 'bg-white/8 text-text border-accent/30'
-                      : 'bg-white/5 text-muted hover:bg-white/6')
-                  }
-                >
-                  {item === 'all' ? 'ALL' : item.toUpperCase()}
-                </button>
-              ))}
             </div>
           ) : null}
         </div>
@@ -200,14 +200,14 @@ export function AdminNotificationsPage() {
                         setSendMode('audience')
                         setTargetUserId('')
                       }}
-                      className={['rounded-xl border px-3 py-2 text-sm transition', sendMode === 'audience' ? 'bg-white/8 text-text border-accent/30' : 'bg-white/5 text-muted hover:bg-white/6'].join(' ')}
+                      className={['rounded-full border px-4 py-1.5 text-sm font-semibold transition', sendMode === 'audience' ? 'border-accent/40 bg-accent/15 text-accent' : 'surface text-muted hover:text-text'].join(' ')}
                     >
                       Select audience
                     </button>
                     <button
                       type="button"
                       onClick={() => setSendMode('user')}
-                      className={['rounded-xl border px-3 py-2 text-sm transition', sendMode === 'user' ? 'bg-white/8 text-text border-accent/30' : 'bg-white/5 text-muted hover:bg-white/6'].join(' ')}
+                      className={['rounded-full border px-4 py-1.5 text-sm font-semibold transition', sendMode === 'user' ? 'border-accent/40 bg-accent/15 text-accent' : 'surface text-muted hover:text-text'].join(' ')}
                     >
                       Send to a user
                     </button>
@@ -249,9 +249,9 @@ export function AdminNotificationsPage() {
                         key={item}
                         type="button"
                         onClick={() => setChannel(item)}
-                        className={['rounded-xl border px-3 py-2 text-sm transition', channel === item ? 'bg-white/8 text-text border-accent/30' : 'bg-white/5 text-muted hover:bg-white/6'].join(' ')}
+                        className={['rounded-full border px-4 py-1.5 text-sm font-semibold transition', channel === item ? 'border-accent/40 bg-accent/15 text-accent' : 'surface text-muted hover:text-text'].join(' ')}
                       >
-                        {item.toUpperCase()}
+                        {item === 'email' ? 'Email' : 'In-app'}
                       </button>
                     ))}
                   </div>
@@ -323,15 +323,16 @@ export function AdminNotificationsPage() {
                   <div className="mt-2 text-sm text-muted">{draft.message}</div>
                   <div className="mt-2 flex justify-end">
                     {isAdmin ? (
-                      <button
+                      <Button
+                        size="xs"
+                        variant="danger-soft"
                         onClick={(event) => {
                           event.stopPropagation()
                           handleDeleteNotification(draft.id)
                         }}
-                        className="rounded-xl border border-danger/20 bg-danger/10 px-3 py-2 text-xs text-danger transition hover:bg-danger/20"
                       >
-                        Delete
-                      </button>
+                        <FiTrash2 /> Delete
+                      </Button>
                     ) : null}
                   </div>
                 </div>

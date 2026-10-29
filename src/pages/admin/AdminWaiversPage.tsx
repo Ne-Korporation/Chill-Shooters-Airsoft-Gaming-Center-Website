@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { FiEye, FiPrinter, FiRefreshCw, FiShield, FiTrash2, FiX } from 'react-icons/fi'
 import toast from 'react-hot-toast'
 import { Card } from '../../components/ui/Card'
+import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { apiDelete, apiGet, apiPut } from '../../utils/apiClient'
 import { OFFICIAL_WAIVER_TEXT } from '../../utils/waiverText'
@@ -186,15 +187,9 @@ export function AdminWaiversPage() {
           </div>
           <div className="flex items-end gap-3">
             <div className="md:w-96"><Input label="Search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Name, player ID, reservation, or status" /></div>
-            <button
-              type="button"
-              onClick={() => refresh(true)}
-              disabled={refreshing || loading}
-              className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-3 text-xs font-semibold text-muted hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
-              aria-label="Refresh waivers"
-            >
+            <Button variant="ghost" onClick={() => refresh(true)} disabled={refreshing || loading} aria-label="Refresh waivers">
               <FiRefreshCw className={refreshing ? 'animate-spin' : ''} /> Refresh
-            </button>
+            </Button>
           </div>
         </div>
 
@@ -203,7 +198,7 @@ export function AdminWaiversPage() {
             <thead><tr className="border-b border-white/10 text-left text-xs uppercase tracking-widest text-muted"><th className="py-3 pr-4">Waiver</th><th className="py-3 pr-4">Player</th><th className="py-3 pr-4">Submitted</th><th className="py-3 pr-4">Status</th><th className="py-3 text-right">Action</th></tr></thead>
             <tbody>
               {loading ? <tr><td colSpan={5} className="py-8 text-center text-muted">Loading waivers...</td></tr> : null}
-              {!loading && filtered.map((waiver) => <tr key={waiver.id || waiver._id} className="border-b border-white/5"><td className="py-3 pr-4"><div className="font-semibold">{waiver.id || waiver._id}</div><div className="text-xs text-muted">Reservation: {waiver.reservationId || '-'}</div></td><td className="py-3 pr-4"><div className="font-semibold">{waiver.fullName || '-'}</div><div className="text-xs text-muted">{waiver.userId || 'Guest submission'}</div></td><td className="py-3 pr-4 text-muted">{formatDate(waiver.submittedAtISO)}</td><td className="py-3 pr-4"><span className={`${waiver.status === 'approved' ? 'rounded-full border border-success/30 bg-success/10 text-success' : waiver.status === 'denied' ? 'rounded-full border border-rose-200 bg-rose-100 text-rose-900 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-200' : 'rounded-full border border-accent/30 bg-accent/10 text-accent'} px-2 py-1 text-[11px] font-semibold uppercase`}>{waiver.status || 'pending'}</span></td><td className="py-3 text-right"><button type="button" onClick={() => setSelectedWaiver(waiver)} className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-muted hover:bg-white/10"><FiEye /> View</button></td></tr>)}
+              {!loading && filtered.map((waiver) => <tr key={waiver.id || waiver._id} className="border-b border-white/5"><td className="py-3 pr-4"><div className="font-semibold">{waiver.id || waiver._id}</div><div className="text-xs text-muted">Reservation: {waiver.reservationId || '-'}</div></td><td className="py-3 pr-4"><div className="font-semibold">{waiver.fullName || '-'}</div><div className="text-xs text-muted">{waiver.userId || 'Guest submission'}</div></td><td className="py-3 pr-4 text-muted">{formatDate(waiver.submittedAtISO)}</td><td className="py-3 pr-4"><span className={`${waiver.status === 'approved' ? 'rounded-full border border-success/30 bg-success/10 text-success' : waiver.status === 'denied' ? 'rounded-full border border-rose-200 bg-rose-100 text-rose-900 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-200' : 'rounded-full border border-accent/30 bg-accent/10 text-accent'} px-2 py-1 text-[11px] font-semibold uppercase`}>{waiver.status || 'pending'}</span></td><td className="py-3 text-right"><Button size="xs" variant="ghost" onClick={() => setSelectedWaiver(waiver)}><FiEye /> View</Button></td></tr>)}
               {!loading && filtered.length === 0 ? <tr><td colSpan={5} className="py-8 text-center text-muted">No waivers found.</td></tr> : null}
             </tbody>
           </table>
@@ -324,37 +319,39 @@ export function AdminWaiversPage() {
                   <p><span className="font-semibold text-slate-700 dark:text-slate-200">Document reference:</span> {selectedWaiver.id || selectedWaiver._id || '-'}</p>
                   <p className="mt-2"><span className="font-semibold text-slate-700 dark:text-slate-200">Displayed as:</span> waiver document view</p>
                 </div>
-                <div className="flex flex-col gap-2 sm:flex-row">
-                  <button
-                    type="button"
-                    onClick={() => printWaiverDocument(selectedWaiver)}
-                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-300 bg-transparent px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
-                  >
-                    <FiPrinter /> Print waiver
-                  </button>
+                {/* Destructive action sits apart on the left; the review decision reads left-to-right
+                    ending in the primary Approve. */}
+                <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center">
                   <button
                     type="button"
                     onClick={deleteWaiver}
                     disabled={savingStatus}
-                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-rose-300 bg-transparent px-4 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-rose-500/40 dark:text-rose-300 dark:hover:bg-rose-500/10"
+                    className="inline-flex h-10 items-center justify-center gap-2 whitespace-nowrap rounded-xl px-4 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 text-rose-700 hover:bg-rose-50 sm:mr-4"
                   >
-                    <FiTrash2 /> Delete waiver
+                    <FiTrash2 /> Delete
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => printWaiverDocument(selectedWaiver)}
+                    className="inline-flex h-10 items-center justify-center gap-2 whitespace-nowrap rounded-xl px-4 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 border border-slate-300 text-slate-700 hover:bg-slate-100"
+                  >
+                    <FiPrinter /> Print
                   </button>
                   <button
                     type="button"
                     onClick={denyWaiver}
                     disabled={savingStatus || selectedWaiver.status === 'denied'}
-                    className="inline-flex items-center justify-center rounded-xl border border-slate-300 bg-transparent px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+                    className="inline-flex h-10 items-center justify-center gap-2 whitespace-nowrap rounded-xl px-4 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 border border-rose-300 text-rose-700 hover:bg-rose-50"
                   >
-                    {selectedWaiver.status === 'denied' ? 'Denied' : savingStatus ? 'Updating...' : 'Deny waiver'}
+                    {selectedWaiver.status === 'denied' ? 'Denied' : savingStatus ? 'Updating…' : 'Deny'}
                   </button>
                   <button
                     type="button"
                     onClick={approveWaiver}
                     disabled={savingStatus || selectedWaiver.status === 'approved'}
-                    className="inline-flex items-center justify-center rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-background transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:bg-white/10"
+                    className="inline-flex h-10 items-center justify-center gap-2 whitespace-nowrap rounded-xl px-4 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 bg-accent text-background hover:bg-accent/90"
                   >
-                    {selectedWaiver.status === 'approved' ? 'Approved' : savingStatus ? 'Updating...' : 'Approve waiver'}
+                    {selectedWaiver.status === 'approved' ? 'Approved' : savingStatus ? 'Updating…' : 'Approve waiver'}
                   </button>
                 </div>
               </div>

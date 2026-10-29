@@ -1,6 +1,8 @@
 import React from 'react'
+import { FiEdit2 } from 'react-icons/fi'
 import toast from 'react-hot-toast'
-import { Button } from '../../components/ui/Button'
+import { ActionGroup, Button } from '../../components/ui/Button'
+import { FilterTabs, titleCaseLabel } from '../../components/ui/FilterTabs'
 import { Card } from '../../components/ui/Card'
 import { apiGet, apiPost, apiPut, apiDelete } from '../../utils/apiClient'
 import { formatDiscountTargetLabel, resolvePackageDiscountConfig, type PackageDiscountMode, type PackageDiscountTarget } from '../../utils/packagePricing'
@@ -440,6 +442,7 @@ export function AdminRentalPackagesPage() {
   }
 
   const handleArchive = async (pkg: RentalPackage) => {
+    if (!window.confirm(`Archive "${pkg.name}"? Players will no longer be able to book it.`)) return
     try {
       await apiPut<any>(`/api/packages/${getApiId(pkg)}`, {
         status: 'archived',
@@ -533,7 +536,7 @@ export function AdminRentalPackagesPage() {
         </div>
 
         <div className="flex items-center gap-2">
-          <Button onClick={handleAddPackage} variant="ghost">Add Package</Button>
+          <Button onClick={handleAddPackage} variant="primary" size="sm">+ Add package</Button>
         </div>
       </div>
 
@@ -547,22 +550,13 @@ export function AdminRentalPackagesPage() {
             <div className="flex flex-col gap-2 md:flex-row md:items-center md:gap-4">
               <div>
                 <div className="text-[10px] text-muted">Status</div>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {(['all', 'active', 'archived'] as const).map((item) => (
-                    <button
-                      key={item}
-                      onClick={() => setStatus(item)}
-                      className={
-                        'rounded-xl border px-3 py-2 text-sm transition ' +
-                        (status === item
-                          ? 'bg-white/8 text-text border-accent/30'
-                          : 'bg-white/5 text-muted hover:bg-white/6')
-                      }
-                    >
-                      {item === 'all' ? 'ALL' : item.toUpperCase()}
-                    </button>
-                  ))}
-                </div>
+                <FilterTabs
+                  className="mt-2"
+                  ariaLabel="Filter packages by status"
+                  value={status}
+                  onChange={setStatus}
+                  options={(['all', 'active', 'archived'] as const).map((item) => ({ value: item, label: item === 'all' ? 'All' : titleCaseLabel(item) }))}
+                />
               </div>
             </div>
         </div>
@@ -628,18 +622,19 @@ export function AdminRentalPackagesPage() {
                       </div>
                       <div className="col-span-2 text-right">
                         <StatusPill status={pkg.status} />
-                        <div className="mt-2 flex justify-end gap-1">
-                          <button
+                        <div className="mt-2 flex justify-end">
+                          <Button
+                            size="xs"
+                            variant="ghost"
                             onClick={(e) => {
                               e.stopPropagation()
                               setIsAdding(false)
                               setSelectedPackageId(pkg.id)
                               setForm(formFromPackage(pkg))
                             }}
-                            className="rounded-xl border border-white/5 bg-white/5 px-2 py-1 text-[10px] text-muted transition hover:bg-white/6"
                           >
-                            Manage
-                          </button>
+                            <FiEdit2 /> Manage
+                          </Button>
                         </div>
                       </div>
                     </div>
@@ -905,19 +900,17 @@ export function AdminRentalPackagesPage() {
 
               <div className="mt-4">
                 {isAdding ? (
-                  <div className="flex items-center gap-2">
-                    <Button onClick={handleCreatePackage} disabled={saving}>
-                      {saving ? 'Creating...' : 'Create package'}
+                  <ActionGroup>
+                    <Button size="sm" variant="ghost" onClick={handleCancelAdd}>Cancel</Button>
+                    <Button size="sm" onClick={handleCreatePackage} disabled={saving}>
+                      {saving ? 'Creating…' : 'Create package'}
                     </Button>
-                    <Button variant="ghost" onClick={handleCancelAdd}>Cancel</Button>
-                  </div>
+                  </ActionGroup>
                 ) : (
-                  <div className="flex items-center gap-2">
-                    <Button onClick={handleSave} disabled={saving}>
-                      {saving ? 'Saving...' : 'Save package'}
-                    </Button>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <Button
-                      variant="ghost"
+                      size="sm"
+                      variant="danger-soft"
                       onClick={() => {
                         if (selectedPackage) {
                           handleArchive(selectedPackage)
@@ -927,14 +920,14 @@ export function AdminRentalPackagesPage() {
                     >
                       Archive
                     </Button>
-                    <Button
-                      variant="ghost"
-                      onClick={() => {
-                        setSelectedPackageId(null)
-                      }}
-                    >
-                      Cancel
-                    </Button>
+                    <ActionGroup>
+                      <Button size="sm" variant="ghost" onClick={() => setSelectedPackageId(null)}>
+                        Cancel
+                      </Button>
+                      <Button size="sm" onClick={handleSave} disabled={saving}>
+                        {saving ? 'Saving…' : 'Save package'}
+                      </Button>
+                    </ActionGroup>
                   </div>
                 )}
               </div>

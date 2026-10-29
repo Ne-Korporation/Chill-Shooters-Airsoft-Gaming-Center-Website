@@ -1,6 +1,8 @@
 import React from 'react'
+import { FiCheck, FiEdit2, FiTrash2, FiX } from 'react-icons/fi'
 import toast from 'react-hot-toast'
-import { Button } from '../../components/ui/Button'
+import { ActionGroup, Button } from '../../components/ui/Button'
+import { FilterTabs } from '../../components/ui/FilterTabs'
 import { Card } from '../../components/ui/Card'
 import { Input } from '../../components/ui/Input'
 import { apiGet, apiPost, apiPut, apiDelete } from '../../utils/apiClient'
@@ -191,6 +193,8 @@ export function AdminEquipmentPage() {
   }, [selectedItemId])
 
   const handleRemove = async (id: string) => {
+    const name = inventory.find((item) => item.id === id)?.name || id
+    if (!window.confirm(`Remove "${name}" from the equipment list? This cannot be undone.`)) return
     try {
       await apiDelete(`/api/equipments/${encodeURIComponent(id)}`)
       toast.success('Equipment removed')
@@ -311,29 +315,16 @@ export function AdminEquipmentPage() {
 
         <div className="flex flex-wrap items-center gap-2">
           <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted">View source</div>
-          {[
-            { value: 'all', label: 'All' },
-            { value: 'business', label: 'Business' },
-            { value: 'player', label: 'Player' },
-          ].map((option) => (
-            <button
-              key={option.value}
-              onClick={() => setSourceFilter(option.value as 'all' | 'business' | 'player')}
-              className={
-                'rounded-full border px-3 py-2 text-sm transition ' +
-                (sourceFilter === option.value
-                  ? 'bg-accent/20 text-accent border-accent/40'
-                  : 'bg-white/5 text-muted hover:bg-white/8')
-              }
-            >
-              <span>{option.label}</span>
-              {option.value === 'player' && pendingPlayerItemsCount > 0 ? (
-                <span className="ml-1 rounded-full bg-warning/20 px-1.5 py-0.5 text-[10px] text-warning">
-                  {pendingPlayerItemsCount}
-                </span>
-              ) : null}
-            </button>
-          ))}
+          <FilterTabs
+            ariaLabel="Filter equipment by source"
+            value={sourceFilter}
+            onChange={setSourceFilter}
+            options={[
+              { value: 'all', label: 'All' },
+              { value: 'business', label: 'Business' },
+              { value: 'player', label: 'Player', ...(pendingPlayerItemsCount > 0 ? { count: pendingPlayerItemsCount } : {}) },
+            ]}
+          />
         </div>
       </div>
 
@@ -408,20 +399,14 @@ export function AdminEquipmentPage() {
                 <div key={item.id} className="rounded-xl border border-white/10 bg-background/50 p-3">
                   <div className="flex items-center justify-between gap-2">
                     <div className="text-sm font-semibold">{item.name}</div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={(e) => { e.stopPropagation(); handleApprovePlayerItem(item.id) }}
-                        className="rounded-lg border border-success/30 bg-success/10 px-2.5 py-1 text-[11px] font-semibold text-success"
-                      >
-                        Approve
-                      </button>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); openRejectDialog(item.id) }}
-                        className="rounded-lg border border-danger/30 bg-danger/10 px-2.5 py-1 text-[11px] font-semibold text-danger"
-                      >
-                        Reject
-                      </button>
-                    </div>
+                    <ActionGroup>
+                      <Button size="xs" variant="success-soft" onClick={(e) => { e.stopPropagation(); handleApprovePlayerItem(item.id) }}>
+                        <FiCheck /> Approve
+                      </Button>
+                      <Button size="xs" variant="danger-soft" onClick={(e) => { e.stopPropagation(); openRejectDialog(item.id) }}>
+                        <FiX /> Reject
+                      </Button>
+                    </ActionGroup>
                   </div>
                   <div className="mt-1 text-xs text-muted">{item.description || item.note}</div>
                 </div>
@@ -437,9 +422,9 @@ export function AdminEquipmentPage() {
             <div className="col-span-2">ID</div>
             <div className="col-span-3">Equipment</div>
             <div className="col-span-1 text-right">Piece</div>
-            <div className="col-span-2 text-right">Price</div>
+            <div className="col-span-1 text-right">Price</div>
             <div className="col-span-2 text-right">Status</div>
-            <div className="col-span-2 text-right">Actions</div>
+            <div className="col-span-3 text-right">Actions</div>
           </div>
 
           <div className="divide-y divide-white/5">
@@ -471,38 +456,29 @@ export function AdminEquipmentPage() {
                     <div className="mt-1 truncate text-xs text-muted">{item.description || item.note}</div>
                   </div>
                   <div className="col-span-1 text-right text-sm font-semibold">{item.source === 'player' || !item.unitNumber ? '—' : `#${item.unitNumber}`}</div>
-                  <div className="col-span-2 text-right text-sm text-accent">₱{item.price}</div>
+                  <div className="col-span-1 text-right text-sm text-accent">₱{item.price}</div>
                   <div className="col-span-2 flex justify-end">
                     <StatusBadge status={item.status} />
                   </div>
-                  <div className="col-span-2 text-right">
-                    <div className="flex flex-wrap items-center justify-end gap-2">
+                  <div className="col-span-3">
+                    <ActionGroup>
+                      <Button size="xs" variant="ghost" onClick={(e) => { e.stopPropagation(); handleSelect(item) }}>
+                        <FiEdit2 /> Edit
+                      </Button>
                       {item.source === 'player' && item.approvalStatus === 'pending' ? (
                         <>
-                          <button
-                            onClick={(e) => { e.stopPropagation(); handleApprovePlayerItem(item.id) }}
-                            className="rounded-xl border border-success/30 bg-success/10 px-3 py-2 text-xs text-success transition hover:bg-success/20"
-                          >
-                            Approve
-                          </button>
-                          <button
-                            onClick={(e) => { e.stopPropagation(); openRejectDialog(item.id) }}
-                            className="rounded-xl border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger transition hover:bg-danger/20"
-                          >
-                            Reject
-                          </button>
+                          <Button size="xs" variant="success-soft" onClick={(e) => { e.stopPropagation(); handleApprovePlayerItem(item.id) }}>
+                            <FiCheck /> Approve
+                          </Button>
+                          <Button size="xs" variant="danger-soft" onClick={(e) => { e.stopPropagation(); openRejectDialog(item.id) }}>
+                            <FiX /> Reject
+                          </Button>
                         </>
                       ) : null}
-                      <button
-                        onClick={(e) => { e.stopPropagation(); handleSelect(item) }}
-                        className="rounded-xl border border-white/5 bg-white/5 px-3 py-2 text-xs text-muted transition hover:bg-white/8 active:bg-white/10 focus:outline-none focus:ring-2 focus:ring-white/10 cursor-pointer"
-                      >
-                        Edit
-                      </button>
-                      <button onClick={(e) => { e.stopPropagation(); handleRemove(item.id) }} className="rounded-xl border border-white/5 bg-white/5 px-3 py-2 text-xs text-muted transition hover:bg-white/6">
-                        Remove
-                      </button>
-                    </div>
+                      <Button size="xs" variant="danger-soft" onClick={(e) => { e.stopPropagation(); handleRemove(item.id) }}>
+                        <FiTrash2 /> Remove
+                      </Button>
+                    </ActionGroup>
                   </div>
                 </div>
               ))

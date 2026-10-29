@@ -1,4 +1,5 @@
 import crypto from 'crypto'
+import { getUserAccountsCollection } from '../db/mongo.js'
 
 const AUTH_SECRET =
   process.env.AUTH_SECRET ||
@@ -50,7 +51,33 @@ export function verifyAuthToken(token) {
   return null
 }
 
-export function requireAuth(req, res, next) {
+// Suspended players are refused even with a still-valid token. The answer is cached briefly
+// so this doesn't add a database read to every request.
+export const SUSPENDED_ACCOUNT_ERROR = 'This account is suspended. Please contact Chill Shooters staff.'
+const SUSPENSION_CACHE_MS = 60 * 1000
+const suspensionCache = new Map()
+
+export function isSuspendedAccount(account) {
+  return String(account?.status || '').toLowerCase() === 'suspended'
+}
+
+// Call after changing an account's status so the new state applies immediately.
+export function forgetSuspension(userId) {
+  suspensionCache.delete(String(userId))
+}
+
+async function isSuspendedUser(userId) {
+  const key = String(userId)
+  const cached = suspensionCache.get(key)
+  if (cached && Date.now() - cached.checkedAt < SUSPENSION_CACHE_MS) return cached.suspended
+  const accounts = await getUserAccountsCollection()
+  const account = await accounts.findOne({ id: key }, { projection: { status: 1 } })
+  const suspended = isSuspendedAccount(account)
+  suspensionCache.set(key, { suspended, checkedAt: Date.now() })
+  return suspended
+}
+
+export async function requireAuth(req, res, next) {
   const authHeader = req.headers.authorization || ''
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : ''
   const payload = verifyAuthToken(token)
@@ -63,6 +90,17 @@ export function requireAuth(req, res, next) {
     id: payload.sub,
     email: payload.email,
     role: payload.role,
+  }
+
+  if (payload.role === 'user') {
+    try {
+      if (await isSuspendedUser(payload.sub)) {
+        return res.status(403).json({ ok: false, error: SUSPENDED_ACCOUNT_ERROR, suspended: true })
+      }
+    } catch (err) {
+      // If the database is briefly unreachable, don't lock every player out; the route will fail on its own.
+      console.warn('Suspension check failed:', String(err))
+    }
   }
 
   next()

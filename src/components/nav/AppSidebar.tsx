@@ -41,6 +41,8 @@ type Item = {
   to: string
   icon: IconType
   roles?: Role[]
+  // Heading shown above the first item of each group (used by the admin menu).
+  section?: string
 }
 
 const baseItems: Item[] = [
@@ -67,26 +69,28 @@ const marshalItems: Item[] = [
 ]
 
 
+// Grouped by the job the admin is doing, in the order a game day runs: check what needs
+// attention, handle bookings, run the field, keep inventory, look after people, keep records.
 const adminItems: Item[] = [
-  { label: 'Admin Dashboard', to: '/app/admin', icon: FiGrid, roles: ['admin'] },
-  { label: 'Analytics', to: '/app/admin/reports', icon: FiBarChart2, roles: ['admin'] },
-  { label: 'Reservation Management', to: '/app/admin/reservation-management', icon: FiCalendar, roles: ['admin'] },
-  { label: 'Games', to: '/app/games', icon: FiZap, roles: ['admin'] },
-  { label: 'Users', to: '/app/admin/player-management', icon: FiUsers, roles: ['admin'] },
-  { label: 'Equipment', to: '/app/admin/equipment', icon: FiTool, roles: ['admin'] },
-  { label: 'Weapons', to: '/app/admin/weapons', icon: FiTruck, roles: ['admin'] },
-  { label: 'Safety Logs', to: '/app/safety', icon: FiAlertTriangle, roles: ['admin'] },
-  { label: 'Counter', to: '/app/counter', icon: FiShoppingBag, roles: ['admin'] },
-  { label: 'Team Grouping', to: '/app/team-grouping', icon: FiShuffle, roles: ['admin'] },
-  { label: 'Rental Check-out', to: '/app/rentals', icon: FiLogOut, roles: ['admin'] },
-  { label: 'Repairs', to: '/app/repairs', icon: FiTool, roles: ['admin'] },
-  { label: 'Waivers', to: '/app/admin/waivers', icon: FiShield, roles: ['admin'] },
-  { label: 'Package Recommendation', to: '/app/admin/rental-packages', icon: FiPackage, roles: ['admin'] },
-  { label: 'Payments', to: '/app/admin/payments', icon: FiCreditCard, roles: ['admin'] },
-  { label: 'Partnerships', to: '/app/admin/partnerships', icon: FiBriefcase, roles: ['admin'] },
-  { label: 'REACH Fund', to: '/app/admin/reach-fund', icon: FiHeart, roles: ['admin'] },
-  { label: 'Player Feedback', to: '/app/admin/feedback', icon: FiMessageSquare, roles: ['admin'] },
-  { label: 'Audit Logs', to: '/app/admin/audit-logs', icon: FiFileText, roles: ['admin'] },
+  { section: 'Overview', label: 'Dashboard', to: '/app/admin', icon: FiGrid, roles: ['admin'] },
+  { section: 'Overview', label: 'Reports', to: '/app/admin/reports', icon: FiBarChart2, roles: ['admin'] },
+  { section: 'Bookings', label: 'Reservations', to: '/app/admin/reservations', icon: FiCalendar, roles: ['admin'] },
+  { section: 'Bookings', label: 'Payments', to: '/app/admin/payments', icon: FiCreditCard, roles: ['admin'] },
+  { section: 'Bookings', label: 'Waivers', to: '/app/admin/waivers', icon: FiShield, roles: ['admin'] },
+  { section: 'Bookings', label: 'Games', to: '/app/games', icon: FiZap, roles: ['admin'] },
+  { section: 'Game day', label: 'Counter (walk-ins)', to: '/app/counter', icon: FiShoppingBag, roles: ['admin'] },
+  { section: 'Game day', label: 'Rental check-out', to: '/app/rentals', icon: FiLogOut, roles: ['admin'] },
+  { section: 'Game day', label: 'Team grouping', to: '/app/team-grouping', icon: FiShuffle, roles: ['admin'] },
+  { section: 'Game day', label: 'Safety logs', to: '/app/safety', icon: FiAlertTriangle, roles: ['admin'] },
+  { section: 'Inventory', label: 'Weapons', to: '/app/admin/weapons', icon: FiTruck, roles: ['admin'] },
+  { section: 'Inventory', label: 'Equipment', to: '/app/admin/equipment', icon: FiTool, roles: ['admin'] },
+  { section: 'Inventory', label: 'Rental packages', to: '/app/admin/rental-packages', icon: FiPackage, roles: ['admin'] },
+  { section: 'Inventory', label: 'Repairs', to: '/app/repairs', icon: FiSettings, roles: ['admin'] },
+  { section: 'People', label: 'Players & staff', to: '/app/admin/player-management', icon: FiUsers, roles: ['admin'] },
+  { section: 'People', label: 'Partnerships', to: '/app/admin/partnerships', icon: FiBriefcase, roles: ['admin'] },
+  { section: 'People', label: 'Player feedback', to: '/app/admin/feedback', icon: FiMessageSquare, roles: ['admin'] },
+  { section: 'Records', label: 'REACH fund', to: '/app/admin/reach-fund', icon: FiHeart, roles: ['admin'] },
+  { section: 'Records', label: 'Audit logs', to: '/app/admin/audit-logs', icon: FiFileText, roles: ['admin'] },
 ]
 
 const registrarItems: Item[] = [
@@ -163,7 +167,7 @@ export function AppSidebar({
     ...(role === 'admin' ? adminItems.filter((it) => !it.roles || it.roles.includes(role)) : []),
     ...(role === 'marshal' ? marshalItems.filter((it) => !it.roles || it.roles.includes(role)) : []),
     ...(role === 'admin' || role === 'user' || role === 'registrar' || role === 'marshal'
-      ? [{ label: 'Notifications', to: '/app/notifications', icon: FiBell, roles: ['user', 'admin', 'registrar', 'marshal'] }]
+      ? [{ label: 'Notifications', to: '/app/notifications', icon: FiBell, roles: ['user', 'admin', 'registrar', 'marshal'], ...(role === 'admin' ? { section: 'Records' } : {}) }]
       : []),
   ]
 
@@ -177,11 +181,17 @@ export function AppSidebar({
       <div className="px-3 pb-2 pt-1 text-xs font-medium text-muted">{roleLabel} menu</div>
 
       <nav className="space-y-0.5">
-        {items.map((item) => {
+        {items.map((item, index) => {
           const Icon = item.icon
+          const startsSection = !!item.section && item.section !== items[index - 1]?.section
           return (
+            <React.Fragment key={item.to}>
+            {startsSection ? (
+              <div className={`px-3 pb-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted ${index === 0 ? 'pt-1' : 'pt-4'}`}>
+                {item.section}
+              </div>
+            ) : null}
             <NavLink
-              key={item.to}
               to={item.to}
               onClick={onNavigate}
               end
@@ -202,6 +212,7 @@ export function AppSidebar({
                 </>
               )}
             </NavLink>
+            </React.Fragment>
           )
         })}
       </nav>

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { FiBriefcase, FiCalendar, FiClock, FiCreditCard, FiFileText, FiTool, FiUsers } from 'react-icons/fi'
+import { FiBarChart2, FiCalendar, FiClock, FiCreditCard, FiLogOut, FiShield, FiShoppingBag, FiTool, FiUsers } from 'react-icons/fi'
 import { DashboardPostsPanel } from '../../components/dashboard/DashboardPostsPanel'
 import { PaymentCompletePanel } from '../../components/dashboard/PaymentCompletePanel'
 import { ActionRow, ActivityList, DashboardHeader, Panel, StatTile, type ActivityTone } from '../../components/dashboard/DashboardParts'
@@ -21,6 +21,7 @@ type DashboardState = {
   pendingApprovals: number
   equipmentAlerts: number
   reviewQueue: number
+  waiversToReview: number
   recentActivity: ActivityItem[]
 }
 
@@ -31,6 +32,7 @@ const defaultState: DashboardState = {
   pendingApprovals: 0,
   equipmentAlerts: 0,
   reviewQueue: 0,
+  waiversToReview: 0,
   recentActivity: [],
 }
 
@@ -60,12 +62,15 @@ export function AdminDashboardPage() {
       setError(null)
 
       try {
-        const [reservationsRes, paymentsRes, usersRes, equipmentRes] = await Promise.all([
+        const [reservationsRes, paymentsRes, usersRes, equipmentRes, waiversRes] = await Promise.all([
           apiGet<{ ok: boolean; data: any[] }>('/api/reservations?limit=200'),
           apiGet<{ ok: boolean; data: any[] }>('/api/payments?limit=200'),
           apiGet<{ ok: boolean; data: any[] }>('/api/user_accounts?limit=500'),
           apiGet<{ ok: boolean; data: any[] }>('/api/equipments?limit=200'),
+          apiGet<{ ok: boolean; data: any[] }>('/api/waivers?limit=200').catch(() => ({ ok: false, data: [] as any[] })),
         ])
+        const waiversToReview = (Array.isArray(waiversRes?.data) ? waiversRes.data : []).filter((waiver) =>
+          ['pending', 'review', 'submitted'].includes(String(waiver?.status || 'pending').trim().toLowerCase())).length
 
         const reservations = Array.isArray(reservationsRes?.data) ? reservationsRes.data : []
         const payments = Array.isArray(paymentsRes?.data) ? paymentsRes.data : []
@@ -122,6 +127,7 @@ export function AdminDashboardPage() {
           pendingApprovals,
           equipmentAlerts: equipmentAlertCount,
           reviewQueue,
+          waiversToReview,
           recentActivity: activityRows.slice(0, 3),
         }
 
@@ -146,7 +152,7 @@ export function AdminDashboardPage() {
     }
   }, [])
 
-  const attentionCount = dashboard.pendingApprovals + dashboard.reviewQueue + dashboard.equipmentAlerts
+  const attentionCount = dashboard.pendingApprovals + dashboard.reviewQueue + dashboard.waiversToReview + dashboard.equipmentAlerts
 
   return (
     <div className="space-y-6">
@@ -176,7 +182,7 @@ export function AdminDashboardPage() {
           >
             <div className="space-y-0.5">
               <ActionRow
-                to="/app/admin/reservation-management"
+                to="/app/admin/reservations"
                 icon={FiClock}
                 title="Reservations to approve"
                 description={dashboard.pendingApprovals > 0 ? 'Pending or flagged for review' : 'Nothing pending'}
@@ -188,6 +194,13 @@ export function AdminDashboardPage() {
                 title="Payments to review"
                 description={dashboard.reviewQueue > 0 ? 'Proofs waiting for verification' : 'Nothing pending'}
                 badge={loading ? undefined : dashboard.reviewQueue}
+              />
+              <ActionRow
+                to="/app/admin/waivers"
+                icon={FiShield}
+                title="Waivers to review"
+                description={dashboard.waiversToReview > 0 ? 'Submitted waivers waiting for approval' : 'Nothing pending'}
+                badge={loading ? undefined : dashboard.waiversToReview}
               />
               <ActionRow
                 to="/app/admin/equipment"
@@ -208,20 +221,11 @@ export function AdminDashboardPage() {
 
         <Panel title="Shortcuts">
           <div className="space-y-0.5">
-            <ActionRow
-              to="/app/admin/reservation-management"
-              icon={FiCalendar}
-              title="Reservation management"
-              description="Approve, reject, and reschedule"
-            />
-            <ActionRow to="/app/admin/players" icon={FiUsers} title="Users" description="Players and staff access" />
-            <ActionRow
-              to="/app/admin/partnerships"
-              icon={FiBriefcase}
-              title="Partnerships"
-              description="Sponsors, schools, and communities"
-            />
-            <ActionRow to="/app/admin/audit-logs" icon={FiFileText} title="Audit logs" description="Recent admin changes" />
+            <ActionRow to="/app/admin/reservations" icon={FiCalendar} title="Reservations" description="Approve, confirm, and review bookings" />
+            <ActionRow to="/app/counter" icon={FiShoppingBag} title="Counter" description="Walk-ins and payments at the field" />
+            <ActionRow to="/app/rentals" icon={FiLogOut} title="Rental check-out" description="Issue and return gear for today's games" />
+            <ActionRow to="/app/admin/player-management" icon={FiUsers} title="Players & staff" description="Accounts, ID checks, and staff access" />
+            <ActionRow to="/app/admin/reports" icon={FiBarChart2} title="Reports" description="Sales, bookings, rentals, and penalties" />
           </div>
         </Panel>
       </div>

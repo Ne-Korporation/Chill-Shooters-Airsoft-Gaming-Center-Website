@@ -24,7 +24,8 @@ export function LoginPage() {
   const navigate = useNavigate()
   const location = useLocation()
   // Set by RequireAuth and the landing page booking bar so login returns the user where they were headed.
-  const redirectFrom = (location.state as { from?: string } | null)?.from
+  const redirectState = location.state as { from?: string; fromUserId?: string } | null
+  const redirectFrom = redirectState?.from
   const [showPassword, setShowPassword] = useState(false)
 
   const {
@@ -50,17 +51,21 @@ export function LoginPage() {
     [],
   )
 
-  const getRedirectRoute = (role?: string) => {
-    if (redirectFrom?.startsWith('/app')) return redirectFrom
-    if (String(role || '').trim().toLowerCase() === 'admin') return '/app/admin'
-    return '/app'
+  // Return to the page the session ended on only for the same account (a page left by another
+  // user, e.g. their profile, is not yours), and never into the admin area for non-admins.
+  const getRedirectRoute = (role?: string, userId?: string) => {
+    const isAdmin = String(role || '').trim().toLowerCase() === 'admin'
+    const sameAccount = !redirectState?.fromUserId || redirectState.fromUserId === String(userId || '')
+    const allowedForRole = isAdmin || !redirectFrom?.startsWith('/app/admin')
+    if (redirectFrom?.startsWith('/app') && sameAccount && allowedForRole) return redirectFrom
+    return isAdmin ? '/app/admin' : '/app'
   }
 
   async function onSubmit(values: FormValues) {
     try {
       const user = await login(values)
       toast.success('Authentication accepted.')
-      navigate(getRedirectRoute(user.role))
+      navigate(getRedirectRoute(user.role, user.id))
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : 'Unable to sign in. Please try again.')
     }
@@ -71,7 +76,7 @@ export function LoginPage() {
       const profile = await signInWithGoogle()
       const user = await loginWithGoogle({ name: profile.name, email: profile.email, idToken: profile.idToken, remember: getValues('remember') })
       toast.success('Signed in with Google.')
-      navigate(getRedirectRoute(user.role))
+      navigate(getRedirectRoute(user.role, user.id))
     } catch (err: any) {
       console.error('Google sign-in error', err)
       toast.error(err?.message || 'Google sign-in failed.')

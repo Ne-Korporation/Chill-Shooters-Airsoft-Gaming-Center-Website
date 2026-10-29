@@ -1,6 +1,8 @@
 import React from 'react'
+import { FiCheck, FiEdit2, FiTrash2, FiX } from 'react-icons/fi'
 import toast from 'react-hot-toast'
-import { Button } from '../../components/ui/Button'
+import { ActionGroup, Button } from '../../components/ui/Button'
+import { FilterTabs } from '../../components/ui/FilterTabs'
 import { Card } from '../../components/ui/Card'
 import { apiGet, apiPost, apiPut, apiDelete } from '../../utils/apiClient'
 import { ModelSummaryStrip } from '../../components/inventory/ModelSummaryStrip'
@@ -302,6 +304,8 @@ export function AdminWeaponsPage() {
   }
 
   const handleRemove = async (id: string) => {
+    const name = weapons.find((weapon) => weapon.id === id)?.name || id
+    if (!window.confirm(`Remove "${name}" from the weapon list? This cannot be undone.`)) return
     try {
       await apiDelete(`/api/weapons/${encodeURIComponent(id)}`)
       toast.success('Weapon removed')
@@ -399,15 +403,15 @@ export function AdminWeaponsPage() {
         </Card>
       </div>
 
-      <div className="flex flex-wrap gap-2">
-        <button type="button" onClick={() => setSourceFilter('business')} className={`rounded-full px-3 py-1 text-xs font-semibold transition ${sourceFilter === 'business' ? 'bg-accent/20 text-accent' : 'bg-white/5 text-muted'}`}>Rental weapons</button>
-        <button type="button" onClick={() => setSourceFilter('player')} className={`rounded-full px-3 py-1 text-xs font-semibold transition ${sourceFilter === 'player' ? 'bg-accent/20 text-accent' : 'bg-white/5 text-muted'}`}>
-          Players' weapons
-          {pendingPlayerWeaponsCount > 0 ? (
-            <span className="ml-1 rounded-full bg-warning/20 px-1.5 py-0.5 text-[10px] text-warning">{pendingPlayerWeaponsCount}</span>
-          ) : null}
-        </button>
-      </div>
+      <FilterTabs
+        ariaLabel="Show rental weapons or players' weapons"
+        value={sourceFilter}
+        onChange={setSourceFilter}
+        options={[
+          { value: 'business', label: 'Rental weapons' },
+          { value: 'player', label: "Players' weapons", ...(pendingPlayerWeaponsCount > 0 ? { count: pendingPlayerWeaponsCount } : {}) },
+        ]}
+      />
 
       <Card className="p-4">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -465,20 +469,14 @@ export function AdminWeaponsPage() {
                 <div key={weapon.id} className="rounded-xl border border-white/10 bg-background/50 p-3">
                   <div className="flex items-center justify-between gap-2">
                     <div className="text-sm font-semibold">{weapon.name}</div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={(event) => { event.stopPropagation(); handleApprovePlayerWeapon(weapon.id) }}
-                        className="rounded-lg border border-success/30 bg-success/10 px-2.5 py-1 text-[11px] font-semibold text-success"
-                      >
-                        Approve
-                      </button>
-                      <button
-                        onClick={(event) => { event.stopPropagation(); openRejectDialog(weapon.id) }}
-                        className="rounded-lg border border-danger/30 bg-danger/10 px-2.5 py-1 text-[11px] font-semibold text-danger"
-                      >
-                        Reject
-                      </button>
-                    </div>
+                    <ActionGroup>
+                      <Button size="xs" variant="success-soft" onClick={(event) => { event.stopPropagation(); handleApprovePlayerWeapon(weapon.id) }}>
+                        <FiCheck /> Approve
+                      </Button>
+                      <Button size="xs" variant="danger-soft" onClick={(event) => { event.stopPropagation(); openRejectDialog(weapon.id) }}>
+                        <FiX /> Reject
+                      </Button>
+                    </ActionGroup>
                   </div>
                   <div className="mt-1 text-xs text-muted">{weapon.description || weapon.note}</div>
                 </div>
@@ -496,8 +494,8 @@ export function AdminWeaponsPage() {
               <div className="col-span-3">Weapon</div>
               <div className="col-span-1 text-right">Piece</div>
               <div className="col-span-1 text-right">Price</div>
-              <div className="col-span-2 text-right">Status</div>
-              <div className="col-span-3 text-right">Actions</div>
+              <div className="col-span-1 text-right">Status</div>
+              <div className="col-span-4 text-right">Actions</div>
             </div>
 
             <div className="divide-y divide-white/5">
@@ -527,43 +525,31 @@ export function AdminWeaponsPage() {
                   </div>
                   <div className="col-span-1 text-right text-sm font-semibold">{weapon.source === 'player' || !weapon.unitNumber ? '—' : `#${weapon.unitNumber}`}</div>
                   <div className="col-span-1 text-right text-sm text-muted">₱{weapon.price}</div>
-                  <div className="col-span-2 text-right">
+                  <div className="col-span-1 text-right">
                     <StatusBadge status={weapon.status} onToggle={() => handleStatusToggle(weapon.id)} />
                   </div>
-                  <div className="col-span-3 text-right">
-                    <div className="flex flex-wrap items-center justify-end gap-2">
+                  <div className="col-span-4">
+                    <ActionGroup>
+                      <Button size="xs" variant="ghost" onClick={(e) => { e.stopPropagation(); handleSelect(weapon) }}>
+                        <FiEdit2 /> Edit
+                      </Button>
                       {weapon.source === 'player' && weapon.approvalStatus === 'pending' ? (
                         <>
-                          <button
-                            onClick={(event) => { event.stopPropagation(); handleApprovePlayerWeapon(weapon.id) }}
-                            className="rounded-xl border border-success/30 bg-success/10 px-3 py-2 text-xs text-success transition hover:bg-success/20"
-                          >
-                            Approve
-                          </button>
-                          <button
-                            onClick={(event) => { event.stopPropagation(); openRejectDialog(weapon.id) }}
-                            className="rounded-xl border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger transition hover:bg-danger/20"
-                          >
-                            Reject
-                          </button>
+                          <Button size="xs" variant="success-soft" onClick={(event) => { event.stopPropagation(); handleApprovePlayerWeapon(weapon.id) }}>
+                            <FiCheck /> Approve
+                          </Button>
+                          <Button size="xs" variant="danger-soft" onClick={(event) => { event.stopPropagation(); openRejectDialog(weapon.id) }}>
+                            <FiX /> Reject
+                          </Button>
                         </>
                       ) : null}
-                      <button
-                        onClick={(e) => { e.stopPropagation(); handleSelect(weapon) }}
-                        className="rounded-xl border border-white/5 bg-white/5 px-3 py-2 text-xs text-muted transition hover:bg-white/8 active:bg-white/10 focus:outline-none focus:ring-2 focus:ring-white/10 cursor-pointer"
-                      >
-                        Edit
-                      </button>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); handleToggleFlag(weapon.id) }}
-                        className={"rounded-xl border px-3 py-2 text-xs font-semibold transition " + (weapon.status === 'needs-check' ? 'border-white/5 bg-white/5 text-text hover:bg-white/8' : 'border-danger/30 bg-danger/10 text-danger hover:bg-danger/15')}
-                      >
+                      <Button size="xs" variant={weapon.status === 'needs-check' ? 'ghost' : 'accent-soft'} onClick={(e) => { e.stopPropagation(); handleToggleFlag(weapon.id) }}>
                         {weapon.status === 'needs-check' ? 'Unflag' : 'Flag'}
-                      </button>
-                      <button onClick={(e) => { e.stopPropagation(); handleRemove(weapon.id) }} className="rounded-xl border border-white/5 bg-white/5 px-3 py-2 text-xs text-muted transition hover:bg-white/6">
-                        Remove
-                      </button>
-                    </div>
+                      </Button>
+                      <Button size="xs" variant="danger-soft" onClick={(e) => { e.stopPropagation(); handleRemove(weapon.id) }}>
+                        <FiTrash2 /> Remove
+                      </Button>
+                    </ActionGroup>
                   </div>
                 </div>
               ))

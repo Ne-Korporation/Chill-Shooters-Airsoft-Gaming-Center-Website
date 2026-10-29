@@ -15,7 +15,7 @@ export function resolveNotificationRoute(notification: NotificationItem, role?: 
   }
 
   if (notificationType.startsWith('reservation_')) {
-    if (currentRole === 'admin') return '/app/admin/reservation-management'
+    if (currentRole === 'admin') return '/app/admin/reservations'
     if (currentRole === 'registrar') return '/app/registrar/reservations'
     if (currentRole === 'marshal') return '/app/games'
     return '/app/reservations'
@@ -52,7 +52,7 @@ export function resolveNotificationRoute(notification: NotificationItem, role?: 
 
   if (notificationType.startsWith('player_')) {
     if (userId) return `/app/players/${encodeURIComponent(userId)}`
-    return '/app/admin/players'
+    return '/app/admin/player-management'
   }
 
   if (notificationType.startsWith('admin_') || notificationType.startsWith('audit_')) {

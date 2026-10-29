@@ -22,7 +22,6 @@ import { MyWeaponsAndEquipmentPage } from './pages/players/MyWeaponsAndEquipment
 import { AdminDashboardPage } from './pages/admin/AdminDashboardPage'
 import { AdminReservationsPage } from './pages/admin/AdminReservationsPage'
 import { AdminGameplayPage } from './pages/admin/AdminGameplayPage'
-import { AdminPlayersPage } from './pages/admin/AdminPlayersPage'
 import { AdminEquipmentPage } from './pages/admin/AdminEquipmentPage'
 import { AdminWeaponsPage } from './pages/admin/AdminWeaponsPage'
 import { AdminWaiversPage } from './pages/admin/AdminWaiversPage'
@@ -40,7 +39,6 @@ import { CounterPage } from './pages/operations/CounterPage'
 import { RentalsPage } from './pages/operations/RentalsPage'
 import { RepairsPage } from './pages/operations/RepairsPage'
 
-import { ReservationManagementPage } from './pages/admin/ReservationManagementPage'
 import { PlayerManagementPage } from './pages/admin/PlayerManagementPage'
 
 import { RegistrarDashboardHomePage } from './pages/registrar/RegistrarDashboardHomePage'
@@ -184,10 +182,9 @@ export default function App() {
         <Route path="admin" element={<AdminDashboardPageWrapper />} />
         <Route path="admin/reservations" element={<AdminPageWrapper><AdminReservationsPage /></AdminPageWrapper>} />
         <Route path="admin/gameplay" element={<AdminPageWrapper><AdminGameplayPage /></AdminPageWrapper>} />
-
-
-        <Route path="admin/reservation-management" element={<AdminPageWrapper><ReservationManagementPage /></AdminPageWrapper>} />
-        <Route path="admin/players" element={<AdminPageWrapper><AdminPlayersPage /></AdminPageWrapper>} />
+        {/* Old addresses kept as redirects so bookmarks and notification links still work. */}
+        <Route path="admin/reservation-management" element={<Navigate to="/app/admin/reservations" replace />} />
+        <Route path="admin/players" element={<Navigate to="/app/admin/player-management" replace />} />
         <Route path="admin/player-management" element={<AdminPageWrapper><PlayerManagementPage /></AdminPageWrapper>} />
         <Route
           path="admin/equipment"
