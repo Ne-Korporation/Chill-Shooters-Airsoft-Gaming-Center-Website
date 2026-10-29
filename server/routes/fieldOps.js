@@ -5,6 +5,7 @@ import { getDb, startDbSession } from '../db/mongo.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
 import { nextShortId } from '../utils/shortIds.js'
 import { getReservationPayments, syncReservationPaymentState } from '../utils/paymentProgress.js'
+import { emailDamageCharge } from '../services/notificationEmails.js'
 import { getExperienceLevel, getAgeGroup, suggestBalancedTeams } from '../utils/teamBalancing.js'
 import { createPieces, modelFilter } from '../utils/inventoryPieces.js'
 
@@ -321,7 +322,7 @@ router.post('/team-grouping', requireAuth, requireRole('admin', 'marshal'), asyn
 // ---------------------------------------------------------------------------
 
 const PAID_STATUSES = ['paid', 'confirmed', 'verified', 'approved', 'succeeded']
-const ONSITE_METHODS = { cash: 'Cash', gcash: 'GCash', bank_transfer: 'Bank transfer', card: 'Card' }
+const ONSITE_METHODS = { cash: 'Cash', gcash: 'GCash', bank_transfer: 'Bank transfer' }
 
 function readPrice(name, fallback) {
   const value = Number(process.env[name])
@@ -331,7 +332,6 @@ function readPrice(name, fallback) {
 export function getChargeConfig() {
   return {
     ammo_reload: { label: 'Extra ammo reload', unitPrice: readPrice('AMMO_RELOAD_PRICE', 100) },
-    late_cancellation: { label: 'Late cancellation penalty', unitPrice: readPrice('LATE_CANCELLATION_FEE', 350) },
     field_modification: { label: 'Field modification fee', unitPrice: readPrice('FIELD_MODIFICATION_FEE', 500) },
     other: { label: 'Other charge', unitPrice: 0 },
   }
@@ -407,7 +407,7 @@ router.post('/payments/onsite', requireAuth, requireRole('admin', 'registrar'), 
   const method = String(body.method || '').toLowerCase()
   const amount = money(body.amount)
   const reference = String(body.reference || '').trim().slice(0, 120)
-  if (!ONSITE_METHODS[method]) return res.status(400).json({ ok: false, error: 'Choose cash, GCash, bank transfer, or card.' })
+  if (!ONSITE_METHODS[method]) return res.status(400).json({ ok: false, error: 'Choose cash, GCash, or bank transfer.' })
   if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ ok: false, error: 'Enter the amount received.' })
   if (method !== 'cash' && reference.length < 4) return res.status(400).json({ ok: false, error: 'Enter the transaction reference number.' })
 
@@ -467,8 +467,8 @@ router.post('/payments/onsite', requireAuth, requireRole('admin', 'registrar'), 
   }
 })
 
-// POST /api/reservations/:id/charges { type, quantity, unitPrice, note } — ammo reloads, late
-// cancellation penalties, field modification fees, or other charges added to the bill.
+// POST /api/reservations/:id/charges { type, quantity, unitPrice, note } — ammo reloads, field
+// modification fees, or other charges added to the bill. There is no cancellation fee.
 router.post('/reservations/:id/charges', requireAuth, requireRole(...STAFF), async (req, res) => {
   const body = req.body || {}
   const config = getChargeConfig()
@@ -732,8 +732,23 @@ router.get('/repairs/summary', requireAuth, requireRole('admin', 'marshal'), asy
   }
 })
 
-// POST /api/repairs { itemCollection, itemId, damage, gunsmith, damageReportId } — opens a repair
-// and pulls the item from rental.
+// The reservation a repair bills: given directly, or the one its damage report is linked to.
+async function findRepairReservation(db, reservationId, damageReportId) {
+  const directId = String(reservationId || '').trim()
+  if (directId) {
+    const reservation = await findById(db, 'reservations', directId)
+    if (!reservation) throw Object.assign(new Error('Reservation not found.'), { statusCode: 404 })
+    return reservation
+  }
+  const reportId = String(damageReportId || '').trim()
+  if (!reportId) return null
+  const report = await db.collection('damage_reports').findOne({ id: reportId })
+  if (!report) throw Object.assign(new Error('Damage report not found.'), { statusCode: 404 })
+  return report.reservationId ? findById(db, 'reservations', report.reservationId) : null
+}
+
+// POST /api/repairs { itemCollection, itemId, damage, gunsmith, damageReportId, reservationId, playerInduced }
+// — opens a repair and pulls the item from rental. playerInduced repairs bill the player on completion.
 router.post('/repairs', requireAuth, requireRole('admin', 'marshal'), async (req, res) => {
   const body = req.body || {}
   const itemCollection = String(body.itemCollection || '')
@@ -744,6 +759,12 @@ router.post('/repairs', requireAuth, requireRole('admin', 'marshal'), async (req
     const db = await getDb()
     const item = await findById(db, itemCollection, body.itemId)
     if (!item) return res.status(404).json({ ok: false, error: 'Item not found' })
+    let reservation = null
+    try {
+      reservation = await findRepairReservation(db, body.reservationId, body.damageReportId)
+    } catch (err) {
+      return sendError(res, err)
+    }
     const nowISO = new Date().toISOString()
     const repair = {
       id: await nextShortId(db, 'repairs', 'RPR'),
@@ -754,6 +775,9 @@ router.post('/repairs', requireAuth, requireRole('admin', 'marshal'), async (req
       damage,
       gunsmith: String(body.gunsmith || '').trim().slice(0, 120),
       damageReportId: String(body.damageReportId || '').trim(),
+      playerInduced: body.playerInduced === true,
+      reservationId: reservation ? keyOf(reservation) : '',
+      playerId: reservation ? String(reservation.userId || '') : '',
       status: 'in_progress',
       openedAtISO: nowISO,
       openedBy: actorOf(req),
@@ -769,7 +793,9 @@ router.post('/repairs', requireAuth, requireRole('admin', 'marshal'), async (req
   }
 })
 
-// PUT /api/repairs/:id/complete { partsReplaced, partsCost, laborCost, repairDate, note, returnToService }
+// PUT /api/repairs/:id/complete { partsReplaced, partsCost, laborCost, repairDate, note, returnToService,
+// playerInduced, reservationId } — when the damage was player-induced, the repair cost is added to
+// that player's reservation balance automatically as a damage penalty.
 router.put('/repairs/:id/complete', requireAuth, requireRole('admin', 'marshal'), async (req, res) => {
   const body = req.body || {}
   const partsCost = money(body.partsCost || 0)
@@ -784,19 +810,73 @@ router.put('/repairs/:id/complete', requireAuth, requireRole('admin', 'marshal')
     const repair = await db.collection('repairs').findOne({ id: String(req.params.id) })
     if (!repair) return res.status(404).json({ ok: false, error: 'Repair not found' })
     if (repair.status !== 'in_progress') return res.status(409).json({ ok: false, error: 'This repair is already closed.' })
+
+    const totalCost = Math.round((partsCost + laborCost) * 100) / 100
+    const playerInduced = typeof body.playerInduced === 'boolean' ? body.playerInduced : repair.playerInduced === true
+    let reservation = null
+    if (playerInduced) {
+      reservation = await findRepairReservation(db, body.reservationId || repair.reservationId, repair.damageReportId)
+      if (!reservation) {
+        return res.status(400).json({ ok: false, error: 'Link the reservation of the player who caused the damage so the repair cost can be billed.' })
+      }
+    }
+    const penaltyAmount = playerInduced ? totalCost : 0
+
     const nowISO = new Date().toISOString()
     const update = {
       status: 'completed',
       partsReplaced: String(body.partsReplaced || '').trim().slice(0, 500),
       partsCost,
       laborCost,
-      totalCost: Math.round((partsCost + laborCost) * 100) / 100,
+      totalCost,
       repairDate,
       completionNote: String(body.note || '').trim().slice(0, 500),
       completedAtISO: nowISO,
       completedBy: actorOf(req),
+      playerInduced,
+      penaltyAmount,
+      ...(reservation ? { reservationId: keyOf(reservation), playerId: String(reservation.userId || '') } : {}),
     }
-    await db.collection('repairs').updateOne({ _id: repair._id }, { $set: update })
+
+    const session = startDbSession()
+    try {
+      await session.withTransaction(async () => {
+        const closed = await db.collection('repairs').updateOne({ _id: repair._id, status: 'in_progress' }, { $set: update }, { session })
+        if (closed.modifiedCount === 0) throw Object.assign(new Error('This repair is already closed.'), { statusCode: 409 })
+        if (penaltyAmount > 0) {
+          await db.collection('reservations').updateOne(
+            { _id: reservation._id },
+            {
+              $inc: { totalAmount: penaltyAmount, balanceAmount: penaltyAmount, damageChargesTotal: penaltyAmount },
+              $push: {
+                pricingBreakdown: { label: `Repair penalty: ${repair.itemName}`, amount: penaltyAmount },
+                damageCharges: { repairId: repair.id, reportId: repair.damageReportId || '', itemName: repair.itemName, amount: penaltyAmount, approvedBy: actorOf(req), atISO: nowISO },
+              },
+              $set: { updatedAtISO: nowISO },
+            },
+            { session },
+          )
+          // The linked damage report is settled by this repair bill.
+          if (repair.damageReportId) {
+            await db.collection('damage_reports').updateOne(
+              { id: repair.damageReportId, status: 'reported' },
+              { $set: { status: 'billed', chargeAmount: penaltyAmount, reviewNote: `Billed from repair ${repair.id}`, reviewedAtISO: nowISO, reviewedBy: actorOf(req) } },
+              { session },
+            )
+          }
+        }
+      })
+    } finally {
+      await session.endSession()
+    }
+    if (penaltyAmount > 0) {
+      void emailDamageCharge(db, reservation, {
+        id: repair.id,
+        itemName: repair.itemName,
+        chargeAmount: penaltyAmount,
+        reviewNote: update.partsReplaced ? `Repair: ${update.partsReplaced}` : '',
+      })
+    }
     if (body.returnToService !== false) {
       await db.collection(repair.itemCollection).updateOne(
         idFilter(repair.itemId),

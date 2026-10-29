@@ -16,8 +16,31 @@ type ReservationDoc = {
   reservationTime?: string
   numberOfPlayers?: number
   totalAmount?: number
+  depositAmount?: number
+  balanceAmount?: number
+  packageDiscountAmount?: number
+  pricingBreakdown?: Array<{ label?: string; amount?: number }>
+  extraCharges?: Array<{ label?: string; type?: string; amount?: number; atISO?: string }>
+  damageCharges?: Array<{ itemName?: string; amount?: number; atISO?: string }>
   locationName?: string
   locationId?: string
+}
+
+type RentalDoc = {
+  id?: string
+  reservationId?: string
+  playerName?: string
+  itemName?: string
+  itemCategory?: string
+  status?: string
+  condition?: string
+  issuedAtISO?: string
+}
+
+type AccountDoc = {
+  id?: string
+  role?: string
+  createdAtISO?: string
 }
 
 type PaymentDoc = {
@@ -57,6 +80,26 @@ const PERIOD_LABELS: Record<Period, string> = {
 // Payment statuses that mean the money was actually received.
 const COLLECTED_STATUSES = ['paid', 'confirmed', 'verified', 'approved', 'succeeded']
 const PAGE_SIZE = 200
+
+// Transaction types the report can be narrowed to (matched against paymentMethod).
+const TRANSACTION_TYPES = [
+  { key: 'all', label: 'All transactions' },
+  { key: 'gcash', label: 'GCash' },
+  { key: 'bank', label: 'Bank transfer' },
+  { key: 'cash', label: 'Cash (onsite)' },
+  { key: 'card', label: 'Card (online)' },
+] as const
+type TransactionType = (typeof TRANSACTION_TYPES)[number]['key']
+
+function paymentType(payment: PaymentDoc & { stripePaymentIntentId?: string }): TransactionType {
+  const method = String(payment.paymentMethod || '').toLowerCase()
+  if (method.includes('card') || payment.stripePaymentIntentId) return 'card'
+  if (method.includes('bank')) return 'bank'
+  if (method.includes('cash')) return 'cash'
+  return 'gcash'
+}
+
+const CANCELLED_STATUSES = ['cancelled', 'canceled', 'rejected']
 
 function formatCurrency(value: number) {
   return `₱${value.toLocaleString('en-PH', { maximumFractionDigits: 0 })}`
@@ -143,6 +186,9 @@ export function AdminReportsPage() {
   const [payments, setPayments] = useState<PaymentDoc[]>([])
   const [equipment, setEquipment] = useState<EquipmentDoc[]>([])
   const [waivers, setWaivers] = useState<WaiverDoc[]>([])
+  const [rentals, setRentals] = useState<RentalDoc[]>([])
+  const [accounts, setAccounts] = useState<AccountDoc[]>([])
+  const [transactionType, setTransactionType] = useState<TransactionType>('all')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [period, setPeriod] = useState<Period>('monthly')
@@ -157,17 +203,21 @@ export function AdminReportsPage() {
       setLoading(true)
       setError(null)
       try {
-        const [nextReservations, nextPayments, nextEquipment, nextWaivers] = await Promise.all([
+        const [nextReservations, nextPayments, nextEquipment, nextWaivers, nextAccounts, rentalRes] = await Promise.all([
           fetchAll<ReservationDoc>('reservations'),
           fetchAll<PaymentDoc>('payments'),
           fetchAll<EquipmentDoc>('equipments'),
           fetchAll<WaiverDoc>('waivers'),
+          fetchAll<AccountDoc>('user_accounts'),
+          apiGet<{ ok: boolean; data: RentalDoc[] }>('/api/rentals').catch(() => ({ ok: false, data: [] as RentalDoc[] })),
         ])
         if (!mounted) return
         setReservations(nextReservations)
         setPayments(nextPayments)
         setEquipment(nextEquipment)
         setWaivers(nextWaivers)
+        setAccounts(nextAccounts)
+        setRentals(Array.isArray(rentalRes?.data) ? rentalRes.data : [])
       } catch (err: any) {
         if (mounted) setError(err?.message || 'Unable to load report data')
       } finally {
@@ -186,7 +236,9 @@ export function AdminReportsPage() {
 
   const report = useMemo(() => {
     const periodReservations = reservations.filter((reservation) => inRange(reservationDay(reservation)))
-    const periodPayments = payments.filter((payment) => inRange(dayOf(payment.createdAtISO || payment.createdAt)))
+    const periodPayments = payments.filter((payment) =>
+      inRange(dayOf(payment.createdAtISO || payment.createdAt)) &&
+      (transactionType === 'all' || paymentType(payment) === transactionType))
     const periodWaivers = waivers.filter((waiver) => inRange(dayOf(waiver.submittedAtISO || waiver.createdAtISO)))
 
     const statusOf = (reservation: ReservationDoc) => String(reservation.reservationStatus || '').trim().toLowerCase()
@@ -224,6 +276,58 @@ export function AdminReportsPage() {
 
     const equipmentAlertCount = equipmentAlerts(equipment).count
 
+    // Player registrations (player accounts created in the period).
+    const registrations = accounts.filter((account) =>
+      String(account.role || 'user').toLowerCase() === 'user' && inRange(dayOf(account.createdAtISO))).length
+
+    // Equipment rentals issued in the period, and which items went out most.
+    const periodRentals = rentals.filter((rental) => inRange(dayOf(rental.issuedAtISO)))
+    const rentalsByItem = new Map<string, number>()
+    for (const rental of periodRentals) {
+      const name = rental.itemName || 'Unknown item'
+      rentalsByItem.set(name, (rentalsByItem.get(name) || 0) + 1)
+    }
+    const topRentals = Array.from(rentalsByItem.entries()).sort((a, b) => b[1] - a[1]).slice(0, 8)
+    const unreturned = periodRentals.filter((rental) => ['out', 'missing'].includes(String(rental.status || '').toLowerCase())).length
+
+    // Penalties and extra charges added to bills in the period.
+    const penalties: Array<{ day: string; reservationId: string; label: string; amount: number }> = []
+    for (const reservation of reservations) {
+      const reservationId = reservation.id || ''
+      for (const charge of reservation.damageCharges || []) {
+        if (inRange(dayOf(charge.atISO))) penalties.push({ day: dayOf(charge.atISO), reservationId, label: `Damage / repair: ${charge.itemName || 'item'}`, amount: Number(charge.amount) || 0 })
+      }
+      for (const charge of reservation.extraCharges || []) {
+        if (inRange(dayOf(charge.atISO))) penalties.push({ day: dayOf(charge.atISO), reservationId, label: charge.label || charge.type || 'Extra charge', amount: Number(charge.amount) || 0 })
+      }
+    }
+    penalties.sort((a, b) => a.day.localeCompare(b.day))
+    const penaltyTotal = penalties.reduce((sum, row) => sum + row.amount, 0)
+    const damageTotal = penalties.filter((row) => row.label.startsWith('Damage')).reduce((sum, row) => sum + row.amount, 0)
+
+    // Financial statement for bookings dated in the period.
+    const activeReservations = periodReservations.filter((r) => !CANCELLED_STATUSES.includes(statusOf(r)))
+    const grossBookings = activeReservations.reduce((sum, r) => sum + (Number(r.totalAmount) || 0), 0)
+    const discounts = activeReservations.reduce((sum, r) => {
+      const fromBreakdown = (r.pricingBreakdown || [])
+        .filter((line) => Number(line.amount) < 0)
+        .reduce((total, line) => total + Math.abs(Number(line.amount) || 0), 0)
+      return sum + Math.max(fromBreakdown, Number(r.packageDiscountAmount) || 0)
+    }, 0)
+    const outstanding = activeReservations.reduce((sum, r) => sum + Math.max(0, Number(r.balanceAmount) || 0), 0)
+    const collectedByType = TRANSACTION_TYPES.filter((type) => type.key !== 'all').map((type) => ({
+      label: type.label,
+      amount: collectedPayments.filter((p) => paymentType(p) === type.key).reduce((sum, p) => sum + paymentAmount(p), 0),
+    }))
+    const statement = [
+      { label: 'Gross booking value (after discounts)', amount: grossBookings },
+      { label: 'Discounts given (package and partnership)', amount: discounts },
+      { label: 'Extra charges and penalties billed', amount: penaltyTotal },
+      ...collectedByType.map((row) => ({ label: `Collected via ${row.label}`, amount: row.amount })),
+      { label: 'Total collected', amount: collected },
+      { label: 'Outstanding balances on these bookings', amount: outstanding },
+    ]
+
     const metrics: Metric[] = [
       { label: 'Reservations', value: String(periodReservations.length), tone: 'accent' },
       { label: 'Confirmed / completed', value: String(confirmed), tone: 'success' },
@@ -233,20 +337,28 @@ export function AdminReportsPage() {
       { label: 'Payments awaiting review', value: `${pendingPayments.length} · ${formatCurrency(pendingAmount)}`, tone: 'danger' },
       { label: 'Pending approvals', value: String(pendingApprovals), tone: 'danger' },
       { label: 'Waivers submitted', value: String(periodWaivers.length), tone: 'accent' },
-      { label: 'Equipment alerts (current)', value: String(equipmentAlertCount), tone: 'danger' },
+      { label: 'Player registrations', value: String(registrations), tone: 'accent' },
+      { label: 'Equipment rentals issued', value: `${periodRentals.length}${unreturned ? ` · ${unreturned} not returned` : ''}`, tone: 'accent' },
+      { label: 'Penalties & extra charges', value: `${penalties.length} · ${formatCurrency(penaltyTotal)}`, tone: 'danger' },
+      { label: 'Damage / repair penalties', value: formatCurrency(damageTotal), tone: 'danger' },
+      { label: 'Equipment alerts (current)', value: String(equipmentAlerts), tone: 'danger' },
     ]
 
-    return { metrics, breakdown, periodPayments, collected, players }
-  }, [reservations, payments, waivers, equipment, range, period])
+    return { metrics, breakdown, periodPayments, collected, players, statement, penalties, topRentals, periodRentals }
+  }, [reservations, payments, waivers, equipment, accounts, rentals, range, period, transactionType])
 
   const rangeLabel = range.start === range.end ? range.start : `${range.start} to ${range.end}`
+  const transactionLabel = TRANSACTION_TYPES.find((type) => type.key === transactionType)?.label || 'All transactions'
 
   const exportCsv = () => {
     const lines: string[] = []
-    lines.push(['Chill Shooters report', PERIOD_LABELS[period], rangeLabel].map(csvCell).join(','))
+    lines.push(['Chill Shooters report', PERIOD_LABELS[period], rangeLabel, transactionLabel].map(csvCell).join(','))
     lines.push('')
     lines.push('Metric,Value')
     for (const metric of report.metrics) lines.push([metric.label, metric.value].map(csvCell).join(','))
+    lines.push('')
+    lines.push('Financial statement,Amount (PHP)')
+    for (const row of report.statement) lines.push([row.label, row.amount].map(csvCell).join(','))
     lines.push('')
     lines.push([period === 'yearly' ? 'Month' : 'Date', 'Reservations', 'Players', 'Revenue collected (PHP)'].join(','))
     for (const row of report.breakdown) lines.push([row.key, row.reservations, row.players, row.collected].map(csvCell).join(','))
@@ -261,6 +373,14 @@ export function AdminReportsPage() {
         paymentStatusOf(payment),
         paymentAmount(payment),
       ].map(csvCell).join(','))
+    }
+    lines.push('')
+    lines.push('Penalty date,Reservation ID,Charge,Amount (PHP)')
+    for (const row of report.penalties) lines.push([row.day, row.reservationId, row.label, row.amount].map(csvCell).join(','))
+    lines.push('')
+    lines.push('Rental ID,Issued,Reservation ID,Player,Item,Category,Status')
+    for (const rental of report.periodRentals) {
+      lines.push([rental.id, dayOf(rental.issuedAtISO), rental.reservationId, rental.playerName, rental.itemName, rental.itemCategory, rental.status].map(csvCell).join(','))
     }
 
     const blob = new Blob([`﻿${lines.join('\n')}`], { type: 'text/csv;charset=utf-8' })
@@ -285,7 +405,7 @@ export function AdminReportsPage() {
       <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
           <h1 className="text-3xl font-bold">Reports</h1>
-          <p className="mt-1 text-sm text-muted">Operational and financial reporting for reservations, payments, waivers, and inventory.</p>
+          <p className="mt-1 text-sm text-muted">Operational and financial reporting for reservations, sales, payments, registrations, rentals, and penalties.</p>
         </div>
         <div className="no-print flex gap-2">
           <Button variant="ghost" onClick={() => window.print()} disabled={loading}>
@@ -331,12 +451,22 @@ export function AdminReportsPage() {
               <input type="date" value={anchor} onChange={(e) => setAnchor(e.target.value || today)} className="ml-2 rounded-xl border border-white/10 bg-background px-3 py-2 text-sm text-text" />
             </label>
           )}
+          <label className="text-xs text-muted">
+            Transaction type
+            <select
+              value={transactionType}
+              onChange={(e) => setTransactionType(e.target.value as TransactionType)}
+              className="ml-2 rounded-xl border border-white/10 bg-background px-3 py-2 text-sm text-text"
+            >
+              {TRANSACTION_TYPES.map((type) => <option key={type.key} value={type.key}>{type.label}</option>)}
+            </select>
+          </label>
         </div>
       </Card>
 
       <div className="print-area space-y-4">
         <div className="text-sm text-muted">
-          <span className="font-semibold text-text">{PERIOD_LABELS[period]} report</span> · {rangeLabel}
+          <span className="font-semibold text-text">{PERIOD_LABELS[period]} report</span> · {rangeLabel} · {transactionLabel}
           {loading ? ' · Loading…' : ''}
         </div>
 
@@ -353,6 +483,58 @@ export function AdminReportsPage() {
               </div>
             </Card>
           ))}
+        </div>
+
+        <Card className="p-4">
+          <div className="text-xs uppercase tracking-widest text-muted">Financial statement</div>
+          <table className="mt-3 w-full text-sm">
+            <tbody className="divide-y divide-white/5">
+              {report.statement.map((row) => (
+                <tr key={row.label}>
+                  <td className="py-2 pr-4">{row.label}</td>
+                  <td className="py-2 text-right font-semibold">{loading ? '…' : formatCurrency(row.amount)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="mt-2 text-xs text-muted">Booking values cover reservations dated in this period; collections count verified payments received in it.</div>
+        </Card>
+
+        <div className="grid gap-4 lg:grid-cols-2">
+          <Card className="p-4">
+            <div className="text-xs uppercase tracking-widest text-muted">Most rented equipment</div>
+            <table className="mt-3 w-full text-sm">
+              <tbody className="divide-y divide-white/5">
+                {report.topRentals.length === 0 ? (
+                  <tr><td className="py-3 text-muted">{loading ? 'Loading…' : 'No rentals issued in this period.'}</td></tr>
+                ) : report.topRentals.map(([name, count]) => (
+                  <tr key={name}>
+                    <td className="py-2 pr-4">{name}</td>
+                    <td className="py-2 text-right font-semibold">{count}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Card>
+
+          <Card className="p-4">
+            <div className="text-xs uppercase tracking-widest text-muted">Penalties and extra charges</div>
+            <div className="mt-3 overflow-x-auto">
+              <table className="w-full text-sm">
+                <tbody className="divide-y divide-white/5">
+                  {report.penalties.length === 0 ? (
+                    <tr><td className="py-3 text-muted">{loading ? 'Loading…' : 'No penalties or extra charges in this period.'}</td></tr>
+                  ) : report.penalties.map((row, index) => (
+                    <tr key={`${row.reservationId}-${index}`}>
+                      <td className="py-2 pr-4 whitespace-nowrap">{row.day}</td>
+                      <td className="py-2 pr-4">{row.label}<div className="text-xs text-muted">{row.reservationId}</div></td>
+                      <td className="py-2 text-right font-semibold">{formatCurrency(row.amount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
         </div>
 
         <Card className="p-4">
@@ -396,7 +578,7 @@ export function AdminReportsPage() {
         </Card>
 
         <Card className="p-4">
-          <div className="text-xs uppercase tracking-widest text-muted">Payments in this period</div>
+          <div className="text-xs uppercase tracking-widest text-muted">Payments in this period · {transactionLabel}</div>
           <div className="mt-3 overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="text-left text-xs uppercase tracking-widest text-muted">

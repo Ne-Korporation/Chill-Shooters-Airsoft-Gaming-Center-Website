@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
-import { FiCheck, FiClock, FiCreditCard, FiUpload, FiUsers } from 'react-icons/fi'
+import { FiCheck, FiClock, FiUpload, FiUsers } from 'react-icons/fi'
 
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
@@ -47,15 +47,18 @@ function formatDue(iso?: string) {
   return new Date(iso).toLocaleString('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short' })
 }
 
-function ShareForm({ item, gcashQrUrl, onPaid }: { item: SplitPaymentItem; gcashQrUrl: string; onPaid: () => void }) {
+type BankDetails = { bankName: string; accountName: string; accountNumber: string }
+
+function ShareForm({ item, gcashQrUrl, bankDetails, onPaid }: { item: SplitPaymentItem; gcashQrUrl: string; bankDetails: BankDetails | null; onPaid: () => void }) {
   const fileRef = useRef<HTMLInputElement | null>(null)
+  const [method, setMethod] = useState<'gcash' | 'bank'>('gcash')
   const [refNo, setRefNo] = useState('')
   const [fileName, setFileName] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
   const submit = async () => {
     const file = fileRef.current?.files?.[0]
-    if (!refNo.trim()) return toast.error('Enter your GCash reference number.')
+    if (!refNo.trim()) return toast.error(method === 'gcash' ? 'Enter your GCash reference number.' : 'Enter your bank reference number.')
     if (!file || !file.type.startsWith('image/')) return toast.error('Attach an image of your payment proof.')
 
     setSubmitting(true)
@@ -69,7 +72,7 @@ function ShareForm({ item, gcashQrUrl, onPaid }: { item: SplitPaymentItem; gcash
       await apiPost('/api/payments', {
         reservationId: item.reservation.id,
         amount: item.myShareDue,
-        paymentMethod: 'GCash',
+        paymentMethod: method === 'gcash' ? 'GCash' : 'Bank Transfer',
         gcashImageUrl: uploadJson.url,
         paymentMode: 'split',
         transactionReference: refNo.trim(),
@@ -100,22 +103,50 @@ function ShareForm({ item, gcashQrUrl, onPaid }: { item: SplitPaymentItem; gcash
       <div>
         <div className="text-xs uppercase tracking-widest text-muted">Payment method</div>
         <div className="mt-2 grid gap-2 sm:grid-cols-2">
-          <div className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-3 ring-2 ring-accent/25">
-            <div className="text-sm font-bold">GCash</div>
-            <div className="mt-1 text-xs text-muted">Scan the QR, pay, then upload your proof</div>
-          </div>
-          <div className="cursor-not-allowed rounded-2xl border border-white/10 bg-white/5 px-4 py-3 opacity-50">
-            <div className="flex items-center gap-2 text-sm font-bold"><FiCreditCard /> Card</div>
-            <div className="mt-1 text-xs text-muted">Not available for split shares</div>
-          </div>
+          {([
+            { key: 'gcash', title: 'GCash', hint: 'Scan the QR, pay, then upload your proof' },
+            { key: 'bank', title: 'Bank Transfer', hint: 'Transfer to our account, then upload your proof' },
+          ] as const).map((option) => (
+            <button
+              key={option.key}
+              type="button"
+              onClick={() => setMethod(option.key)}
+              className={[
+                'rounded-2xl border px-4 py-3 text-left transition',
+                method === option.key ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
+              ].join(' ')}
+            >
+              <div className="text-sm font-bold">{option.title}</div>
+              <div className="mt-1 text-xs text-muted">{option.hint}</div>
+            </button>
+          ))}
         </div>
       </div>
 
-      <div className="flex min-h-32 items-center justify-center rounded-2xl border border-dashed border-accent/30 bg-white/5 p-3 text-xs text-muted">
-        {gcashQrUrl ? <img src={gcashQrUrl} alt="GCash QR code" className="max-h-56 w-full rounded-xl object-contain" /> : 'Admin has not uploaded a GCash QR yet.'}
-      </div>
+      {method === 'gcash' ? (
+        <div className="flex min-h-32 items-center justify-center rounded-2xl border border-dashed border-accent/30 bg-white/5 p-3 text-xs text-muted">
+          {gcashQrUrl ? <img src={gcashQrUrl} alt="GCash QR code" className="max-h-56 w-full rounded-xl object-contain" /> : 'Admin has not uploaded a GCash QR yet.'}
+        </div>
+      ) : (
+        <div className="rounded-2xl border border-dashed border-accent/30 bg-white/5 p-4 text-sm">
+          {bankDetails?.accountNumber ? (
+            <dl className="grid gap-2">
+              <div className="flex justify-between gap-3"><dt className="text-muted">Bank</dt><dd className="font-semibold">{bankDetails.bankName}</dd></div>
+              <div className="flex justify-between gap-3"><dt className="text-muted">Account name</dt><dd className="font-semibold">{bankDetails.accountName}</dd></div>
+              <div className="flex justify-between gap-3"><dt className="text-muted">Account number</dt><dd className="font-mono font-semibold">{bankDetails.accountNumber}</dd></div>
+            </dl>
+          ) : (
+            <div className="text-xs text-muted">The admin has not added bank account details yet. Please use GCash or contact staff.</div>
+          )}
+        </div>
+      )}
 
-      <Input label="GCash reference number" value={refNo} onChange={(e) => setRefNo(e.target.value)} placeholder="e.g., 1234 567 890123" />
+      <Input
+        label={method === 'gcash' ? 'GCash reference number' : 'Bank reference / confirmation number'}
+        value={refNo}
+        onChange={(e) => setRefNo(e.target.value)}
+        placeholder={method === 'gcash' ? 'e.g., 1234 567 890123' : 'e.g., FT2610281234'}
+      />
 
       <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
         <div className="flex items-center gap-3">
@@ -197,6 +228,7 @@ export function SplitPaymentPage() {
   const [items, setItems] = useState<SplitPaymentItem[]>([])
   const [loading, setLoading] = useState(true)
   const [gcashQrUrl, setGcashQrUrl] = useState('')
+  const [bankDetails, setBankDetails] = useState<BankDetails | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -214,6 +246,9 @@ export function SplitPaymentPage() {
     apiGet<{ ok: boolean; data: { imageUrl?: string } }>('/api/payments/gcash-qr')
       .then((res) => setGcashQrUrl(res?.data?.imageUrl || ''))
       .catch(() => setGcashQrUrl(''))
+    apiGet<{ ok: boolean; data: BankDetails }>('/api/payments/bank-details')
+      .then((res) => setBankDetails(res?.data ?? null))
+      .catch(() => setBankDetails(null))
   }, [load])
 
   const afterPaid = () => {
@@ -254,7 +289,7 @@ export function SplitPaymentPage() {
           </div>
 
           {!item.iHavePaid && item.myShareDue > 0 ? (
-            <ShareForm item={item} gcashQrUrl={gcashQrUrl} onPaid={afterPaid} />
+            <ShareForm item={item} gcashQrUrl={gcashQrUrl} bankDetails={bankDetails} onPaid={afterPaid} />
           ) : item.iHavePaid ? (
             <div className="mt-4 flex items-center gap-2 rounded-2xl border border-success/25 bg-success/10 px-4 py-3 text-sm text-success">
               <FiCheck /> Your share is submitted.

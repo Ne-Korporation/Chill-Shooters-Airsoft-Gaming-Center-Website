@@ -15,11 +15,17 @@ const router = express.Router()
 const SETTINGS_COLLECTION = 'site_settings'
 const GCASH_QR_KEY = 'gcash_qr'
 
+// Online card payments run on Stripe in TEST MODE for the capstone demo only: Stripe does not
+// onboard Philippine merchants, so a production deployment would swap this for a local gateway
+// such as PayMongo (which also covers GCash and Maya). Live keys are refused so no real card
+// can be charged. Card is online-only; the counter has no card terminal.
 const stripeSecretKey = process.env.STRIPE_SECRET_KEY
 let stripe = null
-if (stripeSecretKey) {
+if (stripeSecretKey && !stripeSecretKey.startsWith('sk_test_')) {
+  console.warn('STRIPE_SECRET_KEY is not a test key (sk_test_…). Card payments are disabled; this demo only runs Stripe in test mode.')
+} else if (stripeSecretKey) {
   stripe = new Stripe(stripeSecretKey, { apiVersion: null })
-  console.log('Stripe initialized successfully')
+  console.log('Stripe initialized in test mode')
 } else {
   console.warn('STRIPE_SECRET_KEY not set — Stripe card payments will be disabled.')
 }
@@ -224,6 +230,53 @@ router.put('/payments/gcash-qr', requireAuth, requireRole('admin'), async (req, 
         updatedBy: req.user?.id || req.user?.email || 'admin',
       },
     })
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: String(err) })
+  }
+})
+
+// Bank account players transfer their deposit to; shown on the payment page.
+const BANK_DETAILS_KEY = 'bank_transfer'
+
+function publicBankDetails(settings) {
+  return {
+    bankName: settings?.bankName || '',
+    accountName: settings?.accountName || '',
+    accountNumber: settings?.accountNumber || '',
+    updatedAtISO: settings?.updatedAtISO || null,
+  }
+}
+
+router.get('/payments/bank-details', async (_req, res) => {
+  try {
+    const db = await getDb()
+    const settings = await db.collection(SETTINGS_COLLECTION).findOne({ key: BANK_DETAILS_KEY })
+    return res.json({ ok: true, data: publicBankDetails(settings) })
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: String(err) })
+  }
+})
+
+router.put('/payments/bank-details', requireAuth, requireRole('admin'), async (req, res) => {
+  const bankName = String(req.body?.bankName || '').trim().slice(0, 120)
+  const accountName = String(req.body?.accountName || '').trim().slice(0, 120)
+  const accountNumber = String(req.body?.accountNumber || '').trim().slice(0, 60)
+  if (!bankName || !accountName || !accountNumber) {
+    return res.status(400).json({ ok: false, error: 'Bank name, account name and account number are required.' })
+  }
+
+  try {
+    const db = await getDb()
+    const update = {
+      key: BANK_DETAILS_KEY,
+      bankName,
+      accountName,
+      accountNumber,
+      updatedAtISO: new Date().toISOString(),
+      updatedBy: req.user?.id || req.user?.email || 'admin',
+    }
+    await db.collection(SETTINGS_COLLECTION).updateOne({ key: BANK_DETAILS_KEY }, { $set: update }, { upsert: true })
+    return res.json({ ok: true, data: publicBankDetails(update) })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
   }

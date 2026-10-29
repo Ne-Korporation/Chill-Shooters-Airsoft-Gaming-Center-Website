@@ -16,7 +16,23 @@ import { Input } from '../../components/ui/Input'
 import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
 import { clearPackagePrefill } from '../../utils/packagePrefill'
 
-type PaymentMethod = 'gcash' | 'card'
+// Online deposits: GCash and bank transfer are proof-of-payment submissions a registrar
+// verifies; card is charged through Stripe in TEST MODE for the demo (a production deployment
+// would use a Philippine gateway such as PayMongo). Card is online-only: the counter has no
+// card terminal, so remaining balances are settled at the field by GCash, bank transfer, or cash.
+type PaymentMethod = 'gcash' | 'bank' | 'card'
+
+const METHOD_LABELS: Record<PaymentMethod, string> = { gcash: 'GCash', bank: 'Bank Transfer', card: 'Card (online)' }
+
+// Test mode only: a live publishable key is ignored so no real card can be charged.
+const stripePublishableKey = String(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY || '')
+const stripePromise = stripePublishableKey.startsWith('pk_test_') ? loadStripe(stripePublishableKey) : null
+
+type BankDetails = {
+  bankName: string
+  accountName: string
+  accountNumber: string
+}
 
 type PaymentMode = 'self' | 'split'
 
@@ -36,10 +52,6 @@ type UploadState = {
   fileName: string | null
   fileSize: number | null
 }
-
-const stripePromise = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY
-  ? loadStripe(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY)
-  : null
 
 function formatPHP(n: number) {
   return `₱${n.toLocaleString()}`
@@ -77,26 +89,24 @@ class PaymentPageErrorBoundary extends React.Component<{ children: React.ReactNo
 function CardPaymentField({ onChange }: { onChange: (complete: boolean) => void }) {
   const { theme } = useTheme()
 
-  // Without a publishable key the Stripe field never mounts, which used to
-  // leave an empty box that looked like a form but did nothing.
   if (!stripePromise) {
     return (
-      <div className="rounded-[1.75rem] border border-warning/30 bg-warning/10 p-4 text-sm text-warning">
-        <div className="font-bold">Card payments are not set up yet</div>
+      <div className="rounded-2xl border border-warning/30 bg-warning/10 p-4 text-sm text-warning">
+        <div className="font-bold">Card payments are not set up</div>
         <div className="mt-1 text-xs text-muted">
-          This site has no Stripe publishable key (VITE_STRIPE_PUBLISHABLE_KEY). Please pay with GCash for now.
+          Add a Stripe test publishable key (VITE_STRIPE_PUBLISHABLE_KEY=pk_test_…) to enable the demo. Please pay with GCash or bank transfer for now.
         </div>
       </div>
     )
   }
 
   return (
-    <div className="rounded-[1.75rem] border border-white/10 bg-white/5 p-4">
+    <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
       <div className="flex items-center justify-between gap-3 text-xs uppercase tracking-widest text-muted">
         <span>Card details</span>
-        <span>Stripe secure entry</span>
+        <span>Visa / Mastercard</span>
       </div>
-      <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 px-4 py-4">
+      <div className="mt-3 rounded-xl border border-white/10 bg-black/20 px-4 py-4">
         <CardElement
           onChange={(event) => onChange(event.complete)}
           options={{
@@ -113,7 +123,9 @@ function CardPaymentField({ onChange }: { onChange: (complete: boolean) => void 
           }}
         />
       </div>
-      <div className="mt-3 text-[11px] text-muted">Card details are entered directly into Stripe and are not stored by this app.</div>
+      <div className="mt-3 rounded-xl border border-accent/20 bg-accent/5 px-3 py-2 text-[11px] text-muted">
+        <span className="font-semibold text-text">Demo (Stripe test mode):</span> no real money moves. Use card 4242 4242 4242 4242, any future expiry, any CVC.
+      </div>
     </div>
   )
 }
@@ -121,14 +133,15 @@ function CardPaymentField({ onChange }: { onChange: (complete: boolean) => void 
 function PaymentPageContent() {
   const navigate = useNavigate()
   const { user } = useAuth()
+  const { addNotification } = useNotifications()
   const stripe = useStripe()
   const elements = useElements()
-  const { addNotification } = useNotifications()
+  const [cardComplete, setCardComplete] = useState(false)
   const proofInputRef = useRef<HTMLInputElement | null>(null)
 
   const [method, setMethod] = useState<PaymentMethod>('gcash')
-  const [cardComplete, setCardComplete] = useState(false)
-  const [refNo, setRefNo] = useState('ABP-7F21-93')
+  const [bankDetails, setBankDetails] = useState<BankDetails | null>(null)
+  const [refNo, setRefNo] = useState('')
   const [phoneNumber, setPhoneNumber] = useState('')
   const [upload, setUpload] = useState<UploadState>({ fileName: null, fileSize: null })
   const [submitting, setSubmitting] = useState(false)
@@ -242,6 +255,9 @@ function PaymentPageContent() {
     }
 
     loadQr()
+    apiGet<{ ok: boolean; data: BankDetails }>('/api/payments/bank-details')
+      .then((res) => { if (!cancelled) setBankDetails(res?.data ?? null) })
+      .catch(() => { if (!cancelled) setBankDetails(null) })
 
     return () => {
       cancelled = true
@@ -250,22 +266,16 @@ function PaymentPageContent() {
 
   const canSubmit = useMemo(() => {
     if (submitting) return false
-
-    if (method === 'gcash') {
-      if (!refNo.trim()) return false
-      if (!upload.fileName) return false
-      return true
-    }
-
-    return Boolean(stripe && elements && cardComplete && !(paymentMode === 'split' && payerShareAmount < breakdown.total))
-  }, [breakdown.total, cardComplete, elements, method, payerShareAmount, paymentMode, refNo, stripe, submitting, upload.fileName])
+    if (method === 'card') return Boolean(stripe && elements && cardComplete && paymentMode !== 'split')
+    return Boolean(refNo.trim()) && Boolean(upload.fileName)
+  }, [cardComplete, elements, method, paymentMode, refNo, stripe, submitting, upload.fileName])
 
   const onPickFile = (f: File | null) => {
     if (!f) return
     if (!f.type.startsWith('image/')) {
       setUpload({ fileName: '', fileSize: 0 })
       if (proofInputRef.current) proofInputRef.current.value = ''
-      toast.error('Only image files are allowed for GCash proof.')
+      toast.error('Only image files are allowed as proof of payment.')
       return
     }
     setUpload({ fileName: f.name, fileSize: f.size })
@@ -286,17 +296,14 @@ function PaymentPageContent() {
         throw new Error('Invalid pending reservation data.')
       }
 
-      if (method === 'gcash') {
-        if (!upload.fileName) throw new Error('Proof image is required')
-      }
       if (method === 'card') {
-        const stripeClient = stripe
-        const stripeElements = elements
-        if (!stripeClient || !stripeElements) throw new Error('Card payments are not configured. Use GCash or contact staff.')
+        if (!stripe || !elements) throw new Error('Card payments are not configured. Use GCash or bank transfer.')
         if (!cardComplete) throw new Error('Enter valid card details.')
-        if (paymentMode === 'split') throw new Error('Split card payments are not supported yet. Select GCash to submit your share.')
-        const cardElement = stripeElements.getElement(CardElement)
-        if (!cardElement) throw new Error('Card form is unavailable. Please reload and try again.')
+        if (paymentMode === 'split') throw new Error('Split shares are paid by GCash or bank transfer.')
+        if (!elements.getElement(CardElement)) throw new Error('Card form is unavailable. Please reload and try again.')
+      } else {
+        if (!upload.fileName) throw new Error('Proof image is required')
+        if (!refNo.trim()) throw new Error('Reference number is required')
       }
 
       let reservationId = localStorage.getItem('pending_reservation_id') || ''
@@ -342,20 +349,14 @@ function PaymentPageContent() {
       })
 
       if (method === 'card') {
-        const stripeClient = stripe
-        const stripeElements = elements
-        if (!stripeClient || !stripeElements) throw new Error('Card payments are not configured. Use GCash or contact staff.')
+        const cardElement = elements?.getElement(CardElement)
+        if (!stripe || !cardElement) throw new Error('Card form is unavailable. Please reload and try again.')
         const intent = await apiPost<{ ok: boolean; clientSecret: string; paymentIntentId: string }>(
           '/api/create-payment-intent',
           { reservationId: String(reservationId) },
         )
-        const cardElement = stripeElements.getElement(CardElement)
-        if (!cardElement) throw new Error('Card form is unavailable. Please reload and try again.')
-        const paymentResult = await stripeClient.confirmCardPayment(intent.clientSecret, {
-          payment_method: {
-            card: cardElement,
-            billing_details: { name: user.name, email: user.email },
-          },
+        const paymentResult = await stripe.confirmCardPayment(intent.clientSecret, {
+          payment_method: { card: cardElement, billing_details: { name: user.name, email: user.email } },
         })
         if (paymentResult.error) throw new Error(paymentResult.error.message || 'Card payment failed')
         if (paymentResult.paymentIntent?.status !== 'succeeded') {
@@ -368,21 +369,21 @@ function PaymentPageContent() {
         setReceiptReference(receipt.data.id || receipt.data.paymentIntentId)
       } else {
         const file = proofInputRef.current?.files?.[0]
-        if (!file || !file.type.startsWith('image/')) throw new Error('Only image files are allowed for GCash proof.')
+        if (!file || !file.type.startsWith('image/')) throw new Error('Only image files are allowed as proof of payment.')
         const formData = new FormData()
         formData.append('file', file)
         const uploadRes = await fetch(`${apiBase}/api/upload-image`, { method: 'POST', headers: getApiAuthHeaders(), body: formData })
         const uploadJson = await uploadRes.json().catch(() => null)
         if (!uploadRes.ok) throw new Error(uploadJson?.error || uploadJson?.message || 'Upload failed')
-        const gcashImageUrl = uploadJson?.url
-        if (!gcashImageUrl) throw new Error('Cloudinary upload returned no url')
+        const proofImageUrl = uploadJson?.url
+        if (!proofImageUrl) throw new Error('The proof upload returned no URL. Please try again.')
 
         const payment = await apiPost<{ ok: boolean; data?: { id?: string } }>('/api/payments', {
           reservationId: String(reservationId),
           amount,
-          paymentMethod: 'GCash',
+          paymentMethod: METHOD_LABELS[method],
           paymentStatus: 'pending',
-          gcashImageUrl: gcashImageUrl || '',
+          gcashImageUrl: proofImageUrl,
           paymentMode,
           transactionReference: refNo.trim(),
           createdAt: new Date().toISOString(),
@@ -396,7 +397,7 @@ function PaymentPageContent() {
       clearPackagePrefill()
 
       setSuccess(true)
-      toast.success(method === 'card' ? 'Card payment verified.' : 'Payment submitted for staff review.')
+      toast.success(method === 'card' ? 'Card payment confirmed (test mode).' : 'Payment submitted for staff review.')
     } catch (e: any) {
       toast.error(String(e?.message || e))
     } finally {
@@ -409,7 +410,7 @@ function PaymentPageContent() {
       <div className="space-y-2">
         <div className="text-sm font-medium text-accent">Payment</div>
         <h1 className="text-3xl font-bold">Reservation Payment</h1>
-        <p className="text-muted text-sm">The server recalculates the reservation total and deposit. GCash submissions are reviewed by staff; card payments are verified through Stripe.</p>
+        <p className="text-muted text-sm">The server recalculates the reservation total and deposit. Pay the deposit online by GCash or bank transfer (upload your proof for registrar verification) or by card. The remaining balance is settled at the field by GCash, bank transfer, or cash — cards are not accepted onsite.</p>
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[1.6fr_0.9fr]">
@@ -422,54 +423,46 @@ function PaymentPageContent() {
             </div>
           </div>
 
-          <div className="mt-4 grid gap-2 sm:grid-cols-2">
-            <button
-              type="button"
-              onClick={() => setMethod('gcash')}
-              className={[
-                'w-full text-left rounded-2xl border px-4 py-3 transition',
-                method === 'gcash'
-                  ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25'
-                  : 'border-white/10 bg-white/5 hover:bg-white/8',
-              ].join(' ')}
-            >
-              <div className="text-sm font-bold">GCash</div>
-              <div className="mt-1 text-xs text-muted">Scan → confirm → upload proof</div>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setMethod('card')}
-              className={[
-                'w-full text-left rounded-2xl border px-4 py-3 transition',
-                method === 'card'
-                  ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25'
-                  : 'border-white/10 bg-white/5 hover:bg-white/8',
-              ].join(' ')}
-            >
-              <div className="text-sm font-bold">Card Payment</div>
-              <div className="mt-1 text-xs text-muted">
-                {stripePromise ? 'Pay instantly with a secure checkout form' : 'Not available yet — use GCash'}
-              </div>
-            </button>
+          <div className="mt-4 grid gap-2 sm:grid-cols-3">
+            {([
+              { key: 'gcash', title: 'GCash', hint: 'Scan the QR → pay → upload proof' },
+              { key: 'bank', title: 'Bank Transfer', hint: 'Transfer to our account → upload proof' },
+              { key: 'card', title: 'Card', hint: paymentMode === 'split' ? 'Not available for split shares' : 'Online only · Stripe test mode' },
+            ] as const).map((option) => (
+              <button
+                key={option.key}
+                type="button"
+                onClick={() => setMethod(option.key)}
+                disabled={option.key === 'card' && paymentMode === 'split'}
+                className={[
+                  'w-full text-left rounded-2xl border px-4 py-3 transition disabled:cursor-not-allowed disabled:opacity-50',
+                  method === option.key
+                    ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25'
+                    : 'border-white/10 bg-white/5 hover:bg-white/8',
+                ].join(' ')}
+              >
+                <div className="text-sm font-bold">{option.title}</div>
+                <div className="mt-1 text-xs text-muted">{option.hint}</div>
+              </button>
+            ))}
           </div>
 
           <div className="mt-6 rounded-2xl border border-white/10 bg-black/15 p-4">
             <div className="flex items-center gap-2 text-sm font-bold">
               <FiInfo className="text-gold" />
-              <span>{method === 'gcash' ? 'Submission rules' : 'Card payment rules'}</span>
+              <span>Submission rules</span>
             </div>
-            {method === 'gcash' ? (
+            {method === 'card' ? (
               <ul className="mt-2 space-y-1 text-xs text-muted list-disc pl-5">
-                <li>Reference number is required.</li>
-                <li>Upload proof is required before submission.</li>
-                <li>Payments are submitted for registrar review after proof upload.</li>
+                <li>Card details go straight to Stripe and are never stored by this app.</li>
+                <li>The payment is recorded as paid only after Stripe confirms the charge.</li>
+                <li>Cards are accepted online only; there is no card terminal at the field.</li>
               </ul>
             ) : (
               <ul className="mt-2 space-y-1 text-xs text-muted list-disc pl-5">
-                <li>Enter card details in Stripe’s secure card field.</li>
-                <li>Card details are not sent to or stored by this app.</li>
-                <li>Payment is recorded as paid only after Stripe confirms the charge.</li>
+                <li>{method === 'gcash' ? 'The GCash reference number is required.' : 'The bank transaction or confirmation number is required.'}</li>
+                <li>Upload a screenshot or photo of the receipt before submitting.</li>
+                <li>A registrar verifies the payment before your reservation is confirmed.</li>
               </ul>
             )}
           </div>
@@ -483,7 +476,7 @@ function PaymentPageContent() {
                 </div>
               </div>
               {teamMembers.length > 0 ? (
-                <div className="mt-2 text-sm font-semibold text-white">
+                <div className="mt-2 text-sm font-semibold text-text">
                   {teamMembers.map((member) => member.name).join(', ')}
                 </div>
               ) : null}
@@ -519,79 +512,67 @@ function PaymentPageContent() {
                         )}
                       </div>
                   </div>
-
-                  <Input
-                    label="Reference Number"
-                    value={refNo}
-                    onChange={(e) => setRefNo(e.target.value)}
-                    placeholder="e.g., ABP-7F21-93"
-                  />
                 </>
+              ) : method === 'card' ? (
+                <CardPaymentField onChange={setCardComplete} />
               ) : (
-                <div className="relative overflow-hidden rounded-[1.75rem] border border-white/10 bg-[radial-gradient(circle_at_top,_rgba(245,196,73,0.18),_transparent_42%),linear-gradient(180deg,_rgba(255,255,255,0.08),_rgba(0,0,0,0.18))] p-4 shadow-[0_20px_60px_rgba(0,0,0,0.24)]">
-                  <div className="absolute inset-0 opacity-20 [background-image:linear-gradient(rgba(255,255,255,0.12)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.12)_1px,transparent_1px)] [background-size:22px_22px]" />
-                  <div className="relative flex items-start justify-between gap-3">
-                    <div>
-                      <div className="text-xs uppercase tracking-widest text-muted">Card checkout</div>
-                      <div className="mt-1 text-lg font-bold text-white">Secure payment form</div>
-                    </div>
-                    <div className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-muted">
-                      Secure
-                    </div>
-                  </div>
-
-                  <div className="relative mt-4 rounded-[1.25rem] border border-white/10 bg-black/35 p-4 backdrop-blur-sm">
-                    <div className="flex items-center justify-between gap-3 text-[11px] uppercase tracking-[0.2em] text-muted">
-                      <span>Card details</span>
-                      <span>Visa / Mastercard / Amex</span>
-                    </div>
-                    <div className="mt-3">
-                      <CardPaymentField onChange={setCardComplete} />
-                    </div>
-
-                    <div className="mt-4 grid gap-2 sm:grid-cols-3 text-[11px] text-muted">
-                      <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2">Encrypted entry</div>
-                      <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2">Provider verified</div>
-                      <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2">Auditable payment record</div>
-                    </div>
-                  </div>
+                <div className="rounded-2xl border border-dashed border-accent/30 bg-accent/5 p-4">
+                  <div className="text-xs uppercase tracking-widest text-muted">Transfer to</div>
+                  {bankDetails?.accountNumber ? (
+                    <dl className="mt-3 grid gap-2 text-sm">
+                      <div className="flex justify-between gap-3"><dt className="text-muted">Bank</dt><dd className="font-semibold">{bankDetails.bankName}</dd></div>
+                      <div className="flex justify-between gap-3"><dt className="text-muted">Account name</dt><dd className="font-semibold">{bankDetails.accountName}</dd></div>
+                      <div className="flex justify-between gap-3"><dt className="text-muted">Account number</dt><dd className="font-mono font-semibold">{bankDetails.accountNumber}</dd></div>
+                    </dl>
+                  ) : (
+                    <div className="mt-3 text-xs text-muted">The admin has not added bank account details yet. Please use GCash or contact staff.</div>
+                  )}
                 </div>
               )}
+
+              {method !== 'card' ? (
+                <Input
+                  label={method === 'gcash' ? 'GCash Reference Number' : 'Bank Reference / Confirmation Number'}
+                  value={refNo}
+                  onChange={(e) => setRefNo(e.target.value)}
+                  placeholder={method === 'gcash' ? 'e.g., 1023 456 789012' : 'e.g., FT2610281234'}
+                />
+              ) : null}
             </div>
 
-            {method === 'gcash' ? (
-              <div className="mt-6">
-                <div className="text-xs uppercase tracking-widest text-muted">Upload proof</div>
-                <div className="mt-2">
-                  <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                    <div className="flex items-center gap-3">
-                      <div className="grid h-10 w-10 place-items-center rounded-2xl bg-accent/10 ring-1 ring-accent/25">
-                        <FiUpload className="text-gold" />
-                      </div>
-                      <div className="min-w-0">
-                        <div className="text-sm font-bold">Attach payment screenshot / receipt</div>
-                        <div className="mt-1 text-xs text-muted truncate">{upload.fileName ? upload.fileName : 'No file selected'}</div>
-                      </div>
+            {method !== 'card' ? (
+            <div className="mt-6">
+              <div className="text-xs uppercase tracking-widest text-muted">Upload proof</div>
+              <div className="mt-2">
+                <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                  <div className="flex items-center gap-3">
+                    <div className="grid h-10 w-10 place-items-center rounded-2xl bg-accent/10 ring-1 ring-accent/25">
+                      <FiUpload className="text-gold" />
                     </div>
-
-                    <input
-                      ref={proofInputRef}
-                      id="payment-proof-upload"
-                      type="file"
-                      accept="image/*"
-                      className="hidden"
-                      onChange={(e) => onPickFile(e.target.files?.[0] ?? null)}
-                    />
-
-                    <div className="mt-4 flex items-center justify-between gap-3">
-                      <Button type="button" variant="ghost" disabled={submitting} onClick={() => proofInputRef.current?.click()}>
-                        Choose file
-                      </Button>
-                      <div className="text-[11px] text-muted">Accepted: image files only</div>
+                    <div className="min-w-0">
+                      <div className="text-sm font-bold">Attach payment screenshot / receipt</div>
+                      <div className="mt-1 text-xs text-muted truncate">{upload.fileName ? upload.fileName : 'No file selected'}</div>
                     </div>
+                  </div>
+
+                  <input
+                    ref={proofInputRef}
+                    id="payment-proof-upload"
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => onPickFile(e.target.files?.[0] ?? null)}
+                  />
+
+                  <div className="mt-4 flex items-center justify-between gap-3">
+                    <Button type="button" variant="ghost" disabled={submitting} onClick={() => proofInputRef.current?.click()}>
+                      Choose file
+                    </Button>
+                    <div className="text-[11px] text-muted">Accepted: image files only</div>
                   </div>
                 </div>
               </div>
+            </div>
             ) : null}
 
             <div className="rounded-2xl border border-white/10 bg-black/20 p-4 shadow-[0_0_0_1px_rgba(255,255,255,0.03)]">
@@ -599,23 +580,18 @@ function PaymentPageContent() {
               <div className="mt-2">
                 <div className="flex items-center justify-between gap-3">
                   <div className="text-xs text-muted">Method</div>
-                  <div className="text-xs font-bold">{method === 'gcash' ? 'GCash' : 'Card Payment'}</div>
+                  <div className="text-xs font-bold">{METHOD_LABELS[method]}</div>
                 </div>
                 <div className="mt-2 flex items-center justify-between gap-3">
                   <div className="text-xs text-muted">Reference</div>
-                  <div className="text-xs font-bold">{method === 'gcash' ? refNo || '—' : receiptReference || 'Stripe checkout'}</div>
+                  <div className="text-xs font-bold">{method === 'card' ? receiptReference || 'Issued by Stripe' : refNo || '—'}</div>
                 </div>
                 {method === 'gcash' ? (
                   <div className="mt-2 flex items-center justify-between gap-3">
                     <div className="text-xs text-muted">Phone</div>
                     <div className="text-xs font-bold">{phoneNumber || '—'}</div>
                   </div>
-                ) : (
-                  <div className="mt-2 flex items-center justify-between gap-3">
-                    <div className="text-xs text-muted">Status</div>
-                    <div className="text-xs font-bold">{!stripe ? 'Card payments unavailable' : cardComplete ? 'Card details ready' : 'Awaiting card details'}</div>
-                  </div>
-                )}
+                ) : null}
                 <div className="mt-3 h-px bg-white/10" />
                 {(breakdown.itemized.length > 0 ? breakdown.itemized : [
                   { label: 'Field reservation', amount: breakdown.field },
@@ -652,12 +628,12 @@ function PaymentPageContent() {
               className="mt-4 rounded-2xl border border-success/25 bg-success/10 p-4"
             >
               <div className="flex items-center gap-2 text-sm font-bold text-success">
-                <FiCheck /> {method === 'card' ? 'Card Payment Verified' : 'Payment Submitted'}
+                <FiCheck /> {method === 'card' ? 'Card Payment Confirmed' : 'Payment Submitted'}
               </div>
               <div className="mt-2 text-xs text-muted">
                 {method === 'card'
-                  ? 'Stripe confirmed the charge and the payment record was saved.'
-                  : 'Your payment proof has been submitted. The registrar/admin will review and verify it.'}
+                  ? 'Stripe confirmed the charge (test mode) and the payment was recorded.'
+                  : `Your ${METHOD_LABELS[method]} proof has been submitted. The registrar/admin will review and verify it.`}
                 {paymentMode === 'split'
                   ? ' Your teammates have been notified of their shares. Track who has paid under Split Payment in the menu — the slot stays reserved for 24 hours while the team pays.'
                   : ''}
@@ -667,7 +643,7 @@ function PaymentPageContent() {
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-xs text-muted">Receipt</span>
                   <span className="text-xs font-bold">
-                    {receiptReference || (method === 'card' ? 'Stripe receipt' : `ABP-RCPT-${refNo ? refNo.replace(/\W/g, '').slice(-6) : '000000'}`)}
+                    {receiptReference || `ABP-RCPT-${refNo ? refNo.replace(/\W/g, '').slice(-6) : '000000'}`}
                   </span>
                 </div>
                 <div className="mt-2 flex items-center justify-between gap-3">

@@ -21,13 +21,27 @@ type Repair = {
   totalCost?: number
   repairDate?: string
   openedAtISO: string
+  playerInduced?: boolean
+  reservationId?: string
+  damageReportId?: string
+  penaltyAmount?: number
 }
 
 type SummaryRow = { name: string; repairs: number; totalCost: number; open: number }
 
 function CompleteRepairForm({ repair, onDone }: { repair: Repair; onDone: () => void }) {
-  const [form, setForm] = useState({ partsReplaced: '', partsCost: '0', laborCost: '0', repairDate: manilaTodayISO(), note: '', returnToService: true })
+  const [form, setForm] = useState({
+    partsReplaced: '',
+    partsCost: '0',
+    laborCost: '0',
+    repairDate: manilaTodayISO(),
+    note: '',
+    returnToService: true,
+    playerInduced: repair.playerInduced === true,
+    reservationId: repair.reservationId || '',
+  })
   const [saving, setSaving] = useState(false)
+  const repairCost = (Number(form.partsCost) || 0) + (Number(form.laborCost) || 0)
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault()
@@ -37,8 +51,11 @@ function CompleteRepairForm({ repair, onDone }: { repair: Repair; onDone: () => 
         ...form,
         partsCost: Number(form.partsCost),
         laborCost: Number(form.laborCost),
+        reservationId: form.reservationId.trim(),
       })
-      toast.success(`${repair.itemName} repair closed.`)
+      toast.success(form.playerInduced && repairCost > 0
+        ? `${repair.itemName} repaired. ₱${repairCost.toLocaleString()} was added to the player's bill.`
+        : `${repair.itemName} repair closed.`)
       onDone()
     } catch (e: any) {
       toast.error(e?.message || 'Could not close the repair')
@@ -59,6 +76,23 @@ function CompleteRepairForm({ repair, onDone }: { repair: Repair; onDone: () => 
         <input type="checkbox" checked={form.returnToService} onChange={(e) => setForm((f) => ({ ...f, returnToService: e.target.checked }))} className="h-4 w-4 accent-[var(--color-accent)]" />
         Return to rental pool
       </label>
+      <label className="flex items-start gap-2 text-sm sm:col-span-2">
+        <input type="checkbox" checked={form.playerInduced} onChange={(e) => setForm((f) => ({ ...f, playerInduced: e.target.checked }))} className="mt-0.5 h-4 w-4 accent-[var(--color-accent)]" />
+        <span>Damage was caused by a player — bill the repair cost to their reservation</span>
+      </label>
+      {form.playerInduced ? (
+        <div className="sm:col-span-2">
+          <Input
+            label="Reservation ID of the player"
+            value={form.reservationId}
+            onChange={(e) => setForm((f) => ({ ...f, reservationId: e.target.value }))}
+            placeholder={repair.damageReportId ? `Leave blank to use damage report ${repair.damageReportId}` : 'R-…'}
+          />
+          <div className="mt-1 text-xs text-muted">
+            {repairCost > 0 ? `₱${repairCost.toLocaleString()} will be added to this reservation's balance as a repair penalty.` : 'Enter the parts and labor cost to bill the player.'}
+          </div>
+        </div>
+      ) : null}
       <div className="sm:col-span-2">
         <Button type="submit" className="w-full" disabled={saving}>{saving ? 'Saving…' : 'Mark repaired'}</Button>
       </div>
@@ -72,7 +106,7 @@ export function RepairsPage() {
   const [repairs, setRepairs] = useState<Repair[]>([])
   const [summary, setSummary] = useState<{ byItem: SummaryRow[]; byCategory: SummaryRow[] }>({ byItem: [], byCategory: [] })
   const [inventory, setInventory] = useState<InventoryOption[]>([])
-  const [form, setForm] = useState({ itemKey: '', damage: '', gunsmith: '', damageReportId: '' })
+  const [form, setForm] = useState({ itemKey: '', damage: '', gunsmith: '', damageReportId: '', reservationId: '', playerInduced: false })
   const [completingId, setCompletingId] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
@@ -102,9 +136,18 @@ export function RepairsPage() {
     if (!item) return toast.error('Choose the item.')
     setSaving(true)
     try {
-      await apiPost('/api/repairs', { itemCollection: item.collection, itemId: item.id, damage: form.damage, gunsmith: form.gunsmith, damageReportId: form.damageReportId })
+      await apiPost('/api/repairs', {
+        itemCollection: item.collection,
+        itemId: item.id,
+        damage: form.damage,
+        gunsmith: form.gunsmith,
+        damageReportId: form.damageReportId,
+        reservationId: form.reservationId.trim(),
+        playerInduced: form.playerInduced,
+      })
+
       toast.success(`${item.name} is now under repair.`)
-      setForm({ itemKey: '', damage: '', gunsmith: form.gunsmith, damageReportId: '' })
+      setForm({ itemKey: '', damage: '', gunsmith: form.gunsmith, damageReportId: '', reservationId: '', playerInduced: false })
       await load()
     } catch (e: any) {
       toast.error(e?.message || 'Could not open the repair')
@@ -160,6 +203,18 @@ export function RepairsPage() {
               <Input label="Gunsmith" value={form.gunsmith} onChange={(e) => setForm((f) => ({ ...f, gunsmith: e.target.value }))} />
               <Input label="Damage report ID (optional)" value={form.damageReportId} onChange={(e) => setForm((f) => ({ ...f, damageReportId: e.target.value }))} placeholder="DMG-…" />
             </div>
+            <label className="flex items-start gap-2 text-sm">
+              <input type="checkbox" checked={form.playerInduced} onChange={(e) => setForm((f) => ({ ...f, playerInduced: e.target.checked }))} className="mt-0.5 h-4 w-4 accent-[var(--color-accent)]" />
+              <span>Caused by a player — the repair cost is billed to them when the repair is completed</span>
+            </label>
+            {form.playerInduced ? (
+              <Input
+                label="Reservation ID (optional if the damage report is linked)"
+                value={form.reservationId}
+                onChange={(e) => setForm((f) => ({ ...f, reservationId: e.target.value }))}
+                placeholder="R-…"
+              />
+            ) : null}
             <Button type="submit" className="w-full" disabled={saving || !form.itemKey || !form.damage.trim()}>
               {saving ? 'Saving…' : 'Open repair'}
             </Button>
@@ -210,7 +265,12 @@ export function RepairsPage() {
                 <div className="text-sm font-semibold">{repair.itemName} · {repair.repairDate}</div>
                 <div className="text-[11px] text-muted">{repair.damage}{repair.partsReplaced ? ` · Parts: ${repair.partsReplaced}` : ''}{repair.gunsmith ? ` · ${repair.gunsmith}` : ''}</div>
               </div>
-              <div className="text-sm font-semibold">{formatPHP(Number(repair.totalCost || 0))}</div>
+              <div className="text-right">
+                <div className="text-sm font-semibold">{formatPHP(Number(repair.totalCost || 0))}</div>
+                {Number(repair.penaltyAmount || 0) > 0 ? (
+                  <div className="text-[11px] text-warning">Billed to player · {repair.reservationId}</div>
+                ) : null}
+              </div>
             </li>
           ))}
         </ul>

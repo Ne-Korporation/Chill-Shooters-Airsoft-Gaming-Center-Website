@@ -35,7 +35,6 @@ const PAYMENT_METHODS = [
   { id: 'cash', label: 'Cash' },
   { id: 'gcash', label: 'GCash' },
   { id: 'bank_transfer', label: 'Bank transfer' },
-  { id: 'card', label: 'Card' },
 ]
 
 function WalkInForm({ onCreated }: { onCreated: (reservationId: string) => void }) {

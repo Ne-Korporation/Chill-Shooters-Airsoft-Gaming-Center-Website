@@ -88,6 +88,28 @@ test('GCash submission uses the owned, server-priced reservation and persists on
   assert.equal(fake.state.lockUpdates.length, 2)
   assert.ok(fake.state.lockUpdates.every((entry) => entry.session === fake.state.lockUpdates[0].session))
   assert.equal(fake.state.sessionEnded, true)
+  assert.equal(payment.paymentMethod, 'GCash')
+})
+
+test('bank transfer proofs are recorded as bank transfers; anything else falls back to GCash', async () => {
+  const submit = (paymentMethod) => {
+    const fake = createFakeDatabase({
+      reservation: { id: 'R-1', userId: 'player-1', pricingVerified: true, depositAmount: 375 },
+    })
+    return submitGcashPayment({
+      db: fake.db,
+      startSession: fake.startSession,
+      reservationId: 'R-1',
+      userId: 'player-1',
+      amount: 375,
+      transactionReference: 'FT2610281234',
+      gcashImageUrl: 'https://example.test/proof.png',
+      paymentMethod,
+    })
+  }
+
+  assert.equal((await submit('Bank Transfer')).payment.paymentMethod, 'Bank Transfer')
+  assert.equal((await submit('card')).payment.paymentMethod, 'GCash')
 })
 
 test('GCash submission rejects incorrect amounts, unowned reservations, and reused references', async () => {

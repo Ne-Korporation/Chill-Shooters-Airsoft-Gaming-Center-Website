@@ -2,13 +2,10 @@ import express from 'express'
 import { getDb, startDbSession } from '../db/mongo.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
 import { getGcashAmountDue, getPaymentProgress, getSplitPayerIds } from '../utils/paymentRules.js'
-import { updateReservationStatusAtomically } from '../utils/reservationStatus.js'
 import {
   expireOverdueReservations,
   getReservationPayments,
-  notifyUser,
 } from '../utils/paymentProgress.js'
-import { emailReservationEvent } from '../services/notificationEmails.js'
 
 const router = express.Router()
 const OPEN_STATUSES = ['pending', 'needs review', 'confirmed']
@@ -101,44 +98,6 @@ router.get('/split-payments/mine', requireAuth, requireRole('user'), async (req,
 
     return res.json({ ok: true, data: items })
   } catch (err) {
-    return res.status(500).json({ ok: false, error: String(err) })
-  }
-})
-
-// POST /api/reservations/:id/cancel — the captain cancels before payment is complete, releasing the slot.
-router.post('/reservations/:id/cancel', requireAuth, requireRole('user'), async (req, res) => {
-  try {
-    const db = await getDb()
-    const id = String(req.params.id || '').trim()
-    const reservation = await db.collection('reservations').findOne({ id, userId: String(req.user.id) })
-    if (!reservation) return res.status(404).json({ ok: false, error: 'Reservation not found.' })
-    if (!OPEN_STATUSES.includes(String(reservation.reservationStatus || '').toLowerCase())) {
-      return res.status(409).json({ ok: false, error: `A ${reservation.reservationStatus} reservation can't be cancelled.` })
-    }
-
-    const updated = await updateReservationStatusAtomically({
-      db,
-      startSession: startDbSession,
-      reservationFilter: { id },
-      reservationId: id,
-      nextStatus: 'cancelled',
-      actor: req.user,
-      reason: 'cancelled_by_player',
-    })
-
-    for (const userId of getSplitPayerIds(reservation).filter((payerId) => payerId !== String(req.user.id))) {
-      await notifyUser(db, {
-        userId,
-        type: 'reservation_status_update',
-        title: 'Team reservation cancelled',
-        message: `The captain cancelled the reservation for ${reservation.reservationDate} (${reservation.reservationTime}). No further payment is needed.`,
-        linkedResourceId: id,
-      })
-    }
-    void emailReservationEvent(db, updated, 'cancelled')
-    return res.json({ ok: true, data: updated })
-  } catch (err) {
-    if (err?.statusCode) return res.status(err.statusCode).json({ ok: false, error: err.message })
     return res.status(500).json({ ok: false, error: String(err) })
   }
 })

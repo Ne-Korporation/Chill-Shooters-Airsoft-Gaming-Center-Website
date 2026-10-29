@@ -10,7 +10,11 @@ export async function submitGcashPayment({
   amount,
   transactionReference,
   gcashImageUrl,
+  paymentMethod,
 }) {
+  // Players pay online by GCash or bank transfer; both are proof-plus-reference
+  // submissions that a registrar verifies.
+  const method = /bank/i.test(String(paymentMethod || '')) ? 'Bank Transfer' : 'GCash'
   const normalizedReference = normalizeGcashReference(transactionReference)
   const session = startSession()
   let payment
@@ -33,7 +37,7 @@ export async function submitGcashPayment({
         { session },
       )
       if (reusedReference) {
-        const duplicate = new Error('This GCash transaction reference has already been submitted.')
+        const duplicate = new Error('This transaction reference has already been submitted.')
         duplicate.statusCode = 409
         throw duplicate
       }
@@ -79,7 +83,7 @@ export async function submitGcashPayment({
         reservationId,
         userId: String(userId),
         amount: expectedAmount,
-        paymentMethod: 'GCash',
+        paymentMethod: method,
         paymentStatus: 'pending',
         status: 'pending',
         transactionReference: normalizedReference,

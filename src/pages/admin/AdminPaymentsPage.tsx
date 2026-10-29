@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
+import { Input } from '../../components/ui/Input'
 import toast from 'react-hot-toast'
 import { apiBase, apiDelete, apiGet, apiPut, getApiAuthHeaders } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
@@ -29,6 +30,8 @@ function normalizePaymentStatus(value: unknown): PaymentStatus {
   if (lower === 'submitted') return 'pending'
   return (KNOWN_STATUSES as string[]).includes(lower) ? (lower as PaymentStatus) : 'pending'
 }
+
+type BankDetails = { bankName: string; accountName: string; accountNumber: string }
 
 type GcashQrSettings = {
   imageUrl: string
@@ -127,11 +130,30 @@ export function AdminPaymentsPage() {
     }
 
     loadQr()
+    apiGet<{ ok: boolean; data: BankDetails }>('/api/payments/bank-details')
+      .then((res) => { if (!cancelled && res?.data) setBankForm(res.data) })
+      .catch(() => {})
 
     return () => {
       cancelled = true
     }
   }, [])
+
+  const [bankForm, setBankForm] = useState<BankDetails>({ bankName: '', accountName: '', accountNumber: '' })
+  const [bankSaving, setBankSaving] = useState(false)
+
+  const saveBankDetails = async () => {
+    setBankSaving(true)
+    try {
+      const saved = await apiPut<{ ok: boolean; data: BankDetails }>('/api/payments/bank-details', bankForm)
+      setBankForm(saved.data)
+      toast.success('Bank transfer details saved')
+    } catch (e: any) {
+      toast.error(String(e?.message || e))
+    } finally {
+      setBankSaving(false)
+    }
+  }
 
   const saveQrImage = async () => {
     if (!qrFile) {
@@ -407,6 +429,25 @@ export function AdminPaymentsPage() {
           </div>
         </div>
       )}
+
+      <Card className="p-4">
+        <div className="text-xs uppercase tracking-widest text-muted">Bank transfer account</div>
+        <div className="mt-2 text-sm text-muted">Shown to players who choose Bank Transfer on the payment page.</div>
+        <div className="mt-4 grid gap-3 md:grid-cols-3">
+          <Input label="Bank" value={bankForm.bankName} onChange={(e) => setBankForm((f) => ({ ...f, bankName: e.target.value }))} placeholder="e.g., BDO" />
+          <Input label="Account name" value={bankForm.accountName} onChange={(e) => setBankForm((f) => ({ ...f, accountName: e.target.value }))} placeholder="Chill Shooters Airsoft" />
+          <Input label="Account number" value={bankForm.accountNumber} onChange={(e) => setBankForm((f) => ({ ...f, accountNumber: e.target.value }))} placeholder="0000 0000 0000" />
+        </div>
+        <div className="mt-3 flex justify-end">
+          <Button
+            variant="primary"
+            disabled={bankSaving || !bankForm.bankName.trim() || !bankForm.accountName.trim() || !bankForm.accountNumber.trim()}
+            onClick={() => void saveBankDetails()}
+          >
+            {bankSaving ? 'Saving…' : 'Save bank details'}
+          </Button>
+        </div>
+      </Card>
 
       <Card className="p-4">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
