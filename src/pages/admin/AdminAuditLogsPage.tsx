@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { Card } from '../../components/ui/Card'
+import { FilterTabs, titleCaseLabel } from '../../components/ui/FilterTabs'
 import { apiGet } from '../../utils/apiClient'
 
 type AuditAction = 'RESERVATION' | 'PLAYER' | 'EQUIPMENT' | 'WEAPON' | 'PAYMENT' | 'NOTIFICATION'
@@ -187,22 +188,12 @@ export function AdminAuditLogsPage() {
           <p className="mt-1 text-sm text-muted">Track key admin actions by module, severity, and timestamp for accountability.</p>
         </div>
 
-        <div className="flex flex-wrap gap-2">
-          {actionOptions.map((option) => (
-            <button
-              key={option}
-              onClick={() => setAction(option)}
-              className={
-                'rounded-xl border px-3 py-2 text-sm transition ' +
-                (action === option
-                  ? 'bg-white/8 text-text border-accent/30'
-                  : 'bg-white/5 text-muted hover:bg-white/6')
-              }
-            >
-              {option === 'all' ? 'ALL' : option}
-            </button>
-          ))}
-        </div>
+        <FilterTabs
+          ariaLabel="Filter by module"
+          value={action}
+          onChange={setAction}
+          options={actionOptions.map((option) => ({ value: option, label: option === 'all' ? 'All' : option }))}
+        />
       </div>
 
       <div className="grid gap-4 md:grid-cols-3">
@@ -226,22 +217,13 @@ export function AdminAuditLogsPage() {
             <div className="text-xs uppercase tracking-widest text-muted">Traceability</div>
             <div className="mt-2 text-sm text-muted">A detailed audit trail of admin actions and follow-up responses.</div>
           </div>
-          <div className="flex flex-wrap gap-2">
-            {severityOptions.map((option) => (
-              <button
-                key={option}
-                onClick={() => setSeverity(option)}
-                className={
-                  'rounded-xl border px-3 py-2 text-sm transition ' +
-                  (severity === option
-                    ? 'bg-white/8 text-text border-accent/30'
-                    : 'bg-white/5 text-muted hover:bg-white/6')
-                }
-              >
-                {option === 'all' ? 'ALL' : option.toUpperCase()}
-              </button>
-            ))}
-          </div>
+          <FilterTabs
+            size="sm"
+            ariaLabel="Filter by severity"
+            value={severity}
+            onChange={setSeverity}
+            options={severityOptions.map((option) => ({ value: option, label: option === 'all' ? 'All severities' : titleCaseLabel(option) }))}
+          />
         </div>
 
         <div className="mt-4 overflow-hidden rounded-2xl border border-white/5">
@@ -274,11 +256,6 @@ export function AdminAuditLogsPage() {
                   </div>
                   <div className="col-span-3 text-right">
                     <div className="text-sm text-muted">{log.meta}</div>
-                    <div className="mt-2 flex justify-end">
-                      <button className="rounded-xl border border-white/5 bg-white/5 px-3 py-2 text-xs text-muted transition hover:bg-white/6">
-                        Details
-                      </button>
-                    </div>
                   </div>
                 </div>
               ))

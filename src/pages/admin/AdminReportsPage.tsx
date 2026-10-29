@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { FiDownload, FiPrinter } from 'react-icons/fi'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
+import { FilterTabs } from '../../components/ui/FilterTabs'
 import { apiGet } from '../../utils/apiClient'
 
 type Metric = { label: string; value: string; tone: 'accent' | 'success' | 'danger' }
@@ -419,21 +420,12 @@ export function AdminReportsPage() {
 
       <Card className="no-print p-4">
         <div className="flex flex-wrap items-end gap-3">
-          <div className="flex flex-wrap gap-2">
-            {(Object.keys(PERIOD_LABELS) as Period[]).map((option) => (
-              <button
-                key={option}
-                type="button"
-                onClick={() => setPeriod(option)}
-                className={[
-                  'rounded-full border px-4 py-2 text-sm font-semibold transition',
-                  period === option ? 'border-accent/40 bg-accent/15 text-accent' : 'border-white/10 bg-white/5 text-muted hover:text-text',
-                ].join(' ')}
-              >
-                {PERIOD_LABELS[option]}
-              </button>
-            ))}
-          </div>
+          <FilterTabs
+            ariaLabel="Report period"
+            value={period}
+            onChange={setPeriod}
+            options={(Object.keys(PERIOD_LABELS) as Period[]).map((option) => ({ value: option, label: PERIOD_LABELS[option] }))}
+          />
           {period === 'custom' ? (
             <div className="flex flex-wrap gap-2">
               <label className="text-xs text-muted">

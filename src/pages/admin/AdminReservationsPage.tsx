@@ -5,6 +5,7 @@ import toast from 'react-hot-toast'
 
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
+import { FilterTabs, titleCaseLabel } from '../../components/ui/FilterTabs'
 import { apiDelete, apiGet, apiPut } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
 import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
@@ -405,25 +406,16 @@ export function AdminReservationsPage() {
           <p className="mt-1 text-sm text-muted">Review reservations, inspect GCash proof, and move bookings through the approval queue.</p>
         </div>
 
-        <div className="flex flex-wrap gap-2">
-          {([
+        <FilterTabs
+          ariaLabel="Filter reservations by status"
+          value={active}
+          onChange={setActive}
+          options={([
             ['pending', counts.pending],
             ['needs review', counts['needs review']],
             ['confirmed', counts.confirmed],
-          ] as const).map(([status, count]) => (
-            <button
-              key={status}
-              onClick={() => setActive(status)}
-              className={
-                'rounded-xl border px-3 py-2 text-sm transition ' +
-                (active === status ? 'border-accent/30 bg-white/8 text-text' : 'border-white/5 bg-white/5 text-muted hover:bg-white/6')
-              }
-            >
-              <span className="font-semibold capitalize">{status}</span>
-              <span className="ml-2 text-muted">({count})</span>
-            </button>
-          ))}
-        </div>
+          ] as const).map(([status, count]) => ({ value: status, label: titleCaseLabel(status), count }))}
+        />
       </div>
 
       <Card className="p-4">
@@ -477,12 +469,9 @@ export function AdminReservationsPage() {
                     </div>
                     <div className="sm:col-span-2 text-right">
                       <div className="flex items-center justify-end gap-2">
-                        <button
-                          onClick={() => openReview(reservation)}
-                          className="rounded-xl border border-white/5 bg-white/5 px-3 py-2 text-xs font-semibold text-muted transition hover:bg-white/6"
-                        >
-                          <FiEye className="mr-1 inline-block" /> Review
-                        </button>
+                        <Button size="xs" variant="ghost" onClick={() => openReview(reservation)}>
+                          <FiEye /> Review
+                        </Button>
                       </div>
                     </div>
                   </div>
@@ -511,13 +500,9 @@ export function AdminReservationsPage() {
                     <p className="mt-1 text-sm text-muted">Update status, inspect proof, and print details or only the GCash image.</p>
                   </div>
 
-                  <button
-                    onClick={() => setSelectedId(null)}
-                    className="rounded-xl border border-white/5 bg-white/5 p-2 text-muted transition hover:bg-white/6"
-                    aria-label="Close"
-                  >
+                  <Button size="sm" variant="ghost" onClick={() => setSelectedId(null)} aria-label="Close" className="w-10 px-0">
                     <FiX />
-                  </button>
+                  </Button>
                 </div>
 
                 <div className="grid gap-0 lg:grid-cols-[1.25fr_0.75fr]">
@@ -592,42 +577,9 @@ export function AdminReservationsPage() {
                       <StatusPill status={normalizeReservationStatus(selectedReservation.reservationStatus)} />
                     </div>
 
-                    <div className="mt-4 space-y-2">
-                      <Button
-                        variant="ghost"
-                        className="w-full justify-start"
-                        onClick={printReservationDetails}
-                      >
-                        <FiPrinter /> Print details
-                      </Button>
-
-                      <Button
-                        variant="ghost"
-                        className="w-full justify-start"
-                        disabled={!(selectedReservation.payment?.paymentMethod?.toLowerCase() === 'gcash' && selectedReservation.payment?.gcashImageUrl)}
-                        onClick={printReservationImage}
-                      >
-                        <FiImage /> Print image only
-                      </Button>
-                    </div>
-
-                    <div className="mt-6 grid gap-2">
-                      <Button
-                        className="w-full"
-                        variant="ghost"
-                        disabled={savingStatus !== null}
-                        onClick={() => updateReservation('pending')}
-                      >
-                        <FiClock /> Mark pending
-                      </Button>
-                      <Button
-                        className="w-full"
-                        variant="ghost"
-                        disabled={savingStatus !== null}
-                        onClick={() => updateReservation('needs review')}
-                      >
-                        <FiEye /> Needs review
-                      </Button>
+                    {/* Main decision first, secondary status changes beside each other, utilities after,
+                        and the destructive delete set apart at the bottom. */}
+                    <div className="mt-4 grid gap-2">
                       <Button
                         className="w-full"
                         variant="primary"
@@ -636,25 +588,38 @@ export function AdminReservationsPage() {
                       >
                         <FiCheck /> Confirm reservation
                       </Button>
+                      <div className="grid grid-cols-2 gap-2">
+                        <Button size="sm" variant="ghost" disabled={savingStatus !== null} onClick={() => updateReservation('pending')}>
+                          <FiClock /> Mark pending
+                        </Button>
+                        <Button size="sm" variant="accent-soft" disabled={savingStatus !== null} onClick={() => updateReservation('needs review')}>
+                          <FiEye /> Needs review
+                        </Button>
+                      </div>
                     </div>
 
-                    <div className="mt-4 rounded-2xl border border-white/5 bg-white/5 p-3 text-xs text-muted">
+                    <div className="mt-3 rounded-2xl border border-white/5 bg-white/5 p-3 text-xs text-muted">
                       Confirming the reservation also updates the linked payment to <span className="font-semibold text-text">confirmed</span> and creates gameplay once.
                     </div>
 
-                    <div className="mt-6 flex gap-2">
+                    <div className="mt-5 text-xs uppercase tracking-widest text-muted">Print</div>
+                    <div className="mt-2 grid grid-cols-2 gap-2">
+                      <Button size="sm" variant="ghost" onClick={printReservationDetails}>
+                        <FiPrinter /> Details
+                      </Button>
                       <Button
-                        variant="danger"
-                        className="flex-1"
-                        onClick={deleteReservation}
+                        size="sm"
+                        variant="ghost"
+                        disabled={!(selectedReservation.payment?.paymentMethod?.toLowerCase() === 'gcash' && selectedReservation.payment?.gcashImageUrl)}
+                        onClick={printReservationImage}
                       >
-                        <FiTrash2 /> Delete reservation
+                        <FiImage /> Proof image
                       </Button>
                     </div>
 
-                    <div className="mt-2 flex gap-2">
-                      <Button variant="ghost" className="flex-1" onClick={() => setSelectedId(null)}>
-                        Close
+                    <div className="mt-6 border-t border-white/5 pt-4">
+                      <Button size="sm" variant="danger-soft" className="w-full" onClick={deleteReservation}>
+                        <FiTrash2 /> Delete reservation
                       </Button>
                     </div>
                   </div>

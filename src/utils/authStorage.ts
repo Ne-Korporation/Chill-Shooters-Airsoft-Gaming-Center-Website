@@ -25,7 +25,26 @@ export function writeStoredSession(value: unknown, remember: boolean) {
   }
 }
 
+// Who was signed in before the last logout or expiry. The login page only returns someone to
+// the page they were on when it is the same account; otherwise an admin logging in after a
+// player would land on that player's profile.
+const LAST_USER_KEY = 'aim-book-play.lastUserId'
+
+export function readLastUserId() {
+  try {
+    return sessionStorage.getItem(LAST_USER_KEY) || ''
+  } catch {
+    return ''
+  }
+}
+
 export function clearStoredSession() {
+  try {
+    const previous = JSON.parse(readStoredSessionRaw() || 'null')
+    if (previous?.user?.id) sessionStorage.setItem(LAST_USER_KEY, String(previous.user.id))
+  } catch {
+    // ignore unreadable sessions
+  }
   try {
     localStorage.removeItem(AUTH_STORAGE_KEY)
     sessionStorage.removeItem(AUTH_STORAGE_KEY)

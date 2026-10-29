@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Button } from '../../components/ui/Button'
+import { ActionGroup, Button } from '../../components/ui/Button'
+import { FilterTabs, titleCaseLabel } from '../../components/ui/FilterTabs'
 import { Card } from '../../components/ui/Card'
 import { Input } from '../../components/ui/Input'
 import toast from 'react-hot-toast'
@@ -260,22 +261,16 @@ export function AdminPaymentsPage() {
           <p className="mt-1 text-sm text-muted">Review submitted receipts, resolve pending transactions, and confirm booking payments.</p>
         </div>
 
-        <div className="flex flex-wrap gap-2">
-          {(['all', 'review', 'paid', 'pending', 'failed', 'confirmed'] as const).map((status) => (
-            <button
-              key={status}
-              onClick={() => setActive(status)}
-              className={
-                'rounded-xl border px-3 py-2 text-sm transition ' +
-                (active === status
-                  ? 'bg-white/8 text-text border-accent/30'
-                  : 'bg-white/5 text-muted hover:bg-white/6')
-              }
-            >
-              {status === 'all' ? 'ALL' : status.toUpperCase()}
-            </button>
-          ))}
-        </div>
+        <FilterTabs
+          ariaLabel="Filter payments by status"
+          value={active}
+          onChange={setActive}
+          options={(['all', 'pending', 'review', 'paid', 'confirmed', 'failed'] as const).map((status) => ({
+            value: status,
+            label: status === 'all' ? 'All' : status === 'failed' ? 'Sent back' : titleCaseLabel(status),
+            count: status === 'all' ? payments.length : payments.filter((p) => p.status === status).length,
+          }))}
+        />
       </div>
 
       <div className="grid gap-4 md:grid-cols-3">
@@ -357,13 +352,9 @@ export function AdminPaymentsPage() {
                 <div id="gcash-qr-upload-title" className="text-lg font-bold text-white">Upload GCash QR</div>
                 <div className="mt-1 text-sm text-muted">Add the GCash phone number and QR image before saving.</div>
               </div>
-              <button
-                type="button"
-                onClick={closeQrModal}
-                className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-muted transition hover:bg-white/8"
-              >
+              <Button variant="ghost" size="sm" onClick={closeQrModal}>
                 Close
-              </button>
+              </Button>
             </div>
 
             <div className="mt-4 grid gap-4 md:grid-cols-2">
@@ -464,10 +455,10 @@ export function AdminPaymentsPage() {
         <div className="mt-4 overflow-x-auto rounded-2xl border border-white/5">
           <div className="hidden lg:grid lg:grid-cols-12 bg-white/5 px-3 py-2 text-xs uppercase tracking-widest text-muted">
             <div className="col-span-3">Payment ID</div>
-            <div className="col-span-3">Player</div>
-            <div className="col-span-2 text-right">Amount</div>
-            <div className="col-span-2 text-right">Method</div>
-            <div className="col-span-2 text-right">Actions</div>
+            <div className="col-span-2">Player</div>
+            <div className="col-span-1 text-right">Amount</div>
+            <div className="col-span-2 text-right">Status</div>
+            <div className="col-span-4 text-right">Actions</div>
           </div>
 
           <div className="divide-y divide-white/5">
@@ -480,75 +471,55 @@ export function AdminPaymentsPage() {
                     <div className="text-sm font-semibold">{payment.id}</div>
                     <div className="mt-1 text-xs text-muted">{payment.date}</div>
                   </div>
-                  <div className="lg:col-span-3">
-                    <div className="text-sm font-semibold">{payment.player}</div>
-                    <div className="mt-1 text-xs text-muted">{payment.note}</div>
+                  <div className="min-w-0 lg:col-span-2">
+                    <div className="truncate text-sm font-semibold">{payment.player}</div>
+                    <div className="mt-1 truncate text-xs text-muted">{payment.note}</div>
                   </div>
-                  <div className="text-sm font-semibold lg:col-span-2 lg:text-right">₱{payment.amount}</div>
+                  <div className="text-sm font-semibold lg:col-span-1 lg:text-right">₱{payment.amount}</div>
                   <div className="lg:col-span-2 lg:text-right">
                     <StatusPill status={payment.status} />
                     <div className="mt-1 text-xs text-muted">{payment.method}</div>
                   </div>
-                  <div className="lg:col-span-2 lg:text-right">
-                    <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+                  <div className="lg:col-span-4">
+                    <ActionGroup className="lg:justify-end" align="start">
                       {payment.receiptUrl ? (
                         <a
                           href={payment.receiptUrl}
                           target="_blank"
                           rel="noreferrer"
-                          className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-text transition hover:bg-white/10"
+                          className="surface hover-row inline-flex h-8 items-center rounded-xl px-3 text-xs font-semibold text-text"
                         >
                           Receipt
                         </a>
                       ) : (
-                        <span className="rounded-xl border border-white/5 px-3 py-2 text-xs text-muted">No receipt</span>
+                        <span className="inline-flex h-8 items-center px-1 text-xs text-muted">No receipt</span>
                       )}
                       {payment.status === 'paid' || payment.status === 'confirmed' ? (
-                        <span className="px-1 text-xs font-semibold text-success">Verified</span>
+                        <span className="inline-flex h-8 items-center px-1 text-xs font-semibold text-success">Verified</span>
                       ) : payment.status === 'failed' ? (
-                        <span className="px-1 text-xs text-muted">Sent back</span>
+                        <span className="inline-flex h-8 items-center px-1 text-xs text-muted">Sent back</span>
                       ) : payment.stripe ? (
-                        <span className="px-1 text-xs text-muted">Verified by Stripe</span>
+                        <span className="inline-flex h-8 items-center px-1 text-xs text-muted">Verified by Stripe</span>
                       ) : (
                         <>
-                          <button
-                            disabled={updatingId === payment.id}
-                            onClick={() => updateStatus(payment.id, 'paid')}
-                            className="rounded-xl border border-success/30 bg-success/20 px-3 py-2 text-xs font-semibold text-success transition hover:bg-success/25 disabled:opacity-50"
-                          >
+                          <Button size="xs" variant="success-soft" disabled={updatingId === payment.id} onClick={() => updateStatus(payment.id, 'paid')}>
                             Approve
-                          </button>
-                          <button
-                            disabled={updatingId === payment.id}
-                            onClick={() => sendBack(payment)}
-                            className="rounded-xl border border-danger/30 bg-danger/15 px-3 py-2 text-xs font-semibold text-danger transition hover:bg-danger/25 disabled:opacity-50"
-                          >
-                            Send back
-                          </button>
+                          </Button>
                           {payment.status === 'pending' && (
-                            <button
-                              disabled={updatingId === payment.id}
-                              onClick={() => updateStatus(payment.id, 'review')}
-                              className="rounded-xl border border-accent/30 bg-accent/15 px-3 py-2 text-xs font-semibold text-accent transition hover:bg-accent/25 disabled:opacity-50"
-                            >
+                            <Button size="xs" variant="accent-soft" disabled={updatingId === payment.id} onClick={() => updateStatus(payment.id, 'review')}>
                               Flag for review
-                            </button>
+                            </Button>
                           )}
+                          <Button size="xs" variant="danger-soft" disabled={updatingId === payment.id} onClick={() => sendBack(payment)}>
+                            Send back
+                          </Button>
                         </>
                       )}
-                    </div>
+                    </ActionGroup>
                   </div>
                 </div>
               ))
             )}
-          </div>
-        </div>
-
-        <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="text-xs text-muted">Latest settlement queue includes online transfers, card confirmations, and manual follow-ups.</div>
-          <div className="flex items-center gap-2">
-            <Button variant="ghost" size="sm">Previous</Button>
-            <Button variant="ghost" size="sm">Next</Button>
           </div>
         </div>
       </Card>

@@ -1,6 +1,7 @@
 import React from 'react'
 import toast from 'react-hot-toast'
-import { Button } from '../../components/ui/Button'
+import { ActionGroup, Button } from '../../components/ui/Button'
+import { FilterTabs } from '../../components/ui/FilterTabs'
 import { Card } from '../../components/ui/Card'
 import { apiGet, apiPost, apiPut, apiDelete } from '../../utils/apiClient'
 import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
@@ -415,29 +416,16 @@ export function AdminWeaponsPage() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted">View source</div>
-          {[
-            { value: 'all', label: 'All' },
-            { value: 'business', label: 'Business' },
-            { value: 'player', label: 'Player' },
-          ].map((option) => (
-            <button
-              key={option.value}
-              onClick={() => setSourceFilter(option.value as 'all' | 'business' | 'player')}
-              className={
-                'rounded-full border px-3 py-2 text-sm transition ' +
-                (sourceFilter === option.value
-                  ? 'bg-accent/20 text-accent border-accent/40'
-                  : 'bg-white/5 text-muted hover:bg-white/8')
-              }
-            >
-              <span>{option.label}</span>
-              {option.value === 'player' && pendingPlayerWeaponsCount > 0 ? (
-                <span className="ml-1 rounded-full bg-warning/20 px-1.5 py-0.5 text-[10px] text-warning">
-                  {pendingPlayerWeaponsCount}
-                </span>
-              ) : null}
-            </button>
-          ))}
+          <FilterTabs
+            ariaLabel="Filter weapons by source"
+            value={sourceFilter}
+            onChange={setSourceFilter}
+            options={[
+              { value: 'all', label: 'All' },
+              { value: 'business', label: 'Business' },
+              { value: 'player', label: 'Player', ...(pendingPlayerWeaponsCount > 0 ? { count: pendingPlayerWeaponsCount } : {}) },
+            ]}
+          />
         </div>
       </div>
 
@@ -512,20 +500,14 @@ export function AdminWeaponsPage() {
                 <div key={weapon.id} className="rounded-xl border border-white/10 bg-background/50 p-3">
                   <div className="flex items-center justify-between gap-2">
                     <div className="text-sm font-semibold">{weapon.name}</div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={(event) => { event.stopPropagation(); handleApprovePlayerWeapon(weapon.id) }}
-                        className="rounded-lg border border-success/30 bg-success/10 px-2.5 py-1 text-[11px] font-semibold text-success"
-                      >
+                    <ActionGroup>
+                      <Button size="xs" variant="success-soft" onClick={(event) => { event.stopPropagation(); handleApprovePlayerWeapon(weapon.id) }}>
                         Approve
-                      </button>
-                      <button
-                        onClick={(event) => { event.stopPropagation(); openRejectDialog(weapon.id) }}
-                        className="rounded-lg border border-danger/30 bg-danger/10 px-2.5 py-1 text-[11px] font-semibold text-danger"
-                      >
+                      </Button>
+                      <Button size="xs" variant="danger-soft" onClick={(event) => { event.stopPropagation(); openRejectDialog(weapon.id) }}>
                         Reject
-                      </button>
-                    </div>
+                      </Button>
+                    </ActionGroup>
                   </div>
                   <div className="mt-1 text-xs text-muted">{weapon.description || weapon.note}</div>
                 </div>
@@ -541,8 +523,8 @@ export function AdminWeaponsPage() {
               <div className="col-span-3">Weapon</div>
               <div className="col-span-1 text-right">Stock</div>
               <div className="col-span-1 text-right">Price</div>
-              <div className="col-span-2 text-right">Status</div>
-              <div className="col-span-3 text-right">Actions</div>
+              <div className="col-span-1 text-right">Status</div>
+              <div className="col-span-4 text-right">Actions</div>
             </div>
 
             <div className="divide-y divide-white/5">
@@ -567,43 +549,31 @@ export function AdminWeaponsPage() {
                   </div>
                   <div className="col-span-1 text-right text-sm font-semibold">{weapon.source === 'player' ? '—' : weapon.quantity}</div>
                   <div className="col-span-1 text-right text-sm text-muted">₱{weapon.price}</div>
-                  <div className="col-span-2 text-right">
+                  <div className="col-span-1 text-right">
                     <StatusBadge status={weapon.status} onToggle={() => handleStatusToggle(weapon.id)} />
                   </div>
-                  <div className="col-span-3 text-right">
-                    <div className="flex flex-wrap items-center justify-end gap-2">
+                  <div className="col-span-4">
+                    <ActionGroup>
+                      <Button size="xs" variant="ghost" onClick={(e) => { e.stopPropagation(); handleSelect(weapon) }}>
+                        Edit
+                      </Button>
                       {weapon.source === 'player' && weapon.approvalStatus === 'pending' ? (
                         <>
-                          <button
-                            onClick={(event) => { event.stopPropagation(); handleApprovePlayerWeapon(weapon.id) }}
-                            className="rounded-xl border border-success/30 bg-success/10 px-3 py-2 text-xs text-success transition hover:bg-success/20"
-                          >
+                          <Button size="xs" variant="success-soft" onClick={(event) => { event.stopPropagation(); handleApprovePlayerWeapon(weapon.id) }}>
                             Approve
-                          </button>
-                          <button
-                            onClick={(event) => { event.stopPropagation(); openRejectDialog(weapon.id) }}
-                            className="rounded-xl border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger transition hover:bg-danger/20"
-                          >
+                          </Button>
+                          <Button size="xs" variant="danger-soft" onClick={(event) => { event.stopPropagation(); openRejectDialog(weapon.id) }}>
                             Reject
-                          </button>
+                          </Button>
                         </>
                       ) : null}
-                      <button
-                        onClick={(e) => { e.stopPropagation(); handleSelect(weapon) }}
-                        className="rounded-xl border border-white/5 bg-white/5 px-3 py-2 text-xs text-muted transition hover:bg-white/8 active:bg-white/10 focus:outline-none focus:ring-2 focus:ring-white/10 cursor-pointer"
-                      >
-                        Edit
-                      </button>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); handleToggleFlag(weapon.id) }}
-                        className={"rounded-xl border px-3 py-2 text-xs font-semibold transition " + (weapon.status === 'needs-check' ? 'border-white/5 bg-white/5 text-text hover:bg-white/8' : 'border-danger/30 bg-danger/10 text-danger hover:bg-danger/15')}
-                      >
+                      <Button size="xs" variant={weapon.status === 'needs-check' ? 'ghost' : 'accent-soft'} onClick={(e) => { e.stopPropagation(); handleToggleFlag(weapon.id) }}>
                         {weapon.status === 'needs-check' ? 'Unflag' : 'Flag'}
-                      </button>
-                      <button onClick={(e) => { e.stopPropagation(); handleRemove(weapon.id) }} className="rounded-xl border border-white/5 bg-white/5 px-3 py-2 text-xs text-muted transition hover:bg-white/6">
+                      </Button>
+                      <Button size="xs" variant="danger-soft" onClick={(e) => { e.stopPropagation(); handleRemove(weapon.id) }}>
                         Remove
-                      </button>
-                    </div>
+                      </Button>
+                    </ActionGroup>
                   </div>
                 </div>
               ))

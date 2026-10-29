@@ -3,7 +3,8 @@ import { FiCheck, FiChevronRight, FiArchive, FiX } from 'react-icons/fi'
 import { toast } from 'react-hot-toast'
 
 import { Card } from '../../components/ui/Card'
-import { Button } from '../../components/ui/Button'
+import { ActionGroup, Button } from '../../components/ui/Button'
+import { FilterTabs, titleCaseLabel } from '../../components/ui/FilterTabs'
 import { apiDelete, apiGet, apiPut } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
 import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
@@ -180,20 +181,12 @@ export function AdminGameplayPage() {
           <p className="text-muted text-sm mt-1">Active and completed game sessions. Status controls are functional.</p>
         </div>
 
-        <div className="flex flex-wrap gap-2">
-          {(['all', ...statusOptions] as const).map((s) => (
-            <button
-              key={s}
-              onClick={() => setNextStatusFilter(s as any)}
-              className={
-                'rounded-xl border px-3 py-2 text-sm transition ' +
-                (nextStatusFilter === s ? 'bg-white/8 text-text border-accent/30' : 'bg-white/5 text-muted hover:bg-white/6')
-              }
-            >
-              {s === 'all' ? 'ALL' : s.toUpperCase()}
-            </button>
-          ))}
-        </div>
+        <FilterTabs<GameplayStatus | 'all'>
+          ariaLabel="Filter games by status"
+          value={nextStatusFilter}
+          onChange={setNextStatusFilter}
+          options={(['all', ...statusOptions] as Array<GameplayStatus | 'all'>).map((s) => ({ value: s, label: s === 'all' ? 'All' : titleCaseLabel(s) }))}
+        />
       </div>
 
       <Card className="p-4 overflow-hidden">
@@ -228,11 +221,11 @@ export function AdminGameplayPage() {
                         <StatusBadge status={st} />
                       </div>
                       <div className="col-span-3 text-right">
-                        <div className="flex items-center justify-end gap-2">
+                        <ActionGroup>
                           <select
                             value={st}
                             onChange={(e) => updateStatus(doc, e.target.value as GameplayStatus)}
-                            className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-text"
+                            className="surface h-8 rounded-xl px-3 text-xs font-semibold text-text"
                             aria-label="Update gameplay status"
                           >
                             {statusOptions.map((opt) => (
@@ -242,24 +235,16 @@ export function AdminGameplayPage() {
                             ))}
                           </select>
 
-                          {canArchive(st) ? (
-                            <button
-                              onClick={() => archiveGameplay(doc)}
-                              className="rounded-xl border border-accent/30 bg-accent/10 px-3 py-2 text-xs font-semibold text-accent hover:bg-accent/15 transition"
-                              title="Archive gameplay"
-                            >
-                              <FiArchive className="inline-block mr-1" /> Archive Game
-                            </button>
-                          ) : (
-                            <button
-                              className="rounded-xl border border-white/5 bg-white/5 px-3 py-2 text-xs text-muted opacity-60"
-                              disabled
-                              title="Archive available only when COMPLETED"
-                            >
-                              <FiArchive className="inline-block mr-1" /> Archive Game
-                            </button>
-                          )}
-                        </div>
+                          <Button
+                            size="xs"
+                            variant="accent-soft"
+                            disabled={!canArchive(st)}
+                            onClick={() => archiveGameplay(doc)}
+                            title={canArchive(st) ? 'Archive this game' : 'Archive is available once the game is completed'}
+                          >
+                            <FiArchive /> Archive
+                          </Button>
+                        </ActionGroup>
                       </div>
                     </div>
                   )

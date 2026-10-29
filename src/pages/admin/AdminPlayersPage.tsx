@@ -1,6 +1,9 @@
 import React from 'react'
 import toast from 'react-hot-toast'
+import { useNavigate } from 'react-router-dom'
 import { Card } from '../../components/ui/Card'
+import { ActionGroup, Button } from '../../components/ui/Button'
+import { FilterTabs, titleCaseLabel } from '../../components/ui/FilterTabs'
 import { apiGet, apiPost, apiPut, apiDelete } from '../../utils/apiClient'
 
 type PlayerStatus = 'active' | 'pending' | 'suspended'
@@ -24,6 +27,7 @@ const StatusBadge = ({ status }: { status: PlayerStatus }) => {
 }
 
 export function AdminPlayersPage() {
+  const navigate = useNavigate()
   const [status, setStatus] = React.useState<PlayerStatus | 'all'>('all')
   const [players, setPlayers] = React.useState<any[]>([])
   const [loading, setLoading] = React.useState(true)
@@ -103,22 +107,16 @@ export function AdminPlayersPage() {
           <p className="text-muted text-sm mt-1">Manage players, including waivers and access status.</p>
         </div>
 
-        <div className="flex flex-wrap gap-2">
-          {(['all', 'active', 'pending', 'suspended'] as const).map((s) => (
-            <button
-              key={s}
-              onClick={() => setStatus(s)}
-              className={
-                'rounded-xl border px-3 py-2 text-sm transition ' +
-                (status === s
-                  ? 'bg-white/8 text-text border-accent/30'
-                  : 'bg-white/5 text-muted hover:bg-white/6')
-              }
-            >
-              {s === 'all' ? 'ALL' : s.toUpperCase()}
-            </button>
-          ))}
-        </div>
+        <FilterTabs
+          ariaLabel="Filter players by status"
+          value={status}
+          onChange={setStatus}
+          options={(['all', 'active', 'pending', 'suspended'] as const).map((s) => ({
+            value: s,
+            label: s === 'all' ? 'All' : titleCaseLabel(s),
+            count: s === 'all' ? players.length : players.filter((p) => p.status === s).length,
+          }))}
+        />
       </div>
 
       <Card className="p-4">
@@ -142,8 +140,8 @@ export function AdminPlayersPage() {
             <div className="col-span-2">ID</div>
             <div className="col-span-3">Player</div>
             <div className="col-span-2">Experience</div>
-            <div className="col-span-3">Email</div>
-            <div className="col-span-2 text-right">Actions</div>
+            <div className="col-span-2">Email</div>
+            <div className="col-span-3 text-right">Actions</div>
           </div>
 
           <div className="divide-y divide-white/5">
@@ -158,38 +156,26 @@ export function AdminPlayersPage() {
                   </div>
                 </div>
                 <div className="col-span-2 text-sm text-muted">{p.experience} pts</div>
-                <div className="col-span-3 text-sm text-muted">{p.email}</div>
-                <div className="col-span-2 text-right">
-                  <div className="flex items-center justify-end gap-2">
-                    <button className="rounded-xl bg-white/5 border border-white/5 px-3 py-2 text-xs text-muted hover:bg-white/6 transition">
+                <div className="col-span-2 truncate text-sm text-muted" title={p.email}>{p.email}</div>
+                <div className="col-span-3">
+                  <ActionGroup>
+                    <Button size="xs" variant="ghost" onClick={() => navigate(`/app/players/${encodeURIComponent(p.id)}`)}>
                       View
-                    </button>
+                    </Button>
                     {p.status === 'active' ? (
-                      <button
-                        onClick={() => handleUpdateVerification(p.id, 'pending_review', 'suspended')}
-                        disabled={updatingId === p.id}
-                        className="rounded-xl bg-danger/20 border border-danger/30 px-3 py-2 text-xs font-semibold text-danger hover:bg-danger/25 transition disabled:opacity-50"
-                      >
-                        {updatingId === p.id ? 'Processing...' : 'Suspend'}
-                      </button>
+                      <Button size="xs" variant="danger-soft" disabled={updatingId === p.id} onClick={() => handleUpdateVerification(p.id, 'pending_review', 'suspended')}>
+                        {updatingId === p.id ? 'Processing…' : 'Suspend'}
+                      </Button>
                     ) : p.status === 'pending' ? (
-                      <button
-                        onClick={() => handleUpdateVerification(p.id, 'verified', 'active')}
-                        disabled={updatingId === p.id}
-                        className="rounded-xl bg-success/20 border border-success/30 px-3 py-2 text-xs font-semibold text-success hover:bg-success/25 transition disabled:opacity-50"
-                      >
-                        {updatingId === p.id ? 'Processing...' : 'Verify & Activate'}
-                      </button>
+                      <Button size="xs" variant="success-soft" disabled={updatingId === p.id} onClick={() => handleUpdateVerification(p.id, 'verified', 'active')}>
+                        {updatingId === p.id ? 'Processing…' : 'Verify & activate'}
+                      </Button>
                     ) : (
-                      <button
-                        onClick={() => handleUpdateVerification(p.id, 'verified', 'active')}
-                        disabled={updatingId === p.id}
-                        className="rounded-xl bg-accent/20 border border-accent/30 px-3 py-2 text-xs font-semibold text-accent hover:bg-accent/25 transition disabled:opacity-50"
-                      >
-                        {updatingId === p.id ? 'Processing...' : 'Reinstate'}
-                      </button>
+                      <Button size="xs" variant="accent-soft" disabled={updatingId === p.id} onClick={() => handleUpdateVerification(p.id, 'verified', 'active')}>
+                        {updatingId === p.id ? 'Processing…' : 'Reinstate'}
+                      </Button>
                     )}
-                  </div>
+                  </ActionGroup>
                 </div>
               </div>
             ))}
@@ -199,17 +185,7 @@ export function AdminPlayersPage() {
           </div>
         </div>
 
-        <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="text-xs text-muted">Page 1 of 3</div>
-          <div className="flex items-center gap-2">
-            <button className="rounded-xl bg-white/5 border border-white/5 px-4 py-2 text-sm text-muted hover:bg-white/6 transition">
-              Previous
-            </button>
-            <button className="rounded-xl bg-white/5 border border-white/5 px-4 py-2 text-sm text-muted hover:bg-white/6 transition">
-              Next
-            </button>
-          </div>
-        </div>
+        <div className="mt-3 text-xs text-muted">{filtered.length} of {players.length} players shown</div>
       </Card>
     </div>
   )

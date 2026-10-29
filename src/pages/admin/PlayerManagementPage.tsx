@@ -1,6 +1,7 @@
 import React from 'react'
 import toast from 'react-hot-toast'
-import { Button } from '../../components/ui/Button'
+import { ActionGroup, Button } from '../../components/ui/Button'
+import { FilterTabs } from '../../components/ui/FilterTabs'
 import { Card } from '../../components/ui/Card'
 import { apiGet, apiPost, apiPut } from '../../utils/apiClient'
 import { PlayerStatsCard } from '../../components/players/PlayerStatsCard'
@@ -209,23 +210,23 @@ export function PlayerManagementPage() {
             </span>
           </div>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <ActionGroup>
+          <Button variant="ghost" size="xs" onClick={() => setSelectedPlayer(pl)}>View</Button>
           {pl.identityDocumentUrl && pl.verificationStatus === 'pending_review' ? (
             <>
-              <Button variant="secondary" size="sm" onClick={() => pl.id && handleVerifyPlayer(pl.id)} disabled={verifyingId === pl.id}>
+              <Button variant="success-soft" size="xs" onClick={() => pl.id && handleVerifyPlayer(pl.id)} disabled={verifyingId === pl.id}>
                 {verifyingId === pl.id ? 'Verifying…' : 'Verify ID'}
               </Button>
-              <Button variant="ghost" size="sm" onClick={() => pl.id && handleRejectPlayer(pl.id)} disabled={verifyingId === pl.id}>
+              <Button variant="danger-soft" size="xs" onClick={() => pl.id && handleRejectPlayer(pl.id)} disabled={verifyingId === pl.id}>
                 {verifyingId === pl.id ? 'Rejecting…' : 'Reject ID'}
               </Button>
             </>
           ) : pl.identityDocumentUrl && pl.verificationStatus === 'rejected' ? (
-            <Button variant="ghost" size="sm" onClick={() => pl.id && handleSetPlayerVerification(pl.id, 'pending_review')} disabled={verifyingId === pl.id}>
+            <Button variant="accent-soft" size="xs" onClick={() => pl.id && handleSetPlayerVerification(pl.id, 'pending_review')} disabled={verifyingId === pl.id}>
               {verifyingId === pl.id ? 'Updating…' : 'Reopen review'}
             </Button>
           ) : null}
-          <Button variant="ghost" size="sm" onClick={() => setSelectedPlayer(pl)}>View</Button>
-        </div>
+        </ActionGroup>
       </div>
     ))
   )
@@ -246,8 +247,8 @@ export function PlayerManagementPage() {
           <div className="mt-1 text-xs text-muted">{u.email}</div>
           <div className="flex items-center gap-2">
             <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] font-semibold text-text">{u.badge}</span>
-            <Button variant="ghost" size="sm" onClick={() => u.id && handleResetPassword(u.id)} disabled={resettingId === u.id}>
-              {resettingId === u.id ? 'Resetting...' : 'Reset Password'}
+            <Button variant="accent-soft" size="xs" onClick={() => u.id && handleResetPassword(u.id)} disabled={resettingId === u.id}>
+              {resettingId === u.id ? 'Resetting…' : 'Reset password'}
             </Button>
           </div>
         </div>
@@ -295,10 +296,10 @@ export function PlayerManagementPage() {
                     <a href={p.partnershipProofUrl} target="_blank" rel="noreferrer" className="text-xs text-accent underline">View school ID</a>
                   ) : null}
                 </div>
-                <div className="flex gap-2">
-                  <Button size="sm" disabled={verifyingId === p.id} onClick={() => reviewPartnership(p.id, 'verified')}>Verify</Button>
-                  <Button size="sm" variant="danger" disabled={verifyingId === p.id} onClick={() => reviewPartnership(p.id, 'rejected')}>Reject</Button>
-                </div>
+                <ActionGroup>
+                  <Button size="xs" variant="success-soft" disabled={verifyingId === p.id} onClick={() => reviewPartnership(p.id, 'verified')}>Verify</Button>
+                  <Button size="xs" variant="danger-soft" disabled={verifyingId === p.id} onClick={() => reviewPartnership(p.id, 'rejected')}>Reject</Button>
+                </ActionGroup>
               </div>
             ))}
           </div>
@@ -320,10 +321,12 @@ export function PlayerManagementPage() {
         </Card>
       </div>
 
-      <div className="flex flex-wrap gap-2">
-        <button type="button" onClick={() => setActiveView('players')} className={`rounded-full px-3 py-1 text-xs font-semibold transition ${activeView === 'players' ? 'bg-accent/20 text-accent' : 'bg-white/5 text-muted'}`}>Players</button>
-        <button type="button" onClick={() => setActiveView('staff')} className={`rounded-full px-3 py-1 text-xs font-semibold transition ${activeView === 'staff' ? 'bg-accent/20 text-accent' : 'bg-white/5 text-muted'}`}>Staff</button>
-      </div>
+      <FilterTabs
+        ariaLabel="Show players or staff"
+        value={activeView}
+        onChange={setActiveView}
+        options={[{ value: 'players', label: 'Players' }, { value: 'staff', label: 'Staff' }]}
+      />
 
       <Card className="p-4">
         {activeView === 'players' ? (
@@ -366,11 +369,11 @@ export function PlayerManagementPage() {
                     </select>
                   </div>
                   <div className="flex items-end gap-2">
-                    <Button onClick={handleAddPlayer} disabled={addingPlayer} className="w-full">
-                      {addingPlayer ? 'Creating...' : 'Create Player'}
-                    </Button>
-                    <Button variant="ghost" onClick={() => { setShowAddForm(false); setNewPlayerName(''); setNewPlayerEmail(''); setNewPlayerLevel('Beginner') }} className="w-full">
+                    <Button variant="ghost" onClick={() => { setShowAddForm(false); setNewPlayerName(''); setNewPlayerEmail(''); setNewPlayerLevel('Beginner') }} className="flex-1">
                       Cancel
+                    </Button>
+                    <Button onClick={handleAddPlayer} disabled={addingPlayer} className="flex-1">
+                      {addingPlayer ? 'Creating…' : 'Create player'}
                     </Button>
                   </div>
                 </div>
@@ -452,11 +455,11 @@ export function PlayerManagementPage() {
                     </select>
                   </div>
                   <div className="flex items-end gap-2">
-                    <Button onClick={handleAddStaff} disabled={addingStaff} className="w-full">
-                      {addingStaff ? 'Creating...' : 'Create Staff'}
-                    </Button>
-                    <Button variant="ghost" onClick={() => { setShowAddStaffForm(false); setNewStaffName(''); setNewStaffEmail(''); setNewStaffRole('Marshal') }} className="w-full">
+                    <Button variant="ghost" onClick={() => { setShowAddStaffForm(false); setNewStaffName(''); setNewStaffEmail(''); setNewStaffRole('Marshal') }} className="flex-1">
                       Cancel
+                    </Button>
+                    <Button onClick={handleAddStaff} disabled={addingStaff} className="flex-1">
+                      {addingStaff ? 'Creating…' : 'Create staff'}
                     </Button>
                   </div>
                 </div>
@@ -474,12 +477,18 @@ export function PlayerManagementPage() {
               </div>
               <div>
                 <label className="block text-xs font-semibold text-muted mb-1">Filter by Role</label>
-                <div className="flex flex-wrap gap-2">
-                  <button type="button" onClick={() => setStaffFilter('all')} className={`rounded-full px-3 py-1 text-xs font-semibold transition ${staffFilter === 'all' ? 'bg-accent/20 text-accent' : 'bg-white/5 text-muted'}`}>All</button>
-                  <button type="button" onClick={() => setStaffFilter('Marshal')} className={`rounded-full px-3 py-1 text-xs font-semibold transition ${staffFilter === 'Marshal' ? 'bg-accent/20 text-accent' : 'bg-white/5 text-muted'}`}>Marshal</button>
-                  <button type="button" onClick={() => setStaffFilter('Registrar')} className={`rounded-full px-3 py-1 text-xs font-semibold transition ${staffFilter === 'Registrar' ? 'bg-accent/20 text-accent' : 'bg-white/5 text-muted'}`}>Registrar</button>
-                  <button type="button" onClick={() => setStaffFilter('Admin')} className={`rounded-full px-3 py-1 text-xs font-semibold transition ${staffFilter === 'Admin' ? 'bg-accent/20 text-accent' : 'bg-white/5 text-muted'}`}>Admin</button>
-                </div>
+                <FilterTabs
+                  size="sm"
+                  ariaLabel="Filter staff by role"
+                  value={staffFilter}
+                  onChange={setStaffFilter}
+                  options={[
+                    { value: 'all', label: 'All' },
+                    { value: 'Marshal', label: 'Marshals' },
+                    { value: 'Registrar', label: 'Registrars' },
+                    { value: 'Admin', label: 'Admins' },
+                  ]}
+                />
               </div>
             </div>
 
@@ -500,7 +509,7 @@ export function PlayerManagementPage() {
                   selectedPlayer.verificationStatus === 'pending_review' ? (
                     <>
                       <Button
-                        variant="secondary"
+                        variant="success-soft"
                         size="sm"
                         onClick={() => selectedPlayer.id && handleVerifyPlayer(selectedPlayer.id)}
                         disabled={verifyingId === selectedPlayer.id}
@@ -508,7 +517,7 @@ export function PlayerManagementPage() {
                         {verifyingId === selectedPlayer.id ? 'Verifying…' : 'Verify ID'}
                       </Button>
                       <Button
-                        variant="ghost"
+                        variant="danger-soft"
                         size="sm"
                         onClick={() => selectedPlayer.id && handleRejectPlayer(selectedPlayer.id)}
                         disabled={verifyingId === selectedPlayer.id}
@@ -536,7 +545,7 @@ export function PlayerManagementPage() {
                     </Button>
                   ) : null
                 ) : null}
-                <button type="button" onClick={() => setSelectedPlayer(null)} className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-sm transition hover:bg-white/10">Close</button>
+                <Button variant="ghost" size="sm" onClick={() => setSelectedPlayer(null)}>Close</Button>
               </div>
             </div>
             <div className="mt-4 grid gap-4 md:grid-cols-[1fr_1fr]">
