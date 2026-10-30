@@ -18,7 +18,9 @@ const invalid = verifyAuthToken('not-a-valid-token')
 assert.equal(invalid, null)
 
 assert.equal(validateGoogleLoginEligibility(null).allowed, false)
-assert.equal(validateGoogleLoginEligibility({ email: 'employee@chillshooters.test', password: 'hashedpw' }).allowed, false)
+// A password account with the same verified email may sign in with Google after confirming.
+assert.equal(validateGoogleLoginEligibility({ email: 'employee@chillshooters.test', password: 'hashedpw' }).allowed, true)
+assert.equal(validateGoogleLoginEligibility({ email: 'employee@chillshooters.test', password: 'hashedpw' }).linksPasswordAccount, true)
 assert.equal(validateGoogleLoginEligibility({ email: 'player@chillshooters.test', password: null, authProvider: 'google' }).allowed, true)
 
 assert.equal(validatePasswordRequirements('weak').valid, false)

@@ -28,7 +28,7 @@ import { LANDING_PREFILL_KEY, type LandingReservationPrefill } from '../auth/Lan
 import { Card } from '../../components/ui/Card'
 import { Input } from '../../components/ui/Input'
 import { Button } from '../../components/ui/Button'
-import { calculatePackagePricing } from '../../utils/packagePricing'
+import { calculatePackagePricing, packageEquipmentQty } from '../../utils/packagePricing'
 import { formatDiscountTargetLabel, resolvePackageDiscountConfig } from '../../utils/packagePricing'
 import { loadPackagePrefill } from '../../utils/packagePrefill'
 import { modelOf } from '../../utils/inventoryModels'
@@ -65,6 +65,7 @@ type RentalPackage = {
   weaponCount: number
   weaponIds: string[]
   equipmentIds: string[]
+  equipmentQuantities: Record<string, number>
   equipmentCount: number
   status: string
 }
@@ -652,6 +653,7 @@ export function ReservationCalendarPage() {
             weaponCount: typeof d.weaponCount === 'number' && d.weaponCount > 0 ? d.weaponCount : (Array.isArray(d.weaponIds) ? d.weaponIds.length : 0),
             weaponIds: Array.isArray(d.weaponIds) ? d.weaponIds : [],
             equipmentIds: Array.isArray(d.equipmentIds) ? d.equipmentIds : [],
+            equipmentQuantities: d.equipmentQuantities && typeof d.equipmentQuantities === 'object' ? d.equipmentQuantities : {},
             equipmentCount: (d.weaponIds?.length || 0) + (d.equipmentIds?.length || 0),
             status: d.status || 'active',
           }))
@@ -792,17 +794,18 @@ export function ReservationCalendarPage() {
     )
   }, [packages])
 
+  // Pre-pick a package only in package mode; choosing Custom Selection clears the package and
+  // must not be undone by this effect.
   useEffect(() => {
-    if (packages.length > 0 && !selectedPackageId) {
+    if (selectionMode === 'package' && packages.length > 0 && !selectedPackageId) {
       const prefillId = packagePrefill?.selectedPackageId
       if (prefillId && packages.find((p) => p.id === prefillId)) {
         setSelectedPackageId(prefillId)
-        setSelectionMode('package')
       } else if (cheapestPackage) {
         setSelectedPackageId(cheapestPackage.id)
       }
     }
-  }, [packages, packagePrefill?.selectedPackageId, selectedPackageId, cheapestPackage])
+  }, [packages, packagePrefill?.selectedPackageId, selectedPackageId, cheapestPackage, selectionMode])
 
   const selectedPackage = useMemo(
     () => packages.find((p) => p.id === selectedPackageId) ?? cheapestPackage,
@@ -1030,12 +1033,20 @@ export function ReservationCalendarPage() {
     return equipment.filter((e) => customEquipmentIds.includes(e.id))
   }, [equipment, customEquipmentIds])
 
+  // Pieces of an equipment model each player gets in the selected package (set by the admin).
+  const equipmentPerPlayer = useCallback((model: string) => {
+    if (!selectedPackage) return 1
+    const ids = selectedPackage.equipmentIds.filter((id) => rentalEquipment.find((item) => item.id === id)?.model === model)
+    return Math.max(1, ...ids.map((id) => packageEquipmentQty(selectedPackage, id)))
+  }, [selectedPackage, rentalEquipment])
+
   // Package shortages for the selected date/slot. Custom picks are individual free pieces.
   const equipmentStockCheck = useMemo(() => {
     if (selectionMode !== 'package' || !selectedPackage || !slotStock) return []
     const checks = packageEquipmentModels.map((model) => {
       const available = freeOfModel(equipmentGroups, model)
-      return { name: model, available, required: players, ok: available >= players }
+      const required = players * equipmentPerPlayer(model)
+      return { name: model, available, required, ok: available >= required }
     })
     if (packageWeaponModels.length > 0) {
       const weaponStock = packageWeaponStock(selectedPackage)
@@ -1044,7 +1055,7 @@ export function ReservationCalendarPage() {
       }
     }
     return checks
-  }, [selectionMode, selectedPackage, slotStock, packageEquipmentModels, packageWeaponModels, freeOfModel, equipmentGroups, players, packageWeaponStock])
+  }, [selectionMode, selectedPackage, slotStock, packageEquipmentModels, packageWeaponModels, freeOfModel, equipmentGroups, players, packageWeaponStock, equipmentPerPlayer])
 
   const hasInsufficientEquipmentStock = equipmentStockCheck.some((item) => !item.ok)
 
@@ -1098,7 +1109,7 @@ export function ReservationCalendarPage() {
       discountAmount: packagePricing.discountAmount,
       equipmentTotalPerPlayer,
       sessionMultiplier,
-      savings: Math.max(0, packagePricing.preDiscountTotal - packagePricing.discountAmount),
+      savings: Math.max(0, packagePricing.discountAmount),
       originalTotal: packagePricing.preDiscountTotal,
       mode: 'package' as const,
       entranceFeeTotal: packagePricing.entranceFeeTotal,
@@ -2160,20 +2171,20 @@ export function ReservationCalendarPage() {
                       <FiShield /> <span>Included Weapons &amp; Equipment</span>
                     </div>
                     <p className="mt-1 text-xs text-muted">
-                      Each player gets one of every item below. Optionally pick the exact pieces you want; any you don't pick are assigned automatically from what's free.
+                      Each player gets the items below. Optionally pick the exact pieces you want; any you don't pick are assigned automatically from what's free.
                     </p>
                     <PiecePicker
                       groups={[...packageWeaponGroups, ...packageEquipmentGroups]}
                       selected={pickedUnitIds}
                       onToggle={togglePickedUnit}
                       limitFor={(model) => {
-                        if (packageEquipmentModels.includes(model)) return players
+                        if (packageEquipmentModels.includes(model)) return players * equipmentPerPlayer(model)
                         // Weapons share one allowance across the package's weapon models.
                         const pickedHere = pickedUnitIds.filter((id) => rentalWeapons.find((w) => w.id === id)?.model === model).length
                         return pickedHere + Math.max(0, packageWeaponsNeeded - pickedPackageWeapons)
                       }}
                       note={(group) => (packageEquipmentModels.includes(group.model)
-                        ? `${players} needed (1 per player)`
+                        ? `${players * equipmentPerPlayer(group.model)} needed (${equipmentPerPlayer(group.model)} per player)`
                         : `${packageWeaponsNeeded} rental weapon${packageWeaponsNeeded === 1 ? '' : 's'} needed for the group`)}
                     />
                   </Card>
@@ -2521,7 +2532,7 @@ export function ReservationCalendarPage() {
                         {reservationSummary.customWeapons.map((w) => (
                           <div key={w.id} className="flex items-center justify-between text-sm">
                             <span>{w.name}</span>
-                            <span className="text-accent">₱{w.price}/player</span>
+                            <span className="text-accent">₱{w.price} each</span>
                           </div>
                         ))}
                       </div>
@@ -2535,7 +2546,7 @@ export function ReservationCalendarPage() {
                         {reservationSummary.customEquipment.map((e) => (
                           <div key={e.id} className="flex items-center justify-between text-sm">
                             <span>{e.name}</span>
-                            <span className="text-accent">₱{e.price}/player</span>
+                            <span className="text-accent">₱{e.price} each</span>
                           </div>
                         ))}
                       </div>

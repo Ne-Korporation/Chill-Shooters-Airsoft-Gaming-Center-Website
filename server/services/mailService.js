@@ -14,7 +14,7 @@ const pass = process.env.EMAIL_PASS || ''
 const brevoApiKey = process.env.BREVO_API_KEY || ''
 
 // Parses "Name <email@x.com>" or a bare address into Brevo's { name, email } shape.
-function parseAddress(value) {
+export function parseAddress(value) {
   const match = String(value || '').match(/^\s*(.*?)\s*<([^>]+)>\s*$/)
   if (match) return { name: match[1] || undefined, email: match[2].trim() }
   return { email: String(value || '').trim() }

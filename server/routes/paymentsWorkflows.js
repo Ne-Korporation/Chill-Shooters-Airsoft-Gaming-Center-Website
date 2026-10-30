@@ -10,6 +10,7 @@ import {
 import { recordVerifiedStripePayment } from '../utils/stripePayments.js'
 import { emailPaymentEvent } from '../services/notificationEmails.js'
 import { syncReservationPaymentState } from '../utils/paymentProgress.js'
+import { normalizePhPhone } from '../utils/phone.js'
 
 const router = express.Router()
 const SETTINGS_COLLECTION = 'site_settings'
@@ -199,9 +200,9 @@ router.get('/payments/gcash-qr', async (_req, res) => {
 
 router.put('/payments/gcash-qr', requireAuth, requireRole('admin'), async (req, res) => {
   const imageUrl = String(req.body?.imageUrl || '').trim()
-  const phoneNumber = String(req.body?.phoneNumber || '').trim()
+  const phoneNumber = normalizePhPhone(req.body?.phoneNumber)
   if (!imageUrl) return res.status(400).json({ ok: false, error: 'imageUrl is required' })
-  if (!phoneNumber) return res.status(400).json({ ok: false, error: 'phoneNumber is required' })
+  if (!phoneNumber) return res.status(400).json({ ok: false, error: 'Enter the GCash number as +63-9XX-XXX-XXXX.' })
 
   try {
     const db = await getDb()

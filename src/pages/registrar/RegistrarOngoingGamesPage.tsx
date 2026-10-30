@@ -36,6 +36,14 @@ const normalizeStatus = (value: any): GameplayStatus => {
   return 'Scheduled'
 }
 
+// Game day from a "YYYY-MM-DD • slot" schedule, or '' when it can't be read.
+const gameDayOf = (doc: GameplayDoc) => {
+  const day = String(doc.Schedule || '').slice(0, 10)
+  return /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : ''
+}
+
+const manilaToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(new Date())
+
 const statusTone = (status: GameplayStatus) => {
   switch (status) {
     case 'Ongoing':
@@ -212,7 +220,7 @@ export function RegistrarOngoingGamesPage() {
     <div className="space-y-4">
       <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
         <div className="space-y-2">
-          <div className="text-sm font-medium text-accent">Registrar</div>
+          <div className="text-sm font-medium text-accent">Games</div>
           <h1 className="text-3xl font-bold">Ongoing Games</h1>
           <p className="text-muted text-sm">Confirmed reservations appear here as gameplay records with start, complete, and archive actions.</p>
         </div>
@@ -251,7 +259,6 @@ export function RegistrarOngoingGamesPage() {
             <div className="flex items-center gap-2 text-sm font-bold">
               <FiShield /> <span>Game queue</span>
             </div>
-            <div className="mt-1 text-xs text-muted">Rows are loaded from the `gameplay` collection.</div>
           </div>
 
           <div className="md:w-[420px]">
@@ -307,6 +314,8 @@ export function RegistrarOngoingGamesPage() {
               ) : (
                 filtered.map((doc) => {
                   const status = normalizeStatus(doc.Status)
+                  const gameDay = gameDayOf(doc)
+                  const beforeGameDay = Boolean(gameDay) && gameDay > manilaToday()
                   return (
                     <tr key={rowId(doc)} className="border-t border-white/5">
                       <td className="py-3 pr-3">
@@ -345,7 +354,10 @@ export function RegistrarOngoingGamesPage() {
                       </td>
                       <td className="py-3 pr-3">
                         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                          {status === 'Scheduled' ? (
+                          {status === 'Scheduled' && beforeGameDay ? (
+                            <span className="text-xs text-muted">Starts on {gameDay}</span>
+                          ) : null}
+                          {status === 'Scheduled' && !beforeGameDay ? (
                             <Button variant="primary" className="w-full sm:w-auto" onClick={() => startGame(doc)}>
                               Start
                               <FiChevronRight />

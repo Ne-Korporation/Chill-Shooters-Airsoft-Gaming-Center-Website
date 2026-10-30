@@ -113,9 +113,10 @@ export function MyWeaponsAndEquipmentPage() {
         source: 'player',
         approvalStatus: 'pending',
       })
-      sendRoleNotifications(addNotification, {
+      // The server notifies staff about player submissions itself.
+      if (user?.role !== 'user') sendRoleNotifications(addNotification, {
         roles: ['admin', 'registrar', 'marshal'],
-        type: 'equipment_rejected',
+        type: 'equipment_submitted',
         title: 'New Equipment Request',
         message: `A player submitted equipment request "${equipmentForm.name.trim()}" for review.`,
         linkedResourceId: created?.data?.id,
@@ -154,9 +155,10 @@ export function MyWeaponsAndEquipmentPage() {
         source: 'player',
         approvalStatus: 'pending',
       })
-      sendRoleNotifications(addNotification, {
+      // The server notifies staff about player submissions itself.
+      if (user?.role !== 'user') sendRoleNotifications(addNotification, {
         roles: ['admin', 'registrar', 'marshal'],
-        type: 'weapon_rejected',
+        type: 'weapon_submitted',
         title: 'New Weapon Request',
         message: `A player submitted weapon request "${weaponForm.name.trim()}" for review.`,
         linkedResourceId: created?.data?.id,

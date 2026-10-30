@@ -21,6 +21,8 @@ export type PackageLike = {
   settledAmount?: number
   // Number of weapons the package gives (0 / undefined = count of weaponIds)
   weaponCount?: number
+  // Pieces of each equipment item every player gets, keyed by equipment id (default 1)
+  equipmentQuantities?: Record<string, number>
 }
 
 export type PricedItem = {
@@ -91,6 +93,14 @@ export function resolvePackageDiscountConfig(pkg: PackageLike): PackageDiscountC
     value: clampPct(Number(pkg.discountPct ?? 0)),
     targets: Number(pkg.discountPct ?? 0) > 0 ? ['package_total'] : targets,
   }
+}
+
+export const MAX_EQUIPMENT_PER_PLAYER = 10
+
+/** Pieces of one equipment item each player gets. Mirrors server/utils/packageQuantities.js. */
+export function packageEquipmentQty(pkg: Pick<PackageLike, 'equipmentQuantities'>, equipmentId: string): number {
+  const raw = Math.round(Number(pkg.equipmentQuantities?.[equipmentId]))
+  return Number.isFinite(raw) && raw >= 1 ? Math.min(raw, MAX_EQUIPMENT_PER_PLAYER) : 1
 }
 
 /** Number of weapons a package offers: the typed weaponCount, else the count of picked weapons. */
@@ -202,9 +212,9 @@ export function calculatePackagePricing({
   const rentedWeaponCount = Math.max(0, packageWeaponCount * players - Math.max(0, Math.round(ownWeapons)))
 
   const equipmentUnitTotal = (pkg.equipmentIds || [])
-    .map((equipmentId) => equipment.find((item) => item.id === equipmentId))
-    .filter(Boolean)
-    .reduce((sum, item) => sum + Number(item?.price || 0), 0)
+    .map((equipmentId) => ({ item: equipment.find((item) => item.id === equipmentId), qty: packageEquipmentQty(pkg, equipmentId) }))
+    .filter(({ item }) => Boolean(item))
+    .reduce((sum, { item, qty }) => sum + Number(item?.price || 0) * qty, 0)
 
   const basePriceTotal = Number(pkg.basePrice || 0) * players * sessionMultiplier
   const weaponsTotal = averageWeaponPrice * rentedWeaponCount * sessionMultiplier

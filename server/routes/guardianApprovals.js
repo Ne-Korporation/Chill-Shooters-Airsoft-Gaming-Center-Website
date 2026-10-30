@@ -175,6 +175,7 @@ router.get('/guardian-approvals/:token', async (req, res) => {
           guardianSignatureImage: waiver.guardianSignatureImage || '',
           termsAccepted: Boolean(waiver.termsAccepted),
           guardianConsent: Boolean(waiver.guardianConsent),
+          waiverText: waiver.waiverText || null,
         } : null,
       },
     })

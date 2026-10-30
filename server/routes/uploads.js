@@ -73,7 +73,8 @@ async function uploadToCloudinary(fileBuffer, filename) {
     const uploadStream = cl.uploader.upload_stream(
       {
         resource_type: 'auto',
-        public_id: `cs-${Date.now()}-${filename}`,
+        // Cloudinary appends the format itself, so drop the extension to avoid "receipt.png.png".
+        public_id: `cs-${Date.now()}-${String(filename).replace(/\.[^.]+$/, '')}`,
       },
       (err, result) => {
         if (err) return reject(err)

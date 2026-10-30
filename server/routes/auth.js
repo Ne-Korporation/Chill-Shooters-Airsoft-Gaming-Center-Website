@@ -42,23 +42,16 @@ export function validateGoogleLoginEligibility(user) {
     }
   }
 
+  // Google has verified the address, so a password account with the same email may sign in
+  // with Google too, once the player confirms it's theirs (see confirmExisting below).
   const hasPassword = typeof user.password === 'string' && user.password.length > 0
+  return { allowed: true, linksPasswordAccount: hasPassword && user.authProvider !== 'google' }
+}
 
-  if (user.authProvider === 'google' || user.password === null || user.password === undefined) {
-    return { allowed: true }
-  }
-
-  if (hasPassword) {
-    return {
-      allowed: false,
-      error: 'This email is registered with a password. Please use the email/password sign-in option.',
-    }
-  }
-
-  return {
-    allowed: false,
-    error: 'This email is not registered for Google sign-in. Please use a registered account or contact support.',
-  }
+// Records that a password account has also signed in with Google; the password keeps working.
+async function linkGoogleToAccount(userAccounts, user) {
+  if (user.authProvider === 'google' || user.googleLinkedAtISO) return
+  await userAccounts.updateOne({ _id: user._id }, { $set: { googleLinkedAtISO: new Date().toISOString() } })
 }
 
 // Confirms a Firebase ID token and returns the verified email/name, so the
@@ -708,6 +701,7 @@ router.post('/social-login', async (req, res) => {
     if (existed && body.confirmExisting !== true) {
       return res.json({ ok: true, needsConfirm: true, account: { name: user.name || '', email: user.email } })
     }
+    if (existed) await linkGoogleToAccount(userAccounts, user)
 
     const authUser = {
       id: user.id ?? (user._id ? String(user._id) : undefined),
@@ -743,10 +737,6 @@ router.post('/social-register', async (req, res) => {
     const existing = await userAccounts.findOne(sameEmailFilter(normalizedEmail))
 
     if (existing) {
-      if (existing.password !== null && existing.password !== undefined && existing.authProvider !== 'google') {
-        return res.status(409).json({ ok: false, error: 'This email is registered with a password. Please use the email/password sign-in option.' })
-      }
-
       const eligibility = validateGoogleLoginEligibility(existing)
       if (!eligibility.allowed) {
         return res.status(409).json({ ok: false, error: eligibility.error })
@@ -756,6 +746,7 @@ router.post('/social-register', async (req, res) => {
       if (body.confirmExisting !== true) {
         return res.json({ ok: true, needsConfirm: true, account: { name: existing.name || '', email: existing.email } })
       }
+      await linkGoogleToAccount(userAccounts, existing)
 
       const authUser = {
         id: existing.id ?? (existing._id ? String(existing._id) : undefined),

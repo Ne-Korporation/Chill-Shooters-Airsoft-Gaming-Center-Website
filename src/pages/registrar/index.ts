@@ -4,5 +4,4 @@ export { RegistrarOngoingGamesPage } from './RegistrarOngoingGamesPage'
 export { RegistrarArchivedGamesPage } from './RegistrarArchivedGamesPage'
 export { RegistrarAvailedPackagesPage } from './RegistrarAvailedPackagesPage'
 export { RegistrarSubmittedWaiversPage } from './RegistrarSubmittedWaiversPage'
-export { RegistrarSubmittedPaymentsPage } from './RegistrarSubmittedPaymentsPage'
 

@@ -19,7 +19,7 @@ import { Card } from '../../components/ui/Card'
 import { Input } from '../../components/ui/Input'
 import { Button } from '../../components/ui/Button'
 import { apiGet } from '../../utils/apiClient'
-import { calculatePackagePricing, resolvePackageDiscountConfig } from '../../utils/packagePricing'
+import { calculatePackagePricing, packageEquipmentQty, resolvePackageDiscountConfig } from '../../utils/packagePricing'
 import { savePackagePrefill, type PackageRecommendationPrefill } from '../../utils/packagePrefill'
 import { modelOf } from '../../utils/inventoryModels'
 
@@ -45,6 +45,8 @@ type RentalPackage = {
   weaponCount: number
   weaponIds: string[]
   equipmentIds: string[]
+  // Pieces of each equipment item every player gets (default 1)
+  equipmentQuantities?: Record<string, number>
   tier?: string
   status?: string
 }
@@ -194,7 +196,8 @@ function buildRows<T extends { id: string; name: string; category: string; price
 
 function getIncludedItems(pkg: RentalPackage, weapons: WeaponItem[], equipment: EquipmentItem[]) {
   const weaponRows = buildRows(pkg.weaponIds, weapons)
-  const equipmentRows = buildRows(pkg.equipmentIds, equipment)
+  // Equipment rows show how many of each item a player gets.
+  const equipmentRows = buildRows(pkg.equipmentIds, equipment).map((row) => ({ ...row, qty: packageEquipmentQty(pkg, row.item.id) }))
   return {
     weaponRows,
     equipmentRows,
@@ -291,6 +294,7 @@ export function PackageRecommendationPage() {
               weaponCount: typeof d.weaponCount === 'number' && d.weaponCount > 0 ? d.weaponCount : weaponIds.length,
               weaponIds,
               equipmentIds: Array.isArray(d.equipmentIds) ? d.equipmentIds : [],
+              equipmentQuantities: d.equipmentQuantities && typeof d.equipmentQuantities === 'object' ? d.equipmentQuantities : {},
               tier: d.tier || 'starter',
               status: d.status || 'active',
             }

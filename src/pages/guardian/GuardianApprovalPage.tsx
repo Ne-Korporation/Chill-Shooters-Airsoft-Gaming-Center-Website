@@ -6,7 +6,7 @@ import { FiCheckCircle, FiShield, FiXCircle } from 'react-icons/fi'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { apiGet, apiPost } from '../../utils/apiClient'
-import { OFFICIAL_WAIVER_TEXT } from '../../utils/waiverText'
+import { signedWaiverText, type WaiverText } from '../../utils/waiverText'
 
 type ApprovalData = {
   status: 'pending' | 'approved' | 'declined'
@@ -30,6 +30,7 @@ type ApprovalData = {
     guardianSignatureImage: string
     termsAccepted: boolean
     guardianConsent: boolean
+    waiverText?: WaiverText | null
   } | null
 }
 
@@ -139,14 +140,14 @@ export function GuardianApprovalPage() {
                 <div className="text-xs uppercase tracking-widest text-muted">Signed waiver</div>
                 <p className="mt-1 text-xs text-muted">Submitted {formatDate(data.waiver.submittedAtISO)}</p>
                 <div className="mt-3 max-h-72 space-y-2 overflow-y-auto rounded-xl border border-white/10 bg-white/5 p-3 text-xs leading-relaxed">
-                  <p className="font-semibold">{OFFICIAL_WAIVER_TEXT.preamble}</p>
-                  <p>{OFFICIAL_WAIVER_TEXT.intro}</p>
+                  <p className="font-semibold">{signedWaiverText(data.waiver).preamble}</p>
+                  <p>{signedWaiverText(data.waiver).intro}</p>
                   <ol className="list-decimal space-y-2 pl-5">
-                    {OFFICIAL_WAIVER_TEXT.clauses.map((clause, index) => <li key={index}>{clause}</li>)}
+                    {signedWaiverText(data.waiver).clauses.map((clause, index) => <li key={index}>{clause}</li>)}
                   </ol>
-                  <p className="font-semibold">{OFFICIAL_WAIVER_TEXT.closing}</p>
-                  <p className="font-semibold">{OFFICIAL_WAIVER_TEXT.guardianTitle}</p>
-                  <p>{OFFICIAL_WAIVER_TEXT.guardianCertification}</p>
+                  <p className="font-semibold">{signedWaiverText(data.waiver).closing}</p>
+                  <p className="font-semibold">{signedWaiverText(data.waiver).guardianTitle}</p>
+                  <p>{signedWaiverText(data.waiver).guardianCertification}</p>
                 </div>
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
                   {[['Player signature', data.waiver.signatureImage], ['Guardian signature', data.waiver.guardianSignatureImage]].map(([label, src]) => (

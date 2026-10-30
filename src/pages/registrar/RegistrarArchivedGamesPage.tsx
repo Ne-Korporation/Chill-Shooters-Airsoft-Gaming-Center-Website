@@ -114,7 +114,7 @@ export function RegistrarArchivedGamesPage() {
     <div className="space-y-4">
       <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
         <div className="space-y-2">
-          <div className="text-sm font-medium text-accent">Registrar</div>
+          <div className="text-sm font-medium text-accent">Games</div>
           <h1 className="text-3xl font-bold">Archived Games</h1>
           <p className="text-muted text-sm">Completed games that have been archived to the game history.</p>
         </div>

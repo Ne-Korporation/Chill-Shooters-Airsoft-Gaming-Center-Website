@@ -255,8 +255,9 @@ export function AdminAuditLogsPage() {
             ) : visible.length === 0 ? (
               <div className="p-6 text-sm text-muted">No audit logs found for selected filters.</div>
             ) : (
-              visible.map((log) => (
-                <div key={`${log.id}-${log.action}`} className="grid grid-cols-12 items-center px-3 py-3">
+              visible.map((log, index) => (
+                // Records without an id share a fallback like "EQ-UNKNOWN", so include the position.
+                <div key={`${log.id}-${log.action}-${index}`} className="grid grid-cols-12 items-center px-3 py-3">
                   <div className="col-span-2 text-sm font-semibold">{log.id}</div>
                   <div className="col-span-2 text-left text-sm text-muted">{log.action}</div>
                   <div className="col-span-3">

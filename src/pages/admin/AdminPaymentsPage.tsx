@@ -7,6 +7,7 @@ import { Input } from '../../components/ui/Input'
 import toast from 'react-hot-toast'
 import { apiBase, apiDelete, apiGet, apiPut, getApiAuthHeaders } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
+import { formatPhPhone, isValidPhPhone, PH_PHONE_PLACEHOLDER } from '../../utils/phone'
 import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
 
 
@@ -67,6 +68,8 @@ const StatusPill = ({ status }: { status: PaymentStatus }) => {
 
 export function AdminPaymentsPage() {
   const { user } = useAuth()
+  // Registrars verify payments here too; the GCash QR and bank account settings are admin-only.
+  const isAdmin = user?.role === 'admin'
   const [active, setActive] = React.useState<PaymentStatus | 'all'>('all')
   const [payments, setPayments] = React.useState<PaymentItem[]>([])
   const [loading, setLoading] = useState(true)
@@ -162,8 +165,8 @@ export function AdminPaymentsPage() {
       toast.error('Please choose a QR image.')
       return
     }
-    if (!phoneNumber.trim()) {
-      toast.error('GCash phone number is required.')
+    if (!isValidPhPhone(phoneNumber)) {
+      toast.error('Enter the GCash number as +63-9XX-XXX-XXXX.')
       return
     }
     if (!qrFile.type.startsWith('image/')) {
@@ -211,7 +214,7 @@ export function AdminPaymentsPage() {
     setQrModalOpen(false)
   }
 
-  const qrUploadReady = Boolean(qrFile && phoneNumber.trim())
+  const qrUploadReady = Boolean(qrFile && isValidPhPhone(phoneNumber))
 
 
 
@@ -220,6 +223,11 @@ export function AdminPaymentsPage() {
   const filtered = payments.filter((payment) => (active === 'all' ? true : payment.status === active))
   const reviewCount = payments.filter((payment) => payment.status === 'review').length
   const pendingValue = payments.filter((payment) => payment.status === 'pending').reduce((sum, p) => sum + p.amount, 0)
+  const todayLabel = new Date().toDateString()
+  const completedToday = payments.filter((payment) => {
+    const time = Date.parse(payment.date)
+    return (payment.status === 'paid' || payment.status === 'confirmed') && Number.isFinite(time) && new Date(time).toDateString() === todayLabel
+  }).length
 
   const [updatingId, setUpdatingId] = useState('')
 
@@ -285,10 +293,11 @@ export function AdminPaymentsPage() {
         </Card>
         <Card className="p-4">
           <div className="text-xs uppercase tracking-widest text-muted">Completed today</div>
-          <div className="mt-2 text-2xl font-bold text-success">2</div>
+          <div className="mt-2 text-2xl font-bold text-success">{completedToday}</div>
         </Card>
       </div>
 
+      {isAdmin && (
       <Card className="p-4">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div className="max-w-2xl">
@@ -311,11 +320,11 @@ export function AdminPaymentsPage() {
             <div className="text-xs uppercase tracking-widest text-muted">GCash phone number</div>
             <input
               value={phoneNumber}
-              onChange={(e) => setPhoneNumber(e.target.value.replace(/\D/g, ''))}
-              placeholder="e.g. 09171234567"
+              onChange={(e) => setPhoneNumber(formatPhPhone(e.target.value))}
+              placeholder={PH_PHONE_PLACEHOLDER}
               className="mt-2 w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-white placeholder:text-white/40 focus:outline-none"
-              inputMode="numeric"
-              pattern="[0-9]*"
+              inputMode="tel"
+              autoComplete="tel"
             />
           </div>
           <div className="rounded-2xl border border-white/10 bg-black/20 p-4 text-sm text-muted">
@@ -344,8 +353,9 @@ export function AdminPaymentsPage() {
           </div>
         </div>
       </Card>
+      )}
 
-      {qrModalOpen && (
+      {isAdmin && qrModalOpen && (
         <div className="fixed inset-0 z-[99999] grid place-items-center bg-black/70 px-4 py-6 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="gcash-qr-upload-title">
           <div className="w-full max-w-2xl rounded-[1.5rem] border border-white/10 bg-[#111214] p-4 shadow-2xl">
             <div className="flex items-start justify-between gap-3">
@@ -363,10 +373,10 @@ export function AdminPaymentsPage() {
                 <div className="text-xs uppercase tracking-widest text-muted">GCash phone number</div>
                 <input
                   value={phoneNumber}
-                  onChange={(e) => setPhoneNumber(e.target.value.replace(/\D/g, ''))}
-                  placeholder="e.g. 09171234567"
-                  inputMode="numeric"
-                  pattern="[0-9]*"
+                  onChange={(e) => setPhoneNumber(formatPhPhone(e.target.value))}
+                  placeholder={PH_PHONE_PLACEHOLDER}
+                  inputMode="tel"
+                  autoComplete="tel"
                   className="mt-2 w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-white placeholder:text-white/40 focus:outline-none"
                 />
                 <div className="mt-2 text-xs text-warning">GCash phone number is required.</div>
@@ -422,6 +432,7 @@ export function AdminPaymentsPage() {
         </div>
       )}
 
+      {isAdmin && (
       <Card className="p-4">
         <div className="text-xs uppercase tracking-widest text-muted">Bank transfer account</div>
         <div className="mt-2 text-sm text-muted">Shown to players who choose Bank Transfer on the payment page.</div>
@@ -440,6 +451,7 @@ export function AdminPaymentsPage() {
           </Button>
         </div>
       </Card>
+      )}
 
       <Card className="p-4">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">

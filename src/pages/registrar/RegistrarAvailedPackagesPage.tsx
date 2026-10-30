@@ -89,7 +89,7 @@ export function RegistrarAvailedPackagesPage() {
       <div className="space-y-2">
         <div className="text-sm font-medium text-accent">Registrar</div>
         <h1 className="text-3xl font-bold">Availed Packages</h1>
-        <p className="text-muted text-sm">View packages that have been used/assigned, with gear readiness status (prototype).</p>
+        <p className="text-muted text-sm">View packages that have been used/assigned, with gear readiness status.</p>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-3">
