@@ -22,6 +22,9 @@ services:
         sync: false
       - key: TO_EMAIL
         value: support@chillshooters.com
+      # Vercel site URL, used in emailed links such as guardian approvals.
+      - key: PUBLIC_APP_URL
+        sync: false
       # Image uploads (announcements, GCash proofs, IDs). Without these the API
       # stores uploads in MongoDB instead, which works but is slower.
       - key: CLOUDINARY_CLOUD_NAME

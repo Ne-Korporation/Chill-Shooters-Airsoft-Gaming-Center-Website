@@ -9,6 +9,7 @@ import { apiBase, apiGet, apiPost, apiPut, getApiAuthHeaders } from '../../utils
 import { PlayerStatsCard } from '../../components/players/PlayerStatsCard'
 import { PartnershipDiscountCard } from './PartnershipDiscountCard'
 import { useAuth } from '../../context/AuthContext'
+import { ageFromBirthDate, isValidBirthDate, maxBirthDate } from '../../utils/age'
 
 type PlayerProfileDoc = {
   id?: string
@@ -26,6 +27,7 @@ type PlayerProfileDoc = {
   partnershipInstitution?: string
   partnershipEligibilityStatus?: string
   partnershipReviewReason?: string
+  birthDate?: string
 }
 
 type EquipmentItem = {
@@ -52,6 +54,7 @@ export function PlayerProfilePage() {
   const [isEditing, setIsEditing] = React.useState(false)
   const [editName, setEditName] = React.useState('')
   const [editEmail, setEditEmail] = React.useState('')
+  const [editBirthDate, setEditBirthDate] = React.useState('')
   const [equipmentList, setEquipmentList] = React.useState<EquipmentItem[]>([])
   const [equipmentLoading, setEquipmentLoading] = React.useState(false)
   const fileInputRef = React.useRef<HTMLInputElement | null>(null)
@@ -96,6 +99,7 @@ export function PlayerProfilePage() {
     if (player) {
       setEditName(player.name || '')
       setEditEmail(player.email || '')
+      setEditBirthDate(player.birthDate || '')
     }
   }, [player])
 
@@ -327,6 +331,10 @@ export function PlayerProfilePage() {
       setError('Name and email are required.')
       return
     }
+    if (editBirthDate && !isValidBirthDate(editBirthDate)) {
+      setError('Enter a valid birthday.')
+      return
+    }
 
     try {
       setSavingProfile(true)
@@ -335,9 +343,10 @@ export function PlayerProfilePage() {
       const res = await apiPut<{ ok: boolean; data: PlayerProfileDoc }>(`/api/user_accounts/${encodeURIComponent(lookupId)}`, {
         name: nextName,
         email: nextEmail,
+        ...(editBirthDate ? { birthDate: editBirthDate } : {}),
       })
       const updated = res?.data
-      const merged = { ...(player || {}), ...updated, name: nextName, email: nextEmail }
+      const merged = { ...(player || {}), ...updated, name: nextName, email: nextEmail, ...(editBirthDate ? { birthDate: editBirthDate } : {}) }
       setPlayer(merged)
       updateUser({ name: nextName, email: nextEmail })
 
@@ -498,6 +507,15 @@ export function PlayerProfilePage() {
                 placeholder="your@email.com"
               />
 
+              <Input
+                label="Birthday"
+                type="date"
+                value={editBirthDate}
+                max={maxBirthDate()}
+                onChange={(event) => setEditBirthDate(event.target.value)}
+                hint={ageFromBirthDate(editBirthDate) !== null ? `Age: ${ageFromBirthDate(editBirthDate)}` : 'Used to fill in your age on waivers.'}
+              />
+
               {error ? <div className="rounded-2xl border border-danger/20 bg-danger/10 p-3 text-sm text-danger">{error}</div> : null}
 
               <div className="flex flex-col gap-2 sm:flex-row">
@@ -544,6 +562,10 @@ export function PlayerProfilePage() {
               </div>
               <div className="text-sm text-muted">Role: {displayRole}</div>
               <div className="text-sm text-muted">Email: {displayEmail}</div>
+              <div className="text-sm text-muted">
+                Age: {ageFromBirthDate(player?.birthDate) ?? '—'}
+                {player?.birthDate ? ` (born ${new Date(`${player.birthDate}T00:00:00`).toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric' })})` : ''}
+              </div>
             </div>
           </div>
 

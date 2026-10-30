@@ -23,11 +23,12 @@ import { apiGet, apiPost } from '../../utils/apiClient'
 import { OFFICIAL_WAIVER_TEXT } from '../../utils/waiverText'
 import { printWaiverDocument } from '../../utils/waiverPrint'
 import { useAuth } from '../../context/AuthContext'
+import { ageFromBirthDate, isValidBirthDate, maxBirthDate } from '../../utils/age'
 import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
 
 type WaiverState = {
   fullName: string
-  age: number
+  birthDate: string
   guardianName: string
   guardianConsent: boolean
   consent: boolean
@@ -43,6 +44,9 @@ type SubmittedWaiver = {
   reservationId?: string
   fullName?: string
   age?: number
+  birthDate?: string
+  email?: string
+  guardianEmail?: string
   guardianName?: string
   guardianConsent?: boolean
   consent?: boolean
@@ -55,6 +59,7 @@ type SubmittedWaiver = {
   guardianIdImage?: string
   guardianSignatureImage?: string
   status?: string
+  validUntilISO?: string
   submittedAtISO?: string
   createdAtISO?: string
 }
@@ -156,13 +161,12 @@ export function WaiverPage({
 }) {
   const [state, setState] = useState<WaiverState>({
     fullName: '',
-    age: 16,
+    birthDate: '',
     guardianName: '',
     guardianConsent: false,
     consent: false,
     termsAccepted: false,
   })
-  const [ageInput, setAgeInput] = useState('16')
 
   const [submitting, setSubmitting] = useState(false)
   // Field errors stay hidden until the first submit attempt so the form starts calm.
@@ -180,6 +184,7 @@ export function WaiverPage({
   const [hasSignature, setHasSignature] = useState(false)
   const [signatureImage, setSignatureImage] = useState('')
   const [guardianPhone, setGuardianPhone] = useState('')
+  const [guardianEmail, setGuardianEmail] = useState('')
   const [guardianIdImage, setGuardianIdImage] = useState('')
   const [guardianSignatureImage, setGuardianSignatureImage] = useState('')
   const [signatureMethod, setSignatureMethod] = useState<'drawn' | 'uploaded'>('drawn')
@@ -250,26 +255,26 @@ export function WaiverPage({
           })[0] || null
 
         if (!cancelled) {
-          if (existingWaiver && String(existingWaiver.status || '').trim().toLowerCase() === 'denied') {
-            // Denied: reopen the form so the player can fix it and resubmit.
+          if (existingWaiver && ['denied', 'expired'].includes(String(existingWaiver.status || '').trim().toLowerCase())) {
+            // Denied or expired (older than 12 months): reopen the form so the player answers it again.
             // Name/age are prefilled; terms, consent and signature must be redone.
             setState({
               fullName: existingWaiver.fullName || '',
-              age: existingWaiver.age || 16,
+              birthDate: existingWaiver.birthDate || '',
               guardianName: existingWaiver.guardianName || '',
               guardianConsent: false,
               consent: false,
               termsAccepted: false,
             })
-            setAgeInput(String(existingWaiver.age || 16))
             strokesRef.current = []
             setHasSignature(false)
             setSignatureImage('')
-            // Guardian phone and ID photo are kept; signatures must be redone.
+            // Guardian phone, email and ID photo are kept; signatures must be redone.
             setGuardianPhone(existingWaiver.guardianPhone || '')
+            setGuardianEmail(existingWaiver.guardianEmail || '')
             setGuardianIdImage(existingWaiver.guardianIdImage || '')
             setGuardianSignatureImage('')
-            setWaiverStatus('denied')
+            setWaiverStatus(String(existingWaiver.status).trim().toLowerCase())
             setSubmittedWaiver(existingWaiver)
             setSubmitted(false)
             if (waiverStorageKey) localStorage.removeItem(waiverStorageKey)
@@ -277,16 +282,16 @@ export function WaiverPage({
             setState((current) => ({
               ...current,
               fullName: existingWaiver.fullName || current.fullName,
-              age: existingWaiver.age || current.age,
+              birthDate: existingWaiver.birthDate || current.birthDate,
               guardianName: existingWaiver.guardianName || current.guardianName,
               guardianConsent: Boolean(existingWaiver.guardianConsent),
               consent: Boolean(existingWaiver.consent),
               termsAccepted: Boolean(existingWaiver.termsAccepted),
             }))
-            setAgeInput(String(existingWaiver.age || 16))
             setHasSignature(Boolean(existingWaiver.hasSignature))
             setSignatureImage(existingWaiver.signatureImage || '')
             setGuardianPhone(existingWaiver.guardianPhone || '')
+            setGuardianEmail(existingWaiver.guardianEmail || '')
             setGuardianIdImage(existingWaiver.guardianIdImage || '')
             setGuardianSignatureImage(existingWaiver.guardianSignatureImage || '')
             setWaiverStatus(existingWaiver.status)
@@ -300,12 +305,12 @@ export function WaiverPage({
             setWaiverStatus(undefined)
             setSubmittedWaiver(null)
             setViewWaiverOpen(false)
-            setState({ fullName: '', age: 16, guardianName: '', guardianConsent: false, consent: false, termsAccepted: false })
-            setAgeInput('16')
+            setState((current) => ({ fullName: '', birthDate: current.birthDate, guardianName: '', guardianConsent: false, consent: false, termsAccepted: false }))
             strokesRef.current = []
             setHasSignature(false)
             setSignatureImage('')
             setGuardianPhone('')
+            setGuardianEmail('')
             setGuardianIdImage('')
             setGuardianSignatureImage('')
             if (waiverStorageKey) localStorage.removeItem(waiverStorageKey)
@@ -326,18 +331,24 @@ export function WaiverPage({
     }
   }, [user?.id, waiverIdKey, waiverStorageKey])
 
-  const isMinor = state.age < 18
+  // Age always comes from the birthday, so it can't drift from what the player entered.
+  const age = ageFromBirthDate(state.birthDate)
+  const isMinor = age !== null && age < 18
 
   const errors = useMemo(() => {
     const e: Record<string, string> = {}
     if (!state.fullName.trim()) e.fullName = 'Full name is required.'
-    if (!Number.isFinite(state.age) || state.age <= 0) e.age = 'Enter a valid age.'
+    if (!state.birthDate) e.birthDate = 'Birthday is required.'
+    else if (!isValidBirthDate(state.birthDate)) e.birthDate = 'Enter a valid birthday.'
 
     if (isMinor) {
       if (!state.guardianName.trim()) e.guardianName = 'Guardian name is required for minors.'
       if (!state.guardianConsent) e.guardianConsent = 'Guardian consent is required.'
       if (!guardianPhone.trim()) e.guardianPhone = 'Guardian phone number is required.'
       else if (!isValidPhone(guardianPhone)) e.guardianPhone = 'Enter a valid phone number.'
+      if (!guardianEmail.trim()) e.guardianEmail = 'Guardian email is required so they can approve your bookings.'
+      else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(guardianEmail.trim())) e.guardianEmail = 'Enter a valid email address.'
+      else if (guardianEmail.trim().toLowerCase() === String(user?.email || '').toLowerCase()) e.guardianEmail = "Use your parent or guardian's own email, not yours."
       if (!guardianIdImage) e.guardianIdImage = 'A photo of the guardian\'s ID is required.'
       if (!guardianSignatureImage) e.guardianSignature = 'Guardian signature is required.'
     }
@@ -347,7 +358,22 @@ export function WaiverPage({
     if (!hasSignature) e.signature = 'Signature is required.'
 
     return e
-  }, [hasSignature, isMinor, state, guardianPhone, guardianIdImage, guardianSignatureImage])
+  }, [hasSignature, isMinor, state, guardianPhone, guardianEmail, guardianIdImage, guardianSignatureImage, user?.email])
+
+  // Prefill the birthday from the player's profile when the form starts empty.
+  useEffect(() => {
+    if (!user?.id || submitted || state.birthDate) return
+    let alive = true
+    apiGet<{ ok: boolean; data: { birthDate?: string } }>(`/api/user_accounts/${encodeURIComponent(user.id)}`)
+      .then((res) => {
+        const birthDate = res?.data?.birthDate
+        if (alive && birthDate) setState((s) => (s.birthDate ? s : { ...s, birthDate }))
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [user?.id, submitted, state.birthDate])
 
   const canSubmit = Object.keys(errors).length === 0 && !submitting
   const shownErrors: Record<string, string> = showErrors ? errors : {}
@@ -642,7 +668,9 @@ export function WaiverPage({
         userId: user?.id || '',
         reservationId: localStorage.getItem('active_reservation_id') || '',
         fullName: state.fullName.trim(),
-        age: state.age,
+        email: user?.email || '',
+        birthDate: state.birthDate,
+        age,
         guardianName: state.guardianName.trim(),
         guardianConsent: state.guardianConsent,
         consent: state.consent,
@@ -652,6 +680,7 @@ export function WaiverPage({
         signatureImage: compressedPlayerSig,
         signatureMethod,
         guardianPhone: isMinor ? guardianPhone.trim() : '',
+        guardianEmail: isMinor ? guardianEmail.trim().toLowerCase() : '',
         guardianIdImage: isMinor ? compressedGuardianId : '',
         guardianSignatureImage: isMinor ? compressedGuardianSig : '',
         status: 'pending',
@@ -834,10 +863,17 @@ export function WaiverPage({
         </div>
       ) : null}
 
+      {!submitted && String(waiverStatus || '').trim().toLowerCase() === 'expired' ? (
+        <div className="rounded-2xl border border-warning/25 bg-warning/10 p-4 text-sm text-warning">
+          <div className="flex items-center gap-2 font-bold"><FiAlertTriangle /> <span>Your waiver has expired</span></div>
+          <div className="mt-1 text-xs">Waivers are valid for 12 months. Please answer and sign it again to keep booking games.</div>
+        </div>
+      ) : null}
+
       {submitted && !isEmbedded ? (
         <div className="rounded-2xl border border-success/25 bg-success/10 p-4 text-sm text-success">
           {String(waiverStatus || '').trim().toLowerCase() === 'approved'
-            ? 'Waiver approved. Your waiver is cleared for play and ready to print.'
+            ? `Waiver approved. Your waiver is cleared for play and ready to print.${submittedWaiver?.validUntilISO ? ` Valid until ${new Date(submittedWaiver.validUntilISO).toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric' })}.` : ''}`
             : 'Waiver submitted successfully. The form is closed. Use View my waiver to see your submitted waiver.'}
         </div>
       ) : null}
@@ -985,39 +1021,30 @@ export function WaiverPage({
               />
 
               <Input
-                label="Age"
-                type="number"
-                min={1}
-                inputMode="numeric"
-                value={ageInput}
+                label="Email"
+                type="email"
+                value={submittedWaiver?.email || user?.email || ''}
+                readOnly
+                disabled
+                hint="Taken from your account."
+              />
+
+              <Input
+                label="Birthday"
+                type="date"
+                max={maxBirthDate()}
+                value={state.birthDate}
                 disabled={submitted || submitting}
-                onChange={(e) => {
-                  const raw = e.target.value
-                  if (raw === '') {
-                    setAgeInput('')
-                    setState((s) => ({ ...s, age: 0 }))
-                    return
-                  }
+                onChange={(e) => setState((s) => ({ ...s, birthDate: e.target.value }))}
+                error={shownErrors.birthDate}
+              />
 
-                  if (!/^\d+$/.test(raw)) return
-
-                  const nextValue = Number(raw)
-                  setAgeInput(raw)
-                  setState((s) => ({ ...s, age: nextValue }))
-                }}
-                onBlur={() => {
-                  const currentValue = Number(ageInput)
-                  if (!ageInput || Number.isNaN(currentValue) || currentValue <= 0) {
-                    setAgeInput('1')
-                    setState((s) => ({ ...s, age: 1 }))
-                    return
-                  }
-
-                  const safeValue = clamp(currentValue, 1, 120)
-                  setAgeInput(String(safeValue))
-                  setState((s) => ({ ...s, age: safeValue }))
-                }}
-                error={shownErrors.age}
+              <Input
+                label="Age"
+                value={age !== null ? String(age) : ''}
+                placeholder="Filled in from your birthday"
+                readOnly
+                disabled
               />
             </div>
 
@@ -1073,6 +1100,16 @@ export function WaiverPage({
                     disabled={submitted || submitting}
                     onChange={(e) => setGuardianPhone(e.target.value)}
                     error={shownErrors.guardianPhone}
+                  />
+                  <Input
+                    label="Guardian Email"
+                    type="email"
+                    placeholder="e.g., maria.santos@gmail.com"
+                    value={guardianEmail}
+                    disabled={submitted || submitting}
+                    onChange={(e) => setGuardianEmail(e.target.value)}
+                    hint="Every time you book, we email your guardian to approve it."
+                    error={shownErrors.guardianEmail}
                   />
                   <IdUpload
                     label="Guardian ID"
@@ -1249,10 +1286,10 @@ export function WaiverPage({
             {(() => {
               const steps = [
                 { label: "Your name", ok: !!state.fullName.trim() },
-                { label: "Your age", ok: Number.isFinite(state.age) && state.age > 0 },
+                { label: "Your birthday", ok: !errors.birthDate },
                 ...(isMinor
                   ? [
-                      { label: "Guardian details & consent", ok: state.guardianConsent && !!state.guardianName.trim() && !errors.guardianPhone },
+                      { label: "Guardian details & consent", ok: state.guardianConsent && !!state.guardianName.trim() && !errors.guardianPhone && !errors.guardianEmail },
                       { label: "Guardian ID photo", ok: !!guardianIdImage },
                       { label: "Guardian signature", ok: !!guardianSignatureImage },
                     ]

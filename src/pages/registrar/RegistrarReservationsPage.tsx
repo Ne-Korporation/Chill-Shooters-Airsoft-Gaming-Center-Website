@@ -11,6 +11,7 @@ import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { apiGet, apiPut } from '../../utils/apiClient'
+import { GuardianApprovalBadge, type GuardianApprovalSummary } from '../../components/reservations/GuardianApprovalBadge'
 import { useAuth } from '../../context/AuthContext'
 import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
 
@@ -34,6 +35,7 @@ type ReservationRow = {
   reservationTime?: string
   notes?: string
   totalAmount?: number
+  guardianApproval?: GuardianApprovalSummary | null
 }
 
 function fmtDate(value?: string) {
@@ -102,6 +104,7 @@ export function RegistrarReservationsPage() {
         reservationTime: item.reservationTime,
         notes: item.notes,
         totalAmount: item.totalAmount,
+        guardianApproval: item.guardianApproval || null,
       }))
       setRows(mapped)
     } catch (e: any) {
@@ -274,6 +277,7 @@ export function RegistrarReservationsPage() {
                   </td>
                   <td className="py-3 pr-3">
                     <StatusPill status={r.status} />
+                    <GuardianApprovalBadge reservationId={r.id} summary={r.guardianApproval} canRecordInPerson onChanged={() => void refresh()} />
                   </td>
                   <td className="py-3 pr-3">
                     {r.status === 'pending' ? (

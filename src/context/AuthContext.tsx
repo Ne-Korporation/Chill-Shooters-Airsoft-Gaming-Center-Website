@@ -19,13 +19,21 @@ type AuthSession = {
   remember?: boolean
 }
 
+type GoogleAuthPayload = { name: string; email: string; idToken: string; confirmExisting?: boolean }
+
+// When the Google email already has an account, the API asks the player to confirm
+// before signing in; call again with confirmExisting: true to proceed.
+export type GoogleAuthResult =
+  | { user: AuthUser; needsConfirm?: false }
+  | { needsConfirm: true; account: { name: string; email: string } }
+
 type AuthContextValue = {
   user: AuthUser | null
   token: string
   isAuthenticated: boolean
   login: (payload: { email: string; password: string; remember?: boolean }) => Promise<AuthUser>
-  loginWithGoogle: (payload: { name: string; email: string; idToken: string; remember?: boolean }) => Promise<AuthUser>
-  registerWithGoogle: (payload: { name: string; email: string; idToken: string }) => Promise<AuthUser>
+  loginWithGoogle: (payload: GoogleAuthPayload & { remember?: boolean }) => Promise<GoogleAuthResult>
+  registerWithGoogle: (payload: GoogleAuthPayload) => Promise<GoogleAuthResult>
   register: (payload: { name: string; email: string; password: string }) => Promise<void>
   updateUser: (updates: Partial<AuthUser>) => void
   logout: () => void
@@ -128,21 +136,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         startSession({ user: res.user, token: res.token, remember })
         return res.user
       },
-      loginWithGoogle: async ({ name, email, idToken, remember = false }) => {
-        const res = await apiPost<any>('/api/auth/social-login', { name, email, idToken, remember })
+      loginWithGoogle: async ({ name, email, idToken, confirmExisting = false, remember = false }) => {
+        const res = await apiPost<any>('/api/auth/social-login', { name, email, idToken, confirmExisting, remember })
+        if (res?.ok && res?.needsConfirm) return { needsConfirm: true, account: res.account }
         if (!res?.ok || !res?.user || !res?.token) {
           throw new Error('Social login failed')
         }
         startSession({ user: res.user, token: res.token, remember })
-        return res.user
+        return { user: res.user }
       },
-      registerWithGoogle: async ({ name, email, idToken }) => {
-        const res = await apiPost<any>('/api/auth/social-register', { name, email, idToken })
+      registerWithGoogle: async ({ name, email, idToken, confirmExisting = false }) => {
+        const res = await apiPost<any>('/api/auth/social-register', { name, email, idToken, confirmExisting })
+        if (res?.ok && res?.needsConfirm) return { needsConfirm: true, account: res.account }
         if (!res?.ok || !res?.user || !res?.token) {
           throw new Error(res?.error || 'Google registration failed')
         }
         startSession({ user: res.user, token: res.token })
-        return res.user
+        return { user: res.user }
       },
       register: async ({ name, email, password }) => {
         const res = await apiPost<any>('/api/auth/register', { name, email, password })

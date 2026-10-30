@@ -9,6 +9,10 @@ import { getBookingInventoryRequirements, getHeldQuantities, holdBookingInventor
 import { canonicalEmail, normalizeEmail, sameEmailFilter } from '../utils/emails.js'
 import { submitGcashPayment } from '../utils/gcashPayments.js'
 import { nextShortId } from '../utils/shortIds.js'
+import { ageFromBirthDate } from '../utils/age.js'
+import { ACTIVE_WAIVER_STATUSES, expireOldWaivers, validUntilFrom } from '../utils/waiverValidity.js'
+import { appUrlFrom, requestGuardianApprovals } from './guardianApprovals.js'
+import { evaluateFpsReading, weaponFpsClass } from './operations.js'
 import { emailGearReviewEvent, emailReservationEvent, emailSplitShareRequest } from '../services/notificationEmails.js'
 import {
   PAYMENT_WINDOW_HOURS,
@@ -768,6 +772,97 @@ function canAccessNotification(doc, user) {
   return doc?.userId === 'broadcast' && ['all', user?.role].includes(doc?.targetRole)
 }
 
+// Broadcast notifications are one shared record, so non-admins read and clear them
+// per account (readBy / dismissedBy) instead of changing them for everyone.
+function isSharedNotification(doc, user) {
+  return user?.role !== 'admin' && doc?.userId === 'broadcast'
+}
+
+function personalizeNotification(doc, user) {
+  if (!doc || user?.role === 'admin') return doc
+  const { readBy, dismissedBy, ...rest } = doc
+  if (doc.userId !== 'broadcast') return rest
+  return { ...rest, read: (readBy || []).map(String).includes(String(user.id)) }
+}
+
+// Waiver details an admin may correct; every change is kept in editHistory with the old value.
+const WAIVER_DETAIL_FIELDS = new Set(['fullName', 'birthDate', 'email', 'guardianName', 'guardianPhone', 'guardianEmail', 'reservationId'])
+const WAIVER_REVIEW_FIELDS = new Set(['status', 'reviewerNote', 'idType', 'idChecked'])
+// Philippine IDs a reviewer may accept when approving a waiver.
+export const ACCEPTED_ID_TYPES = [
+  'PhilSys National ID',
+  "Driver's License",
+  'Passport',
+  'UMID',
+  'SSS ID',
+  'PRC ID',
+  "Voter's ID",
+  'Postal ID',
+  'PhilHealth ID',
+  'Senior Citizen ID',
+  'School ID',
+]
+
+// Validates a waiver edit and turns it into a MongoDB update. Registrars may only review;
+// admins may also correct details. Approving requires a checked, accepted ID and starts
+// the 12-month validity.
+function prepareWaiverUpdate(existing, payload, req) {
+  const changes = { ...(payload.$set || payload) }
+  if (Object.keys(changes).some((field) => field.startsWith('$')) || Object.keys(payload).some((field) => field.startsWith('$') && field !== '$set')) {
+    return { error: 'Waiver updates support direct fields only.' }
+  }
+  const role = req.user.role
+  const allowed = role === 'admin' ? new Set([...WAIVER_DETAIL_FIELDS, ...WAIVER_REVIEW_FIELDS]) : WAIVER_REVIEW_FIELDS
+  const blocked = Object.keys(changes).filter((field) => !allowed.has(field))
+  if (blocked.length) return { status: 403, error: `You can't change these waiver fields: ${blocked.join(', ')}` }
+
+  for (const field of ['fullName', 'guardianName', 'guardianPhone', 'reviewerNote']) {
+    if (typeof changes[field] === 'string') changes[field] = changes[field].trim()
+  }
+  if (changes.fullName === '') return { error: 'Full name cannot be empty.' }
+  if (typeof changes.email === 'string') changes.email = normalizeEmail(changes.email)
+  if (typeof changes.guardianEmail === 'string') changes.guardianEmail = normalizeEmail(changes.guardianEmail)
+  if (changes.birthDate !== undefined) {
+    const age = ageFromBirthDate(changes.birthDate)
+    if (age === null || age < 1 || age > 120) return { error: 'Enter a valid birthday.' }
+    changes.age = age
+    changes.isMinor = age < 18
+  }
+  if (changes.idChecked !== undefined) changes.idChecked = changes.idChecked === true
+
+  const nowISO = new Date().toISOString()
+  const nextStatus = String(changes.status ?? existing.status ?? '').toLowerCase()
+  if (changes.status !== undefined) {
+    if (!['approved', 'denied', 'pending'].includes(nextStatus)) return { error: 'Unknown waiver status.' }
+    if (String(existing.status || '').toLowerCase() === 'expired') {
+      return { status: 409, error: 'This waiver expired. The player needs to answer a new waiver.' }
+    }
+    changes.status = nextStatus
+    changes.reviewedAtISO = nowISO
+    changes.reviewedBy = { id: String(req.user.id), email: req.user.email || '', role }
+  }
+  if (nextStatus === 'approved' && String(existing.status || '').toLowerCase() !== 'approved') {
+    const idType = changes.idType ?? existing.idType
+    const idChecked = changes.idChecked ?? existing.idChecked
+    if (!ACCEPTED_ID_TYPES.includes(idType) || idChecked !== true) {
+      return { error: 'Select the ID type and confirm the ID is valid before approving.' }
+    }
+    changes.approvedAtISO = nowISO
+    changes.validUntilISO = validUntilFrom(nowISO)
+  }
+
+  const edits = Object.fromEntries(
+    Object.keys(changes)
+      .filter((field) => WAIVER_DETAIL_FIELDS.has(field) && String(changes[field] ?? '') !== String(existing[field] ?? ''))
+      .map((field) => [field, { from: existing[field] ?? null, to: changes[field] }]),
+  )
+  const update = { $set: { ...changes, updatedAtISO: nowISO } }
+  if (Object.keys(edits).length) {
+    update.$push = { editHistory: { fields: edits, atISO: nowISO, by: { id: String(req.user.id), email: req.user.email || '' } } }
+  }
+  return { update }
+}
+
 function playerOwnershipFilter(userId) {
   return {
     $or: [
@@ -917,6 +1012,7 @@ router.get('/:collection', requireAuth, async (req, res) => {
   }
 
   try {
+    if (collection === 'waivers') await expireOldWaivers(await getDb())
     const db = await getDb()
     const playerUser = req.user.role === 'user'
     if (playerUser && collection === 'user_accounts') {
@@ -956,6 +1052,9 @@ router.get('/:collection', requireAuth, async (req, res) => {
         ],
       })
     }
+    if (collection === 'notifications' && req.user.role !== 'admin') {
+      filter = mergeFilters(filter, { dismissedBy: { $ne: String(req.user.id) } })
+    }
 
     let query = db
       .collection(collection)
@@ -971,6 +1070,9 @@ router.get('/:collection', requireAuth, async (req, res) => {
     }
     const docs = await query.toArray()
 
+    if (collection === 'notifications') {
+      return res.json({ ok: true, data: docs.map((doc) => personalizeNotification(doc, req.user)) })
+    }
     return res.json({ ok: true, data: docs })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
@@ -997,8 +1099,9 @@ router.get('/:collection/:id', requireAuth, async (req, res) => {
     if (req.user.role === 'user' && USER_OWNED_COLLECTIONS.has(collection) && !isOwnedByUser(doc, req.user.id)) {
       return res.status(404).json({ ok: false, error: 'not found' })
     }
-    if (collection === 'notifications' && !canAccessNotification(doc, req.user)) {
-      return res.status(404).json({ ok: false, error: 'not found' })
+    if (collection === 'notifications') {
+      if (!canAccessNotification(doc, req.user)) return res.status(404).json({ ok: false, error: 'not found' })
+      return res.json({ ok: true, data: personalizeNotification(doc, req.user) })
     }
     if (collection === 'user_accounts') {
       delete doc.password
@@ -1068,8 +1171,9 @@ async function resolveTeamAndOwnWeapons(db, doc) {
 }
 
 // Tells each teammate in a split payment what they owe and by when.
-async function notifySplitPayers(db, reservation) {
+async function notifySplitPayers(db, reservation, appUrl) {
   if (reservation.paymentMode !== 'split') return
+  const payLink = `${appUrl}/app/split-payments`
   const share = Math.round((Number(reservation.depositAmount || 0) / reservation.teamSize) * 100) / 100
   const captain = await findDocumentById(db, 'user_accounts', reservation.userId)
   const captainName = captain?.name || 'Your team captain'
@@ -1082,7 +1186,7 @@ async function notifySplitPayers(db, reservation) {
       message: `${captainName} added you to a reservation on ${reservation.reservationDate} (${reservation.reservationTime}). Your share is ₱${share.toLocaleString()}; pay it from Split Payment before ${dueLabel}.`,
       linkedResourceId: reservation.id,
     })
-    void emailSplitShareRequest(db, reservation, userId, share, captainName, dueLabel)
+    void emailSplitShareRequest(db, reservation, userId, share, captainName, dueLabel, payLink)
   }
 }
 
@@ -1185,9 +1289,28 @@ router.post('/:collection', requireAuth, async (req, res) => {
     }
 
     if (collection === 'waivers' && payload.userId) {
-      const existingWaiver = await db.collection(collection).findOne({ userId: String(payload.userId) })
+      // A denied or expired waiver can be answered again; an active one can't be duplicated.
+      await expireOldWaivers(db, { force: true })
+      const existingWaiver = await db.collection(collection).findOne({
+        userId: String(payload.userId),
+        status: { $regex: `^(${ACTIVE_WAIVER_STATUSES.join('|')})$`, $options: 'i' },
+      })
       if (existingWaiver) {
         return res.status(409).json({ ok: false, error: 'User has already submitted a waiver' })
+      }
+      // Age and minor status come from the birthday, and the email from the account.
+      if (payload.birthDate !== undefined) {
+        const age = ageFromBirthDate(payload.birthDate)
+        if (age === null || age < 1 || age > 120) return res.status(400).json({ ok: false, error: 'Enter a valid birthday.' })
+        payload.age = age
+        payload.isMinor = age < 18
+      }
+      if (req.user.role === 'user') {
+        payload.email = req.user.email || payload.email || ''
+        payload.status = 'pending'
+      }
+      if (payload.isMinor && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(payload.guardianEmail || ''))) {
+        return res.status(400).json({ ok: false, error: 'A guardian email is required for players under 18.' })
       }
     }
 
@@ -1336,6 +1459,13 @@ router.post('/:collection', requireAuth, async (req, res) => {
       } catch (err) {
         return res.status(400).json({ ok: false, error: err.message || 'Unable to calculate reservation price' })
       }
+      // Payment plan: everything online now, or the downpayment online and the balance in cash
+      // at the field. The cash plan never skips the online downpayment.
+      doc.paymentPlan = String(doc.paymentPlan || '') === 'full' ? 'full' : 'cash_balance'
+      if (doc.paymentPlan === 'full') {
+        doc.depositAmount = doc.totalAmount
+        doc.balanceAmount = 0
+      }
       try {
         doc.inventoryRequirements = await getBookingInventoryRequirements({
           db,
@@ -1392,7 +1522,8 @@ router.post('/:collection', requireAuth, async (req, res) => {
           await db.collection('slot_holds').deleteOne({ _id: `user:${doc.userId}` }, { session })
         })
         void emailReservationEvent(db, doc, 'received')
-        void notifySplitPayers(db, doc)
+        void notifySplitPayers(db, doc, appUrlFrom(req))
+        void requestGuardianApprovals(db, doc, appUrlFrom(req))
         return res.status(201).json({ ok: true, insertedId, data: doc })
       } catch (err) {
         if (err?.statusCode) {
@@ -1432,6 +1563,7 @@ router.post('/:collection', requireAuth, async (req, res) => {
           transactionReference: payload.transactionReference,
           gcashImageUrl: payload.gcashImageUrl,
           paymentMethod: payload.paymentMethod,
+          senderNumber: payload.senderNumber,
         })
         for (const key of Object.keys(doc)) delete doc[key]
         Object.assign(doc, submitted.payment)
@@ -1519,13 +1651,23 @@ router.put('/:collection/:id', requireAuth, async (req, res) => {
     const usesUnsupportedOperator = Object.keys(payload).some((field) => field.startsWith('$') && field !== '$set')
     const hasMixedUpdateShape = Object.prototype.hasOwnProperty.call(payload, '$set') &&
       Object.keys(payload).some((field) => field !== '$set')
-    const allowedProfileFields = new Set(['name', 'email', 'profileImageUrl'])
+    const allowedProfileFields = new Set(['name', 'email', 'profileImageUrl', 'birthDate'])
     if (
       usesUnsupportedOperator ||
       hasMixedUpdateShape ||
       Object.keys(changes).some((field) => !allowedProfileFields.has(field))
     ) {
       return res.status(403).json({ ok: false, error: 'Profile update contains fields that players cannot change' })
+    }
+  }
+  if (collection === 'user_accounts') {
+    const changes = payload.$set || payload
+    if (Object.prototype.hasOwnProperty.call(changes, 'birthDate')) {
+      const age = ageFromBirthDate(changes.birthDate)
+      if (age === null || age < 1 || age > 120) {
+        return res.status(400).json({ ok: false, error: 'Enter a valid birthday.' })
+      }
+      changes.age = age
     }
   }
   if (collection === 'notifications' && updateRole !== 'admin') {
@@ -1545,6 +1687,10 @@ router.put('/:collection/:id', requireAuth, async (req, res) => {
     if (collection === 'notifications' && !canAccessNotification(existing, req.user)) {
       return res.status(404).json({ ok: false, error: 'not found' })
     }
+    if (collection === 'notifications' && isSharedNotification(existing, req.user)) {
+      await db.collection(collection).updateOne({ _id: existing._id }, { $addToSet: { readBy: String(req.user.id) } })
+      return res.json({ ok: true, data: { ...personalizeNotification(existing, req.user), read: true } })
+    }
 
     if (collection === 'user_accounts') {
       const changes = payload.$set || payload
@@ -1559,6 +1705,36 @@ router.put('/:collection/:id', requireAuth, async (req, res) => {
         changes.email = email
         changes.emailCanonical = canonicalEmail(email)
       }
+    }
+
+    // A player's own weapon is only approved for play after it passes the chronograph.
+    if (collection === 'weapons' && existing.source === 'player') {
+      const changes = payload.$set || payload
+      if (String(changes.approvalStatus || '') === 'approved' && existing.approvalStatus !== 'approved') {
+        const fps = Number(changes.chronoFps)
+        if (!Number.isFinite(fps) || fps <= 0 || fps >= 1000) {
+          return res.status(400).json({ ok: false, error: 'Enter the chronograph FPS reading to approve this weapon.' })
+        }
+        const fpsClass = ['aeg', 'sniper'].includes(String(changes.fpsClass)) ? String(changes.fpsClass) : weaponFpsClass(existing)
+        const { limit, result } = evaluateFpsReading(fpsClass, fps)
+        if (result === 'fail') {
+          return res.status(400).json({ ok: false, error: `${fps} FPS is over the ${limit} FPS limit for ${fpsClass === 'sniper' ? 'sniper rifles' : 'AEGs'}. Reject it or have the owner adjust it.` })
+        }
+        Object.assign(changes, {
+          chronoFps: fps,
+          fpsClass,
+          fpsLimit: limit,
+          chronoCheckedAtISO: new Date().toISOString(),
+          chronoCheckedBy: req.user.email || String(req.user.id),
+        })
+      }
+    }
+
+    if (collection === 'waivers') {
+      const prepared = prepareWaiverUpdate(existing, payload, req)
+      if (prepared.error) return res.status(prepared.status || 400).json({ ok: false, error: prepared.error })
+      for (const key of Object.keys(payload)) delete payload[key]
+      Object.assign(payload, prepared.update)
     }
 
     if (['equipment', 'equipments', 'weapons'].includes(collection)) {
@@ -1674,6 +1850,10 @@ router.delete('/:collection/:id', requireAuth, async (req, res) => {
     if (!existing) return res.status(404).json({ ok: false, error: 'not found' })
     if (collection === 'notifications' && !canAccessNotification(existing, req.user)) {
       return res.status(404).json({ ok: false, error: 'not found' })
+    }
+    if (collection === 'notifications' && isSharedNotification(existing, req.user)) {
+      await db.collection(collection).updateOne({ _id: existing._id }, { $addToSet: { dismissedBy: String(req.user.id) } })
+      return res.json({ ok: true })
     }
     if (deleteRole !== 'admin' && collection !== 'notifications') {
       return res.status(404).json({ ok: false, error: 'not found' })

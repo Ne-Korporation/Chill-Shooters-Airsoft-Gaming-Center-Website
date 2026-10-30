@@ -126,6 +126,26 @@ async function getPlayerProfiles(db, userIds) {
   }))
 }
 
+// GET /api/players/levels — live experience level of every player, for staff player lists.
+router.get('/players/levels', requireAuth, requireRole(...STAFF), async (req, res) => {
+  try {
+    const db = await getDb()
+    const players = await db.collection('user_accounts').find(
+      { $or: [{ role: 'user' }, { role: { $exists: false } }] },
+      { projection: { id: 1 } },
+    ).limit(2000).toArray()
+    const profiles = await getPlayerProfiles(db, players.map(keyOf))
+    const data = Object.fromEntries([...profiles].map(([id, profile]) => [id, {
+      gamesPlayed: profile.gamesPlayed,
+      experience: profile.experience,
+      experienceLevel: profile.experienceLevel,
+    }]))
+    return res.json({ ok: true, data })
+  } catch (err) {
+    return sendError(res, err)
+  }
+})
+
 // GET /api/players/:id/stats — the player's own profile numbers, or any player's for staff.
 router.get('/players/:id/stats', requireAuth, async (req, res) => {
   const id = String(req.params.id || '')
@@ -312,6 +332,80 @@ router.post('/team-grouping', requireAuth, requireRole('admin', 'marshal'), asyn
       { upsert: true },
     )
     return res.json({ ok: true, data: { teams: cleaned, savedAtISO: nowISO } })
+  } catch (err) {
+    return sendError(res, err)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Field check-in: who from each booked team has arrived at the field
+// ---------------------------------------------------------------------------
+
+// GET /api/field-checkin?location&date&slot — every booked team with its players and who has
+// checked in. Registrars tick players off; marshals see the same list read-only.
+router.get('/field-checkin', requireAuth, requireRole(...STAFF), async (req, res) => {
+  try {
+    const session = readSession(req.query)
+    const db = await getDb()
+    const roster = await getSessionRoster(db, session)
+    const saved = await db.collection('field_checkins').findOne({ _id: sessionKey(session.location, session.date, session.slot) })
+    const checkedIn = saved?.players || {}
+
+    const teams = new Map()
+    for (const player of roster) {
+      const team = teams.get(player.reservationId) || { reservationId: player.reservationId, players: [] }
+      team.players.push({
+        key: player.key,
+        id: player.id,
+        name: player.name,
+        guest: player.guest,
+        experienceLevel: player.experienceLevel,
+        ageGroup: player.ageGroup,
+        checkedIn: Boolean(checkedIn[player.key]),
+        checkedInAtISO: checkedIn[player.key]?.atISO || null,
+        checkedInBy: checkedIn[player.key]?.actorEmail || '',
+      })
+      teams.set(player.reservationId, team)
+    }
+
+    const reservations = await db.collection('reservations').find(
+      { id: { $in: [...teams.keys()] } },
+      { projection: { id: 1, userId: 1, walkIn: 1, walkInName: 1, teamName: 1, numberOfPlayers: 1, reservationStatus: 1 } },
+    ).toArray()
+    const captains = await getPlayerProfiles(db, reservations.map((r) => r.userId).filter(Boolean))
+    for (const reservation of reservations) {
+      const team = teams.get(reservation.id)
+      if (!team) continue
+      team.label = reservation.teamName
+        || (reservation.walkIn ? `Walk-in: ${reservation.walkInName || 'Guest'}` : `${captains.get(String(reservation.userId))?.name || 'Player'}'s team`)
+      team.reservationStatus = reservation.reservationStatus
+    }
+
+    return res.json({ ok: true, data: { teams: [...teams.values()], updatedAtISO: saved?.updatedAtISO || null } })
+  } catch (err) {
+    return sendError(res, err)
+  }
+})
+
+// PUT /api/field-checkin { location, date, slot, playerKey, checkedIn } — registrar marks a player in or out.
+router.put('/field-checkin', requireAuth, requireRole('admin', 'registrar'), async (req, res) => {
+  try {
+    const session = readSession(req.body || {})
+    const playerKey = String(req.body?.playerKey || '')
+    if (!/^(user|guest):/.test(playerKey) || /[.$]/.test(playerKey)) {
+      return res.status(400).json({ ok: false, error: 'Unknown player.' })
+    }
+    const db = await getDb()
+    const roster = await getSessionRoster(db, session)
+    if (!roster.some((player) => player.key === playerKey)) {
+      return res.status(404).json({ ok: false, error: 'That player is not booked for this session.' })
+    }
+    const nowISO = new Date().toISOString()
+    const update = req.body?.checkedIn === true
+      ? { $set: { ...session, [`players.${playerKey}`]: { atISO: nowISO, ...actorOf(req) }, updatedAtISO: nowISO } }
+      : { $set: { ...session, updatedAtISO: nowISO }, $unset: { [`players.${playerKey}`]: '' } }
+    await db.collection('field_checkins').updateOne({ _id: sessionKey(session.location, session.date, session.slot) }, update, { upsert: true })
+    return res.json({ ok: true, data: { playerKey, checkedIn: req.body?.checkedIn === true, atISO: nowISO } })
   } catch (err) {
     return sendError(res, err)
   }

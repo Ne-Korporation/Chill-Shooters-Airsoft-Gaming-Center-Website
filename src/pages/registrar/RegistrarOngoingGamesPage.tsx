@@ -20,6 +20,7 @@ type GameplayDoc = {
   Group?: string
   Package?: string
   LayoutRequest?: string
+  LayoutBlueprintUrl?: string
   Notes?: string
   Status?: GameplayStatus | string
   createdAtISO?: string
@@ -326,6 +327,11 @@ export function RegistrarOngoingGamesPage() {
                       <td className="py-3 pr-3">
                         <div className="font-bold">{doc.Mode || '—'}</div>
                         {doc.LayoutRequest ? <div className="mt-1 max-w-[220px] text-xs text-muted">Layout: {doc.LayoutRequest}</div> : null}
+                        {doc.LayoutBlueprintUrl ? (
+                          <a href={doc.LayoutBlueprintUrl} target="_blank" rel="noreferrer" className="mt-1 inline-block text-xs font-semibold text-accent hover:underline">
+                            View layout blueprint
+                          </a>
+                        ) : null}
                         {doc.Notes ? <div className="mt-1 max-w-[220px] text-xs text-muted">Notes: {doc.Notes}</div> : null}
                       </td>
                       <td className="py-3 pr-3">

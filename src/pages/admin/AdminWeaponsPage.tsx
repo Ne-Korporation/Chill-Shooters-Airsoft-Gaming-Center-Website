@@ -94,6 +94,9 @@ export function AdminWeaponsPage() {
   const [selectedWeaponId, setSelectedWeaponId] = React.useState<string | null>(null)
   const [rejectionTargetId, setRejectionTargetId] = React.useState<string | null>(null)
   const [rejectionReason, setRejectionReason] = React.useState('')
+  // Approving a player's own weapon needs a passing chronograph reading.
+  const [approvalTarget, setApprovalTarget] = React.useState<{ id: string; fpsClass: 'aeg' | 'sniper' } | null>(null)
+  const [chronoFps, setChronoFps] = React.useState('')
   const nameRef = React.useRef<HTMLInputElement | null>(null)
 
   const [partners, setPartners] = React.useState<Array<{ id: string; name: string }>>([])
@@ -321,13 +324,23 @@ export function AdminWeaponsPage() {
 
   const { addNotification } = useNotifications()
 
-  const handleApprovePlayerWeapon = async (id: string) => {
+  const openApproveDialog = (weapon: { id: string; category?: string }) => {
+    setApprovalTarget({ id: weapon.id, fpsClass: String(weapon.category || '').toLowerCase().startsWith('sniper') ? 'sniper' : 'aeg' })
+    setChronoFps('')
+  }
+
+  const handleApprovePlayerWeapon = async () => {
+    if (!approvalTarget) return
+    const id = approvalTarget.id
     try {
       await apiPut<any>(`/api/weapons/${encodeURIComponent(id)}`, {
         approvalStatus: 'approved',
         status: 'available',
+        chronoFps: Number(chronoFps),
+        fpsClass: approvalTarget.fpsClass,
         updatedAtISO: new Date().toISOString(),
       })
+      setApprovalTarget(null)
       sendRoleNotifications(addNotification, {
         roles: ['admin', 'registrar', 'marshal'],
         type: 'weapon_approved',
@@ -470,7 +483,7 @@ export function AdminWeaponsPage() {
                   <div className="flex items-center justify-between gap-2">
                     <div className="text-sm font-semibold">{weapon.name}</div>
                     <ActionGroup>
-                      <Button size="xs" variant="success-soft" onClick={(event) => { event.stopPropagation(); handleApprovePlayerWeapon(weapon.id) }}>
+                      <Button size="xs" variant="success-soft" onClick={(event) => { event.stopPropagation(); openApproveDialog(weapon) }}>
                         <FiCheck /> Approve
                       </Button>
                       <Button size="xs" variant="danger-soft" onClick={(event) => { event.stopPropagation(); openRejectDialog(weapon.id) }}>
@@ -535,7 +548,7 @@ export function AdminWeaponsPage() {
                       </Button>
                       {weapon.source === 'player' && weapon.approvalStatus === 'pending' ? (
                         <>
-                          <Button size="xs" variant="success-soft" onClick={(event) => { event.stopPropagation(); handleApprovePlayerWeapon(weapon.id) }}>
+                          <Button size="xs" variant="success-soft" onClick={(event) => { event.stopPropagation(); openApproveDialog(weapon) }}>
                             <FiCheck /> Approve
                           </Button>
                           <Button size="xs" variant="danger-soft" onClick={(event) => { event.stopPropagation(); openRejectDialog(weapon.id) }}>
@@ -743,6 +756,44 @@ export function AdminWeaponsPage() {
         </div>
         ) : null}
       </Card>
+      {approvalTarget ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" role="dialog" aria-modal="true" aria-labelledby="weapon-approval-title">
+          <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-background p-5 shadow-2xl">
+            <div id="weapon-approval-title" className="text-lg font-bold">Approve player weapon</div>
+            <p className="mt-1 text-sm text-muted">
+              Chrono the weapon first. It's approved only if the reading is within the limit (AEG 450 FPS, sniper 550 FPS unless changed in settings).
+            </p>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <label className="block">
+                <div className="mb-2 text-sm font-semibold">Class</div>
+                <select
+                  value={approvalTarget.fpsClass}
+                  onChange={(event) => setApprovalTarget({ ...approvalTarget, fpsClass: event.target.value as 'aeg' | 'sniper' })}
+                  className="w-full rounded-xl border border-white/10 bg-background px-4 py-3 text-sm [&>option]:bg-background"
+                >
+                  <option value="aeg">AEG / rifle</option>
+                  <option value="sniper">Sniper / bolt-action</option>
+                </select>
+              </label>
+              <label className="block">
+                <div className="mb-2 text-sm font-semibold">Chronograph reading (FPS)</div>
+                <input
+                  autoFocus
+                  inputMode="numeric"
+                  value={chronoFps}
+                  onChange={(event) => setChronoFps(event.target.value.replace(/[^\d.]/g, ''))}
+                  placeholder="e.g. 380"
+                  className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-text outline-none focus:border-accent/50"
+                />
+              </label>
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => setApprovalTarget(null)}>Cancel</Button>
+              <Button onClick={handleApprovePlayerWeapon} disabled={!(Number(chronoFps) > 0)}>Approve weapon</Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {rejectionTargetId ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" role="dialog" aria-modal="true" aria-labelledby="weapon-rejection-title">
           <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-background p-5 shadow-2xl">

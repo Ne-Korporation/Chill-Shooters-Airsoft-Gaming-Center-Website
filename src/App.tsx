@@ -35,6 +35,8 @@ import { AdminFeedbackPage } from './pages/admin/AdminFeedbackPage'
 import { AdminReachFundPage } from './pages/admin/AdminReachFundPage'
 import { SafetyLogPage } from './pages/marshal/SafetyLogPage'
 import { TeamGroupingPage } from './pages/operations/TeamGroupingPage'
+import { FieldCheckInPage } from './pages/operations/FieldCheckInPage'
+import { GuardianApprovalPage } from './pages/guardian/GuardianApprovalPage'
 import { CounterPage } from './pages/operations/CounterPage'
 import { RentalsPage } from './pages/operations/RentalsPage'
 import { RepairsPage } from './pages/operations/RepairsPage'
@@ -131,6 +133,7 @@ export default function App() {
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
       <Route path="/otp" element={<OtpVerificationPage />} />
       <Route path="/reset-password" element={<ResetPasswordPage />} />
+      <Route path="/guardian-approval/:token" element={<GuardianApprovalPage />} />
 
       <Route
         path="/app"
@@ -217,6 +220,7 @@ export default function App() {
         <Route path="admin/reach-fund" element={<AdminPageWrapper><AdminReachFundPage /></AdminPageWrapper>} />
         <Route path="safety" element={<RequireRole roles={['marshal', 'admin']}><SafetyLogPage /></RequireRole>} />
         <Route path="team-grouping" element={<RequireRole roles={['marshal', 'admin']}><TeamGroupingPage /></RequireRole>} />
+        <Route path="check-in" element={<RequireRole roles={['registrar', 'marshal', 'admin']}><FieldCheckInPage /></RequireRole>} />
         <Route path="counter" element={<RequireRole roles={['registrar', 'admin']}><CounterPage /></RequireRole>} />
         <Route path="rentals" element={<RequireRole roles={['marshal', 'registrar', 'admin']}><RentalsPage /></RequireRole>} />
         <Route path="repairs" element={<RequireRole roles={['marshal', 'admin']}><RepairsPage /></RequireRole>} />

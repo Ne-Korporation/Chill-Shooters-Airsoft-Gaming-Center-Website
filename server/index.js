@@ -24,6 +24,7 @@ const { default: paymentsWorkflowsRouter } = await import('./routes/paymentsWork
 const { default: operationsRouter } = await import('./routes/operations.js')
 const { default: teamBookingsRouter } = await import('./routes/teamBookings.js')
 const { default: fieldOpsRouter } = await import('./routes/fieldOps.js')
+const { default: guardianApprovalsRouter } = await import('./routes/guardianApprovals.js')
 const { expireOverdueReservations } = await import('./utils/paymentProgress.js')
 const { sendDueReminders } = await import('./utils/reminders.js')
 
@@ -159,6 +160,8 @@ app.use('/api', paymentsWorkflowsRouter)
 app.use('/api', operationsRouter)
 app.use('/api', teamBookingsRouter)
 app.use('/api', fieldOpsRouter)
+// Before crudRouter: the guardian link is public and must not hit its auth-required /:collection/:id.
+app.use('/api', guardianApprovalsRouter)
 app.use('/api/auth', authRouter)
 app.use('/api', crudRouter)
 

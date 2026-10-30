@@ -38,13 +38,14 @@ function layout(title, name, lines) {
   `
 }
 
-async function sendLogged(db, { key, userId, subject, title, lines }) {
+// `recipient` ({ email, name }) sends to someone without an account, such as a guardian.
+async function sendLogged(db, { key, userId, recipient, subject, title, lines }) {
   try {
     const log = db.collection(EMAIL_LOG)
     indexReady ??= log.createIndex({ key: 1 }, { unique: true }).catch(() => null)
     await indexReady
 
-    const account = await findAccount(db, userId)
+    const account = recipient || await findAccount(db, userId)
     if (!account?.email) return { skipped: 'no recipient' }
 
     try {
@@ -173,18 +174,30 @@ export function emailGearReviewEvent(db, item, kind, status) {
   })
 }
 
-export function emailSplitShareRequest(db, reservation, userId, share, captainName, dueLabel) {
+// payLink opens the Split Payment page (after login if needed) where the teammate pays their share.
+export function emailSplitShareRequest(db, reservation, userId, share, captainName, dueLabel, payLink = '') {
   if (!reservation || !userId) return Promise.resolve({ skipped: 'missing data' })
   const id = String(reservation.id || reservation._id)
+  const details = [
+    ['Date', reservationLabel(reservation)],
+    ['Players', escapeHtml(reservation.numberOfPlayers || reservation.teamSize || '')],
+    ['Package', escapeHtml(reservation.packageName || '-')],
+    ['Team deposit', formatPHP(reservation.depositAmount)],
+    ['Your share', `<b>${formatPHP(share)}</b>`],
+    ['Pay before', escapeHtml(dueLabel)],
+  ]
   return sendLogged(db, {
     key: `split-share:${id}:${userId}`,
     userId,
     subject: 'Your share of a Chill Shooters reservation is due',
     title: 'Split payment requested',
     lines: [
-      `${escapeHtml(captainName)} added you to the reservation for ${reservationLabel(reservation)} and split the payment with the team.`,
-      `Your share is <b>${formatPHP(share)}</b>. Log in and open <b>Split Payment</b> in the menu to pay with GCash and upload your proof.`,
-      `Please pay before ${escapeHtml(dueLabel)}. If the team doesn't finish paying by then, the slot is released.`,
+      `${escapeHtml(captainName)} added you to a reservation and split the payment with the team.`,
+      `<table style="border-collapse:collapse;">${details.map(([label, value]) => `<tr><td style="padding:2px 12px 2px 0;color:#6b7280;">${label}</td><td style="padding:2px 0;">${value}</td></tr>`).join('')}</table>`,
+      payLink
+        ? button(payLink, 'Pay my share')
+        : 'Log in and open <b>Split Payment</b> in the menu to pay with GCash and upload your proof.',
+      "If the team doesn't finish paying by the deadline, the slot is released.",
       `Reservation ID: ${escapeHtml(id)}`,
     ],
   })
@@ -206,11 +219,49 @@ export function emailGameReminder(db, reservation, userId) {
   })
 }
 
-export function emailWaiverReminder(db, reservation, userId) {
+function button(href, label) {
+  return `<a href="${escapeHtml(href)}" style="display:inline-block;background:#b45309;color:#ffffff;padding:12px 20px;border-radius:10px;font-weight:bold;text-decoration:none;">${escapeHtml(label)}</a>`
+}
+
+// Sent to a minor's guardian for every booking the minor is part of.
+export function emailGuardianApprovalRequest(db, { approval, reservation, link }) {
+  return sendLogged(db, {
+    key: `guardian-approval:${approval.id}`,
+    recipient: { email: approval.guardianEmail, name: approval.guardianName },
+    subject: `Please approve ${approval.minorName}'s Chill Shooters booking`,
+    title: 'Guardian approval needed',
+    lines: [
+      `${escapeHtml(approval.minorName)} (age ${Number(approval.minorAge) || '-'}) booked an airsoft game for ${reservationLabel(reservation)} and listed you as their parent or guardian.`,
+      'Players under 18 need a guardian to approve every booking. Please review the details they entered, the booking, and their signed waiver, then approve or decline.',
+      button(link, 'Review & approve booking'),
+      `If the button doesn't work, open this link: ${escapeHtml(link)}`,
+      "If you don't know this player, you can ignore this email or decline the request.",
+    ],
+  })
+}
+
+// Tells the player how their guardian answered.
+export function emailGuardianDecision(db, approval, reservation) {
+  const approved = approval.status === 'approved'
+  return sendLogged(db, {
+    key: `guardian-decision:${approval.id}:${approval.status}`,
+    userId: approval.userId,
+    subject: approved ? 'Your guardian approved your booking' : 'Your guardian declined your booking',
+    title: approved ? 'Guardian approved' : 'Guardian declined',
+    lines: [
+      approved
+        ? `Your guardian approved your booking for ${reservationLabel(reservation)}.`
+        : `Your guardian declined your booking for ${reservationLabel(reservation)}.${approval.note ? ` Note: ${escapeHtml(approval.note)}` : ''} Please talk to them or contact us.`,
+    ],
+  })
+}
+
+// sentOn (YYYY-MM-DD) is part of the de-dup key so each 3-day repeat gets its own email.
+export function emailWaiverReminder(db, reservation, userId, sentOn = '') {
   if (!reservation || !userId) return Promise.resolve({ skipped: 'missing data' })
   const id = String(reservation.id || reservation._id)
   return sendLogged(db, {
-    key: `reminder:waiver:${id}:${userId}`,
+    key: `reminder:waiver:${id}:${userId}${sentOn ? `:${sentOn}` : ''}`,
     userId,
     subject: 'Please complete your Chill Shooters waiver',
     title: 'Your waiver is still needed',
