@@ -3,6 +3,7 @@ import { CardElement, Elements, useElements, useStripe } from '@stripe/react-str
 import { loadStripe } from '@stripe/stripe-js'
 import { useNavigate } from 'react-router-dom'
 import { apiBase, apiGet, apiPost, getApiAuthHeaders } from '../../utils/apiClient'
+import { formatPhPhone, isValidPhPhone, PH_PHONE_PLACEHOLDER } from '../../utils/phone'
 import toast from 'react-hot-toast'
 import { useAuth } from '../../context/AuthContext'
 import { useTheme } from '../../context/ThemeContext'
@@ -13,7 +14,6 @@ import { FiCheck, FiChevronRight, FiFileText, FiInfo, FiLock, FiUpload } from 'r
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
-import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
 import { clearPackagePrefill } from '../../utils/packagePrefill'
 
 // Online deposits: GCash and bank transfer are proof-of-payment submissions a registrar
@@ -133,7 +133,6 @@ function CardPaymentField({ onChange }: { onChange: (complete: boolean) => void 
 function PaymentPageContent() {
   const navigate = useNavigate()
   const { user } = useAuth()
-  const { addNotification } = useNotifications()
   const stripe = useStripe()
   const elements = useElements()
   const [cardComplete, setCardComplete] = useState(false)
@@ -344,14 +343,6 @@ function PaymentPageContent() {
 
       localStorage.setItem('active_reservation_id', String(reservationId))
 
-      sendRoleNotifications(addNotification, {
-        roles: ['admin', 'registrar', 'marshal'],
-        type: 'reservation_submitted',
-        title: 'New Reservation Request',
-        message: `A new reservation request was submitted for ${pendingReservation?.reservationDate || 'a selected date'}.`,
-        linkedResourceId: String(reservationId),
-      })
-
       if (method === 'card') {
         const cardElement = elements?.getElement(CardElement)
         if (!stripe || !cardElement) throw new Error('Card form is unavailable. Please reload and try again.')
@@ -372,7 +363,7 @@ function PaymentPageContent() {
         )
         setReceiptReference(receipt.data.id || receipt.data.paymentIntentId)
       } else {
-        if (phoneNumber && !/^09\d{9}$/.test(phoneNumber)) throw new Error('Enter your GCash number as 11 digits starting with 09, or leave it blank.')
+        if (phoneNumber && !isValidPhPhone(phoneNumber)) throw new Error('Enter your GCash number as +63-9XX-XXX-XXXX, or leave it blank.')
         const file = proofInputRef.current?.files?.[0]
         if (!file || !file.type.startsWith('image/')) throw new Error('Only image files are allowed as proof of payment.')
         const formData = new FormData()
@@ -508,12 +499,11 @@ function PaymentPageContent() {
                   <Input
                     label="Your GCash number (optional)"
                     value={phoneNumber}
-                    onChange={(e) => setPhoneNumber(e.target.value.replace(/\D/g, '').slice(0, 11))}
-                    inputMode="numeric"
-                    maxLength={11}
-                    placeholder="e.g., 09171234567"
+                    onChange={(e) => setPhoneNumber(formatPhPhone(e.target.value))}
+                    inputMode="tel"
+                    placeholder={PH_PHONE_PLACEHOLDER}
                     hint="The number you paid from, so staff can match your payment."
-                    error={phoneNumber && !/^09\d{9}$/.test(phoneNumber) ? 'Enter an 11-digit mobile number starting with 09.' : undefined}
+                    error={phoneNumber && !isValidPhPhone(phoneNumber) ? 'Enter a mobile number as +63-9XX-XXX-XXXX.' : undefined}
                   />
 
                   <div className="rounded-2xl border border-dashed border-accent/30 bg-accent/5 p-4">

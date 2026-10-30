@@ -1,4 +1,4 @@
-import { OFFICIAL_WAIVER_TEXT as T } from './waiverText'
+import { signedWaiverText, type WaiverText } from './waiverText'
 
 export type PrintableWaiver = {
   id?: string
@@ -14,6 +14,10 @@ export type PrintableWaiver = {
   guardianPhone?: string
   guardianIdImage?: string
   guardianSignatureImage?: string
+  idType?: string
+  idImage?: string
+  guardianIdType?: string
+  waiverText?: WaiverText | null
   status?: string
   submittedAtISO?: string
 }
@@ -22,6 +26,7 @@ const esc = (v: unknown) =>
   String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string))
 
 export function buildWaiverPrintHtml(w: PrintableWaiver) {
+  const T = signedWaiverText(w)
   const name = esc(w.fullName || '-')
   const submitted = w.submittedAtISO ? esc(new Date(w.submittedAtISO).toLocaleString()) : '-'
   const guardian = w.isMinor
@@ -31,7 +36,10 @@ export function buildWaiverPrintHtml(w: PrintableWaiver) {
 
   const idThumb = (src: string | undefined, label: string) =>
     src ? `<div class="id"><img src="${esc(src)}" alt="${esc(label)}" /><div class="cap">${esc(label)}</div></div>` : ''
-  const ids = w.isMinor ? idThumb(w.guardianIdImage, 'Guardian ID') : ''
+  const ids = [
+    idThumb(w.idImage, `Participant ID${w.idType ? ` (${w.idType})` : ''}`),
+    w.isMinor ? idThumb(w.guardianIdImage, `Guardian ID${w.guardianIdType ? ` (${w.guardianIdType})` : ''}`) : '',
+  ].join('')
 
   const sigBlock = (who: string, img: string | undefined, caption: string) => `
     <div class="sigcol">

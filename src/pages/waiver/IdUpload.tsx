@@ -1,5 +1,6 @@
 import React, { useRef, useState } from 'react'
 import { FiAlertTriangle, FiCheck, FiFileText, FiTrash2, FiUpload } from 'react-icons/fi'
+import { ACCEPTED_ID_TYPES } from '../../utils/idTypes'
 
 const ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/webp']
 const MAX_FILE_BYTES = 5 * 1024 * 1024
@@ -28,6 +29,9 @@ export function IdUpload({
   disabled,
   error,
   helper = 'Photo of a valid government or school ID. PNG, JPG or WEBP, up to 5 MB.',
+  idType,
+  onIdTypeChange,
+  idTypeError,
 }: {
   label: string
   value: string
@@ -35,6 +39,10 @@ export function IdUpload({
   disabled?: boolean
   error?: string
   helper?: string
+  // When given, the person also says which kind of ID this is; staff see it when checking.
+  idType?: string
+  onIdTypeChange?: (idType: string) => void
+  idTypeError?: string
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null)
   const [localError, setLocalError] = useState<string | null>(null)
@@ -146,6 +154,23 @@ export function IdUpload({
   return (
     <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
       <div className="text-sm font-bold">{label}</div>
+
+      {onIdTypeChange ? (
+        <label className="mt-3 block">
+          <div className="mb-1 text-xs font-semibold text-muted">ID type</div>
+          <select
+            value={idType || ''}
+            disabled={disabled}
+            onChange={(e) => onIdTypeChange(e.target.value)}
+            aria-label={`${label} type`}
+            className="w-full rounded-xl border border-white/10 bg-background px-4 py-3 text-sm text-text focus:outline-none focus:ring-2 focus:ring-accent/40 disabled:opacity-60 [&>option]:bg-background"
+          >
+            <option value="">Select the ID type…</option>
+            {ACCEPTED_ID_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
+          </select>
+          {idTypeError ? <div className="mt-1 text-xs font-semibold text-danger">{idTypeError}</div> : null}
+        </label>
+      ) : null}
 
       <input
         ref={inputRef}

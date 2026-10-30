@@ -5,7 +5,7 @@ import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { FiCheck, FiShield, FiClock, FiAlertTriangle } from 'react-icons/fi'
 import { apiGet, apiPut } from '../../utils/apiClient'
-import { WaiverApprovalDialog } from '../../components/waivers/WaiverApprovalDialog'
+import { WaiverApprovalDialog, type WaiverIdCheck } from '../../components/waivers/WaiverApprovalDialog'
 
 type WaiverStatus = 'pending' | 'accepted' | 'flagged' | 'expired'
 
@@ -18,6 +18,10 @@ type WaiverRow = {
   status: WaiverStatus
   reviewerNote: string
   fullName: string
+  idType: string
+  idImage: string
+  guardianName: string
+  guardianIdType: string
   guardianIdImage: string
 }
 
@@ -57,6 +61,10 @@ export function RegistrarSubmittedWaiversPage() {
         status: normalizeStatus(item.status),
         reviewerNote: item.reviewerNote || '',
         fullName: item.fullName || 'this player',
+        idType: item.idType || '',
+        idImage: item.idImage || '',
+        guardianName: item.guardianName || '',
+        guardianIdType: item.guardianIdType || '',
         guardianIdImage: item.guardianIdImage || '',
       }))
       setRows(mapped)
@@ -90,7 +98,7 @@ export function RegistrarSubmittedWaiversPage() {
 
   const [approving, setApproving] = useState<{ row: WaiverRow; note: string } | null>(null)
 
-  const updateStatus = async (id: string, nextStatus: WaiverStatus, reviewerNote: string, idCheck?: { idType: string; idChecked: true }) => {
+  const updateStatus = async (id: string, nextStatus: WaiverStatus, reviewerNote: string, idCheck?: WaiverIdCheck) => {
     setSavingId(id)
     try {
       await apiPut(`/api/waivers/${encodeURIComponent(id)}`, {
@@ -117,9 +125,7 @@ export function RegistrarSubmittedWaiversPage() {
       <WaiverApprovalDialog
         key={approving?.row.id || 'closed'}
         open={Boolean(approving)}
-        participant={approving?.row.fullName || ''}
-        isMinor={Boolean(approving?.row.isMinor)}
-        guardianIdImage={approving?.row.guardianIdImage}
+        waiver={approving?.row || null}
         busy={Boolean(approving && savingId === approving.row.id)}
         onCancel={() => setApproving(null)}
         onConfirm={(check) => approving && void updateStatus(approving.row.id, 'accepted', approving.note, check)}
@@ -127,7 +133,7 @@ export function RegistrarSubmittedWaiversPage() {
       <div className="space-y-2">
         <div className="text-sm font-medium text-accent">Registrar</div>
         <h1 className="text-3xl font-bold">Submitted Online Waivers</h1>
-        <p className="text-muted text-sm">Review waiver submissions and accept/flag (prototype state-only).</p>
+        <p className="text-muted text-sm">Review waiver submissions and accept or flag them.</p>
       </div>
 
       <div className="grid gap-4 md:grid-cols-3">

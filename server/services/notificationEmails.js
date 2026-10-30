@@ -240,6 +240,22 @@ export function emailGuardianApprovalRequest(db, { approval, reservation, link }
   })
 }
 
+// Sent when a minor submits a waiver naming this guardian. Each booking still needs its own
+// approval (emailGuardianApprovalRequest).
+export function emailGuardianWaiverSubmitted(db, waiver) {
+  return sendLogged(db, {
+    key: `guardian-waiver:${waiver.id}`,
+    recipient: { email: waiver.guardianEmail, name: waiver.guardianName },
+    subject: `${waiver.fullName || 'A player'} listed you as their guardian at Chill Shooters`,
+    title: 'Waiver submitted with you as guardian',
+    lines: [
+      `${escapeHtml(waiver.fullName || 'A player')} (age ${Number(waiver.age) || '-'}) submitted a Chill Shooters waiver and listed you as their parent or guardian, with your signature and ID.`,
+      'Our staff will check the waiver and both IDs. After that, we will email you to approve each game they book.',
+      "If you don't know this player or didn't sign this waiver, please reply to this email or contact Chill Shooters.",
+    ],
+  })
+}
+
 // Tells the player how their guardian answered.
 export function emailGuardianDecision(db, approval, reservation) {
   const approved = approval.status === 'approved'

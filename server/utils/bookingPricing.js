@@ -1,4 +1,5 @@
 import { modelOf } from './inventoryPieces.js'
+import { packageEquipmentQty } from './packageQuantities.js'
 
 const DEFAULT_ENTRANCE_FEE = 150
 const DEFAULT_STANDARD_DEPOSIT_RATE = 0.5
@@ -141,7 +142,8 @@ export async function calculateBookingPrice({ db, payload, players, findDocument
       const rentedWeaponCount = Math.max(0, packageWeaponCount * players - ownWeaponCount)
       const weaponsTotal = Math.round(averageWeaponPrice * rentedWeaponCount * sessionMultiplier)
       const equipmentTotal = Math.round(
-        equipment.reduce((sum, item) => sum + numberOrZero(item.price, 'Equipment'), 0) * players * sessionMultiplier,
+        equipment.reduce((sum, item, index) => sum + numberOrZero(item.price, 'Equipment') * packageEquipmentQty(pkg, equipmentIds[index]), 0)
+          * players * sessionMultiplier,
       )
       const packageBase = Math.round(basePrice * players * sessionMultiplier)
       const preDiscount = packageBase + weaponsTotal + equipmentTotal + entranceFee
@@ -152,10 +154,11 @@ export async function calculateBookingPrice({ db, payload, players, findDocument
       const weaponLabel = [...new Set(weapons.map(modelOf))].join(' / ') || 'Rental weapons'
       if (weaponsTotal) breakdown.push({ label: `${weaponLabel} rental (${rentedWeaponCount})`, amount: weaponsTotal })
       if (ownWeaponCount && packageWeaponCount) breakdown.push({ label: `Own weapons (${Math.min(ownWeaponCount, packageWeaponCount * players)}) — no rental charge`, amount: 0 })
-      for (const item of equipment) {
-        const amount = Math.round(numberOrZero(item.price, 'Equipment') * players * sessionMultiplier)
-        if (amount) breakdown.push({ label: `${modelOf(item)} rental (${players})`, amount })
-      }
+      equipment.forEach((item, index) => {
+        const pieces = players * packageEquipmentQty(pkg, equipmentIds[index])
+        const amount = Math.round(numberOrZero(item.price, 'Equipment') * pieces * sessionMultiplier)
+        if (amount) breakdown.push({ label: `${modelOf(item)} rental (${pieces})`, amount })
+      })
       breakdown.push({ label: 'Player entrance fee', amount: entranceFee })
       if (packageDiscount) breakdown.push({ label: 'Package discount', amount: -packageDiscount })
     }

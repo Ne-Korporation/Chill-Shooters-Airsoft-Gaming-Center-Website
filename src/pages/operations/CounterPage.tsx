@@ -6,6 +6,7 @@ import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { apiGet, apiPost } from '../../utils/apiClient'
+import { formatPhPhone, PH_PHONE_PLACEHOLDER } from '../../utils/phone'
 import { LOCATIONS, SLOTS, formatDateTime, formatPHP, selectClass, toInventoryOptions, type InventoryOption } from './shared'
 
 type Ledger = {
@@ -92,7 +93,7 @@ function WalkInForm({ onCreated }: { onCreated: (reservationId: string) => void 
       <form className="mt-4 space-y-3" onSubmit={submit}>
         <div className="grid gap-3 sm:grid-cols-2">
           <Input label="Name" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
-          <Input label="Contact (optional)" value={form.contact} onChange={(e) => setForm((f) => ({ ...f, contact: e.target.value }))} />
+          <Input label="Contact number (optional)" inputMode="tel" placeholder={PH_PHONE_PLACEHOLDER} value={form.contact} onChange={(e) => setForm((f) => ({ ...f, contact: formatPhPhone(e.target.value) }))} />
         </div>
         <div className="grid gap-3 sm:grid-cols-3">
           <label className="block">

@@ -84,11 +84,14 @@ export async function syncReservationPaymentState(db, reservation) {
         message: `All payments for ${reservationLabel(reservation)} are in. Review the proofs and waivers to approve it.`,
         linkedResourceId: reservation.id,
       })
+      const split = String(reservation.paymentMode || 'self').toLowerCase() === 'split'
       await notifyUser(db, {
         userId: reservation.userId,
         type: 'reservation_payment_finalized',
-        title: 'Your team payment is complete',
-        message: `Every share for ${reservationLabel(reservation)} has been submitted. It is now with the admin for final approval.`,
+        title: split ? 'Your team payment is complete' : 'Your payment is complete',
+        message: split
+          ? `Every share for ${reservationLabel(reservation)} has been submitted. It is now with the admin for final approval.`
+          : `Your payment for ${reservationLabel(reservation)} has been submitted. It is now with the admin for final approval.`,
         linkedResourceId: reservation.id,
       })
     }

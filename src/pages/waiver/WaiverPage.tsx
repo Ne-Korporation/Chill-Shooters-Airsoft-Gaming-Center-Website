@@ -20,11 +20,11 @@ import { Input } from '../../components/ui/Input'
 import { IdUpload } from './IdUpload'
 import { SignaturePad } from './SignaturePad'
 import { apiGet, apiPost } from '../../utils/apiClient'
-import { OFFICIAL_WAIVER_TEXT } from '../../utils/waiverText'
+import { formatPhPhone, isValidPhPhone, PH_PHONE_PLACEHOLDER } from '../../utils/phone'
+import { signedWaiverText, useCurrentWaiverText, type WaiverText } from '../../utils/waiverText'
 import { printWaiverDocument } from '../../utils/waiverPrint'
 import { useAuth } from '../../context/AuthContext'
 import { ageFromBirthDate, isValidBirthDate, maxBirthDate } from '../../utils/age'
-import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
 
 type WaiverState = {
   fullName: string
@@ -58,6 +58,10 @@ type SubmittedWaiver = {
   guardianPhone?: string
   guardianIdImage?: string
   guardianSignatureImage?: string
+  idType?: string
+  idImage?: string
+  guardianIdType?: string
+  waiverText?: WaiverText | null
   status?: string
   validUntilISO?: string
   submittedAtISO?: string
@@ -67,13 +71,13 @@ type SubmittedWaiver = {
 // ---------------------------------------------------------------------
 // Official waiver text (Chill Shooters)
 // ---------------------------------------------------------------------
-const WAIVER_TEXT = OFFICIAL_WAIVER_TEXT
-
 function WaiverTermsBody({
+  text: WAIVER_TEXT,
   isMinor,
   textClass,
   headingClass,
 }: {
+  text: WaiverText
   isMinor: boolean
   textClass: string
   headingClass: string
@@ -104,10 +108,6 @@ function WaiverTermsBody({
 }
 
 // 10 to 13 digits (e.g. 09171234567 or +63 917 123 4567)
-function isValidPhone(value: string) {
-  const digits = value.replace(/\D/g, '')
-  return digits.length >= 10 && digits.length <= 13
-}
 
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n))
@@ -186,12 +186,16 @@ export function WaiverPage({
   const [guardianPhone, setGuardianPhone] = useState('')
   const [guardianEmail, setGuardianEmail] = useState('')
   const [guardianIdImage, setGuardianIdImage] = useState('')
+  const [guardianIdType, setGuardianIdType] = useState('')
+  const [idType, setIdType] = useState('')
+  const [idImage, setIdImage] = useState('')
+  // New waivers are signed with the admin's current text; a submitted one shows what was signed.
+  const { text: currentWaiverText } = useCurrentWaiverText()
   const [guardianSignatureImage, setGuardianSignatureImage] = useState('')
   const [signatureMethod, setSignatureMethod] = useState<'drawn' | 'uploaded'>('drawn')
   const [signatureMode, setSignatureMode] = useState<'draw' | 'upload'>('draw')
   const [signatureError, setSignatureError] = useState<string | null>(null)
   const { user } = useAuth()
-  const { addNotification } = useNotifications()
 
   const waiverStorageKey = user?.id ? `waiver_submitted:${user.id}` : ''
   const waiverIdKey = user?.id ? `last_waiver_id:${user.id}` : ''
@@ -269,10 +273,13 @@ export function WaiverPage({
             strokesRef.current = []
             setHasSignature(false)
             setSignatureImage('')
-            // Guardian phone, email and ID photo are kept; signatures must be redone.
+            // Guardian phone, email and both IDs are kept; signatures must be redone.
             setGuardianPhone(existingWaiver.guardianPhone || '')
             setGuardianEmail(existingWaiver.guardianEmail || '')
             setGuardianIdImage(existingWaiver.guardianIdImage || '')
+            setGuardianIdType(existingWaiver.guardianIdType || '')
+            setIdType(existingWaiver.idType || '')
+            setIdImage(existingWaiver.idImage || '')
             setGuardianSignatureImage('')
             setWaiverStatus(String(existingWaiver.status).trim().toLowerCase())
             setSubmittedWaiver(existingWaiver)
@@ -293,6 +300,9 @@ export function WaiverPage({
             setGuardianPhone(existingWaiver.guardianPhone || '')
             setGuardianEmail(existingWaiver.guardianEmail || '')
             setGuardianIdImage(existingWaiver.guardianIdImage || '')
+            setGuardianIdType(existingWaiver.guardianIdType || '')
+            setIdType(existingWaiver.idType || '')
+            setIdImage(existingWaiver.idImage || '')
             setGuardianSignatureImage(existingWaiver.guardianSignatureImage || '')
             setWaiverStatus(existingWaiver.status)
             setSubmittedWaiver(existingWaiver)
@@ -312,6 +322,9 @@ export function WaiverPage({
             setGuardianPhone('')
             setGuardianEmail('')
             setGuardianIdImage('')
+            setGuardianIdType('')
+            setIdType('')
+            setIdImage('')
             setGuardianSignatureImage('')
             if (waiverStorageKey) localStorage.removeItem(waiverStorageKey)
             if (waiverIdKey) localStorage.removeItem(waiverIdKey)
@@ -340,15 +353,18 @@ export function WaiverPage({
     if (!state.fullName.trim()) e.fullName = 'Full name is required.'
     if (!state.birthDate) e.birthDate = 'Birthday is required.'
     else if (!isValidBirthDate(state.birthDate)) e.birthDate = 'Enter a valid birthday.'
+    if (!idType) e.idType = 'Choose which ID you are attaching.'
+    if (!idImage) e.idImage = 'A photo of your ID is required.'
 
     if (isMinor) {
       if (!state.guardianName.trim()) e.guardianName = 'Guardian name is required for minors.'
       if (!state.guardianConsent) e.guardianConsent = 'Guardian consent is required.'
       if (!guardianPhone.trim()) e.guardianPhone = 'Guardian phone number is required.'
-      else if (!isValidPhone(guardianPhone)) e.guardianPhone = 'Enter a valid phone number.'
+      else if (!isValidPhPhone(guardianPhone)) e.guardianPhone = 'Enter the phone number as +63-9XX-XXX-XXXX.'
       if (!guardianEmail.trim()) e.guardianEmail = 'Guardian email is required so they can approve your bookings.'
       else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(guardianEmail.trim())) e.guardianEmail = 'Enter a valid email address.'
       else if (guardianEmail.trim().toLowerCase() === String(user?.email || '').toLowerCase()) e.guardianEmail = "Use your parent or guardian's own email, not yours."
+      if (!guardianIdType) e.guardianIdType = "Choose which ID the guardian is attaching."
       if (!guardianIdImage) e.guardianIdImage = 'A photo of the guardian\'s ID is required.'
       if (!guardianSignatureImage) e.guardianSignature = 'Guardian signature is required.'
     }
@@ -358,7 +374,7 @@ export function WaiverPage({
     if (!hasSignature) e.signature = 'Signature is required.'
 
     return e
-  }, [hasSignature, isMinor, state, guardianPhone, guardianEmail, guardianIdImage, guardianSignatureImage, user?.email])
+  }, [hasSignature, isMinor, state, guardianPhone, guardianEmail, guardianIdImage, guardianIdType, guardianSignatureImage, idType, idImage, user?.email])
 
   // Prefill the birthday from the player's profile when the form starts empty.
   useEffect(() => {
@@ -657,7 +673,8 @@ export function WaiverPage({
     setSubmitting(true)
     try {
       // Compress images first so the request body stays small (minors send an ID photo + 2 signatures)
-      const [compressedGuardianId, compressedGuardianSig, compressedPlayerSig] = await Promise.all([
+      const [compressedPlayerId, compressedGuardianId, compressedGuardianSig, compressedPlayerSig] = await Promise.all([
+        compressImage(idImage, 1000, 0.75),
         isMinor ? compressImage(guardianIdImage, 1000, 0.75) : Promise.resolve(''),
         isMinor ? compressImage(guardianSignatureImage, 600, 0.85) : Promise.resolve(''),
         compressImage(signatureImage, 600, 0.85),
@@ -682,6 +699,9 @@ export function WaiverPage({
         guardianPhone: isMinor ? guardianPhone.trim() : '',
         guardianEmail: isMinor ? guardianEmail.trim().toLowerCase() : '',
         guardianIdImage: isMinor ? compressedGuardianId : '',
+        guardianIdType: isMinor ? guardianIdType : '',
+        idType,
+        idImage: compressedPlayerId,
         guardianSignatureImage: isMinor ? compressedGuardianSig : '',
         status: 'pending',
         submittedAtISO: new Date().toISOString(),
@@ -698,19 +718,6 @@ export function WaiverPage({
         if (waiverIdKey && response.data?.id) localStorage.setItem(waiverIdKey, response.data.id)
       } catch {
         // ignore
-      }
-
-      // Notifications must never block or undo a successful submit
-      try {
-        sendRoleNotifications(addNotification, {
-          roles: ['admin', 'registrar', 'marshal'],
-          type: 'waiver_submitted',
-          title: 'New Waiver Submitted',
-          message: `A new waiver was submitted by ${user?.name || user?.id || 'a player'}.`,
-          linkedResourceId: response.data?.id,
-        })
-      } catch (err) {
-        console.warn('Notification failed', err)
       }
 
       toast.success('Waiver submitted')
@@ -881,7 +888,8 @@ export function WaiverPage({
       {viewWaiverOpen && submittedWaiver ? createPortal(
         <div className="waiver-print-overlay fixed inset-0 z-[9999] grid place-items-center bg-black/60 p-4">
           <div className="waiver-print-sheet max-h-[90vh] w-full max-w-5xl overflow-y-auto bg-white text-slate-950 dark:bg-slate-950 dark:text-white p-6 shadow-2xl">
-            <div className="flex flex-col gap-4 border-b border-slate-200/70 pb-4 sm:flex-row sm:items-center sm:justify-between">
+            {/* Pinned so the close button stays reachable while scrolling the waiver. */}
+            <div className="sticky -top-6 z-10 -mx-6 -mt-6 flex flex-col gap-4 border-b border-slate-200/70 bg-white px-6 pb-4 pt-6 dark:bg-slate-950 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <div className="text-xs uppercase tracking-widest text-slate-500">Waiver document</div>
                 <h2 id="waiver-details-title" className="mt-1 text-2xl font-semibold">{submittedWaiver.fullName || 'Unnamed player'}</h2>
@@ -927,6 +935,12 @@ export function WaiverPage({
               <p className="mt-3"><span className="font-semibold">Name:</span> {submittedWaiver.fullName || '-'}</p>
               <p className="mt-2"><span className="font-semibold">Age:</span> {submittedWaiver.age ?? '-'}</p>
               <p className="mt-2"><span className="font-semibold">Reservation:</span> {submittedWaiver.reservationId || '-'}</p>
+              <p className="mt-2"><span className="font-semibold">ID type:</span> {submittedWaiver.idType || '-'}</p>
+              {submittedWaiver.idImage ? (
+                <div className="mt-1 inline-block rounded-lg border border-slate-200 bg-white p-2">
+                  <img src={submittedWaiver.idImage} alt="Your ID" className="block h-24 object-contain" />
+                </div>
+              ) : null}
 
               <p className="mt-6 uppercase tracking-widest text-[11px] text-slate-500">Guardian information</p>
               {submittedWaiver.isMinor ? (
@@ -934,6 +948,7 @@ export function WaiverPage({
                   <p className="mt-3"><span className="font-semibold">Guardian name:</span> {submittedWaiver.guardianName || '-'}</p>
                   <p className="mt-2"><span className="font-semibold">Guardian consent:</span> {submittedWaiver.guardianConsent ? 'Yes' : 'No'}</p>
                   <p className="mt-2"><span className="font-semibold">Guardian phone:</span> {submittedWaiver.guardianPhone || '-'}</p>
+                  <p className="mt-2"><span className="font-semibold">Guardian ID type:</span> {submittedWaiver.guardianIdType || '-'}</p>
                   <div className="mt-2 flex flex-wrap gap-4">
                     {submittedWaiver.guardianIdImage ? (
                       <div>
@@ -964,9 +979,10 @@ export function WaiverPage({
                 <li>Signature captured: {submittedWaiver.hasSignature ? 'Yes' : 'No'}</li>
               </ul>
 
-              <p className="mt-6 uppercase tracking-widest text-[11px] text-slate-500">{WAIVER_TEXT.title}</p>
+              <p className="mt-6 uppercase tracking-widest text-[11px] text-slate-500">{signedWaiverText(submittedWaiver).title}</p>
               <div className="waiver-print-terms mt-3">
                 <WaiverTermsBody
+                  text={signedWaiverText(submittedWaiver)}
                   isMinor={Boolean(submittedWaiver.isMinor)}
                   textClass="text-slate-700 dark:text-slate-300"
                   headingClass="text-slate-500"
@@ -1048,6 +1064,20 @@ export function WaiverPage({
               />
             </div>
 
+            <div className="mt-4">
+              <IdUpload
+                label="Your ID"
+                value={idImage}
+                onChange={setIdImage}
+                idType={idType}
+                onIdTypeChange={setIdType}
+                idTypeError={shownErrors.idType}
+                disabled={submitted || submitting}
+                error={shownErrors.idImage}
+                helper="Photo of your valid government or school ID. Staff check it before approving your waiver."
+              />
+            </div>
+
             {isMinor ? (
               <motion.div
                 initial={{ opacity: 0, y: 6 }}
@@ -1095,10 +1125,10 @@ export function WaiverPage({
                     label="Guardian Phone Number"
                     type="tel"
                     inputMode="tel"
-                    placeholder="e.g., 0917 123 4567"
+                    placeholder={PH_PHONE_PLACEHOLDER}
                     value={guardianPhone}
                     disabled={submitted || submitting}
-                    onChange={(e) => setGuardianPhone(e.target.value)}
+                    onChange={(e) => setGuardianPhone(formatPhPhone(e.target.value))}
                     error={shownErrors.guardianPhone}
                   />
                   <Input
@@ -1115,6 +1145,9 @@ export function WaiverPage({
                     label="Guardian ID"
                     value={guardianIdImage}
                     onChange={setGuardianIdImage}
+                    idType={guardianIdType}
+                    onIdTypeChange={setGuardianIdType}
+                    idTypeError={shownErrors.guardianIdType}
                     disabled={submitted || submitting}
                     error={shownErrors.guardianIdImage}
                   />
@@ -1136,7 +1169,7 @@ export function WaiverPage({
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="text-sm font-bold flex items-center gap-2">
-                    <FiUser /> <span>{WAIVER_TEXT.title}</span>
+                    <FiUser /> <span>{currentWaiverText.title}</span>
                   </div>
                   <div className="mt-1 text-xs text-muted">Read the full waiver below before confirming. Required before signature submission.</div>
                 </div>
@@ -1157,6 +1190,7 @@ export function WaiverPage({
                   className="mt-4 max-h-80 overflow-y-auto rounded-2xl border border-white/10 bg-white/5 p-4 pr-3"
                 >
                   <WaiverTermsBody
+                    text={currentWaiverText}
                     isMinor={isMinor}
                     textClass="text-muted"
                     headingClass="text-muted"
@@ -1287,10 +1321,11 @@ export function WaiverPage({
               const steps = [
                 { label: "Your name", ok: !!state.fullName.trim() },
                 { label: "Your birthday", ok: !errors.birthDate },
+                { label: "Your ID", ok: !!idType && !!idImage },
                 ...(isMinor
                   ? [
                       { label: "Guardian details & consent", ok: state.guardianConsent && !!state.guardianName.trim() && !errors.guardianPhone && !errors.guardianEmail },
-                      { label: "Guardian ID photo", ok: !!guardianIdImage },
+                      { label: "Guardian ID", ok: !!guardianIdType && !!guardianIdImage },
                       { label: "Guardian signature", ok: !!guardianSignatureImage },
                     ]
                   : []),

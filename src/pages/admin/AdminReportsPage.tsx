@@ -5,8 +5,30 @@ import { Button } from '../../components/ui/Button'
 import { FilterTabs } from '../../components/ui/FilterTabs'
 import { apiGet } from '../../utils/apiClient'
 import { equipmentAlerts } from '../../utils/inventoryModels'
+import { useAuth } from '../../context/AuthContext'
 
 type Metric = { label: string; value: string; tone: 'accent' | 'success' | 'danger' }
+
+// Report order: money and items needing action first, then activity, then records.
+const METRIC_PRIORITY = [
+  'Revenue collected',
+  'Payments awaiting review',
+  'Pending approvals',
+  'Reservations',
+  'Confirmed / completed',
+  'Players booked',
+  'Penalties & extra charges',
+  'Damage / repair penalties',
+  'Equipment alerts (current)',
+  'Cancelled / rejected',
+  'Waivers submitted',
+  'Player registrations',
+  'Equipment rentals issued',
+]
+const metricRank = (label: string) => {
+  const index = METRIC_PRIORITY.indexOf(label)
+  return index === -1 ? METRIC_PRIORITY.length : index
+}
 
 type ReservationDoc = {
   id?: string
@@ -96,6 +118,8 @@ function paymentType(payment: PaymentDoc & { stripePaymentIntentId?: string }): 
   const method = String(payment.paymentMethod || '').toLowerCase()
   if (method.includes('card') || payment.stripePaymentIntentId) return 'card'
   if (method.includes('bank')) return 'bank'
+  // "gcash" contains "cash", so check GCash first.
+  if (method.includes('gcash')) return 'gcash'
   if (method.includes('cash')) return 'cash'
   return 'gcash'
 }
@@ -182,6 +206,8 @@ function csvCell(value: unknown) {
 }
 
 export function AdminReportsPage() {
+  // The signed-in staff member is named on the report as "Prepared by".
+  const { user } = useAuth()
   const today = toISODate(new Date())
   const [reservations, setReservations] = useState<ReservationDoc[]>([])
   const [payments, setPayments] = useState<PaymentDoc[]>([])
@@ -342,7 +368,7 @@ export function AdminReportsPage() {
       { label: 'Equipment rentals issued', value: `${periodRentals.length}${unreturned ? ` · ${unreturned} not returned` : ''}`, tone: 'accent' },
       { label: 'Penalties & extra charges', value: `${penalties.length} · ${formatCurrency(penaltyTotal)}`, tone: 'danger' },
       { label: 'Damage / repair penalties', value: formatCurrency(damageTotal), tone: 'danger' },
-      { label: 'Equipment alerts (current)', value: String(equipmentAlerts), tone: 'danger' },
+      { label: 'Equipment alerts (current)', value: String(equipmentAlertCount), tone: 'danger' },
     ]
 
     return { metrics, breakdown, periodPayments, collected, players, statement, penalties, topRentals, periodRentals }
@@ -350,39 +376,48 @@ export function AdminReportsPage() {
 
   const rangeLabel = range.start === range.end ? range.start : `${range.start} to ${range.end}`
   const transactionLabel = TRANSACTION_TYPES.find((type) => type.key === transactionType)?.label || 'All transactions'
+  const reportTitle = `${PERIOD_LABELS[period]} Report`
+  const preparedBy = `${user?.name || user?.email || 'Unknown user'}${user?.role ? ` (${user.role})` : ''}`
+  const generatedAt = new Date().toLocaleString('en-PH', { dateStyle: 'long', timeStyle: 'short' })
+
+  // Only what has a value is shown, most important first; zero rows and empty sections are left out.
+  const shown = useMemo(() => ({
+    metrics: report.metrics
+      .filter((metric) => /[1-9]/.test(metric.value))
+      .sort((a, b) => metricRank(a.label) - metricRank(b.label)),
+    statement: report.statement.filter((row) => Math.round(row.amount) !== 0),
+    breakdown: report.breakdown.filter((row) => row.reservations || row.players || row.collected),
+  }), [report])
+  const hasActivity = shown.metrics.length > 0 || report.periodPayments.length > 0 || report.penalties.length > 0 || report.periodRentals.length > 0
 
   const exportCsv = () => {
     const lines: string[] = []
-    lines.push(['Chill Shooters report', PERIOD_LABELS[period], rangeLabel, transactionLabel].map(csvCell).join(','))
-    lines.push('')
-    lines.push('Metric,Value')
-    for (const metric of report.metrics) lines.push([metric.label, metric.value].map(csvCell).join(','))
-    lines.push('')
-    lines.push('Financial statement,Amount (PHP)')
-    for (const row of report.statement) lines.push([row.label, row.amount].map(csvCell).join(','))
-    lines.push('')
-    lines.push([period === 'yearly' ? 'Month' : 'Date', 'Reservations', 'Players', 'Revenue collected (PHP)'].join(','))
-    for (const row of report.breakdown) lines.push([row.key, row.reservations, row.players, row.collected].map(csvCell).join(','))
-    lines.push('')
-    lines.push('Payment ID,Reservation ID,Date,Method,Status,Amount (PHP)')
-    for (const payment of report.periodPayments) {
-      lines.push([
-        payment.id,
-        payment.reservationId,
-        dayOf(payment.createdAtISO || payment.createdAt),
-        payment.paymentMethod,
-        paymentStatusOf(payment),
-        paymentAmount(payment),
-      ].map(csvCell).join(','))
+    lines.push(['Chill Shooters Airsoft Gaming Center', reportTitle].map(csvCell).join(','))
+    lines.push(['Period', rangeLabel].map(csvCell).join(','))
+    lines.push(['Transactions', transactionLabel].map(csvCell).join(','))
+    lines.push(['Prepared by', preparedBy].map(csvCell).join(','))
+    lines.push(['Generated', generatedAt].map(csvCell).join(','))
+    const section = (header: string, rows: string[]) => {
+      if (!rows.length) return
+      lines.push('', header, ...rows)
     }
-    lines.push('')
-    lines.push('Penalty date,Reservation ID,Charge,Amount (PHP)')
-    for (const row of report.penalties) lines.push([row.day, row.reservationId, row.label, row.amount].map(csvCell).join(','))
-    lines.push('')
-    lines.push('Rental ID,Issued,Reservation ID,Player,Item,Category,Status')
-    for (const rental of report.periodRentals) {
-      lines.push([rental.id, dayOf(rental.issuedAtISO), rental.reservationId, rental.playerName, rental.itemName, rental.itemCategory, rental.status].map(csvCell).join(','))
-    }
+    section('Metric,Value', shown.metrics.map((metric) => [metric.label, metric.value].map(csvCell).join(',')))
+    section('Financial statement,Amount (PHP)', shown.statement.map((row) => [row.label, row.amount].map(csvCell).join(',')))
+    section(
+      [period === 'yearly' ? 'Month' : 'Date', 'Reservations', 'Players', 'Revenue collected (PHP)'].join(','),
+      shown.breakdown.map((row) => [row.key, row.reservations, row.players, row.collected].map(csvCell).join(',')),
+    )
+    section('Payment ID,Reservation ID,Date,Method,Status,Amount (PHP)', report.periodPayments.map((payment) => [
+      payment.id,
+      payment.reservationId,
+      dayOf(payment.createdAtISO || payment.createdAt),
+      payment.paymentMethod,
+      paymentStatusOf(payment),
+      paymentAmount(payment),
+    ].map(csvCell).join(',')))
+    section('Penalty date,Reservation ID,Charge,Amount (PHP)', report.penalties.map((row) => [row.day, row.reservationId, row.label, row.amount].map(csvCell).join(',')))
+    section('Rental ID,Issued,Reservation ID,Player,Item,Category,Status', report.periodRentals.map((rental) =>
+      [rental.id, dayOf(rental.issuedAtISO), rental.reservationId, rental.playerName, rental.itemName, rental.itemCategory, rental.status].map(csvCell).join(',')))
 
     const blob = new Blob([`﻿${lines.join('\n')}`], { type: 'text/csv;charset=utf-8' })
     const url = URL.createObjectURL(blob)
@@ -403,7 +438,7 @@ export function AdminReportsPage() {
         .print-area * { color: #000 !important; border-color: #ccc !important; background: transparent !important; box-shadow: none !important; }
       }`}</style>
 
-      <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+      <div className="no-print flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
           <h1 className="text-3xl font-bold">Reports</h1>
           <p className="mt-1 text-sm text-muted">Operational and financial reporting for reservations, sales, payments, registrations, rentals, and penalties.</p>
@@ -457,17 +492,26 @@ export function AdminReportsPage() {
       </Card>
 
       <div className="print-area space-y-4">
-        <div className="text-sm text-muted">
-          <span className="font-semibold text-text">{PERIOD_LABELS[period]} report</span> · {rangeLabel} · {transactionLabel}
-          {loading ? ' · Loading…' : ''}
-        </div>
+        <Card className="p-5">
+          <div className="text-xs uppercase tracking-widest text-muted">Chill Shooters Airsoft Gaming Center</div>
+          <h2 className="mt-1 text-2xl font-bold">{reportTitle}</h2>
+          <div className="mt-1 text-sm text-muted">{rangeLabel} · {transactionLabel}{loading ? ' · Loading…' : ''}</div>
+          <div className="mt-3 grid gap-1 text-sm sm:grid-cols-2">
+            <div><span className="text-muted">Prepared by: </span><span className="font-semibold">{preparedBy}</span></div>
+            <div><span className="text-muted">Generated: </span><span className="font-semibold">{generatedAt}</span></div>
+          </div>
+        </Card>
 
         {error ? (
           <div className="rounded-2xl border border-danger/20 bg-danger/10 px-4 py-3 text-sm text-danger">{error}</div>
         ) : null}
 
+        {!loading && !hasActivity ? (
+          <Card className="p-4 text-sm text-muted">No activity in this period.</Card>
+        ) : null}
+
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {report.metrics.map((metric) => (
+          {shown.metrics.map((metric) => (
             <Card key={metric.label} className="p-4">
               <div className="text-xs uppercase tracking-widest text-muted">{metric.label}</div>
               <div className={`mt-2 text-2xl font-bold ${metric.tone === 'accent' ? 'text-accent' : metric.tone === 'success' ? 'text-success' : 'text-danger'}`}>
@@ -477,11 +521,12 @@ export function AdminReportsPage() {
           ))}
         </div>
 
+        {shown.statement.length ? (
         <Card className="p-4">
           <div className="text-xs uppercase tracking-widest text-muted">Financial statement</div>
           <table className="mt-3 w-full text-sm">
             <tbody className="divide-y divide-white/5">
-              {report.statement.map((row) => (
+              {shown.statement.map((row) => (
                 <tr key={row.label}>
                   <td className="py-2 pr-4">{row.label}</td>
                   <td className="py-2 text-right font-semibold">{loading ? '…' : formatCurrency(row.amount)}</td>
@@ -491,15 +536,15 @@ export function AdminReportsPage() {
           </table>
           <div className="mt-2 text-xs text-muted">Booking values cover reservations dated in this period; collections count verified payments received in it.</div>
         </Card>
+        ) : null}
 
         <div className="grid gap-4 lg:grid-cols-2">
+          {report.topRentals.length ? (
           <Card className="p-4">
             <div className="text-xs uppercase tracking-widest text-muted">Most rented equipment</div>
             <table className="mt-3 w-full text-sm">
               <tbody className="divide-y divide-white/5">
-                {report.topRentals.length === 0 ? (
-                  <tr><td className="py-3 text-muted">{loading ? 'Loading…' : 'No rentals issued in this period.'}</td></tr>
-                ) : report.topRentals.map(([name, count]) => (
+                {report.topRentals.map(([name, count]) => (
                   <tr key={name}>
                     <td className="py-2 pr-4">{name}</td>
                     <td className="py-2 text-right font-semibold">{count}</td>
@@ -508,15 +553,15 @@ export function AdminReportsPage() {
               </tbody>
             </table>
           </Card>
+          ) : null}
 
+          {report.penalties.length ? (
           <Card className="p-4">
             <div className="text-xs uppercase tracking-widest text-muted">Penalties and extra charges</div>
             <div className="mt-3 overflow-x-auto">
               <table className="w-full text-sm">
                 <tbody className="divide-y divide-white/5">
-                  {report.penalties.length === 0 ? (
-                    <tr><td className="py-3 text-muted">{loading ? 'Loading…' : 'No penalties or extra charges in this period.'}</td></tr>
-                  ) : report.penalties.map((row, index) => (
+                  {report.penalties.map((row, index) => (
                     <tr key={`${row.reservationId}-${index}`}>
                       <td className="py-2 pr-4 whitespace-nowrap">{row.day}</td>
                       <td className="py-2 pr-4">{row.label}<div className="text-xs text-muted">{row.reservationId}</div></td>
@@ -527,8 +572,10 @@ export function AdminReportsPage() {
               </table>
             </div>
           </Card>
+          ) : null}
         </div>
 
+        {shown.breakdown.length ? (
         <Card className="p-4">
           <div className="text-xs uppercase tracking-widest text-muted">
             Breakdown by {period === 'yearly' ? 'month' : 'day'}
@@ -544,9 +591,7 @@ export function AdminReportsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
-                {report.breakdown.length === 0 ? (
-                  <tr><td colSpan={4} className="py-3 text-muted">{loading ? 'Loading…' : 'No activity in this period.'}</td></tr>
-                ) : report.breakdown.map((row) => (
+                {shown.breakdown.map((row) => (
                   <tr key={row.key}>
                     <td className="py-2 pr-4">{row.key}</td>
                     <td className="py-2 pr-4 text-right">{row.reservations}</td>
@@ -555,20 +600,20 @@ export function AdminReportsPage() {
                   </tr>
                 ))}
               </tbody>
-              {report.breakdown.length > 0 ? (
-                <tfoot className="font-semibold">
-                  <tr className="border-t border-white/10">
-                    <td className="py-2 pr-4">Total</td>
-                    <td className="py-2 pr-4 text-right">{report.breakdown.reduce((n, r) => n + r.reservations, 0)}</td>
-                    <td className="py-2 pr-4 text-right">{report.breakdown.reduce((n, r) => n + r.players, 0)}</td>
-                    <td className="py-2 text-right">{formatCurrency(report.collected)}</td>
-                  </tr>
-                </tfoot>
-              ) : null}
+              <tfoot className="font-semibold">
+                <tr className="border-t border-white/10">
+                  <td className="py-2 pr-4">Total</td>
+                  <td className="py-2 pr-4 text-right">{shown.breakdown.reduce((n, r) => n + r.reservations, 0)}</td>
+                  <td className="py-2 pr-4 text-right">{shown.breakdown.reduce((n, r) => n + r.players, 0)}</td>
+                  <td className="py-2 text-right">{formatCurrency(report.collected)}</td>
+                </tr>
+              </tfoot>
             </table>
           </div>
         </Card>
+        ) : null}
 
+        {report.periodPayments.length ? (
         <Card className="p-4">
           <div className="text-xs uppercase tracking-widest text-muted">Payments in this period · {transactionLabel}</div>
           <div className="mt-3 overflow-x-auto">
@@ -584,9 +629,7 @@ export function AdminReportsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
-                {report.periodPayments.length === 0 ? (
-                  <tr><td colSpan={6} className="py-3 text-muted">{loading ? 'Loading…' : 'No payments in this period.'}</td></tr>
-                ) : report.periodPayments.map((payment, index) => (
+                {report.periodPayments.map((payment, index) => (
                   <tr key={payment.id || index}>
                     <td className="py-2 pr-4">{dayOf(payment.createdAtISO || payment.createdAt)}</td>
                     <td className="py-2 pr-4">{payment.id || '-'}</td>
@@ -601,6 +644,7 @@ export function AdminReportsPage() {
           </div>
           <div className="mt-2 text-xs text-muted">Revenue collected counts only payments marked paid, confirmed, verified, approved, or succeeded.</div>
         </Card>
+        ) : null}
       </div>
     </div>
   )

@@ -315,7 +315,7 @@ export function RegistrarReservationsPage() {
             <div>
               <div className="text-sm font-bold">Registrar workflow</div>
               <div className="mt-1 text-xs text-muted">
-                Approve moves a reservation to <span className="font-bold text-success">APPROVED</span>. Rejection moves it to <span className="font-bold text-danger">REJECTED</span>. In a real backend, this would also reserve capacity and notify marshals.
+                Approve moves a reservation to <span className="font-bold text-success">APPROVED</span>. Rejection moves it to <span className="font-bold text-danger">REJECTED</span>. Approving also schedules the game and notifies the marshals.
               </div>
             </div>
           </div>

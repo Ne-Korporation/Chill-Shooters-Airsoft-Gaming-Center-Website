@@ -48,6 +48,8 @@ function formatDateTime(iso?: string) {
 
 function toItems(docs: any[]): InventoryItem[] {
   return docs
+    // Player-owned gear is not center inventory; log it as "Player-owned / not listed".
+    .filter((doc) => doc.source !== 'player')
     .map((doc) => ({ id: String(doc.id || doc._id || ''), name: String(doc.name || 'Unnamed') }))
     .filter((item) => item.id)
 }

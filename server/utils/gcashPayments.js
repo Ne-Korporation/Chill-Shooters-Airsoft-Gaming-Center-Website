@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto'
 import { toObjectId } from '../db/mongo.js'
 import { getGcashAmountDue, normalizeGcashReference, paymentAmountMatchesDue } from './paymentRules.js'
+import { normalizePhPhone } from './phone.js'
 
 export async function submitGcashPayment({
   db,
@@ -18,9 +19,9 @@ export async function submitGcashPayment({
   const method = /bank/i.test(String(paymentMethod || '')) ? 'Bank Transfer' : 'GCash'
   const normalizedReference = normalizeGcashReference(transactionReference)
   // Optional: the PH mobile number the player paid from, for staff to cross-check.
-  const sender = String(senderNumber || '').replace(/\D/g, '')
-  if (sender && !/^09\d{9}$/.test(sender)) {
-    const invalid = new Error('GCash number must be 11 digits starting with 09.')
+  const sender = String(senderNumber || '').trim() ? normalizePhPhone(senderNumber) : ''
+  if (sender === null) {
+    const invalid = new Error('Enter your GCash number as +63-9XX-XXX-XXXX.')
     invalid.statusCode = 400
     throw invalid
   }

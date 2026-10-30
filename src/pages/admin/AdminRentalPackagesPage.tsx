@@ -5,7 +5,7 @@ import { ActionGroup, Button } from '../../components/ui/Button'
 import { FilterTabs, titleCaseLabel } from '../../components/ui/FilterTabs'
 import { Card } from '../../components/ui/Card'
 import { apiGet, apiPost, apiPut, apiDelete } from '../../utils/apiClient'
-import { formatDiscountTargetLabel, resolvePackageDiscountConfig, type PackageDiscountMode, type PackageDiscountTarget } from '../../utils/packagePricing'
+import { formatDiscountTargetLabel, MAX_EQUIPMENT_PER_PLAYER, packageEquipmentQty, resolvePackageDiscountConfig, type PackageDiscountMode, type PackageDiscountTarget } from '../../utils/packagePricing'
 import { modelOf, summarizeModels } from '../../utils/inventoryModels'
 
 type PackageStatus = 'active' | 'draft' | 'archived'
@@ -31,6 +31,8 @@ type RentalPackage = {
   settledAmount: number
   // Number of weapons the package gives
   weaponCount: number
+  // Pieces of each equipment item every player gets, keyed by equipment id (default 1)
+  equipmentQuantities: Record<string, number>
 }
 
 type WeaponItem = {
@@ -115,6 +117,7 @@ type FormState = {
   weaponCount: string
   weaponIds: string[]
   equipmentIds: string[]
+  equipmentQuantities: Record<string, number>
 }
 
 const EMPTY_FORM: FormState = {
@@ -130,6 +133,7 @@ const EMPTY_FORM: FormState = {
   weaponCount: '0',
   weaponIds: [],
   equipmentIds: [],
+  equipmentQuantities: {},
 }
 
 function formFromPackage(pkg: RentalPackage): FormState {
@@ -148,6 +152,7 @@ function formFromPackage(pkg: RentalPackage): FormState {
     weaponCount: String(pkg.weaponCount),
     weaponIds: [...pkg.weaponIds],
     equipmentIds: [...pkg.equipmentIds],
+    equipmentQuantities: { ...pkg.equipmentQuantities },
   }
 }
 
@@ -211,6 +216,7 @@ export function AdminRentalPackagesPage() {
           players: typeof d.players === 'number' ? d.players : 0,
           settledAmount: typeof d.settledAmount === 'number' ? d.settledAmount : 0,
           weaponCount: typeof d.weaponCount === 'number' && d.weaponCount > 0 ? d.weaponCount : weaponIds.length,
+          equipmentQuantities: d.equipmentQuantities && typeof d.equipmentQuantities === 'object' ? d.equipmentQuantities : {},
         }
       })
       setPackages(normalized)
@@ -333,6 +339,7 @@ export function AdminRentalPackagesPage() {
       weaponCount: typedWeaponCount > 0 ? typedWeaponCount : form.weaponIds.length,
       weaponIds: form.weaponIds,
       equipmentIds: form.equipmentIds,
+      equipmentQuantities: Object.fromEntries(form.equipmentIds.map((id) => [id, packageEquipmentQty(form, id)])),
       equipmentCount: totalItems,
     }
   }
@@ -512,10 +519,15 @@ export function AdminRentalPackagesPage() {
     const weaponTotal = averageWeaponPrice * effectiveWeaponCount
     const equipmentTotal = form.equipmentIds.reduce((sum, eid) => {
       const eq = getEquipmentById(eid)
-      return sum + (eq?.price || 0)
+      return sum + (eq?.price || 0) * packageEquipmentQty(form, eid)
     }, 0)
     return weaponTotal + equipmentTotal
-  }, [form.weaponIds, form.equipmentIds, weapons, equipment, pickedWeaponCount, effectiveWeaponCount])
+  }, [form.weaponIds, form.equipmentIds, form.equipmentQuantities, weapons, equipment, pickedWeaponCount, effectiveWeaponCount])
+
+  const setEquipmentQty = (equipmentId: string, value: string) => {
+    const qty = Math.min(MAX_EQUIPMENT_PER_PLAYER, Math.max(1, Math.round(Number(value)) || 1))
+    setForm((prev) => ({ ...prev, equipmentQuantities: { ...prev.equipmentQuantities, [equipmentId]: qty } }))
+  }
 
   // Live preview of what a player would spend with the settled amount
   const settledPreview = React.useMemo(() => {
@@ -868,7 +880,8 @@ export function AdminRentalPackagesPage() {
                 ) : (
                   <div className="max-h-48 overflow-y-auto rounded-xl border border-white/10 bg-white/5 p-2 space-y-1">
                     {equipmentModels.map((eq) => {
-                      const isSelected = form.equipmentIds.some((id) => modelOfPiece(equipment, id) === eq.model)
+                      const selectedId = form.equipmentIds.find((id) => modelOfPiece(equipment, id) === eq.model)
+                      const isSelected = Boolean(selectedId)
                       return (
                         <label
                           key={eq.model}
@@ -887,7 +900,22 @@ export function AdminRentalPackagesPage() {
                               <div className="text-sm font-semibold text-text">{eq.model}</div>
                               <div className="text-[11px] text-muted">{eq.category.toUpperCase()} • {eq.available} of {eq.total} pieces available</div>
                             </div>
-                            <div className="text-right">
+                            <div className="flex items-center gap-3 text-right">
+                              {selectedId ? (
+                                // How many of this item each player gets (e.g. 2 gloves).
+                                <span className="flex items-center gap-1 text-[11px] text-muted" onClick={(e) => e.preventDefault()}>
+                                  <input
+                                    type="number"
+                                    min={1}
+                                    max={MAX_EQUIPMENT_PER_PLAYER}
+                                    value={packageEquipmentQty(form, selectedId)}
+                                    onChange={(e) => setEquipmentQty(selectedId, e.target.value)}
+                                    aria-label={`${eq.model} per player`}
+                                    className="w-14 rounded-lg border border-white/10 bg-background px-2 py-1 text-sm text-text"
+                                  />
+                                  per player
+                                </span>
+                              ) : null}
                               <div className="text-[11px] font-semibold text-accent">₱{eq.price}</div>
                             </div>
                           </div>
@@ -1048,7 +1076,7 @@ export function AdminRentalPackagesPage() {
                           <div className="mt-1 flex items-center justify-between">
                             <div className="text-[11px] text-muted">{eq ? `${equipmentModels.find((g) => g.model === modelOf(eq))?.total ?? 0} pieces in inventory` : `ID: ${eid}`}</div>
                             {eq?.price !== undefined && (
-                              <div className="text-[11px] font-semibold text-accent">₱{eq.price}</div>
+                              <div className="text-[11px] font-semibold text-accent">₱{eq.price} × {packageEquipmentQty(form, eid)} per player</div>
                             )}
                           </div>
                         </div>

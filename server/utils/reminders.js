@@ -5,7 +5,7 @@ import { expireOldWaivers } from './waiverValidity.js'
 const WAIVER_REMINDER_DAYS = 7
 const WAIVER_REMINDER_REPEAT_MS = 3 * 86_400_000
 
-function manilaDateISO(offsetDays = 0) {
+export function manilaDateISO(offsetDays = 0) {
   const date = new Date(Date.now() + offsetDays * 86_400_000)
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(date)
 }

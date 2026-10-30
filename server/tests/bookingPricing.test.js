@@ -17,6 +17,8 @@ const records = {
       equipmentIds: ['vest'],
       weaponCount: 1,
     },
+    // Two gloves per player, one mask (the default)
+    { id: 'gloves-pack', name: 'Gloves Pack', status: 'active', settledAmount: 0, basePrice: 0, weaponIds: [], equipmentIds: ['MASK-1', 'VEST-1'], equipmentQuantities: { 'VEST-1': 2 } },
   ],
   weapons: [
     { id: 'rifle', name: 'Rifle', price: 500, status: 'available' },
@@ -171,4 +173,16 @@ test('the full package is ₱750 per player with a 50% deposit', async () => {
     userId: 'player',
   })
   assert.equal(ten.totalAmount, 7500)
+})
+
+test('package equipment is charged per piece: players x quantity per player', async () => {
+  const result = await calculateBookingPrice({
+    db: {},
+    payload: { selectionMode: 'package', selectedPackageId: 'gloves-pack', sessionType: 'public' },
+    players: 2,
+    findDocumentById,
+    userId: 'player',
+  })
+  // 2 x 150 entrance + 2 x 1 x 50 mask + 2 x 2 x 50 vest
+  assert.equal(result.totalAmount, 300 + 100 + 200)
 })

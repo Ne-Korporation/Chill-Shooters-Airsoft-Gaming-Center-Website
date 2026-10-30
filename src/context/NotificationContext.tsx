@@ -10,6 +10,8 @@ export type NotificationType =
   | 'reservation_status_update'
   | 'weapon_approved'
   | 'weapon_rejected'
+  | 'weapon_submitted'
+  | 'equipment_submitted'
   | 'equipment_approved'
   | 'equipment_rejected'
   | 'waiver_approved'

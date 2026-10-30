@@ -1,4 +1,5 @@
 import { isRentalPiece, modelFilter, modelOf } from './inventoryPieces.js'
+import { packageEquipmentQty } from './packageQuantities.js'
 
 export function stockQuantity(item, collection) {
   const candidates = collection === 'weapons'
@@ -109,13 +110,21 @@ export async function getBookingInventoryRequirements({
     return models
   }
 
+  // Pieces needed per equipment model: players × the package's per-player quantity.
+  const equipmentNeeds = new Map()
+  for (const id of [...new Set((Array.isArray(pkg.equipmentIds) ? pkg.equipmentIds : []).map(String))]) {
+    const [model] = await modelsOf('equipments', [id])
+    equipmentNeeds.set(model, Math.max(equipmentNeeds.get(model) || 0, packageEquipmentQty(pkg, id)))
+  }
+
   const requirements = []
-  for (const model of await modelsOf('equipments', pkg.equipmentIds)) {
+  for (const [model, perPlayer] of equipmentNeeds) {
+    const needed = players * perPlayer
     const free = await freePiecesOf('equipments', model)
-    if (free.length < players) {
-      throw new Error(`${model} has only ${free.length} piece(s) free for this slot, but ${players} players need one each.`)
+    if (free.length < needed) {
+      throw new Error(`${model} has only ${free.length} piece(s) free for this slot, but ${players} players need ${perPlayer} each.`)
     }
-    for (const piece of free.slice(0, players)) {
+    for (const piece of free.slice(0, needed)) {
       taken.add(String(piece.id))
       requirements.push(requirement(piece, 'equipments'))
     }

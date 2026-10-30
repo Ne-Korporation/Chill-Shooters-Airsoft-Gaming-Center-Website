@@ -1,3 +1,6 @@
+import { useCallback, useEffect, useState } from 'react'
+import { apiGet } from './apiClient'
+
 export const OFFICIAL_WAIVER_TEXT = {
   title: 'Waiver, Release of Liability & Assumption of Risk',
   preamble:
@@ -21,3 +24,38 @@ export const OFFICIAL_WAIVER_TEXT = {
   guardianCertification:
     'This is to certify that I, as the parent/guardian with legal responsibility for this participant, do consent and agree not only to his/her release of CHILL SHOOTERS and all other releasees but also to release and indemnify the releasees from any and all liabilities incident to his/her involvement in activities listed above.',
 } as const
+
+export type WaiverText = {
+  title: string
+  preamble: string
+  intro: string
+  clauses: readonly string[]
+  closing: string
+  guardianTitle: string
+  guardianCertification: string
+}
+
+// The text a signed waiver was agreed to: its saved copy, or the official text for waivers
+// signed before the admin could edit it.
+export function signedWaiverText(waiver?: { waiverText?: WaiverText | null } | null): WaiverText {
+  return waiver?.waiverText || OFFICIAL_WAIVER_TEXT
+}
+
+// The text new waivers are signed with: the admin's edited version, or the official text.
+export function useCurrentWaiverText() {
+  const [text, setText] = useState<WaiverText>(OFFICIAL_WAIVER_TEXT)
+  const [updatedAtISO, setUpdatedAtISO] = useState<string | null>(null)
+  const reload = useCallback(async () => {
+    try {
+      const res = await apiGet<{ ok: boolean; data: WaiverText | null; updatedAtISO: string | null }>('/api/waiver-text')
+      setText(res?.data || OFFICIAL_WAIVER_TEXT)
+      setUpdatedAtISO(res?.updatedAtISO || null)
+    } catch {
+      // Keep the official text if the server can't be reached.
+    }
+  }, [])
+  useEffect(() => {
+    void reload()
+  }, [reload])
+  return { text, updatedAtISO, reload }
+}

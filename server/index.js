@@ -27,6 +27,7 @@ const { default: fieldOpsRouter } = await import('./routes/fieldOps.js')
 const { default: guardianApprovalsRouter } = await import('./routes/guardianApprovals.js')
 const { expireOverdueReservations } = await import('./utils/paymentProgress.js')
 const { sendDueReminders } = await import('./utils/reminders.js')
+const { parseAddress } = await import('./services/mailService.js')
 
 const app = express()
 app.use(cors())
@@ -92,7 +93,7 @@ if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
 
 // Public: must be registered before the /api routers, which require auth.
 const CONTACT_TO = process.env.TO_EMAIL || 'support@chillshooters.com'
-const EMAIL_PATTERN = /^[^s@]+@[^s@]+.[^s@]+$/
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 // Render's free tier blocks outbound SMTP, so prefer Brevo's HTTPS API when
 // BREVO_API_KEY is set and fall back to the SMTP transporter for local dev.
@@ -113,7 +114,8 @@ ${message}`
         accept: 'application/json',
       },
       body: JSON.stringify({
-        sender: { email: sender, name: 'Chill Shooters Website' },
+        // EMAIL_FROM may be "Name <email>"; Brevo needs the bare address.
+        sender: { email: parseAddress(sender).email, name: 'Chill Shooters Website' },
         to: [{ email: CONTACT_TO }],
         replyTo: { email, name },
         subject,

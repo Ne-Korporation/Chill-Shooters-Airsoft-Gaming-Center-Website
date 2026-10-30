@@ -48,7 +48,6 @@ import { RegistrarReservationsPage } from './pages/registrar/RegistrarReservatio
 import { RegistrarOngoingGamesPage, RegistrarArchivedGamesPage } from './pages/registrar'
 import { RegistrarAvailedPackagesPage } from './pages/registrar/RegistrarAvailedPackagesPage'
 import { RegistrarSubmittedWaiversPage } from './pages/registrar/RegistrarSubmittedWaiversPage'
-import { RegistrarSubmittedPaymentsPage } from './pages/registrar/RegistrarSubmittedPaymentsPage'
 import { MarshalDashboardHomePage } from './pages/marshal/MarshalDashboardHomePage'
 import { PlayerFeedbackPage } from './pages/players/PlayerFeedbackPage'
 
@@ -117,7 +116,7 @@ function RegistrarSubmittedWaiversPageWrapper() {
 function RegistrarSubmittedPaymentsPageWrapper() {
   return (
     <RequireRole roles={['registrar']}>
-      <RegistrarSubmittedPaymentsPage />
+      <AdminPaymentsPage />
     </RequireRole>
   )
 }
@@ -144,11 +143,11 @@ export default function App() {
         }
       >
         <Route index element={<AppHomePage />} />
-        <Route path="reservations" element={<RequireRole roles={['user', 'admin', 'registrar']}>{<ReservationCalendarPage />}</RequireRole>} />
+        <Route path="reservations" element={<RequireRole roles={['user']}><ReservationCalendarPage /></RequireRole>} />
         <Route path="my-reservations" element={<RequireRole roles={['user']}><MyReservationsPage /></RequireRole>} />
-        <Route path="packages" element={<RequireRole roles={['user', 'admin', 'registrar']}>{<PackageRecommendationPage />}</RequireRole>} />
-        <Route path="waiver" element={<RequireRole roles={['user', 'admin', 'registrar']}>{<WaiverPage />}</RequireRole>} />
-        <Route path="payment" element={<RequireRole roles={['user', 'admin', 'registrar']}>{<PaymentPage />}</RequireRole>} />
+        <Route path="packages" element={<RequireRole roles={['user']}><PackageRecommendationPage /></RequireRole>} />
+        <Route path="waiver" element={<RequireRole roles={['user']}><WaiverPage /></RequireRole>} />
+        <Route path="payment" element={<RequireRole roles={['user']}><PaymentPage /></RequireRole>} />
         <Route path="split-payments" element={<RequireRole roles={['user']}><SplitPaymentPage /></RequireRole>} />
         <Route path="feedback" element={<RequireRole roles={['user']}><PlayerFeedbackPage /></RequireRole>} />
         <Route path="notifications" element={<RequireRole roles={['user', 'admin', 'registrar', 'marshal']}>{<AdminNotificationsPage />}</RequireRole>} />
