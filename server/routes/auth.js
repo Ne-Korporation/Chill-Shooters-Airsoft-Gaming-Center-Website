@@ -9,6 +9,9 @@ import { verifyFirebaseIdToken } from '../utils/firebaseTokens.js'
 
 const router = express.Router()
 
+// Experience needed to start at each level (matches getExperienceLevel in utils/teamBalancing.js).
+const STARTING_LEVEL_ADJUSTMENT = { Beginner: 0, Intermediate: 3, Experienced: 10 }
+
 export function validatePasswordRequirements(password) {
   const value = typeof password === 'string' ? password : ''
   const checks = {
@@ -181,7 +184,10 @@ router.post('/admin/add-player', requireAuth, requireRole('admin', 'marshal', 'r
       emailCanonical: canonicalEmail(normalizedEmail),
       password: hashedPassword,
       role: 'user',
-      experience: skillLevel || 'Beginner',
+      experience: 0,
+      // Level is computed from games played; a starting level becomes an adjustment
+      // at that level's threshold (see getExperienceLevel), so later games still count.
+      experienceAdjustment: STARTING_LEVEL_ADJUSTMENT[skillLevel] || 0,
       emailVerified: true,
       identityVerificationStatus: 'not_submitted',
       createdAtISO: new Date().toISOString(),
@@ -683,6 +689,7 @@ router.post('/social-login', async (req, res) => {
   try {
     const userAccounts = await getUserAccountsCollection()
     let user = await userAccounts.findOne(sameEmailFilter(normalizedEmail))
+    const existed = Boolean(user)
 
     // "Continue with Google" on the login page also works for a first visit:
     // Google has verified the address, so create the player account.
@@ -696,6 +703,11 @@ router.post('/social-login', async (req, res) => {
       return res.status(403).json({ ok: false, error: eligibility.error })
     }
     if (isSuspendedAccount(user)) return res.status(403).json({ ok: false, error: SUSPENDED_ACCOUNT_ERROR })
+
+    // Existing accounts are only signed in after the player confirms it's theirs.
+    if (existed && body.confirmExisting !== true) {
+      return res.json({ ok: true, needsConfirm: true, account: { name: user.name || '', email: user.email } })
+    }
 
     const authUser = {
       id: user.id ?? (user._id ? String(user._id) : undefined),
@@ -740,6 +752,10 @@ router.post('/social-register', async (req, res) => {
         return res.status(409).json({ ok: false, error: eligibility.error })
       }
       if (isSuspendedAccount(existing)) return res.status(403).json({ ok: false, error: SUSPENDED_ACCOUNT_ERROR })
+
+      if (body.confirmExisting !== true) {
+        return res.json({ ok: true, needsConfirm: true, account: { name: existing.name || '', email: existing.email } })
+      }
 
       const authUser = {
         id: existing.id ?? (existing._id ? String(existing._id) : undefined),

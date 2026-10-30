@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react'
+import React, { useEffect, useState, useMemo } from 'react'
 import { useForm } from 'react-hook-form'
 import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
@@ -11,7 +11,8 @@ import { Card } from '../../components/ui/Card'
 import { uid } from '../../utils/id'
 import { apiPost } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
-import { signInWithGoogle } from '../../utils/firebase'
+import { completeGoogleRedirect, signInWithGoogle, type GoogleProfile } from '../../utils/firebase'
+import { ExistingAccountDialog } from '../../components/auth/ExistingAccountDialog'
 
 type FormValues = {
   name: string
@@ -22,6 +23,8 @@ type FormValues = {
 export function RegisterPage() {
   const navigate = useNavigate()
   const [showPassword, setShowPassword] = useState(false)
+  const [pendingGoogle, setPendingGoogle] = useState<{ profile: GoogleProfile; account: { name: string; email: string } } | null>(null)
+  const [confirmingGoogle, setConfirmingGoogle] = useState(false)
   const { registerWithGoogle } = useAuth()
 
   const {
@@ -75,24 +78,61 @@ export function RegisterPage() {
     return '/app'
   }
 
+  async function finishGoogleRegister(profile: GoogleProfile, confirmExisting: boolean) {
+    const result = await registerWithGoogle({ name: profile.name || 'Google User', email: profile.email, idToken: profile.idToken, confirmExisting })
+    if (result.needsConfirm) {
+      setPendingGoogle({ profile, account: result.account })
+      return
+    }
+    setPendingGoogle(null)
+    toast.success(confirmExisting ? 'Signed in with Google.' : 'Account created with Google.')
+    navigate(getRedirectRoute(result.user.role))
+  }
+
   async function handleGoogleRegister() {
     try {
       const profile = await signInWithGoogle()
+      // null: the pop-up was blocked and the browser is going to Google; we finish on return.
+      if (!profile) return
       if (!profile.email) {
         throw new Error('Google did not return an email address.')
       }
-
-      const user = await registerWithGoogle({ name: profile.name || 'Google User', email: profile.email, idToken: profile.idToken })
-      toast.success('Account created with Google.')
-      navigate(getRedirectRoute(user.role))
+      await finishGoogleRegister(profile, false)
     } catch (err: any) {
       console.error('Google registration error', err)
       toast.error(err?.message || 'Google registration failed.')
     }
   }
 
+  // Finishes a Google sign-up that fell back to a full-page redirect.
+  useEffect(() => {
+    completeGoogleRedirect()
+      .then((profile) => (profile?.email ? finishGoogleRegister(profile, false) : undefined))
+      .catch((err: any) => toast.error(err?.message || 'Google registration failed.'))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  async function proceedWithExistingAccount() {
+    if (!pendingGoogle) return
+    setConfirmingGoogle(true)
+    try {
+      await finishGoogleRegister(pendingGoogle.profile, true)
+    } catch (err: any) {
+      setPendingGoogle(null)
+      toast.error(err?.message || 'Google sign-in failed.')
+    } finally {
+      setConfirmingGoogle(false)
+    }
+  }
+
   return (
     <div className="relative min-h-screen overflow-hidden bg-background px-3 py-10 lg:py-14">
+      <ExistingAccountDialog
+        account={pendingGoogle?.account ?? null}
+        busy={confirmingGoogle}
+        onProceed={proceedWithExistingAccount}
+        onCancel={() => setPendingGoogle(null)}
+      />
       <div className="pointer-events-none absolute inset-0 bg-camouflage opacity-20" />
       <div className="absolute right-[-120px] top-[-120px] h-[260px] w-[260px] rounded-full bg-secondary/20 blur-3xl animate-gradientShift" />
 

@@ -158,6 +158,8 @@ function PaymentPageContent() {
   const [receiptReference, setReceiptReference] = useState('')
   const [amountPaid, setAmountPaid] = useState(0)
   const [balanceDue, setBalanceDue] = useState(0)
+  // Chosen when booking: pay everything online, or the downpayment online and the rest in cash at the field.
+  const [paysInFull, setPaysInFull] = useState(false)
 
   useEffect(() => {
     const pendingReservationJson = localStorage.getItem('pending_reservation')
@@ -181,7 +183,9 @@ function PaymentPageContent() {
       const nextTeamSize = Math.max(1, Number(pendingReservation?.teamSize || nextTeamMembers.length + 1 || 1))
       const isOwnGear = String(pendingReservation?.selectionMode || '').toLowerCase() === 'custom' &&
         !(pendingReservation?.customWeaponIds?.length || pendingReservation?.customEquipmentIds?.length)
-      const estimatedDeposit = isOwnGear ? Math.min(total, 350) : Math.min(total, Math.round(total * 0.5))
+      const fullPlan = pendingReservation?.paymentPlan === 'full'
+      setPaysInFull(fullPlan)
+      const estimatedDeposit = fullPlan ? total : isOwnGear ? Math.min(total, 350) : Math.min(total, Math.round(total * 0.5))
       const nextPayerShareAmount = nextPaymentMode === 'split' ? Math.round((estimatedDeposit / nextTeamSize) * 100) / 100 : estimatedDeposit
       const nextAmountDue = nextPayerShareAmount
       const itemized = Array.isArray(pendingReservation?.itemizedBreakdown)
@@ -368,6 +372,7 @@ function PaymentPageContent() {
         )
         setReceiptReference(receipt.data.id || receipt.data.paymentIntentId)
       } else {
+        if (phoneNumber && !/^09\d{9}$/.test(phoneNumber)) throw new Error('Enter your GCash number as 11 digits starting with 09, or leave it blank.')
         const file = proofInputRef.current?.files?.[0]
         if (!file || !file.type.startsWith('image/')) throw new Error('Only image files are allowed as proof of payment.')
         const formData = new FormData()
@@ -386,6 +391,7 @@ function PaymentPageContent() {
           gcashImageUrl: proofImageUrl,
           paymentMode,
           transactionReference: refNo.trim(),
+          ...(phoneNumber ? { senderNumber: phoneNumber } : {}),
           createdAt: new Date().toISOString(),
         })
         setReceiptReference(payment.data?.id || refNo.trim())
@@ -491,13 +497,23 @@ function PaymentPageContent() {
             <div className="space-y-4">
               {method === 'gcash' ? (
                 <>
+                  {gcashPhoneNumber ? (
+                    <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                      <div className="text-xs uppercase tracking-widest text-muted">Send payment to</div>
+                      <div className="mt-1 text-lg font-bold tracking-wide">{gcashPhoneNumber}</div>
+                    </div>
+                  ) : null}
+
+                  {/* The player's own GCash number, kept separate from the shop's so typing never mixes the two. */}
                   <Input
-                    label="Phone Number"
-                    value={phoneNumber || gcashPhoneNumber}
-                    onChange={(e) => setPhoneNumber(e.target.value.replace(/\D/g, ''))}
+                    label="Your GCash number (optional)"
+                    value={phoneNumber}
+                    onChange={(e) => setPhoneNumber(e.target.value.replace(/\D/g, '').slice(0, 11))}
                     inputMode="numeric"
-                    pattern="[0-9]*"
-                    placeholder={gcashPhoneNumber || 'e.g., 0917 123 4567'}
+                    maxLength={11}
+                    placeholder="e.g., 09171234567"
+                    hint="The number you paid from, so staff can match your payment."
+                    error={phoneNumber && !/^09\d{9}$/.test(phoneNumber) ? 'Enter an 11-digit mobile number starting with 09.' : undefined}
                   />
 
                   <div className="rounded-2xl border border-dashed border-accent/30 bg-accent/5 p-4">
@@ -606,9 +622,12 @@ function PaymentPageContent() {
                 ))}
                 <div className="mt-3 h-px bg-white/10" />
                 <div className="mt-3 flex items-center justify-between gap-3">
-                  <div className="text-xs text-muted">Reservation deposit</div>
+                  <div className="text-xs text-muted">{paysInFull ? 'Pay online now (full amount)' : 'Pay online now (downpayment)'}</div>
                   <div className="text-sm font-black text-gold">{formatPHP(amountDue || payerShareAmount || breakdown.total)}</div>
                 </div>
+                {!paysInFull ? (
+                  <div className="mt-2 text-[11px] text-muted">The rest is paid in cash at the counter on game day.</div>
+                ) : null}
               </div>
             </div>
           </div>
@@ -688,12 +707,12 @@ function PaymentPageContent() {
               <span className="font-bold text-accent">{formatPHP(breakdown.total)}</span>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-muted">Reservation deposit</span>
+              <span className="text-muted">{balanceDue > 0 ? 'Downpayment paid online' : 'Paid online in full'}</span>
               <span className="font-bold text-accent">{formatPHP(amountDue || payerShareAmount || breakdown.total)}</span>
             </div>
             {balanceDue > 0 ? (
               <div className="flex items-center justify-between">
-                <span className="text-muted">Remaining balance</span>
+                <span className="text-muted">Balance: pay in cash at the field</span>
                 <span className="font-semibold">{formatPHP(balanceDue)}</span>
               </div>
             ) : null}

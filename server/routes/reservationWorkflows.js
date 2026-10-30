@@ -5,6 +5,7 @@ import { requireAuth, requireRole } from '../middleware/auth.js'
 import { updateReservationStatusAtomically } from '../utils/reservationStatus.js'
 import { nextShortId } from '../utils/shortIds.js'
 import { emailReservationEvent } from '../services/notificationEmails.js'
+import { assertGuardianApprovalsComplete } from './guardianApprovals.js'
 
 const router = express.Router()
 
@@ -62,6 +63,7 @@ function mapReservationToGameplay({ reservation }) {
     Group: group,
     Package: pkg,
     LayoutRequest: reservation?.layoutRequest || '',
+    LayoutBlueprintUrl: reservation?.layoutBlueprintUrl || '',
     Notes: reservation?.notes || '',
     Status: 'Scheduled',
     Actions: {
@@ -92,6 +94,8 @@ async function updateReservationStatus(req, res) {
     if (String(reservation.reservationStatus || '').toLowerCase() === 'cancelled' && nextStatus !== 'cancelled') {
       return res.status(409).json({ ok: false, error: 'Cancelled reservations cannot be reopened. Create a new reservation instead.' })
     }
+    // Every minor on the booking needs their guardian's approval before it is confirmed.
+    if (nextStatus === 'confirmed') await assertGuardianApprovalsComplete(db, reservationKey(reservation))
 
     // Update reservation status using the stable string id first, and only use ObjectId lookup when the value is truly valid.
     const reservationFilter = {
@@ -129,6 +133,7 @@ async function updateReservationStatus(req, res) {
           Schedule: already.Schedule || [updatedReservation.reservationDate, updatedReservation.reservationTime].filter(Boolean).join(' • ') || updatedReservation.createdAtISO || '',
           Mode: already.Mode || already.mode || updatedReservation.gameModePreference || updatedReservation.mode || updatedReservation.gameMode || updatedReservation.sessionType || '—',
           LayoutRequest: already.LayoutRequest || updatedReservation.layoutRequest || '',
+          LayoutBlueprintUrl: already.LayoutBlueprintUrl || updatedReservation.layoutBlueprintUrl || '',
           Notes: already.Notes || updatedReservation.notes || '',
           Group: already.Group || already.group || updatedReservation.group || updatedReservation.sessionType || `${updatedReservation.numberOfPlayers || '—'} players`,
           Package: already.Package || already.package || updatedReservation.packageName || updatedReservation.selectedGameplayName || updatedReservation.selectedPackageId || '—',

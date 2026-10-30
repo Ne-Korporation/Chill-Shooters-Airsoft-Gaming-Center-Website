@@ -5,8 +5,9 @@ import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { FiCheck, FiShield, FiClock, FiAlertTriangle } from 'react-icons/fi'
 import { apiGet, apiPut } from '../../utils/apiClient'
+import { WaiverApprovalDialog } from '../../components/waivers/WaiverApprovalDialog'
 
-type WaiverStatus = 'pending' | 'accepted' | 'flagged'
+type WaiverStatus = 'pending' | 'accepted' | 'flagged' | 'expired'
 
 type WaiverRow = {
   id: string
@@ -16,6 +17,8 @@ type WaiverRow = {
   isMinor: boolean
   status: WaiverStatus
   reviewerNote: string
+  fullName: string
+  guardianIdImage: string
 }
 
 function dateTime(iso: string) {
@@ -30,6 +33,8 @@ function normalizeStatus(value?: string): WaiverStatus {
   const raw = String(value || '').trim().toLowerCase()
   if (raw === 'approved' || raw === 'accepted') return 'accepted'
   if (raw === 'denied' || raw === 'flagged') return 'flagged'
+  // Older than 12 months: the player has to answer a new waiver, so there is nothing to review.
+  if (raw === 'expired') return 'expired'
   return 'pending'
 }
 
@@ -51,6 +56,8 @@ export function RegistrarSubmittedWaiversPage() {
         isMinor: Boolean(item.isMinor || Number(item.age) < 18),
         status: normalizeStatus(item.status),
         reviewerNote: item.reviewerNote || '',
+        fullName: item.fullName || 'this player',
+        guardianIdImage: item.guardianIdImage || '',
       }))
       setRows(mapped)
     } catch (e: any) {
@@ -81,11 +88,18 @@ export function RegistrarSubmittedWaiversPage() {
   const pendingCount = useMemo(() => rows.filter((r) => r.status === 'pending').length, [rows])
   const flaggedCount = useMemo(() => rows.filter((r) => r.status === 'flagged').length, [rows])
 
-  const updateStatus = async (id: string, nextStatus: WaiverStatus, reviewerNote: string) => {
+  const [approving, setApproving] = useState<{ row: WaiverRow; note: string } | null>(null)
+
+  const updateStatus = async (id: string, nextStatus: WaiverStatus, reviewerNote: string, idCheck?: { idType: string; idChecked: true }) => {
     setSavingId(id)
     try {
-      await apiPut(`/api/waivers/${encodeURIComponent(id)}`, { status: nextStatus === 'accepted' ? 'approved' : 'denied', reviewerNote })
+      await apiPut(`/api/waivers/${encodeURIComponent(id)}`, {
+        status: nextStatus === 'accepted' ? 'approved' : 'denied',
+        reviewerNote,
+        ...(idCheck || {}),
+      })
       toast.success(`Waiver ${nextStatus === 'accepted' ? 'accepted' : 'flagged'}`)
+      setApproving(null)
       await refresh()
     } catch (e: any) {
       toast.error(String(e?.message || e))
@@ -94,11 +108,22 @@ export function RegistrarSubmittedWaiversPage() {
     }
   }
 
-  const accept = (id: string) => void updateStatus(id, 'accepted', 'Waiver accepted by registrar.')
-  const clearFlag = (id: string) => void updateStatus(id, 'accepted', 'Flag cleared after verification.')
+  // Accepting opens the ID check first; the waiver is only approved once the ID is confirmed.
+  const accept = (row: WaiverRow) => setApproving({ row, note: 'Waiver accepted by registrar.' })
+  const clearFlag = (row: WaiverRow) => setApproving({ row, note: 'Flag cleared after verification.' })
 
   return (
     <div className="space-y-4">
+      <WaiverApprovalDialog
+        key={approving?.row.id || 'closed'}
+        open={Boolean(approving)}
+        participant={approving?.row.fullName || ''}
+        isMinor={Boolean(approving?.row.isMinor)}
+        guardianIdImage={approving?.row.guardianIdImage}
+        busy={Boolean(approving && savingId === approving.row.id)}
+        onCancel={() => setApproving(null)}
+        onConfirm={(check) => approving && void updateStatus(approving.row.id, 'accepted', approving.note, check)}
+      />
       <div className="space-y-2">
         <div className="text-sm font-medium text-accent">Registrar</div>
         <h1 className="text-3xl font-bold">Submitted Online Waivers</h1>
@@ -192,16 +217,17 @@ export function RegistrarSubmittedWaiversPage() {
                   <td className="py-3 pr-3">
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                       {r.status === 'pending' ? (
-                        <Button variant="primary" className="w-full sm:w-auto" onClick={() => accept(r.id)} disabled={savingId === r.id}>
+                        <Button variant="primary" className="w-full sm:w-auto" onClick={() => accept(r)} disabled={savingId === r.id}>
                           <FiCheck /> {savingId === r.id ? 'Saving…' : 'Accept'}
                         </Button>
                       ) : null}
                       {r.status === 'flagged' ? (
-                        <Button variant="ghost" className="w-full sm:w-auto" onClick={() => clearFlag(r.id)} disabled={savingId === r.id}>
+                        <Button variant="ghost" className="w-full sm:w-auto" onClick={() => clearFlag(r)} disabled={savingId === r.id}>
                           <FiAlertTriangle /> {savingId === r.id ? 'Saving…' : 'Re-verify'}
                         </Button>
                       ) : null}
                       {r.status === 'accepted' ? <div className="text-xs text-muted">No action</div> : null}
+                      {r.status === 'expired' ? <div className="text-xs text-muted">Player must submit a new waiver</div> : null}
                     </div>
                   </td>
                 </tr>

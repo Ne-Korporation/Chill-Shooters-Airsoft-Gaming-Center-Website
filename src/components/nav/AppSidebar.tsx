@@ -63,6 +63,7 @@ const marshalItems: Item[] = [
   { label: 'Equipment', to: '/app/admin/equipment', icon: FiTool, roles: ['marshal'] },
   { label: 'Weapons', to: '/app/admin/weapons', icon: FiTruck, roles: ['marshal'] },
   { label: 'Safety Logs', to: '/app/safety', icon: FiAlertTriangle, roles: ['marshal'] },
+  { label: 'Field Check-in', to: '/app/check-in', icon: FiClipboard, roles: ['marshal'] },
   { label: 'Team Grouping', to: '/app/team-grouping', icon: FiShuffle, roles: ['marshal'] },
   { label: 'Rental Check-out', to: '/app/rentals', icon: FiLogOut, roles: ['marshal'] },
   { label: 'Repairs', to: '/app/repairs', icon: FiTool, roles: ['marshal'] },
@@ -80,6 +81,7 @@ const adminItems: Item[] = [
   { section: 'Bookings', label: 'Games', to: '/app/games', icon: FiZap, roles: ['admin'] },
   { section: 'Game day', label: 'Counter (walk-ins)', to: '/app/counter', icon: FiShoppingBag, roles: ['admin'] },
   { section: 'Game day', label: 'Rental check-out', to: '/app/rentals', icon: FiLogOut, roles: ['admin'] },
+  { section: 'Game day', label: 'Field check-in', to: '/app/check-in', icon: FiClipboard, roles: ['admin'] },
   { section: 'Game day', label: 'Team grouping', to: '/app/team-grouping', icon: FiShuffle, roles: ['admin'] },
   { section: 'Game day', label: 'Safety logs', to: '/app/safety', icon: FiAlertTriangle, roles: ['admin'] },
   { section: 'Inventory', label: 'Weapons', to: '/app/admin/weapons', icon: FiTruck, roles: ['admin'] },
@@ -96,6 +98,7 @@ const adminItems: Item[] = [
 const registrarItems: Item[] = [
   { label: 'Reservations', to: '/app/registrar/reservations', icon: FiCalendar, roles: ['registrar'] },
   { label: 'Counter', to: '/app/counter', icon: FiShoppingBag, roles: ['registrar'] },
+  { label: 'Field Check-in', to: '/app/check-in', icon: FiClipboard, roles: ['registrar'] },
   { label: 'Rental Check-out', to: '/app/rentals', icon: FiLogOut, roles: ['registrar'] },
   { label: 'Games', to: '/app/registrar/games', icon: FiZap, roles: ['registrar'] },
   { label: 'Availed Packages', to: '/app/registrar/availed-packages', icon: FiPackage, roles: ['registrar'] },

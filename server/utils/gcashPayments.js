@@ -11,11 +11,19 @@ export async function submitGcashPayment({
   transactionReference,
   gcashImageUrl,
   paymentMethod,
+  senderNumber,
 }) {
   // Players pay online by GCash or bank transfer; both are proof-plus-reference
   // submissions that a registrar verifies.
   const method = /bank/i.test(String(paymentMethod || '')) ? 'Bank Transfer' : 'GCash'
   const normalizedReference = normalizeGcashReference(transactionReference)
+  // Optional: the PH mobile number the player paid from, for staff to cross-check.
+  const sender = String(senderNumber || '').replace(/\D/g, '')
+  if (sender && !/^09\d{9}$/.test(sender)) {
+    const invalid = new Error('GCash number must be 11 digits starting with 09.')
+    invalid.statusCode = 400
+    throw invalid
+  }
   const session = startSession()
   let payment
   let insertedId
@@ -88,6 +96,7 @@ export async function submitGcashPayment({
         status: 'pending',
         transactionReference: normalizedReference,
         ...(gcashImageUrl ? { gcashImageUrl: String(gcashImageUrl) } : {}),
+        ...(sender ? { senderNumber: sender } : {}),
         createdAtISO: nowISO,
       }
       const result = await db.collection('payments').insertOne(payment, { session })

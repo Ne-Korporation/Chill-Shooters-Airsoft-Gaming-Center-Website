@@ -1,6 +1,7 @@
 import React from 'react'
 import { createPortal } from 'react-dom'
-import { FiEye, FiPrinter, FiRefreshCw, FiShield, FiTrash2, FiX } from 'react-icons/fi'
+import { FiEdit2, FiEye, FiPrinter, FiRefreshCw, FiShield, FiTrash2, FiX } from 'react-icons/fi'
+import { WaiverApprovalDialog } from '../../components/waivers/WaiverApprovalDialog'
 import toast from 'react-hot-toast'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
@@ -17,6 +18,8 @@ type WaiverRecord = {
   reservationId?: string
   fullName?: string
   age?: number
+  birthDate?: string
+  email?: string
   guardianName?: string
   guardianConsent?: boolean
   consent?: boolean
@@ -25,11 +28,28 @@ type WaiverRecord = {
   hasSignature?: boolean
   signatureImage?: string
   guardianPhone?: string
+  guardianEmail?: string
   guardianIdImage?: string
   guardianSignatureImage?: string
   status?: string
+  idType?: string
+  validUntilISO?: string
   submittedAtISO?: string
+  editHistory?: Array<{ atISO: string; by?: { email?: string }; fields: Record<string, { from: unknown; to: unknown }> }>
 }
+
+// Details an admin can correct (the server keeps the old values in editHistory).
+const EDITABLE_FIELDS = [
+  { key: 'fullName', label: 'Full name', type: 'text' },
+  { key: 'email', label: 'Email', type: 'email' },
+  { key: 'birthDate', label: 'Birthday', type: 'date' },
+  { key: 'reservationId', label: 'Reservation', type: 'text' },
+  { key: 'guardianName', label: 'Guardian name', type: 'text', minorOnly: true },
+  { key: 'guardianPhone', label: 'Guardian phone', type: 'tel', minorOnly: true },
+  { key: 'guardianEmail', label: 'Guardian email', type: 'email', minorOnly: true },
+] as const
+
+type EditableKey = (typeof EDITABLE_FIELDS)[number]['key']
 
 function formatDate(value?: string) {
   if (!value) return '-'
@@ -77,7 +97,49 @@ export function AdminWaiversPage() {
 
   const { addNotification } = useNotifications()
 
-  const updateWaiverStatus = React.useCallback(async (status: 'approved' | 'denied') => {
+  const [approvalOpen, setApprovalOpen] = React.useState(false)
+  const [editing, setEditing] = React.useState(false)
+  const [draft, setDraft] = React.useState<Partial<Record<EditableKey, string>>>({})
+
+  React.useEffect(() => {
+    setEditing(false)
+    setApprovalOpen(false)
+  }, [selectedWaiver?.id, selectedWaiver?._id])
+
+  const startEditing = () => {
+    if (!selectedWaiver) return
+    setDraft(Object.fromEntries(EDITABLE_FIELDS.map(({ key }) => [key, String(selectedWaiver[key] ?? '')])))
+    setEditing(true)
+  }
+
+  const saveDetails = async () => {
+    if (!selectedWaiver) return
+    const waiverId = selectedWaiver.id || selectedWaiver._id
+    if (!waiverId) return
+    const changes = Object.fromEntries(
+      Object.entries(draft).filter(([key, value]) => String(value ?? '') !== String(selectedWaiver[key as EditableKey] ?? '')),
+    )
+    if (Object.keys(changes).length === 0) {
+      setEditing(false)
+      return
+    }
+    setSavingStatus(true)
+    try {
+      const response = await apiPut<{ ok: boolean; data: WaiverRecord }>(`/api/waivers/${encodeURIComponent(String(waiverId))}`, changes)
+      if (response?.data) {
+        setSelectedWaiver(response.data)
+        setWaivers((current) => current.map((waiver) => (waiver.id === waiverId || waiver._id === waiverId ? response.data : waiver)))
+      }
+      setEditing(false)
+      toast.success('Waiver details updated.')
+    } catch (e: any) {
+      toast.error(String(e?.message || 'Could not update the waiver.'))
+    } finally {
+      setSavingStatus(false)
+    }
+  }
+
+  const updateWaiverStatus = React.useCallback(async (status: 'approved' | 'denied', idCheck?: { idType: string; idChecked: true }) => {
     if (!selectedWaiver) return
     const waiverId = selectedWaiver.id || selectedWaiver._id
     if (!waiverId) return
@@ -86,7 +148,9 @@ export function AdminWaiversPage() {
     try {
       const response = await apiPut<{ ok: boolean; data: WaiverRecord }>(`/api/waivers/${encodeURIComponent(String(waiverId))}`, {
         status,
+        ...(idCheck || {}),
       })
+      setApprovalOpen(false)
 
       if (response?.data) {
         setSelectedWaiver(response.data)
@@ -128,7 +192,7 @@ export function AdminWaiversPage() {
     }
   }, [selectedWaiver, addNotification])
 
-  const approveWaiver = React.useCallback(() => updateWaiverStatus('approved'), [updateWaiverStatus])
+  const approveWaiver = React.useCallback(() => setApprovalOpen(true), [])
   const denyWaiver = React.useCallback(() => updateWaiverStatus('denied'), [updateWaiverStatus])
   const portalTarget = typeof window === 'undefined' ? null : document.body
 
@@ -237,10 +301,44 @@ export function AdminWaiversPage() {
             </div>
 
             <div className="pt-6 text-sm leading-relaxed text-slate-700 dark:text-slate-300">
-              <p className="uppercase tracking-widest text-[11px] text-slate-500">Participant details</p>
-              <p className="mt-3"><span className="font-semibold">Name:</span> {selectedWaiver.fullName || '-'}</p>
-              <p className="mt-2"><span className="font-semibold">Age:</span> {selectedWaiver.age ?? '-'}</p>
-              <p className="mt-2"><span className="font-semibold">Reservation:</span> {selectedWaiver.reservationId || '-'}</p>
+              <div className="flex items-center justify-between gap-3">
+                <p className="uppercase tracking-widest text-[11px] text-slate-500">Participant details</p>
+                {editing ? (
+                  <div className="flex gap-2">
+                    <button type="button" onClick={() => setEditing(false)} disabled={savingStatus} className="rounded-lg border border-slate-300 px-3 py-1 text-xs font-semibold dark:border-slate-700">Cancel</button>
+                    <button type="button" onClick={saveDetails} disabled={savingStatus} className="rounded-lg bg-accent px-3 py-1 text-xs font-semibold text-background disabled:opacity-50">{savingStatus ? 'Saving…' : 'Save details'}</button>
+                  </div>
+                ) : (
+                  <button type="button" onClick={startEditing} className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-3 py-1 text-xs font-semibold dark:border-slate-700"><FiEdit2 /> Edit details</button>
+                )}
+              </div>
+
+              {editing ? (
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  {EDITABLE_FIELDS.filter((field) => !('minorOnly' in field) || selectedWaiver.isMinor).map((field) => (
+                    <label key={field.key} className="block">
+                      <div className="mb-1 text-xs font-semibold text-slate-500">{field.label}</div>
+                      <input
+                        type={field.type}
+                        value={draft[field.key] ?? ''}
+                        onChange={(e) => setDraft((current) => ({ ...current, [field.key]: e.target.value }))}
+                        className="w-full rounded-lg border border-slate-300 bg-transparent px-3 py-2 text-sm dark:border-slate-700"
+                      />
+                    </label>
+                  ))}
+                  <p className="text-xs text-slate-500 sm:col-span-2">Age and under-18 status are recalculated from the birthday. Every change is recorded below.</p>
+                </div>
+              ) : (
+                <>
+                  <p className="mt-3"><span className="font-semibold">Name:</span> {selectedWaiver.fullName || '-'}</p>
+                  <p className="mt-2"><span className="font-semibold">Email:</span> {selectedWaiver.email || '-'}</p>
+                  <p className="mt-2"><span className="font-semibold">Birthday:</span> {selectedWaiver.birthDate || '-'}</p>
+                  <p className="mt-2"><span className="font-semibold">Age:</span> {selectedWaiver.age ?? '-'}</p>
+                  <p className="mt-2"><span className="font-semibold">Reservation:</span> {selectedWaiver.reservationId || '-'}</p>
+                  {selectedWaiver.idType ? <p className="mt-2"><span className="font-semibold">ID checked:</span> {selectedWaiver.idType}</p> : null}
+                  {selectedWaiver.validUntilISO ? <p className="mt-2"><span className="font-semibold">Valid until:</span> {formatDate(selectedWaiver.validUntilISO)}</p> : null}
+                </>
+              )}
 
               <p className="mt-6 uppercase tracking-widest text-[11px] text-slate-500">Guardian information</p>
               {selectedWaiver.isMinor ? (
@@ -248,6 +346,7 @@ export function AdminWaiversPage() {
                   <p className="mt-3"><span className="font-semibold">Guardian name:</span> {selectedWaiver.guardianName || '-'}</p>
                   <p className="mt-2"><span className="font-semibold">Guardian consent:</span> {selectedWaiver.guardianConsent ? 'Yes' : 'No'}</p>
                   <p className="mt-2"><span className="font-semibold">Guardian phone:</span> {selectedWaiver.guardianPhone || '-'}</p>
+                  <p className="mt-2"><span className="font-semibold">Guardian email:</span> {selectedWaiver.guardianEmail || '-'}</p>
                   <div className="mt-2 flex flex-wrap gap-4">
                     <div>
                       <span className="font-semibold">Guardian ID:</span>
@@ -274,6 +373,22 @@ export function AdminWaiversPage() {
               ) : (
                 <p className="mt-3">Not required for participants 18 or older.</p>
               )}
+
+              {selectedWaiver.editHistory?.length ? (
+                <>
+                  <p className="mt-6 uppercase tracking-widest text-[11px] text-slate-500">Edit history</p>
+                  <ul className="mt-3 space-y-2 text-xs">
+                    {[...selectedWaiver.editHistory].reverse().map((entry, index) => (
+                      <li key={index} className="rounded-lg border border-slate-200 p-2 dark:border-slate-700">
+                        <div className="font-semibold">{formatDate(entry.atISO)}{entry.by?.email ? ` · ${entry.by.email}` : ''}</div>
+                        {Object.entries(entry.fields).map(([field, change]) => (
+                          <div key={field}>{field}: “{String(change.from ?? '')}” → “{String(change.to ?? '')}”</div>
+                        ))}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              ) : null}
 
               <p className="mt-6 uppercase tracking-widest text-[11px] text-slate-500">Consent summary</p>
               <ul className="mt-3 list-disc space-y-2 pl-5">
@@ -348,10 +463,10 @@ export function AdminWaiversPage() {
                   <button
                     type="button"
                     onClick={approveWaiver}
-                    disabled={savingStatus || selectedWaiver.status === 'approved'}
+                    disabled={savingStatus || selectedWaiver.status === 'approved' || selectedWaiver.status === 'expired'}
                     className="inline-flex h-10 items-center justify-center gap-2 whitespace-nowrap rounded-xl px-4 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 bg-accent text-background hover:bg-accent/90"
                   >
-                    {selectedWaiver.status === 'approved' ? 'Approved' : savingStatus ? 'Updating…' : 'Approve waiver'}
+                    {selectedWaiver.status === 'approved' ? 'Approved' : selectedWaiver.status === 'expired' ? 'Expired' : savingStatus ? 'Updating…' : 'Approve waiver'}
                   </button>
                 </div>
               </div>
@@ -360,6 +475,17 @@ export function AdminWaiversPage() {
         </div>,
         portalTarget,
       ) : null}
+
+      <WaiverApprovalDialog
+        key={String(selectedWaiver?.id || selectedWaiver?._id || 'none')}
+        open={approvalOpen && Boolean(selectedWaiver)}
+        participant={selectedWaiver?.fullName || 'this player'}
+        isMinor={Boolean(selectedWaiver?.isMinor)}
+        guardianIdImage={selectedWaiver?.guardianIdImage}
+        busy={savingStatus}
+        onCancel={() => setApprovalOpen(false)}
+        onConfirm={(check) => void updateWaiverStatus('approved', check)}
+      />
     </div>
   )
 }

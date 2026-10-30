@@ -7,6 +7,7 @@ import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { FilterTabs, titleCaseLabel } from '../../components/ui/FilterTabs'
 import { apiDelete, apiGet, apiPut } from '../../utils/apiClient'
+import { GuardianApprovalBadge, type GuardianApprovalSummary } from '../../components/reservations/GuardianApprovalBadge'
 import { useAuth } from '../../context/AuthContext'
 import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
 
@@ -39,6 +40,7 @@ type ReservationDoc = {
   notes?: string
   createdAtISO?: string
   updatedAtISO?: string
+  guardianApproval?: GuardianApprovalSummary | null
 }
 
 type PaymentDoc = {
@@ -576,6 +578,12 @@ export function AdminReservationsPage() {
                     <div className="mt-3 flex flex-wrap gap-2">
                       <StatusPill status={normalizeReservationStatus(selectedReservation.reservationStatus)} />
                     </div>
+                    <GuardianApprovalBadge
+                      reservationId={String(selectedReservation.id || selectedReservation._id || '')}
+                      summary={selectedReservation.guardianApproval}
+                      canRecordInPerson
+                      onChanged={() => void refresh()}
+                    />
 
                     {/* Main decision first, secondary status changes beside each other, utilities after,
                         and the destructive delete set apart at the bottom. */}

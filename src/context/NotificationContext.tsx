@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { apiDelete, apiGet, apiPost, apiPut } from '../utils/apiClient'
+import { useAuth } from './AuthContext'
 
 export type NotificationType =
   | 'reservation_confirmed'
@@ -84,30 +85,12 @@ type NotificationContextValue = {
   getAllNotifications: () => NotificationItem[]
 }
 
-const STORAGE_KEY = 'chillshooters_notifications'
+// Old builds cached notifications here, shared by every account on the browser.
+const LEGACY_STORAGE_KEY = 'chillshooters_notifications'
 const NOTIFICATIONS_ENDPOINT = '/api/notifications?limit=500'
 
 function sortNotifications(items: NotificationItem[]) {
   return [...items].sort((a, b) => new Date(b.createdAtISO).getTime() - new Date(a.createdAtISO).getTime())
-}
-
-function loadLegacyNotifications(): NotificationItem[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return []
-    const parsed = JSON.parse(raw) as NotificationItem[]
-    return Array.isArray(parsed) ? parsed : []
-  } catch {
-    return []
-  }
-}
-
-function clearLegacyNotifications() {
-  try {
-    localStorage.removeItem(STORAGE_KEY)
-  } catch {
-    // ignore storage errors
-  }
 }
 
 let notificationCounter = 0
@@ -119,49 +102,35 @@ function generateId(): string {
 const NotificationContext = createContext<NotificationContextValue | null>(null)
 
 export function NotificationProvider({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth()
   const [notifications, setNotifications] = useState<NotificationItem[]>([])
-  const [loaded, setLoaded] = useState(false)
 
-  const syncNotifications = useCallback((items: NotificationItem[]) => {
-    setNotifications(sortNotifications(items))
-  }, [])
-
+  // Reload whenever the signed-in account changes, so one account never sees
+  // another account's list left over from the same browser tab.
   useEffect(() => {
     let active = true
+    setNotifications([])
+    try {
+      localStorage.removeItem(LEGACY_STORAGE_KEY)
+    } catch {
+      // ignore storage errors
+    }
+    if (!user?.id) return
 
     const load = async () => {
       try {
         const response = await apiGet<{ ok: boolean; data: NotificationItem[] }>(NOTIFICATIONS_ENDPOINT)
-        const remoteNotifications = Array.isArray(response?.data) ? sortNotifications(response.data) : []
-
-        if (remoteNotifications.length === 0) {
-          const legacyNotifications = sortNotifications(loadLegacyNotifications())
-          if (legacyNotifications.length > 0) {
-            await Promise.all(legacyNotifications.map((item) => apiPost('/api/notifications', item)))
-            clearLegacyNotifications()
-
-            const migrated = await apiGet<{ ok: boolean; data: NotificationItem[] }>(NOTIFICATIONS_ENDPOINT)
-            const migratedNotifications = Array.isArray(migrated?.data) ? sortNotifications(migrated.data) : []
-            if (active) syncNotifications(migratedNotifications)
-            return
-          }
-        }
-
-        if (active) syncNotifications(remoteNotifications)
-      } catch {
-        const legacyNotifications = sortNotifications(loadLegacyNotifications())
-        if (active) syncNotifications(legacyNotifications)
-      } finally {
-        if (active) setLoaded(true)
+        if (active) setNotifications(sortNotifications(Array.isArray(response?.data) ? response.data : []))
+      } catch (error) {
+        console.warn('Failed to load notifications', error)
       }
     }
-
     void load()
 
     return () => {
       active = false
     }
-  }, [syncNotifications])
+  }, [user?.id])
 
   const addNotification = useCallback(
     (item: Omit<NotificationItem, 'id' | 'read' | 'createdAtISO'>) => {
@@ -253,13 +222,11 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
           return false
         })
       }
-      // For other roles: match their role, 'all' targetRole, or notifications sent directly to the user's userId
+      // For other roles: broadcasts to their role or 'all', or notifications sent directly to this user.
+      // A role tag on a notification addressed to someone else doesn't make it visible here.
       return notifications.filter((n) => {
-        if (n.targetRole === 'all') return true
-        if (n.targetRole === role) return true
-        // Include notifications sent directly to this specific user
         if (userId && n.userId === userId) return true
-        return false
+        return n.userId === 'broadcast' && (n.targetRole === 'all' || n.targetRole === role)
       })
     },
     [notifications],
@@ -296,10 +263,6 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     }),
     [notifications, addNotification, markAsRead, markAllAsRead, clearAllNotifications, clearNotificationsByIds, unreadCount, getNotificationsForUser, getNotificationsForRole, deleteNotification, getAllNotifications],
   )
-
-  if (!loaded) {
-    // Keep the provider mounted while we hydrate notifications from MongoDB.
-  }
 
   return <NotificationContext.Provider value={value}>{children}</NotificationContext.Provider>
 }

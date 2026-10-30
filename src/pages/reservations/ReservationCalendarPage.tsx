@@ -22,7 +22,7 @@ import {
   FiX,
 } from 'react-icons/fi'
 
-import { apiDelete, apiGet, apiPost } from '../../utils/apiClient'
+import { apiBase, apiDelete, apiGet, apiPost, getApiAuthHeaders } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
 import { LANDING_PREFILL_KEY, type LandingReservationPrefill } from '../auth/LandingPage'
 import { Card } from '../../components/ui/Card'
@@ -128,6 +128,8 @@ type TeamMember = {
 }
 
 type PaymentMode = 'self' | 'split'
+// full: pay everything online now. cash_balance: the 50% downpayment online now, the rest in cash at the field.
+type PaymentPlan = 'full' | 'cash_balance'
 
 type StockEntry = { stock: number; held: number; available: number }
 
@@ -305,6 +307,7 @@ export function ReservationCalendarPage() {
   const [teamEmail, setTeamEmail] = useState('')
   const [teamLookup, setTeamLookup] = useState<{ status: 'idle' | 'searching' | 'found' | 'error'; member?: TeamMember; error?: string }>({ status: 'idle' })
   const [paymentMode, setPaymentMode] = useState<PaymentMode>('self')
+  const [paymentPlan, setPaymentPlan] = useState<PaymentPlan>('cash_balance')
   const [waiverEligibleUserIds, setWaiverEligibleUserIds] = useState<string[]>([])
   // Status of the logged-in user's own waiver: none = never submitted
   const [currentWaiverStatus, setCurrentWaiverStatus] = useState<'none' | 'pending' | 'approved' | 'denied'>('none')
@@ -462,6 +465,26 @@ export function ReservationCalendarPage() {
   const [notes, setNotes] = useState('')
   const [gameModePreference, setGameModePreference] = useState<string>(GAME_MODES[0])
   const [layoutRequest, setLayoutRequest] = useState('')
+  // Optional sketch of the custom field layout the marshals should set up.
+  const [layoutBlueprintUrl, setLayoutBlueprintUrl] = useState('')
+  const [uploadingBlueprint, setUploadingBlueprint] = useState(false)
+  const uploadBlueprint = async (file: File) => {
+    if (!file.type.startsWith('image/')) return toast.error('Upload an image file (PNG or JPG).')
+    if (file.size > 5 * 1024 * 1024) return toast.error('The image must be 5 MB or smaller.')
+    setUploadingBlueprint(true)
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      const res = await fetch(`${apiBase}/api/upload-image`, { method: 'POST', headers: getApiAuthHeaders(), body: formData })
+      const json = await res.json().catch(() => null)
+      if (!res.ok || !json?.url) throw new Error(json?.error || 'Upload failed')
+      setLayoutBlueprintUrl(json.url)
+    } catch (e: any) {
+      toast.error(e?.message || 'Could not upload the blueprint')
+    } finally {
+      setUploadingBlueprint(false)
+    }
+  }
   const [selectedPackageId, setSelectedPackageId] = useState<string>('')
 
   const [selectionMode, setSelectionMode] = useState<SelectionMode>('package')
@@ -1350,6 +1373,7 @@ export function ReservationCalendarPage() {
         notes,
         gameModePreference,
         layoutRequest: layoutRequest.trim(),
+        ...(layoutBlueprintUrl ? { layoutBlueprintUrl } : {}),
         reservationStatus: 'pending',
         packageName: pkgName,
         selectionMode,
@@ -1360,6 +1384,7 @@ export function ReservationCalendarPage() {
         })),
         selectedTeammateIds,
         paymentMode,
+        paymentPlan,
         teamSize: paymentMode === 'split' ? splitPartySize : 1,
         payerShareAmount,
         ownWeaponTarget,
@@ -2383,6 +2408,34 @@ export function ReservationCalendarPage() {
                     maxLength={500}
                     onChange={(e) => setLayoutRequest(e.target.value)}
                   />
+                  <div className="sm:col-span-2">
+                    <div className="mb-2 text-sm font-semibold text-text">Layout blueprint (Optional)</div>
+                    <div className="flex flex-wrap items-center gap-3">
+                      <label className="cursor-pointer rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm hover:bg-white/10">
+                        {uploadingBlueprint ? 'Uploading…' : layoutBlueprintUrl ? 'Replace image' : 'Upload a sketch or diagram'}
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          disabled={uploadingBlueprint}
+                          onChange={(e) => {
+                            const file = e.target.files?.[0]
+                            e.target.value = ''
+                            if (file) void uploadBlueprint(file)
+                          }}
+                        />
+                      </label>
+                      {layoutBlueprintUrl ? (
+                        <>
+                          <a href={layoutBlueprintUrl} target="_blank" rel="noreferrer">
+                            <img src={layoutBlueprintUrl} alt="Layout blueprint" className="h-14 w-20 rounded-lg border border-white/10 object-cover" />
+                          </a>
+                          <button type="button" className="text-xs text-muted hover:text-text" onClick={() => setLayoutBlueprintUrl('')}>Remove</button>
+                        </>
+                      ) : null}
+                    </div>
+                    <div className="mt-2 text-xs text-muted">Marshals use it to set up the field. Image files up to 5 MB.</div>
+                  </div>
                 </div>
                 <div>
                   <Input
@@ -2859,11 +2912,43 @@ export function ReservationCalendarPage() {
                 </button>
               </div>
 
+              <div className="mt-5 text-xs uppercase tracking-widest text-muted">How you'll pay</div>
+              <div className="mt-2 grid gap-2">
+                {([
+                  ['full', 'Pay in full online', 'Pay the whole amount now with GCash or card. Nothing to pay at the field.'],
+                  ['cash_balance', '50% online + cash at the field', 'Pay the 50% downpayment online now, then the rest in cash at the counter on game day.'],
+                ] as const).map(([plan, title, description]) => (
+                  <button
+                    key={plan}
+                    type="button"
+                    onClick={() => setPaymentPlan(plan)}
+                    className={[
+                      'rounded-2xl border px-4 py-3 text-left transition',
+                      paymentPlan === plan ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
+                    ].join(' ')}
+                  >
+                    <div className="text-sm font-bold">{title}</div>
+                    <div className="mt-1 text-xs text-muted">{description}</div>
+                  </button>
+                ))}
+              </div>
+
               <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4">
                 <div className="flex items-center justify-between gap-3 text-xs text-muted">
                   <span>Payment mode</span>
                   <span>{teamPaymentLabel}</span>
                 </div>
+                <div className="mt-2 flex items-center justify-between gap-3 text-xs text-muted">
+                  <span>Pay online now</span>
+                  <span>
+                    {paymentPlan === 'full'
+                      ? formatCurrency(payerShareAmount)
+                      : `about ${formatCurrency(Math.round(payerShareAmount * 0.5))} (50% downpayment)`}
+                  </span>
+                </div>
+                {paymentPlan === 'cash_balance' ? (
+                  <div className="mt-1 text-[11px] text-muted">The exact downpayment is confirmed on the next page; the balance is paid in cash at the field.</div>
+                ) : null}
                 <div className="mt-3 flex items-center justify-between gap-3">
                   <span className="text-xs text-muted">Reservation total</span>
                   <span className="text-sm font-bold">{formatCurrency(dynamicPricing.total)}</span>
