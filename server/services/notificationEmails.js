@@ -289,3 +289,21 @@ export function emailWaiverReminder(db, reservation, userId, sentOn = '') {
     ],
   })
 }
+
+// Weather advisory for a booked game. `key` keeps an automatic advisory to one email per
+// player, reservation and date; manual advisories carry their own advisory id.
+export function emailWeatherAdvisory(db, reservation, userId, { key, title, message }) {
+  if (!reservation || !userId || !key) return Promise.resolve({ skipped: 'missing data' })
+  const id = String(reservation.id || reservation._id)
+  return sendLogged(db, {
+    key,
+    userId,
+    subject: `Weather advisory: ${title}`,
+    title,
+    lines: [
+      `About your game on ${reservationLabel(reservation)}:`,
+      escapeHtml(message),
+      `Reservation ID: ${escapeHtml(id)}`,
+    ],
+  })
+}

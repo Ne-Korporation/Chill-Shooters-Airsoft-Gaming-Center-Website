@@ -12,14 +12,16 @@ import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { clearPackagePrefill } from '../../utils/packagePrefill'
+import { StripeCardPayment } from '../../components/payments/StripeCardPayment'
 import { cancelBookingDraftLeft, clearBookingDraft, hasBookingDraft, markBookingDraftLeft, readBookingDraft, saveBookingDraft, scheduleBookingDraftLeft } from '../../utils/bookingDraft'
 
 // Online deposits: GCash and bank transfer are proof-of-payment submissions a registrar
 // verifies, or PayMongo checkout when the server has it set up. Remaining balances are
-// settled at the field by GCash, bank transfer, or cash.
-type PaymentMethod = 'gcash' | 'bank' | 'paymongo'
+// settled at the field by GCash, bank transfer, or cash. Card payments through Stripe (test mode)
+// are offered alongside them when the server has Stripe keys.
+type PaymentMethod = 'gcash' | 'bank' | 'paymongo' | 'stripe'
 
-const METHOD_LABELS: Record<PaymentMethod, string> = { gcash: 'GCash', bank: 'Bank Transfer', paymongo: 'Online (PayMongo)' }
+const METHOD_LABELS: Record<PaymentMethod, string> = { gcash: 'GCash', bank: 'Bank Transfer', paymongo: 'Online (PayMongo)', stripe: 'Card (Stripe)' }
 
 // Pay everything online, or the downpayment online and the rest in cash at the field.
 type PaymentPlan = 'full' | 'cash_balance'
@@ -97,6 +99,14 @@ function PaymentPageContent() {
         setPaymongoEnabled(true)
         setMethod('paymongo')
       })
+      .catch(() => null)
+  }, [])
+  // Stripe card payments (test mode), shown next to the other methods when configured.
+  const [stripeConfig, setStripeConfig] = useState<{ enabled: boolean; publishableKey: string }>({ enabled: false, publishableKey: '' })
+  const [stripeSession, setStripeSession] = useState<{ clientSecret: string; paymentIntentId: string; reservationId: string; amount: number } | null>(null)
+  useEffect(() => {
+    apiGet<{ ok: boolean; enabled: boolean; publishableKey: string }>('/api/stripe/config')
+      .then((res) => setStripeConfig({ enabled: Boolean(res?.enabled), publishableKey: res?.publishableKey || '' }))
       .catch(() => null)
   }, [])
   const [bankDetails, setBankDetails] = useState<BankDetails | null>(null)
@@ -282,8 +292,9 @@ function PaymentPageContent() {
   const canSubmit = useMemo(() => {
     if (submitting) return false
     if (method === 'paymongo') return true
+    if (method === 'stripe') return !stripeSession && paymentMode !== 'split'
     return Boolean(refNo.trim()) && Boolean(upload.fileName) && (!phoneNumber || isValidPhPhone(phoneNumber))
-  }, [method, phoneNumber, refNo, submitting, upload.fileName])
+  }, [method, phoneNumber, refNo, submitting, upload.fileName, stripeSession, paymentMode])
 
   const onPickFile = (f: File | null) => {
     if (!f) return
@@ -314,7 +325,8 @@ function PaymentPageContent() {
       // The choices made on this page are what the reservation is created with.
       pendingReservation = { ...pendingReservation, paymentMode, paymentPlan, teamSize }
 
-      if (method !== 'paymongo') {
+      if (method === 'stripe' && paymentMode === 'split') throw new Error('Split payments are paid by GCash; card payment covers the whole amount.')
+      if (method !== 'paymongo' && method !== 'stripe') {
         // Every check runs before the reservation is created, so a mistake never leaves a booking behind.
         if (!upload.fileName) throw new Error('Proof image is required')
         if (!refNo.trim()) throw new Error('Reference number is required')
@@ -372,6 +384,12 @@ function PaymentPageContent() {
         clearPackagePrefill()
         clearBookingDraft(user.id)
         window.location.assign(checkout.data.checkoutUrl)
+        return
+      }
+      if (method === 'stripe') {
+        // The reservation now holds the slot; the card form below completes the payment.
+        const intent = await apiPost<{ ok: boolean; clientSecret: string; paymentIntentId: string; amount: number }>('/api/create-payment-intent', { reservationId: String(reservationId) })
+        setStripeSession({ clientSecret: intent.clientSecret, paymentIntentId: intent.paymentIntentId, reservationId: String(reservationId), amount: Number(intent.amount) })
         return
       }
       {
@@ -488,15 +506,19 @@ function PaymentPageContent() {
           </div>
 
           <div className="mt-4 grid gap-2 sm:grid-cols-2">
-            {((paymongoEnabled ? [
-              { key: 'paymongo', title: 'Pay online', hint: 'GCash, QR Ph, Maya or card · PayMongo test mode' },
-            ] : [
-              { key: 'gcash', title: 'GCash', hint: 'Scan the QR → pay → upload proof' },
-              { key: 'bank', title: 'Bank Transfer', hint: 'Transfer to our account → upload proof' },
-            ]) as Array<{ key: PaymentMethod; title: string; hint: string }>).map((option) => (
+            {([
+              ...(paymongoEnabled ? [
+                { key: 'paymongo', title: 'Pay online', hint: 'GCash, QR Ph, Maya or card · PayMongo test mode' },
+              ] : [
+                { key: 'gcash', title: 'GCash', hint: 'Scan the QR → pay → upload proof' },
+                { key: 'bank', title: 'Bank Transfer', hint: 'Transfer to our account → upload proof' },
+              ]),
+              ...(stripeConfig.enabled ? [{ key: 'stripe', title: 'Credit / debit card', hint: 'Visa, Mastercard · Stripe test mode' }] : []),
+            ] as Array<{ key: PaymentMethod; title: string; hint: string }>).map((option) => (
               <button
                 key={option.key}
                 type="button"
+                disabled={Boolean(stripeSession)}
                 onClick={() => setMethod(option.key)}
                 className={[
                   'w-full text-left rounded-2xl border px-4 py-3 transition disabled:cursor-not-allowed disabled:opacity-50',
@@ -516,7 +538,14 @@ function PaymentPageContent() {
               <FiInfo className="text-gold" />
               <span>Submission rules</span>
             </div>
-            {method === 'paymongo' ? (
+            {method === 'stripe' ? (
+              <ul className="mt-2 space-y-1 text-xs text-muted list-disc pl-5">
+                <li>Enter your card in Stripe's secure form. Card details go straight to Stripe and are never stored by Chill Shooters.</li>
+                <li>Your reservation is confirmed automatically once the server verifies the payment with Stripe.</li>
+                <li>Card payment covers the whole online amount; split payments use GCash.</li>
+                <li>Test mode: no real money is charged.</li>
+              </ul>
+            ) : method === 'paymongo' ? (
               <ul className="mt-2 space-y-1 text-xs text-muted list-disc pl-5">
                 <li>You'll be taken to PayMongo's secure checkout to pay with GCash, QR Ph, Maya, or a card.</li>
                 <li>Your reservation is confirmed automatically as soon as PayMongo confirms the payment. No proof to upload.</li>
@@ -553,7 +582,33 @@ function PaymentPageContent() {
 
           <div className="mt-5 space-y-5">
             <div className="space-y-4">
-              {method === 'paymongo' ? null : method === 'gcash' ? (
+              {method === 'stripe' ? (
+                stripeSession ? (
+                  <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                    <StripeCardPayment
+                      publishableKey={stripeConfig.publishableKey}
+                      clientSecret={stripeSession.clientSecret}
+                      paymentIntentId={stripeSession.paymentIntentId}
+                      reservationId={stripeSession.reservationId}
+                      amount={stripeSession.amount}
+                      onPaid={(payment) => {
+                        setReceiptReference(payment.id || stripeSession.paymentIntentId)
+                        setAmountPaid(stripeSession.amount)
+                        localStorage.removeItem('pending_reservation')
+                        localStorage.removeItem('pending_reservation_id')
+                        clearPackagePrefill()
+                        if (user?.id) clearBookingDraft(user.id)
+                        setSuccess(true)
+                        toast.success('Card payment received. Your reservation is confirmed.')
+                      }}
+                    />
+                  </div>
+                ) : (
+                  <div className="rounded-2xl border border-white/10 bg-white/5 p-4 text-xs text-muted">
+                    Press Continue to card payment to save your reservation and open the secure card form.
+                  </div>
+                )
+              ) : method === 'paymongo' ? null : method === 'gcash' ? (
                 <>
                   {gcashPhoneNumber ? (
                     <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
@@ -601,7 +656,7 @@ function PaymentPageContent() {
                 </div>
               )}
 
-              {method !== 'paymongo' ? (
+              {method !== 'paymongo' && method !== 'stripe' ? (
                 <Input
                   label={method === 'gcash' ? 'GCash Reference Number' : 'Bank Reference / Confirmation Number'}
                   value={refNo}
@@ -611,7 +666,7 @@ function PaymentPageContent() {
               ) : null}
             </div>
 
-            {method !== 'paymongo' ? (
+            {method !== 'paymongo' && method !== 'stripe' ? (
             <div className="mt-6">
               <div className="text-xs uppercase tracking-widest text-muted">Upload proof</div>
               <div className="mt-2">
@@ -655,7 +710,7 @@ function PaymentPageContent() {
                 </div>
                 <div className="mt-2 flex items-center justify-between gap-3">
                   <div className="text-xs text-muted">Reference</div>
-                  <div className="text-xs font-bold">{method === 'paymongo' ? 'Issued by PayMongo' : refNo || '—'}</div>
+                  <div className="text-xs font-bold">{method === 'paymongo' ? 'Issued by PayMongo' : method === 'stripe' ? 'Issued by Stripe' : refNo || '—'}</div>
                 </div>
                 {method === 'gcash' ? (
                   <div className="mt-2 flex items-center justify-between gap-3">
@@ -689,7 +744,7 @@ function PaymentPageContent() {
 
           <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:items-center">
             <Button variant="primary" disabled={!canSubmit} onClick={submit}>
-              {submitting ? (method === 'paymongo' ? 'Opening PayMongo…' : 'Submitting…') : success ? 'Submitted' : method === 'paymongo' ? 'Continue to payment' : 'Submit Payment'}
+              {submitting ? (method === 'paymongo' ? 'Opening PayMongo…' : 'Submitting…') : success ? 'Submitted' : method === 'paymongo' ? 'Continue to payment' : method === 'stripe' ? 'Continue to card payment' : 'Submit Payment'}
               <FiChevronRight />
             </Button>
           </div>
@@ -702,10 +757,12 @@ function PaymentPageContent() {
               className="mt-4 rounded-2xl border border-success/25 bg-success/10 p-4"
             >
               <div className="flex items-center gap-2 text-sm font-bold text-success">
-                <FiCheck /> Payment Submitted
+                <FiCheck /> {method === 'stripe' ? 'Payment Received' : 'Payment Submitted'}
               </div>
               <div className="mt-2 text-xs text-muted">
-                {`Your ${METHOD_LABELS[method]} proof has been submitted. The registrar/admin will review and verify it.`}
+                {method === 'stripe'
+                  ? 'Your card payment was verified with Stripe and your reservation is confirmed.'
+                  : `Your ${METHOD_LABELS[method]} proof has been submitted. The registrar/admin will review and verify it.`}
                 {paymentMode === 'split'
                   ? ' Your teammates have been notified of their shares. Track who has paid under Split Payment in the menu — the slot stays reserved for 24 hours while the team pays.'
                   : ''}

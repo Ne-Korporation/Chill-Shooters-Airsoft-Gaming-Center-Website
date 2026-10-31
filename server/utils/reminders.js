@@ -10,7 +10,7 @@ export function manilaDateISO(offsetDays = 0) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(date)
 }
 
-function playerIdsOf(reservation) {
+export function playerIdsOf(reservation) {
   return [...new Set([reservation.userId, ...(reservation.teamMembers || []).map((member) => member.id)]
     .map((id) => String(id || ''))
     .filter((id) => id && id !== 'walk-in'))]

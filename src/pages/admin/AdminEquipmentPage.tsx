@@ -24,6 +24,7 @@ type InventoryItem = {
   model: string
   unitNumber: number
   price: number
+  replacementValue?: number
   note: string
   description?: string
   createdAtISO?: string
@@ -58,7 +59,7 @@ const StatusBadge = ({ status }: { status: EquipmentStatus }) => {
   )
 }
 
-const emptyForm = () => ({ name: '', description: '', pieces: '1', applyToModel: true, price: '0', status: 'available' as EquipmentStatus, category: 'gear' as EquipmentCategory, partnerId: '' })
+const emptyForm = () => ({ name: '', description: '', pieces: '1', applyToModel: true, price: '0', replacementValue: '', status: 'available' as EquipmentStatus, category: 'gear' as EquipmentCategory, partnerId: '' })
 
 export function AdminEquipmentPage() {
   const [activeCategory, setActiveCategory] = React.useState<EquipmentCategory | 'all'>('all')
@@ -87,6 +88,7 @@ export function AdminEquipmentPage() {
         model: modelOf(d),
         unitNumber: Number(d.unitNumber) || 0,
         price: typeof d.price === 'number' ? d.price : 0,
+        replacementValue: Number(d.replacementValue) || 0,
         note: d.note || d.description || '',
         description: d.description || d.note || '',
         createdAtISO: d.createdAtISO || null,
@@ -144,6 +146,7 @@ export function AdminEquipmentPage() {
         category: form.category,
         status: form.status,
         price: Number(form.price) || 0,
+        replacementValue: Number(form.replacementValue) || 0, 
         description: form.description.trim(),
         note: form.description.trim() || 'Newly entered from admin inventory.',
         partnerId: form.partnerId,
@@ -167,6 +170,7 @@ export function AdminEquipmentPage() {
       pieces: '1',
       applyToModel: true,
       price: String(item.price),
+      replacementValue: item.replacementValue ? String(item.replacementValue) : '',
       status: item.status,
       category: item.category,
       partnerId: item.partnerId || '',
@@ -277,7 +281,7 @@ export function AdminEquipmentPage() {
         status: form.status,
         description: form.description.trim(),
         note: form.description.trim() || 'Updated from admin inventory.',
-        ...(form.applyToModel ? {} : { price: Number(form.price) || 0, category: form.category, partnerId: form.partnerId }),
+        ...(form.applyToModel ? {} : { price: Number(form.price) || 0, replacementValue: Number(form.replacementValue) || 0, category: form.category, partnerId: form.partnerId }),
         updatedAtISO: new Date().toISOString(),
       })
       // Price, category, and owner are shared by every piece of the model.
@@ -285,6 +289,7 @@ export function AdminEquipmentPage() {
         await apiPut<any>('/api/inventory/equipments/models', {
           model: piece.model,
           price: Number(form.price) || 0,
+          replacementValue: Number(form.replacementValue) || 0, 
           category: form.category,
           partnerId: form.partnerId,
         })
@@ -535,6 +540,18 @@ export function AdminEquipmentPage() {
                 value={form.price}
                 onChange={(event) => setForm((prev) => ({ ...prev, price: event.target.value }))}
                 placeholder="e.g. 200"
+                className="mt-2 w-full rounded-xl border border-white/10 bg-transparent px-4 py-3 text-sm text-text placeholder:text-muted"
+              />
+            </div>
+
+            <div className="mt-3">
+              <label className="block text-sm font-semibold text-text">Replacement value (₱)</label>
+              <input
+                type="number"
+                min="0"
+                value={form.replacementValue}
+                onChange={(event) => setForm((prev) => ({ ...prev, replacementValue: event.target.value }))}
+                placeholder="What it costs to replace if lost"
                 className="mt-2 w-full rounded-xl border border-white/10 bg-transparent px-4 py-3 text-sm text-text placeholder:text-muted"
               />
             </div>

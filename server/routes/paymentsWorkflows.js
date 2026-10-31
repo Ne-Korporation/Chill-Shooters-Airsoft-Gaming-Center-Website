@@ -9,10 +9,13 @@ import {
 } from '../utils/paymentRules.js'
 import { recordVerifiedStripePayment } from '../utils/stripePayments.js'
 import { emailPaymentEvent } from '../services/notificationEmails.js'
-import { syncReservationPaymentState } from '../utils/paymentProgress.js'
+import { getReservationPayments, syncReservationPaymentState } from '../utils/paymentProgress.js'
 import { normalizePhPhone } from '../utils/phone.js'
+import { nextShortId } from '../utils/shortIds.js'
 
 const router = express.Router()
+// Must match VERIFIED_PAYMENT_STATUSES in src/utils/receiptPrint.ts
+const RECEIPT_STATUSES = ['paid', 'confirmed', 'verified', 'approved', 'succeeded']
 const SETTINGS_COLLECTION = 'site_settings'
 const GCASH_QR_KEY = 'gcash_qr'
 
@@ -332,6 +335,76 @@ router.put('/payments/:id/verify', requireAuth, requireRole('admin', 'registrar'
 
     void emailPaymentEvent(db, updated, nextStatus, reason)
     return res.json({ ok: true, data: updated })
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: String(err) })
+  }
+})
+
+// GET /api/stripe/config — whether test-mode card payments are available, and the publishable key.
+router.get('/stripe/config', requireAuth, (_req, res) => {
+  const publishableKey = String(process.env.STRIPE_PUBLISHABLE_KEY || process.env.VITE_STRIPE_PUBLISHABLE_KEY || '')
+  const enabled = Boolean(stripe) && publishableKey.startsWith('pk_test_')
+  res.json({ ok: true, enabled, publishableKey: enabled ? publishableKey : '' })
+})
+
+// POST /api/reservations/:id/receipt — the official receipt number for the reservation's verified
+// payments. The first print of a given set of verified payments issues the next OR-###### number;
+// printing the same set again returns the same number, and a new verified payment issues a new one.
+router.post('/reservations/:id/receipt', requireAuth, async (req, res) => {
+  try {
+    const db = await getDb()
+    const rawId = String(req.params.id || '').trim()
+    const objectId = toObjectId(rawId)
+    const reservation = await db.collection('reservations').findOne({ $or: [{ id: rawId }, ...(objectId ? [{ _id: objectId }] : [])] })
+    const ownsIt = reservation && (String(reservation.userId) === String(req.user.id) ||
+      (reservation.teamMembers || []).some((member) => String(member.id) === String(req.user.id)))
+    if (!reservation || (req.user.role === 'user' && !ownsIt) || req.user.role === 'marshal') {
+      return res.status(404).json({ ok: false, error: 'Reservation not found' })
+    }
+
+    const payments = (await getReservationPayments(db, reservation)).filter((payment) =>
+      RECEIPT_STATUSES.includes(String(payment.paymentStatus || payment.status || '').toLowerCase()))
+    if (!payments.length) return res.status(409).json({ ok: false, error: 'No verified payments to receipt yet.' })
+
+    const reservationId = String(reservation.id || reservation._id)
+    const paymentIds = payments.map((payment) => String(payment.id || payment._id)).sort()
+    const paymentKey = paymentIds.join(',')
+    const receipts = db.collection('receipts')
+    await receipts.createIndex({ reservationId: 1, paymentKey: 1 }, { unique: true })
+    await receipts.createIndex({ receiptNo: 1 }, { unique: true })
+
+    const existing = await receipts.findOne({ reservationId, paymentKey })
+    if (existing) return res.json({ ok: true, data: existing })
+
+    const totalPaid = Math.round(payments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0) * 100) / 100
+    // Retry on the rare collision when two receipts are issued at the same moment.
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const doc = {
+        receiptNo: await nextShortId(db, 'receipts', 'OR'),
+        id: '',
+        reservationId,
+        paymentIds,
+        paymentKey,
+        totalPaid,
+        reservationTotal: Number(reservation.totalAmount || 0),
+        issuedAtISO: new Date().toISOString(),
+        issuedBy: { actorId: String(req.user.id || ''), actorRole: req.user.role },
+      }
+      doc.id = doc.receiptNo
+      try {
+        await receipts.insertOne(doc)
+        await db.collection('payments').updateMany(
+          { $or: payments.map((payment) => ({ _id: payment._id })) },
+          { $addToSet: { receiptNos: doc.receiptNo } },
+        )
+        return res.status(201).json({ ok: true, data: doc })
+      } catch (err) {
+        if (err?.code !== 11000) throw err
+        const raced = await receipts.findOne({ reservationId, paymentKey })
+        if (raced) return res.json({ ok: true, data: raced })
+      }
+    }
+    return res.status(503).json({ ok: false, error: 'Could not issue a receipt number. Please try again.' })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
   }

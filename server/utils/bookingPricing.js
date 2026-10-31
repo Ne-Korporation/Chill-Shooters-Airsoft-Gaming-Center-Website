@@ -76,6 +76,41 @@ function groupByModel(items) {
   return [...groups].map(([model, { count, amount }]) => [`${model}${count > 1 ? ` × ${count}` : ''}`, Math.round(amount)])
 }
 
+export const CVSU_NAME = 'Cavite State University'
+
+function escapeRegex(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+// A partner organization's player discount: its `discountPercent` on the Partnerships page,
+// only while the partnership is active. CvSU falls back to CVSU_DISCOUNT_PERCENT when it has
+// no partnership record of its own.
+export async function partnerDiscountPercent(db, institution, config = getPricingConfig()) {
+  const name = String(institution || '').trim()
+  if (!name) return 0
+  const partner = await db.collection('partnerships').findOne({ name: { $regex: `^${escapeRegex(name)}$`, $options: 'i' } })
+  if (partner) {
+    if (String(partner.status || '').toLowerCase() !== 'active') return 0
+    const percent = Number(partner.discountPercent)
+    return Number.isFinite(percent) && percent > 0 ? Math.min(percent, 100) : 0
+  }
+  return name.toLowerCase() === CVSU_NAME.toLowerCase() ? config.cvsuDiscountPercent : 0
+}
+
+// Organizations a player can claim a discount from: active partners with a discount set,
+// plus CvSU when it is covered by the CVSU_DISCOUNT_PERCENT fallback.
+export async function listDiscountInstitutions(db, config = getPricingConfig()) {
+  const partners = await db.collection('partnerships')
+    .find({ status: 'active', discountPercent: { $gt: 0 } }, { projection: { name: 1, discountPercent: 1, type: 1 } })
+    .toArray()
+  const list = partners.map((p) => ({ name: String(p.name), discountPercent: Math.min(Number(p.discountPercent), 100), type: p.type || '' }))
+  const hasCvsuRecord = await db.collection('partnerships').countDocuments({ name: { $regex: `^${escapeRegex(CVSU_NAME)}$`, $options: 'i' } })
+  if (!hasCvsuRecord && config.cvsuDiscountPercent > 0) {
+    list.unshift({ name: CVSU_NAME, discountPercent: config.cvsuDiscountPercent, type: 'school' })
+  }
+  return list
+}
+
 function calculateDeposit(total, isOwnGear, config) {
   if (isOwnGear) return Math.min(total, Math.round(config.ownGearDeposit))
   return Math.min(total, Math.round(total * config.standardDepositRate))
@@ -193,13 +228,14 @@ export async function calculateBookingPrice({ db, payload, players, findDocument
 
   if (userId && !isOwnGear) {
     const account = await findDocumentById(db, 'user_accounts', userId)
-    const cvsuVerified = account &&
-      String(account.partnershipInstitution || '').toLowerCase() === 'cavite state university' &&
-      String(account.partnershipEligibilityStatus || '').toLowerCase() === 'verified'
-    if (cvsuVerified) {
-      const cvsuDiscount = Math.round(subtotal * config.cvsuDiscountPercent / 100)
-      subtotal = Math.max(0, subtotal - cvsuDiscount)
-      breakdown.push({ label: 'Verified CvSU discount', amount: -cvsuDiscount })
+    const verified = account && String(account.partnershipEligibilityStatus || '').toLowerCase() === 'verified'
+    const institution = String(account?.partnershipInstitution || '').trim()
+    const percent = verified && institution ? await partnerDiscountPercent(db, institution, config) : 0
+    if (percent > 0) {
+      const discount = Math.round(subtotal * percent / 100)
+      subtotal = Math.max(0, subtotal - discount)
+      const label = institution.toLowerCase() === CVSU_NAME.toLowerCase() ? 'CvSU' : institution
+      breakdown.push({ label: `Verified ${label} discount (${percent}%)`, amount: -discount })
     }
   }
 

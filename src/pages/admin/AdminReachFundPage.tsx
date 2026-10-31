@@ -5,6 +5,8 @@ import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { apiGet, apiPost, apiPut } from '../../utils/apiClient'
+import { ReachNetRevenuePanel } from './ReachNetRevenuePanel'
+import { ReachProgramsCard, type ReachProgram } from './ReachProgramsCard'
 
 type Summary = {
   ratePercent: number | null
@@ -21,6 +23,7 @@ type LedgerEntry = {
   amount: number
   description: string
   donorName?: string
+  programId?: string
   dateISO?: string
   atISO: string
   recordedBy?: { actorEmail?: string }
@@ -42,11 +45,16 @@ export function AdminReachFundPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [rateInput, setRateInput] = useState('')
-  const [entryForm, setEntryForm] = useState({ type: 'expenditure', amount: '', description: '', donorName: '', dateISO: '' })
+  const [entryForm, setEntryForm] = useState({ type: 'expenditure', amount: '', description: '', donorName: '', dateISO: '', programId: '' })
+  const [programs, setPrograms] = useState<ReachProgram[]>([])
 
   const load = useCallback(async () => {
     try {
-      const res = await apiGet<{ ok: boolean; summary: Summary; data: LedgerEntry[] }>('/api/reach-fund')
+      const [res, programRes] = await Promise.all([
+        apiGet<{ ok: boolean; summary: Summary; data: LedgerEntry[] }>('/api/reach-fund'),
+        apiGet<{ ok: boolean; data: ReachProgram[] }>('/api/reach-programs'),
+      ])
+      setPrograms(programRes.data || [])
       setSummary(res.summary)
       setEntries(res.data || [])
       setRateInput(res.summary?.ratePercent == null ? '' : String(res.summary.ratePercent))
@@ -74,28 +82,13 @@ export function AdminReachFundPage() {
     }
   }
 
-  const allocate = async () => {
-    setSaving(true)
-    try {
-      const res = await apiPost<{ ok: boolean; created: number; amountAllocated: number }>('/api/reach-fund/allocate', {})
-      toast.success(res.created > 0
-        ? `Allocated ${formatPHP(res.amountAllocated)} from ${res.created} payment${res.created === 1 ? '' : 's'}.`
-        : 'No new collected payments to allocate.')
-      await load()
-    } catch (err: any) {
-      toast.error(err?.message || 'Unable to allocate')
-    } finally {
-      setSaving(false)
-    }
-  }
-
   const addEntry = async (event: React.FormEvent) => {
     event.preventDefault()
     setSaving(true)
     try {
       await apiPost('/api/reach-fund/entries', { ...entryForm, amount: Number(entryForm.amount) })
       toast.success(entryForm.type === 'donation' ? 'Donation recorded.' : 'Expenditure recorded.')
-      setEntryForm((c) => ({ ...c, amount: '', description: '', donorName: '' }))
+      setEntryForm((c) => ({ ...c, amount: '', description: '', donorName: '', programId: '' }))
       await load()
     } catch (err: any) {
       toast.error(err?.message || 'Unable to record entry')
@@ -133,9 +126,9 @@ export function AdminReachFundPage() {
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card className="p-4 md:p-5">
-          <div className="text-xs uppercase tracking-widest text-muted">Allocation from revenue</div>
+          <div className="text-xs uppercase tracking-widest text-muted">Allocation rate</div>
           <p className="mt-2 text-sm text-muted">
-            The owner-approved percentage of each collected (verified) payment is moved into the fund. Each payment is allocated only once.
+            The owner-approved percentage of each month's net revenue that goes into the fund.
           </p>
           <div className="mt-3 flex flex-wrap items-end gap-2">
             <div className="w-40">
@@ -151,7 +144,6 @@ export function AdminReachFundPage() {
               />
             </div>
             <Button variant="secondary" onClick={saveRate} disabled={saving || rateInput === ''}>Save rate</Button>
-            <Button variant="primary" onClick={allocate} disabled={saving || !summary?.ratePercent}>Allocate new payments</Button>
           </div>
           {summary?.ratePercent == null ? (
             <div className="mt-2 text-xs text-warning">No rate set yet. Enter the percentage approved by the owner.</div>
@@ -178,7 +170,19 @@ export function AdminReachFundPage() {
             </div>
             {entryForm.type === 'donation' ? (
               <Input label="Donor (optional)" value={entryForm.donorName} onChange={(e) => setEntryForm((c) => ({ ...c, donorName: e.target.value }))} />
-            ) : null}
+            ) : (
+              <label className="block">
+                <div className="mb-2 text-sm font-semibold text-text">Outreach program (optional)</div>
+                <select
+                  value={entryForm.programId}
+                  onChange={(e) => setEntryForm((c) => ({ ...c, programId: e.target.value }))}
+                  className="w-full rounded-xl border border-white/10 bg-background px-4 py-3 text-sm text-text focus:outline-none focus:ring-2 focus:ring-accent/40 [&>option]:bg-background"
+                >
+                  <option value="">Not linked to a program</option>
+                  {programs.map((program) => <option key={program.id} value={program.id}>{program.title} ({program.dateISO})</option>)}
+                </select>
+              </label>
+            )}
             <Input
               label="Description"
               placeholder={entryForm.type === 'donation' ? 'e.g. Sponsor donation for school outreach' : 'e.g. Supplies for barangay outreach day'}
@@ -189,6 +193,10 @@ export function AdminReachFundPage() {
           </form>
         </Card>
       </div>
+
+      <ReachNetRevenuePanel onAllocated={() => void load()} />
+
+      <ReachProgramsCard programs={programs} onChanged={() => void load()} />
 
       <Card className="p-4 md:p-5">
         <div className="text-xs uppercase tracking-widest text-muted">Ledger</div>
@@ -211,7 +219,12 @@ export function AdminReachFundPage() {
                 <tr key={entry._id || index}>
                   <td className="py-2 pr-4">{entry.dateISO || entry.atISO.slice(0, 10)}</td>
                   <td className={`py-2 pr-4 capitalize ${TYPE_STYLES[entry.type]}`}>{entry.type}</td>
-                  <td className="py-2 pr-4">{entry.description}{entry.donorName ? ` (${entry.donorName})` : ''}</td>
+                  <td className="py-2 pr-4">
+                    {entry.description}{entry.donorName ? ` (${entry.donorName})` : ''}
+                    {entry.programId ? (
+                      <div className="text-[11px] text-muted">Program: {programs.find((p) => p.id === entry.programId)?.title || entry.programId}</div>
+                    ) : null}
+                  </td>
                   <td className="py-2 pr-4 text-muted">{entry.recordedBy?.actorEmail || '-'}</td>
                   <td className="py-2 text-right">{entry.type === 'expenditure' ? '−' : '+'}{formatPHP(entry.amount)}</td>
                 </tr>

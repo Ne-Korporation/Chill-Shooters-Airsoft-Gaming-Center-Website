@@ -305,7 +305,7 @@ export function MyReservationsPage() {
                   </Button>
                 ) : null}
                 {hasVerifiedPayment ? (
-                  <Button variant="ghost" onClick={() => printReceipt(reservation, reservationPayments, user?.name || '')}>
+                  <Button variant="ghost" onClick={() => printReceipt(reservation, reservationPayments, user?.name || '').catch((err: any) => toast.error(err?.message || 'Unable to print the receipt'))}>
                     <FiPrinter /> Print receipt
                   </Button>
                 ) : null}

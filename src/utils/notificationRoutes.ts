@@ -10,6 +10,8 @@ export function resolveNotificationRoute(notification: NotificationItem, role?: 
 
   if (notificationType.startsWith('split_payment_')) return '/app/split-payments'
 
+  if (notificationType === 'weather_advisory') return isStaffRole(currentRole) ? '/app/weather' : '/app/my-reservations'
+
   if (notificationType === 'reservation_payment_finalized') {
     return currentRole === 'admin' ? '/app/admin' : '/app/my-reservations'
   }

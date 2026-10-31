@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { apiDelete, apiGet, apiPost, apiPut } from '../../utils/apiClient'
+import { PartnerLoansCard } from './PartnerLoansCard'
 
 type Partnership = {
   _id?: string
@@ -13,6 +14,8 @@ type Partnership = {
   status: 'active' | 'pending' | 'inactive'
   // Share of rental income owed to an equipment partner for their items (percent)
   revenueSharePercent?: number
+  // Rental discount for verified members of this organization (percent, 0 = none)
+  discountPercent?: number
   notes?: string
   createdAtISO?: string
   updatedAtISO?: string
@@ -25,6 +28,7 @@ const initialForm: Omit<Partnership, '_id'> = {
   contactEmail: '',
   status: 'pending',
   revenueSharePercent: 50,
+  discountPercent: 0,
   notes: '',
 }
 
@@ -112,6 +116,7 @@ export function AdminPartnershipsPage() {
         revenueSharePercent: form.type === 'equipment_partner'
           ? Math.min(100, Math.max(0, Number(form.revenueSharePercent) || 0))
           : undefined,
+        discountPercent: Math.min(100, Math.max(0, Number(form.discountPercent) || 0)),
       }
 
       if (!payload.name || !payload.contactName || !payload.contactEmail) {
@@ -143,6 +148,7 @@ export function AdminPartnershipsPage() {
       contactEmail: item.contactEmail || '',
       status: item.status || 'pending',
       revenueSharePercent: item.revenueSharePercent ?? 50,
+      discountPercent: item.discountPercent ?? 0,
       notes: item.notes || '',
     })
   }
@@ -198,6 +204,13 @@ export function AdminPartnershipsPage() {
               </div>
             ) : null}
             <div>
+              <label className="mb-1 block text-xs font-bold uppercase tracking-[0.18em] text-muted">Member discount (%)</label>
+              <input type="number" min={0} max={100} value={form.discountPercent ?? 0} onChange={(event) => setForm({ ...form, discountPercent: Number(event.target.value) })} className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm outline-none focus:border-accent/40" />
+              <p className="mt-1 text-xs text-muted">
+                Players from this organization can request it with their ID; once staff verify it, it applies automatically to their rental bookings while the partnership is active. 0 = no discount.
+              </p>
+            </div>
+            <div>
               <label className="mb-1 block text-xs font-bold uppercase tracking-[0.18em] text-muted">Contact person</label>
               <input value={form.contactName} onChange={(event) => setForm({ ...form, contactName: event.target.value })} className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm outline-none focus:border-accent/40" placeholder="Jane Cruz" />
             </div>
@@ -246,6 +259,7 @@ export function AdminPartnershipsPage() {
                       <div className="text-base font-semibold">{item.name}</div>
                       <div className="mt-1 text-xs text-muted">
                         {item.type === 'equipment_partner' ? `Equipment partner · ${item.revenueSharePercent ?? 0}% share` : item.type} · {item.status}
+                        {Number(item.discountPercent) > 0 ? ` · ${item.discountPercent}% member discount` : ''}
                       </div>
                     </div>
                     <span className="rounded-full border border-white/10 bg-white/5 px-2 py-1 text-[10px] uppercase tracking-widest text-muted">{item.status}</span>
@@ -316,6 +330,12 @@ export function AdminPartnershipsPage() {
           </table>
         </div>
       </Card>
+
+      <PartnerLoansCard
+        partners={items
+          .map((item) => ({ id: String(item.id ?? item._id ?? ''), name: item.name }))
+          .filter((partner) => partner.id)}
+      />
     </div>
   )
 }

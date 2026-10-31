@@ -26,8 +26,11 @@ const { default: teamBookingsRouter } = await import('./routes/teamBookings.js')
 const { default: fieldOpsRouter } = await import('./routes/fieldOps.js')
 const { default: guardianApprovalsRouter } = await import('./routes/guardianApprovals.js')
 const { default: paymongoRouter } = await import('./routes/paymongo.js')
+const { default: recommendationsRouter } = await import('./routes/recommendations.js')
+const { default: weatherRouter } = await import('./routes/weather.js')
 const { expireOverdueReservations } = await import('./utils/paymentProgress.js')
 const { sendDueReminders } = await import('./utils/reminders.js')
+const { sendWeatherAlerts } = await import('./utils/weather.js')
 const { parseAddress } = await import('./services/mailService.js')
 
 const app = express()
@@ -77,6 +80,13 @@ setInterval(() => {
     .then((db) => sendDueReminders(db, { force: true }))
     .catch((err) => console.warn('Reminder sweep failed:', String(err)))
 }, 30 * 60_000).unref()
+
+// Day-before weather check for booked games; each advisory is sent once per reservation and day.
+setInterval(() => {
+  getDb()
+    .then((db) => sendWeatherAlerts(db))
+    .catch((err) => console.warn('Weather check failed:', String(err)))
+}, 60 * 60_000).unref()
 
 let transporter
 if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
@@ -167,6 +177,8 @@ app.use('/api', fieldOpsRouter)
 // Before crudRouter: the guardian link is public and must not hit its auth-required /:collection/:id.
 app.use('/api', guardianApprovalsRouter)
 app.use('/api', paymongoRouter)
+app.use('/api', recommendationsRouter)
+app.use('/api', weatherRouter)
 app.use('/api/auth', authRouter)
 app.use('/api', crudRouter)
 

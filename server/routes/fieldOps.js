@@ -8,6 +8,7 @@ import { getReservationPayments, syncReservationPaymentState } from '../utils/pa
 import { emailDamageCharge } from '../services/notificationEmails.js'
 import { getExperienceLevel, getAgeGroup, suggestBalancedTeams } from '../utils/teamBalancing.js'
 import { createPieces, modelFilter } from '../utils/inventoryPieces.js'
+import { computePenalty, getPenaltyRules, resolvePenaltyCharge } from '../utils/penaltyRules.js'
 
 // Field-side operations from the manuscript scope that sit outside the booking flow:
 // player experience and balanced team grouping, onsite/balance payments and extra
@@ -745,13 +746,15 @@ router.put('/rentals/:id/return', requireAuth, requireRole(...STAFF), async (req
 // Rental inventory pieces: each physical item is its own record
 // ---------------------------------------------------------------------------
 
-const PIECE_FIELDS = ['category', 'price', 'description', 'note', 'status', 'partnerId', 'fpsClass', 'fpsLimit']
+// replacementValue is what a lost piece costs to replace; it is the loss penalty.
+const PIECE_FIELDS = ['category', 'price', 'replacementValue', 'description', 'note', 'status', 'partnerId', 'fpsClass', 'fpsLimit']
+const NUMERIC_PIECE_FIELDS = ['price', 'replacementValue', 'fpsLimit']
 
 function readPieceFields(body) {
   const fields = {}
   for (const key of PIECE_FIELDS) {
     if (body[key] === undefined) continue
-    fields[key] = ['price', 'fpsLimit'].includes(key) ? Math.max(0, Number(body[key]) || 0) : String(body[key] ?? '').trim().slice(0, 500)
+    fields[key] = NUMERIC_PIECE_FIELDS.includes(key) ? Math.max(0, Number(body[key]) || 0) : String(body[key] ?? '').trim().slice(0, 500)
   }
   return fields
 }
@@ -893,8 +896,9 @@ router.post('/repairs', requireAuth, requireRole('admin', 'marshal'), async (req
 })
 
 // PUT /api/repairs/:id/complete { partsReplaced, partsCost, laborCost, repairDate, note, returnToService,
-// playerInduced, reservationId } — when the damage was player-induced, the repair cost is added to
-// that player's reservation balance automatically as a damage penalty.
+// playerInduced, reservationId, penaltyAmount?, overrideReason? } — when the damage was player-induced,
+// the penalty rule (repair cost + handling fee) is added to that player's reservation balance.
+// Billing a different amount needs an override reason.
 router.put('/repairs/:id/complete', requireAuth, requireRole('admin', 'marshal'), async (req, res) => {
   const body = req.body || {}
   const partsCost = money(body.partsCost || 0)
@@ -919,7 +923,21 @@ router.put('/repairs/:id/complete', requireAuth, requireRole('admin', 'marshal')
         return res.status(400).json({ ok: false, error: 'Link the reservation of the player who caused the damage so the repair cost can be billed.' })
       }
     }
-    const penaltyAmount = playerInduced ? totalCost : 0
+    let penaltyAmount = 0
+    let penalty = null
+    if (playerInduced) {
+      const computed = computePenalty({ kind: 'damage', repairCost: totalCost, rules: await getPenaltyRules(db) })
+      const resolved = resolvePenaltyCharge(computed, { requestedAmount: body.penaltyAmount, overrideReason: body.overrideReason })
+      if (resolved.error) return res.status(400).json({ ok: false, error: resolved.error })
+      penaltyAmount = resolved.amount
+      penalty = {
+        basis: 'damage',
+        computedAmount: computed.amount,
+        lines: computed.lines,
+        overridden: resolved.overridden,
+        overrideReason: resolved.overridden ? String(resolved.overrideReason).slice(0, 500) : '',
+      }
+    }
 
     const nowISO = new Date().toISOString()
     const update = {
@@ -934,6 +952,7 @@ router.put('/repairs/:id/complete', requireAuth, requireRole('admin', 'marshal')
       completedBy: actorOf(req),
       playerInduced,
       penaltyAmount,
+      ...(penalty ? { penalty } : {}),
       ...(reservation ? { reservationId: keyOf(reservation), playerId: String(reservation.userId || '') } : {}),
     }
 
@@ -949,7 +968,7 @@ router.put('/repairs/:id/complete', requireAuth, requireRole('admin', 'marshal')
               $inc: { totalAmount: penaltyAmount, balanceAmount: penaltyAmount, damageChargesTotal: penaltyAmount },
               $push: {
                 pricingBreakdown: { label: `Repair penalty: ${repair.itemName}`, amount: penaltyAmount },
-                damageCharges: { repairId: repair.id, reportId: repair.damageReportId || '', itemName: repair.itemName, amount: penaltyAmount, approvedBy: actorOf(req), atISO: nowISO },
+                damageCharges: { repairId: repair.id, reportId: repair.damageReportId || '', kind: 'damage', itemName: repair.itemName, amount: penaltyAmount, penalty, approvedBy: actorOf(req), atISO: nowISO },
               },
               $set: { updatedAtISO: nowISO },
             },
@@ -959,7 +978,7 @@ router.put('/repairs/:id/complete', requireAuth, requireRole('admin', 'marshal')
           if (repair.damageReportId) {
             await db.collection('damage_reports').updateOne(
               { id: repair.damageReportId, status: 'reported' },
-              { $set: { status: 'billed', chargeAmount: penaltyAmount, reviewNote: `Billed from repair ${repair.id}`, reviewedAtISO: nowISO, reviewedBy: actorOf(req) } },
+              { $set: { status: 'billed', chargeAmount: penaltyAmount, penalty: { ...penalty, repairId: repair.id }, reviewNote: `Billed from repair ${repair.id}`, reviewedAtISO: nowISO, reviewedBy: actorOf(req) } },
               { session },
             )
           }
