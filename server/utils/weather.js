@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto'
 import { emailWeatherAdvisory } from '../services/notificationEmails.js'
 import { notifyUser } from './paymentProgress.js'
 import { manilaDateISO, playerIdsOf } from './reminders.js'
+import { DEFAULT_SLOT_HOURS, SLOT_ORDER, getSlotHours, slotWindow } from './slotHours.js'
 
 // Day-before weather advisories from the OpenWeatherMap 5-day / 3-hour forecast
 // (OPENWEATHER_API_KEY). For every location with games tomorrow, each slot's
@@ -19,8 +20,6 @@ const DEFAULT_COORDS = {
   binan: { lat: 14.3036, lon: 121.0781, name: 'LOMA Binan Laguna' },
 }
 
-// Manila-time hours each slot covers: [start, end).
-export const SLOT_HOURS = { morning: [6, 12], afternoon: [12, 18], evening: [18, 23] }
 
 export function locationCoords(locationId, env = process.env) {
   const base = DEFAULT_COORDS[locationId]
@@ -55,8 +54,9 @@ function manilaParts(unixSeconds) {
 }
 
 // Summarizes the 3-hour forecast entries that overlap a slot, and whether they are severe.
-export function summarizeSlotForecast(entries, date, slot, config = weatherConfig()) {
-  const [start, end] = SLOT_HOURS[slot] || [0, 24]
+// `hours` is the slot-hours setting (utils/slotHours.js).
+export function summarizeSlotForecast(entries, date, slot, config = weatherConfig(), hours = DEFAULT_SLOT_HOURS) {
+  const [start, end] = slotWindow(hours, slot)
   const inSlot = (entries || []).filter((entry) => {
     const { date: day, hour } = manilaParts(entry.dt)
     // A 3-hour block starting at `hour` overlaps [start, end) when it ends after start.
@@ -109,9 +109,12 @@ export async function fetchForecast(locationId, { http = axios, env = process.en
   return entries
 }
 
-export async function forecastForDate(locationId, date, options) {
-  const entries = await fetchForecast(locationId, options)
-  return Object.keys(SLOT_HOURS).map((slot) => summarizeSlotForecast(entries, date, slot, weatherConfig(options?.env)))
+export async function forecastForDate(db, locationId, date, options) {
+  const [entries, { hours }] = await Promise.all([fetchForecast(locationId, options), getSlotHours(db)])
+  return SLOT_ORDER.map((slot) => ({
+    ...summarizeSlotForecast(entries, date, slot, weatherConfig(options?.env), hours),
+    hours: hours[slot],
+  }))
 }
 
 function slotReservationsFilter({ locationId, date, slot }) {
@@ -190,6 +193,7 @@ export async function sendWeatherAlerts(db, { force = false, http, env = process
   }
 
   const sent = []
+  const { hours } = await getSlotHours(db)
   for (const [locationId, slots] of slotsByLocation) {
     let entries
     try {
@@ -199,8 +203,8 @@ export async function sendWeatherAlerts(db, { force = false, http, env = process
       continue
     }
     for (const slot of slots) {
-      if (!SLOT_HOURS[slot]) continue
-      const forecast = summarizeSlotForecast(entries, tomorrow, slot, weatherConfig(env))
+      if (!SLOT_ORDER.includes(slot)) continue
+      const forecast = summarizeSlotForecast(entries, tomorrow, slot, weatherConfig(env), hours)
       if (!forecast.severe) continue
       // One automatic advisory per location/date/slot, even across restarts.
       const marker = await db.collection('weather_advisories').findOne({ source: 'auto', locationId, date: tomorrow, slot })

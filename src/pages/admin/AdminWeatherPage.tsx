@@ -6,6 +6,7 @@ import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { apiGet, apiPost } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
+import { formatSlotRange, useSlotHours } from '../../utils/slotHours'
 
 type SlotForecast = {
   slot: string
@@ -45,6 +46,7 @@ const selectClass = 'w-full rounded-xl border border-white/10 bg-background px-3
 
 export function AdminWeatherPage() {
   const { user } = useAuth()
+  const slotHours = useSlotHours()
   const [configured, setConfigured] = useState(true)
   const [location, setLocation] = useState(LOCATIONS[0].id)
   const [date, setDate] = useState(manilaDate(1))
@@ -137,7 +139,7 @@ export function AdminWeatherPage() {
             {forecast.map((entry) => (
               <div key={entry.slot} className={['rounded-2xl border p-3', entry.severe ? 'border-danger/30 bg-danger/10' : 'border-white/10 bg-white/5'].join(' ')}>
                 <div className="flex items-center justify-between">
-                  <div className="text-sm font-bold capitalize">{entry.slot}</div>
+                  <div className="text-sm font-bold capitalize">{entry.slot} <span className="text-xs font-normal normal-case text-muted">{formatSlotRange(slotHours, entry.slot)}</span></div>
                   {entry.severe ? <span className="text-[10px] font-bold uppercase tracking-widest text-danger">Advisory</span> : null}
                 </div>
                 <div className="mt-2 text-xs text-muted">{entry.summary}</div>
@@ -154,7 +156,7 @@ export function AdminWeatherPage() {
             ))}
             {configured && !forecastError && forecast.length === 0 ? <div className="text-sm text-muted">Loading…</div> : null}
           </div>
-          <p className="mt-3 text-[11px] text-muted">Forecasts cover the next 5 days. Slots: morning 6 AM–12 NN, afternoon 12 NN–6 PM, evening 6–11 PM.</p>
+          <p className="mt-3 text-[11px] text-muted">Forecasts cover the next 5 days. Slot hours are set on the Reservations page.</p>
         </Card>
 
         {canSend ? (

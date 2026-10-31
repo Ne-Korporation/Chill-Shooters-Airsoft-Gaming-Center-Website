@@ -25,6 +25,7 @@ import toast from 'react-hot-toast'
 import { Button } from '../../components/ui/Button'
 import { useAuth } from '../../context/AuthContext'
 import { getApiBase } from '../../utils/apiClient'
+import { formatSlotRange, useSlotHours } from '../../utils/slotHours'
 
 type FAQ = {
   q: string
@@ -344,6 +345,7 @@ function BookingOption({
 }
 
 export function LandingPage() {
+  const slotHours = useSlotHours()
   const { isAuthenticated } = useAuth()
   const navigate = useNavigate()
   const [faqOpen, setFaqOpen] = useState<number | null>(null)
@@ -644,6 +646,7 @@ export function LandingPage() {
                         }`}
                       >
                         {s.label}
+                        <span className="block text-[9px] font-normal opacity-80">{formatSlotRange(slotHours, s.id)}</span>
                       </button>
                     ))}
                   </div>

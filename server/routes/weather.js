@@ -1,9 +1,11 @@
 import express from 'express'
 import { getDb } from '../db/mongo.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
-import { forecastForDate, isWeatherConfigured, locationCoords, sendAdvisory, sendWeatherAlerts, SLOT_HOURS } from '../utils/weather.js'
+import { forecastForDate, isWeatherConfigured, locationCoords, sendAdvisory, sendWeatherAlerts } from '../utils/weather.js'
+import { SLOT_HOURS_ID, SLOT_ORDER, getSlotHours, validateSlotHours } from '../utils/slotHours.js'
 
-// Weather forecast for staff, manual advisories to booked players, and the advisory history.
+// Game slot hours, the weather forecast for staff, manual advisories to booked players,
+// and the advisory history.
 const router = express.Router()
 const STAFF = ['admin', 'registrar', 'marshal']
 
@@ -15,6 +17,38 @@ function sendError(res, err) {
   return res.status(err?.statusCode || 500).json({ ok: false, error: err?.statusCode ? err.message : String(err?.message || err) })
 }
 
+// GET /api/slot-hours — public: the booking pages and landing page show these times.
+router.get('/slot-hours', async (_req, res) => {
+  try {
+    const db = await getDb()
+    return res.json({ ok: true, data: await getSlotHours(db) })
+  } catch (err) {
+    return sendError(res, err)
+  }
+})
+
+// PUT /api/slot-hours { morning: { start, end }, afternoon: {...}, evening: {...} } — HH:MM, 24-hour.
+router.put('/slot-hours', requireAuth, requireRole('admin'), async (req, res) => {
+  const checked = validateSlotHours(req.body || {})
+  if (checked.error) return res.status(400).json({ ok: false, error: checked.error })
+  try {
+    const db = await getDb()
+    const previous = await getSlotHours(db)
+    const nowISO = new Date().toISOString()
+    await db.collection('settings').updateOne(
+      { _id: SLOT_HOURS_ID },
+      {
+        $set: { hours: checked.hours, updatedAtISO: nowISO, updatedBy: actorOf(req) },
+        $push: { history: { from: previous.hours, to: checked.hours, atISO: nowISO, ...actorOf(req) } },
+      },
+      { upsert: true },
+    )
+    return res.json({ ok: true, data: await getSlotHours(db) })
+  } catch (err) {
+    return sendError(res, err)
+  }
+})
+
 // GET /api/weather/forecast?location=salawag&date=YYYY-MM-DD — per-slot summary and severity.
 router.get('/weather/forecast', requireAuth, requireRole(...STAFF), async (req, res) => {
   const locationId = String(req.query.location || '').toLowerCase()
@@ -23,7 +57,7 @@ router.get('/weather/forecast', requireAuth, requireRole(...STAFF), async (req, 
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ ok: false, error: 'date must be YYYY-MM-DD' })
   if (!isWeatherConfigured()) return res.json({ ok: true, configured: false, data: [] })
   try {
-    return res.json({ ok: true, configured: true, data: await forecastForDate(locationId, date) })
+    return res.json({ ok: true, configured: true, data: await forecastForDate(await getDb(), locationId, date) })
   } catch (err) {
     return sendError(res, err)
   }
@@ -49,7 +83,7 @@ router.post('/weather-advisories', requireAuth, requireRole('admin', 'registrar'
   const message = String(body.message || '').trim().slice(0, 1000)
   if (!locationCoords(locationId)) return res.status(400).json({ ok: false, error: 'Choose a location.' })
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ ok: false, error: 'date must be YYYY-MM-DD' })
-  if (slot && !SLOT_HOURS[slot]) return res.status(400).json({ ok: false, error: 'slot must be morning, afternoon, or evening' })
+  if (slot && !SLOT_ORDER.includes(slot)) return res.status(400).json({ ok: false, error: 'slot must be morning, afternoon, or evening' })
   if (message.length < 10) return res.status(400).json({ ok: false, error: 'Write the advisory message (at least 10 characters).' })
   try {
     const db = await getDb()
