@@ -22,9 +22,21 @@ type FpsLog = {
   testedBy?: Actor
 }
 
+type PenaltyLine = { label: string; amount: number }
+
+type PenaltyQuote = {
+  amount: number | null
+  basis: 'damage' | 'loss'
+  lines?: PenaltyLine[]
+  missing?: string
+  handlingFeePercent: number
+}
+
 type DamageReport = {
   id: string
   itemType: 'weapon' | 'equipment'
+  kind?: 'damage' | 'loss'
+  penalty?: { computedAmount: number | null; overridden: boolean; overrideReason?: string; lines?: PenaltyLine[] }
   itemName: string
   reservationId?: string
   playerName?: string
@@ -67,8 +79,37 @@ export function SafetyLogPage() {
   const [saving, setSaving] = useState(false)
 
   const [fpsForm, setFpsForm] = useState({ weaponId: '', weaponName: '', weaponClass: 'aeg', fps: '', playerName: '', notes: '' })
-  const [damageForm, setDamageForm] = useState({ itemType: 'weapon', itemId: '', itemName: '', reservationId: '', playerName: '', description: '' })
-  const [review, setReview] = useState<{ id: string; amount: string; note: string } | null>(null)
+  const [damageForm, setDamageForm] = useState({ kind: 'damage', itemType: 'weapon', itemId: '', itemName: '', reservationId: '', playerName: '', description: '' })
+  const [review, setReview] = useState<{ id: string; amount: string; note: string; overrideReason: string; quote: PenaltyQuote | null } | null>(null)
+  const [handlingFee, setHandlingFee] = useState('')
+
+  useEffect(() => {
+    apiGet<{ ok: boolean; data: { handlingFeePercent: number } }>('/api/penalty-rules')
+      .then((res) => setHandlingFee(String(res.data.handlingFeePercent)))
+      .catch(() => null)
+  }, [])
+
+  const saveHandlingFee = async () => {
+    try {
+      const res = await apiPut<{ ok: boolean; data: { handlingFeePercent: number } }>('/api/penalty-rules', { handlingFeePercent: Number(handlingFee) })
+      setHandlingFee(String(res.data.handlingFeePercent))
+      toast.success('Handling fee saved.')
+    } catch (err: any) {
+      toast.error(err?.message || 'Unable to save the handling fee')
+    }
+  }
+
+  const openReview = async (report: DamageReport) => {
+    setReview({ id: report.id, amount: '', note: '', overrideReason: '', quote: null })
+    try {
+      const res = await apiGet<{ ok: boolean; data: PenaltyQuote }>(`/api/damage-reports/${encodeURIComponent(report.id)}/penalty-quote`)
+      setReview((current) => current && current.id === report.id
+        ? { ...current, quote: res.data, amount: res.data.amount !== null ? String(res.data.amount) : '' }
+        : current)
+    } catch (err: any) {
+      toast.error(err?.message || 'Unable to compute the penalty')
+    }
+  }
 
   const load = useCallback(async () => {
     try {
@@ -127,8 +168,8 @@ export function SafetyLogPage() {
     setSaving(true)
     try {
       await apiPost('/api/damage-reports', damageForm)
-      toast.success('Damage report filed. The item was moved to maintenance.')
-      setDamageForm({ itemType: damageForm.itemType, itemId: '', itemName: '', reservationId: '', playerName: '', description: '' })
+      toast.success(damageForm.kind === 'loss' ? 'Loss report filed. The item was taken out of rental.' : 'Damage report filed. The item was moved to maintenance.')
+      setDamageForm({ kind: damageForm.kind, itemType: damageForm.itemType, itemId: '', itemName: '', reservationId: '', playerName: '', description: '' })
       await load()
     } catch (err: any) {
       toast.error(err?.message || 'Unable to file report')
@@ -143,7 +184,8 @@ export function SafetyLogPage() {
     try {
       await apiPut(`/api/damage-reports/${encodeURIComponent(review.id)}/review`, {
         decision,
-        chargeAmount: Number(review.amount),
+        chargeAmount: review.amount === '' ? undefined : Number(review.amount),
+        overrideReason: review.overrideReason,
         note: review.note,
       })
       toast.success(decision === 'bill' ? 'Charge added to the reservation balance.' : 'Charge waived.')
@@ -278,9 +320,25 @@ export function SafetyLogPage() {
         </div>
       ) : (
         <div className="grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
+          <div className="space-y-4">
           <Card className="p-4 md:p-5">
-            <div className="flex items-center gap-2 text-sm font-bold"><FiAlertTriangle /> File a damage report</div>
+            <div className="flex items-center gap-2 text-sm font-bold"><FiAlertTriangle /> File a damage or loss report</div>
             <form className="mt-4 space-y-3" onSubmit={submitDamage}>
+              <div className="grid grid-cols-2 gap-2">
+                {([['damage', 'Damaged'], ['loss', 'Lost']] as const).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setDamageForm((c) => ({ ...c, kind: value }))}
+                    className={[
+                      'rounded-xl border px-3 py-2 text-sm font-semibold transition',
+                      damageForm.kind === value ? 'border-accent/40 bg-accent/15 text-accent' : 'border-white/10 bg-white/5 text-muted hover:text-text',
+                    ].join(' ')}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="block">
                   <div className="mb-2 text-sm font-semibold text-text">Item type</div>
@@ -340,6 +398,22 @@ export function SafetyLogPage() {
           </Card>
 
           <Card className="p-4 md:p-5">
+            <div className="text-xs uppercase tracking-widest text-muted">Penalty rules</div>
+            <div className="mt-2 space-y-1 text-sm text-muted">
+              <div><span className="font-semibold text-text">Lost item:</span> the item's replacement value (set on the Weapons / Equipment page).</div>
+              <div><span className="font-semibold text-text">Damaged item:</span> gunsmith repair cost (parts + labor) plus a {handlingFee || 0}% handling fee.</div>
+              <div>Billing a different amount needs a written reason.</div>
+            </div>
+            {isAdmin ? (
+              <div className="mt-3 flex items-end gap-2">
+                <Input label="Handling fee (%)" type="number" min={0} max={100} value={handlingFee} onChange={(e) => setHandlingFee(e.target.value)} />
+                <Button variant="secondary" onClick={saveHandlingFee} disabled={handlingFee === ''}>Save</Button>
+              </div>
+            ) : null}
+          </Card>
+          </div>
+
+          <Card className="p-4 md:p-5">
             <div className="text-xs uppercase tracking-widest text-muted">Reports</div>
             <div className="mt-3 divide-y divide-white/5">
               {loading ? <div className="py-3 text-sm text-muted">Loading…</div> : null}
@@ -348,13 +422,20 @@ export function SafetyLogPage() {
                 <div key={report.id} className="py-3">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <div className="text-sm font-semibold">{report.itemName} <span className="text-xs text-muted">({report.itemType})</span></div>
+                      <div className="text-sm font-semibold">
+                        {report.itemName} <span className="text-xs text-muted">({report.itemType}{report.kind === 'loss' ? ', lost' : ''})</span>
+                      </div>
                       <div className="mt-0.5 text-xs text-muted">
                         {report.id} · {formatDateTime(report.reportedAtISO)} · {report.reservationId || 'no reservation'}
                         {report.playerName ? ` · ${report.playerName}` : ''}
                       </div>
                       <div className="mt-1 text-sm text-muted">{report.description}</div>
                       {report.reviewNote ? <div className="mt-1 text-xs text-muted">Review: {report.reviewNote}</div> : null}
+                      {report.penalty?.overridden ? (
+                        <div className="mt-1 text-xs text-warning">
+                          Override{report.penalty.computedAmount != null ? ` (rule gave ₱${report.penalty.computedAmount.toLocaleString()})` : ''}: {report.penalty.overrideReason}
+                        </div>
+                      ) : null}
                     </div>
                     <div className="text-right">
                       <span className={`text-[10px] font-semibold uppercase tracking-[0.15em] ${report.status === 'billed' ? 'text-danger' : report.status === 'waived' ? 'text-success' : 'text-warning'}`}>
@@ -367,13 +448,34 @@ export function SafetyLogPage() {
                   {isAdmin && report.status === 'reported' ? (
                     review?.id === report.id ? (
                       <div className="mt-3 grid gap-2 rounded-xl border border-white/10 bg-white/5 p-3 sm:grid-cols-2">
+                        <div className="text-xs sm:col-span-2">
+                          {!review.quote ? (
+                            <span className="text-muted">Computing penalty…</span>
+                          ) : review.quote.amount === null ? (
+                            <span className="text-warning">{review.quote.missing}</span>
+                          ) : (
+                            <div className="space-y-0.5">
+                              {(review.quote.lines || []).map((line) => (
+                                <div key={line.label} className="flex justify-between text-muted"><span>{line.label}</span><span>₱{line.amount.toLocaleString()}</span></div>
+                              ))}
+                              <div className="flex justify-between font-semibold"><span>Rule-based penalty</span><span>₱{review.quote.amount.toLocaleString()}</span></div>
+                            </div>
+                          )}
+                        </div>
                         <Input
-                          label="Approved charge (₱)"
+                          label="Charge (₱)"
                           type="number"
                           min={1}
                           value={review.amount}
                           onChange={(e) => setReview((c) => c && { ...c, amount: e.target.value })}
                         />
+                        {review.quote && (review.quote.amount === null || (review.amount !== '' && Number(review.amount) !== review.quote.amount)) ? (
+                          <Input
+                            label="Reason for this amount"
+                            value={review.overrideReason}
+                            onChange={(e) => setReview((c) => c && { ...c, overrideReason: e.target.value })}
+                          />
+                        ) : null}
                         <Input
                           label="Note"
                           value={review.note}
@@ -388,7 +490,7 @@ export function SafetyLogPage() {
                       </div>
                     ) : (
                       <div className="mt-2">
-                        <Button variant="ghost" onClick={() => setReview({ id: report.id, amount: '', note: '' })}>Review charge</Button>
+                        <Button variant="ghost" onClick={() => void openReview(report)}>Review charge</Button>
                       </div>
                     )
                   ) : null}

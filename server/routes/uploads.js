@@ -6,9 +6,22 @@ import { randomUUID } from 'crypto'
 import { Binary } from 'mongodb'
 import { isCloudinaryConfigured, requireCloudinary } from './cloudinary.js'
 import { getDb, getUserAccountsCollection } from '../db/mongo.js'
-import { requireAuth } from '../middleware/auth.js'
+import { requireAuth, requireRole } from '../middleware/auth.js'
 
 const router = express.Router()
+
+// Staff paperwork (partner borrowing agreements, return slips, expense receipts): images or PDFs.
+const documentUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const type = String(file?.mimetype || '')
+    if (!type.startsWith('image/') && type !== 'application/pdf') {
+      return cb(new Error('Only images and PDF files are allowed.'))
+    }
+    cb(null, true)
+  },
+})
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -87,6 +100,21 @@ async function uploadToCloudinary(fileBuffer, filename) {
     stream.pipe(uploadStream)
   })
 }
+
+router.post('/upload-document', requireAuth, requireRole('admin', 'registrar', 'marshal'), (req, res, next) => {
+  documentUpload.single('file')(req, res, (err) => {
+    if (err) return res.status(400).json({ ok: false, error: err.message || 'Only images and PDF files are allowed.' })
+    next()
+  })
+}, async (req, res) => {
+  if (!req.file?.buffer) return res.status(400).json({ ok: false, error: 'file is required' })
+  try {
+    const url = await storeUpload(req, req.file.buffer, req.file.originalname || 'document', req.file.mimetype)
+    return res.json({ ok: true, url, name: String(req.file.originalname || 'document').slice(0, 120) })
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: String(err) })
+  }
+})
 
 router.post('/upload-image', requireAuth, (req, res, next) => {
   upload.single('file')(req, res, (err) => {

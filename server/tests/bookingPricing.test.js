@@ -31,11 +31,27 @@ const records = {
   ],
   user_accounts: [
     { id: 'verified-cvsu', partnershipInstitution: 'Cavite State University', partnershipEligibilityStatus: 'verified' },
+    { id: 'verified-scouts', partnershipInstitution: 'Scouts Council', partnershipEligibilityStatus: 'verified' },
+    { id: 'verified-former', partnershipInstitution: 'Former Partner', partnershipEligibilityStatus: 'verified' },
+    { id: 'pending-scouts', partnershipInstitution: 'Scouts Council', partnershipEligibilityStatus: 'pending' },
   ],
 }
 
 async function findDocumentById(_db, collection, id) {
   return records[collection]?.find((record) => record.id === id) || null
+}
+
+// Minimal partnerships collection: case-insensitive exact name lookup.
+function dbWithPartners(partners) {
+  return {
+    collection: (name) => ({
+      findOne: async (query) => {
+        if (name !== 'partnerships') return null
+        const pattern = new RegExp(query.name.$regex, query.name.$options)
+        return partners.find((partner) => pattern.test(partner.name)) || null
+      },
+    }),
+  }
 }
 
 test('standard rental package charges the 50 percent deposit', async () => {
@@ -111,7 +127,7 @@ test('own-gear bookings charge entrance fees and cap the fixed deposit at the to
 
 test('verified CvSU eligibility applies the configured discount from server profile data', async () => {
   const result = await calculateBookingPrice({
-    db: {},
+    db: dbWithPartners([]),
     payload: { selectionMode: 'package', selectedPackageId: 'full-rental', sessionType: 'public' },
     players: 1,
     findDocumentById,
@@ -120,6 +136,39 @@ test('verified CvSU eligibility applies the configured discount from server prof
 
   assert.equal(result.totalAmount, 675)
   assert.equal(result.depositAmount, 338)
+})
+
+test("a verified member gets the active partner organization's discount rate", async () => {
+  const db = dbWithPartners([
+    { name: 'Scouts Council', status: 'active', discountPercent: 20 },
+    { name: 'Cavite State University', status: 'active', discountPercent: 15 },
+  ])
+  const price = (userId) => calculateBookingPrice({
+    db,
+    payload: { selectionMode: 'package', selectedPackageId: 'full-rental', sessionType: 'public' },
+    players: 1,
+    findDocumentById,
+    userId,
+  })
+  const scouts = await price('verified-scouts')
+  assert.equal(scouts.totalAmount, 600)
+  assert.deepEqual(scouts.pricingBreakdown.at(-1), { label: 'Verified Scouts Council discount (20%)', amount: -150 })
+  // A CvSU partnership record overrides the CVSU_DISCOUNT_PERCENT fallback.
+  assert.equal((await price('verified-cvsu')).totalAmount, 637)
+  // Not yet verified: no discount.
+  assert.equal((await price('pending-scouts')).totalAmount, 750)
+})
+
+test('no discount when the partnership is inactive or has no record', async () => {
+  const db = dbWithPartners([{ name: 'Former Partner', status: 'inactive', discountPercent: 30 }])
+  const result = await calculateBookingPrice({
+    db,
+    payload: { selectionMode: 'package', selectedPackageId: 'full-rental', sessionType: 'public' },
+    players: 1,
+    findDocumentById,
+    userId: 'verified-former',
+  })
+  assert.equal(result.totalAmount, 750)
 })
 
 test('verified own weapons replace rental weapons in package and custom pricing', async () => {

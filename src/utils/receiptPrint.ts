@@ -1,3 +1,5 @@
+import { apiPost } from './apiClient'
+
 export type ReceiptReservation = {
   id?: string
   _id?: string
@@ -37,12 +39,11 @@ const esc = (v: unknown) =>
 
 const php = (value: unknown) => `₱${Number(value || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
-export function buildReceiptHtml(reservation: ReceiptReservation, payments: ReceiptPayment[], payerName: string) {
+export function buildReceiptHtml(reservation: ReceiptReservation, payments: ReceiptPayment[], payerName: string, receiptNo: string) {
   const verified = payments.filter(isVerifiedPayment)
   const reservationId = String(reservation.id || reservation._id || '')
   const paid = verified.reduce((sum, p) => sum + Number(p.amount || 0), 0)
   const total = Number(reservation.totalAmount || 0)
-  const receiptNo = `OR-${reservationId.replace(/[^A-Za-z0-9]/g, '').slice(-8).toUpperCase()}-${verified.length}`
   const lines = (reservation.pricingBreakdown || [])
     .map((item) => `<tr><td>${esc(item.label || 'Charge')}</td><td class="r">${php(item.amount)}</td></tr>`)
     .join('')
@@ -86,14 +87,18 @@ export function buildReceiptHtml(reservation: ReceiptReservation, payments: Rece
 </body></html>`
 }
 
-export function printReceipt(reservation: ReceiptReservation, payments: ReceiptPayment[], payerName: string) {
+// The receipt number is issued and saved by the server, so reprinting the same payments
+// shows the same number and every number traces back to its payments.
+export async function printReceipt(reservation: ReceiptReservation, payments: ReceiptPayment[], payerName: string) {
+  const reservationId = String(reservation.id || reservation._id || '')
+  const res = await apiPost<{ ok: boolean; data: { receiptNo: string } }>(`/api/reservations/${encodeURIComponent(reservationId)}/receipt`, {})
   const iframe = document.createElement('iframe')
   iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden'
   document.body.appendChild(iframe)
   const win = iframe.contentWindow
   if (!win) return
   win.document.open()
-  win.document.write(buildReceiptHtml(reservation, payments, payerName))
+  win.document.write(buildReceiptHtml(reservation, payments, payerName, res.data.receiptNo))
   win.document.close()
   win.addEventListener('afterprint', () => setTimeout(() => iframe.remove(), 500), { once: true })
   win.focus()

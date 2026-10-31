@@ -18,7 +18,7 @@ import toast from 'react-hot-toast'
 import { Card } from '../../components/ui/Card'
 import { Input } from '../../components/ui/Input'
 import { Button } from '../../components/ui/Button'
-import { apiGet } from '../../utils/apiClient'
+import { apiGet, apiPost } from '../../utils/apiClient'
 import { calculatePackagePricing, packageEquipmentQty, resolvePackageDiscountConfig } from '../../utils/packagePricing'
 import { savePackagePrefill, type PackageRecommendationPrefill } from '../../utils/packagePrefill'
 import { modelOf } from '../../utils/inventoryModels'
@@ -82,6 +82,22 @@ type PricingResult = {
   discountSummary: string
   isSettled: boolean
   settledAmount: number
+}
+
+// The server's quote for a package (POST /api/package-recommendations): the same calculator
+// the booking uses, plus a stock check for the chosen date and slot.
+type ServerQuote = {
+  packageId: string
+  fitsGroup: boolean
+  withinBudget: boolean
+  inStock: boolean
+  recommended: boolean
+  total: number | null
+  perPlayer: number | null
+  depositAmount: number | null
+  breakdown: Array<{ label: string; amount: number }>
+  reasons: string[]
+  unavailableReason: string
 }
 
 function clamp(n: number, min: number, max: number) {
@@ -339,7 +355,43 @@ export function PackageRecommendationPage() {
   const ownWeaponsSafe = clamp(ownWeapons, 0, MAX_WEAPONS)
   const rentalWeaponsNeeded = Math.max(0, playerSafe - ownWeaponsSafe)
 
-  // Every package that fits the group size and weapon request, priced for this group
+  // Optional date and slot so the stock check counts gear other bookings already hold.
+  const [quoteDate, setQuoteDate] = useState('')
+  const [quoteSlot, setQuoteSlot] = useState('')
+  const [quotes, setQuotes] = useState<Map<string, ServerQuote>>(new Map())
+  const [quoteError, setQuoteError] = useState('')
+
+  useEffect(() => {
+    if (packages.length === 0) return
+    const slotQuery = quoteDate && quoteSlot ? { date: quoteDate, slot: quoteSlot } : {}
+    let cancelled = false
+    const timer = window.setTimeout(() => {
+      apiPost<{ ok: boolean; data: ServerQuote[] }>('/api/package-recommendations', {
+        budget: budgetSafe,
+        players: playerSafe,
+        sessionType: budgetModel,
+        ownWeapons: ownWeaponsSafe,
+        weaponsWanted: weaponsWantedSafe,
+        ...slotQuery,
+      })
+        .then((res) => {
+          if (cancelled) return
+          setQuotes(new Map((res.data || []).map((quote) => [quote.packageId, quote])))
+          setQuoteError('')
+        })
+        .catch((err: any) => {
+          if (!cancelled) setQuoteError(err?.message || 'Unable to check prices and stock right now.')
+        })
+    }, 400)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [packages.length, budgetSafe, playerSafe, budgetModel, ownWeaponsSafe, weaponsWantedSafe, quoteDate, quoteSlot])
+
+  // Every package that fits the group size and weapon request, priced for this group.
+  // The server's total (with any verified partner discount) replaces the local estimate,
+  // and packages without enough free gear are not recommended.
   const priced = useMemo(() => {
     return packages
       .filter((pkg) => {
@@ -352,15 +404,21 @@ export function PackageRecommendationPage() {
         return playersOk && weaponsOk
       })
       .map((pkg) => {
-        const pricing = computeTotal({ pkg, players: playerSafe, budgetModel, weapons, equipment, ownWeapons: ownWeaponsSafe })
-        return { pkg, pricing, affordable: pricing.total <= budgetSafe }
+        const estimate = computeTotal({ pkg, players: playerSafe, budgetModel, weapons, equipment, ownWeapons: ownWeaponsSafe })
+        const quote = quotes.get(pkg.id)
+        const pricing = quote && quote.total !== null
+          ? { ...estimate, total: quote.total, perPlayer: quote.perPlayer ?? estimate.perPlayer }
+          : estimate
+        const inStock = quote ? quote.inStock : true
+        return { pkg, pricing, quote, inStock, affordable: pricing.total <= budgetSafe }
       })
       .sort((a, b) => a.pricing.total - b.pricing.total)
-  }, [packages, budgetSafe, budgetModel, playerSafe, weaponsWantedSafe, ownWeaponsSafe, weapons, equipment])
+  }, [packages, budgetSafe, budgetModel, playerSafe, weaponsWantedSafe, ownWeaponsSafe, weapons, equipment, quotes])
 
-  // Only packages that match the group AND fit the budget are recommended
-  const scored = useMemo(() => priced.filter((item) => item.affordable), [priced])
-  const closestOver = useMemo(() => priced.find((item) => !item.affordable), [priced])
+  // Only packages that match the group, fit the budget, and have the gear free are recommended
+  const scored = useMemo(() => priced.filter((item) => item.affordable && item.inStock), [priced])
+  const closestOver = useMemo(() => priced.find((item) => !item.affordable && item.inStock), [priced])
+  const outOfStock = useMemo(() => priced.filter((item) => item.affordable && !item.inStock), [priced])
 
   // Packages hidden only because the group size doesn't fit, so the empty state can say why
   const blockedByPlayers = useMemo(() => {
@@ -650,6 +708,26 @@ export function PackageRecommendationPage() {
                   <span className="font-semibold text-accent">Note:</span> Public sessions are only available on weekends.
                 </div>
               </div>
+
+              <div className="md:col-span-3">
+                <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Planned date (optional)</div>
+                <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                  <Input type="date" value={quoteDate} onChange={(e) => setQuoteDate(e.target.value)} />
+                  <select
+                    value={quoteSlot}
+                    onChange={(e) => setQuoteSlot(e.target.value)}
+                    className="w-full rounded-xl border border-white/10 bg-background px-4 py-3 text-sm text-text focus:outline-none focus:ring-2 focus:ring-accent/40 [&>option]:bg-background"
+                  >
+                    <option value="">Any time slot</option>
+                    <option value="morning">Morning</option>
+                    <option value="afternoon">Afternoon</option>
+                    <option value="evening">Evening</option>
+                  </select>
+                </div>
+                <p className="mt-1 text-[11px] text-muted">
+                  Pick a date and slot to hide packages whose gear is already booked by other groups then.
+                </p>
+              </div>
             </div>
           </Card>
 
@@ -660,7 +738,20 @@ export function PackageRecommendationPage() {
             <p className="mt-1 text-xs text-muted">
               Showing packages for {playerSafe} player{playerSafe === 1 ? '' : 's'}
               {` with ${rentalWeaponsNeeded} rental weapon${rentalWeaponsNeeded === 1 ? '' : 's'}`} within ₱{budgetSafe.toLocaleString()}, cheapest first.
+              {' '}Prices are calculated by the booking system, including any verified partner discount.
             </p>
+            {quoteError ? (
+              <div className="mt-2 rounded-xl border border-danger/20 bg-danger/10 px-3 py-2 text-xs text-danger">
+                {quoteError} Showing estimates only.
+              </div>
+            ) : null}
+            {outOfStock.length > 0 ? (
+              <div className="mt-2 rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-muted">
+                {outOfStock.map((item) => (
+                  <div key={item.pkg.id}>"{item.pkg.name}" fits your budget but not enough gear is free: {item.quote?.unavailableReason}</div>
+                ))}
+              </div>
+            ) : null}
 
             {loading ? (
               <div className="mt-4 text-sm text-muted">Loading packages...</div>
@@ -770,6 +861,15 @@ export function PackageRecommendationPage() {
                           <div className="mt-2 text-[11px] text-muted">Fixed price while the player count stays at {item.pkg.players}.</div>
                         )}
                       </div>
+
+                      {item.quote?.reasons?.length ? (
+                        <div className="mt-3 space-y-1">
+                          <div className="text-[10px] font-bold uppercase tracking-widest text-muted">Why it fits</div>
+                          {item.quote.reasons.map((reason) => (
+                            <div key={reason} className="flex gap-1.5 text-[11px] text-muted"><FiCheck className="mt-0.5 flex-none text-success" /> {reason}</div>
+                          ))}
+                        </div>
+                      ) : null}
 
                       {item.pkg.description && (
                         <div className="mt-3 text-[11px] text-muted italic">
@@ -1053,6 +1153,26 @@ export function PackageRecommendationPage() {
                       </div>
                     </div>
                   )}
+
+                  {detailsItem.quote?.breakdown?.length ? (
+                    <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                      <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Itemized booking price</div>
+                      <div className="mt-3 space-y-2 text-sm">
+                        {detailsItem.quote.breakdown.map((line, index) => (
+                          <div key={`${line.label}-${index}`} className={['flex items-center justify-between', line.amount < 0 ? 'text-success' : ''].join(' ')}>
+                            <span className={line.amount < 0 ? '' : 'text-muted'}>{line.label}</span>
+                            <span>{line.amount < 0 ? '− ' : ''}₱{Math.abs(line.amount).toLocaleString()}</span>
+                          </div>
+                        ))}
+                        {detailsItem.quote.depositAmount !== null ? (
+                          <div className="flex items-center justify-between border-t border-white/10 pt-2">
+                            <span className="text-muted">Down payment to reserve</span>
+                            <span className="font-semibold">₱{detailsItem.quote.depositAmount.toLocaleString()}</span>
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
 
                 <div className="mt-5 flex flex-wrap items-center justify-end gap-3">

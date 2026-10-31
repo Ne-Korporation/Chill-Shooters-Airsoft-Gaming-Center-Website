@@ -25,6 +25,7 @@ type WeaponItem = {
   note: string
   description?: string
   price: number
+  replacementValue?: number
   model: string
   unitNumber: number
   createdAtISO?: string
@@ -75,7 +76,7 @@ const StatusBadge = ({ status, onToggle }: { status: WeaponStatus; onToggle?: ()
 // category fills in the price; the admin can still change it.
 const DEFAULT_CATEGORY_PRICES: Partial<Record<WeaponCategory, number>> = { rifles: 500 }
 
-const emptyForm = () => ({ name: '', description: '', category: 'rifles' as WeaponCategory, status: 'available' as WeaponStatus, price: String(DEFAULT_CATEGORY_PRICES.rifles), pieces: '1', applyToModel: true, partnerId: '', fpsClass: '', fpsLimit: '' })
+const emptyForm = () => ({ name: '', description: '', category: 'rifles' as WeaponCategory, status: 'available' as WeaponStatus, price: String(DEFAULT_CATEGORY_PRICES.rifles), replacementValue: '', pieces: '1', applyToModel: true, partnerId: '', fpsClass: '', fpsLimit: '' })
 
 // Blank class follows the category (snipers are sniper class); blank limit uses the class default.
 function fpsFields(form: { fpsClass: string; fpsLimit: string }) {
@@ -124,6 +125,7 @@ export function AdminWeaponsPage() {
         note: d.note || d.description || '',
         description: d.description || d.note || '',
         price: typeof d.price === 'number' ? d.price : 0,
+        replacementValue: Number(d.replacementValue) || 0,
         model: modelOf(d),
         unitNumber: Number(d.unitNumber) || 0,
         createdAtISO: d.createdAtISO || null,
@@ -189,6 +191,7 @@ export function AdminWeaponsPage() {
         category: form.category,
         status: form.status,
         price: Number(form.price) || 0,
+        replacementValue: Number(form.replacementValue) || 0, 
         description: form.description.trim(),
         note: form.description.trim() || 'Added through the admin inventory review.',
         partnerId: form.partnerId,
@@ -213,6 +216,7 @@ export function AdminWeaponsPage() {
       category: weapon.category,
       status: weapon.status,
       price: String(weapon.price),
+      replacementValue: weapon.replacementValue ? String(weapon.replacementValue) : '',
       pieces: '1',
       applyToModel: true,
       partnerId: weapon.partnerId || '',
@@ -239,7 +243,7 @@ export function AdminWeaponsPage() {
         status: form.status,
         description: form.description.trim(),
         note: form.description.trim() || 'Updated from admin inventory.',
-        ...(form.applyToModel ? {} : { price: Number(form.price) || 0, category: form.category, partnerId: form.partnerId, ...fpsFields(form) }),
+        ...(form.applyToModel ? {} : { price: Number(form.price) || 0, replacementValue: Number(form.replacementValue) || 0, category: form.category, partnerId: form.partnerId, ...fpsFields(form) }),
         updatedAtISO: new Date().toISOString(),
       })
       // Price, category, owner, and FPS rules are shared by every piece of the model.
@@ -247,6 +251,7 @@ export function AdminWeaponsPage() {
         await apiPut<any>('/api/inventory/weapons/models', {
           model: piece.model,
           price: Number(form.price) || 0,
+          replacementValue: Number(form.replacementValue) || 0, 
           category: form.category,
           partnerId: form.partnerId,
           ...fpsFields(form),
@@ -599,6 +604,18 @@ export function AdminWeaponsPage() {
                   value={form.price}
                   onChange={(event) => setForm((prev) => ({ ...prev, price: event.target.value }))}
                   placeholder="e.g. 150"
+                  className="w-full rounded-xl border border-white/10 bg-transparent px-4 py-3 text-sm text-text placeholder:text-muted"
+                />
+              </label>
+
+              <label className="block">
+                <div className="mb-2 text-sm font-semibold text-text">Replacement value (₱)</div>
+                <input
+                  type="number"
+                  min="0"
+                  value={form.replacementValue}
+                  onChange={(event) => setForm((prev) => ({ ...prev, replacementValue: event.target.value }))}
+                  placeholder="What it costs to replace if lost"
                   className="w-full rounded-xl border border-white/10 bg-transparent px-4 py-3 text-sm text-text placeholder:text-muted"
                 />
               </label>

@@ -39,9 +39,22 @@ function CompleteRepairForm({ repair, onDone }: { repair: Repair; onDone: () => 
     returnToService: true,
     playerInduced: repair.playerInduced === true,
     reservationId: repair.reservationId || '',
+    penaltyAmount: '',
+    overrideReason: '',
   })
   const [saving, setSaving] = useState(false)
+  const [handlingFeePercent, setHandlingFeePercent] = useState(0)
+  useEffect(() => {
+    apiGet<{ ok: boolean; data: { handlingFeePercent: number } }>('/api/penalty-rules')
+      .then((res) => setHandlingFeePercent(Number(res.data.handlingFeePercent) || 0))
+      .catch(() => null)
+  }, [])
   const repairCost = (Number(form.partsCost) || 0) + (Number(form.laborCost) || 0)
+  // Penalty rule: repair cost plus the admin-set handling fee.
+  const handlingFee = Math.round(repairCost * handlingFeePercent) / 100
+  const rulePenalty = Math.round((repairCost + handlingFee) * 100) / 100
+  const overriding = form.penaltyAmount !== '' && Number(form.penaltyAmount) !== rulePenalty
+  const billed = form.penaltyAmount !== '' ? Number(form.penaltyAmount) : rulePenalty
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault()
@@ -52,9 +65,10 @@ function CompleteRepairForm({ repair, onDone }: { repair: Repair; onDone: () => 
         partsCost: Number(form.partsCost),
         laborCost: Number(form.laborCost),
         reservationId: form.reservationId.trim(),
+        penaltyAmount: form.penaltyAmount === '' ? undefined : Number(form.penaltyAmount),
       })
-      toast.success(form.playerInduced && repairCost > 0
-        ? `${repair.itemName} repaired. ₱${repairCost.toLocaleString()} was added to the player's bill.`
+      toast.success(form.playerInduced && billed > 0
+        ? `${repair.itemName} repaired. ₱${billed.toLocaleString()} was added to the player's bill.`
         : `${repair.itemName} repair closed.`)
       onDone()
     } catch (e: any) {
@@ -88,8 +102,27 @@ function CompleteRepairForm({ repair, onDone }: { repair: Repair; onDone: () => 
             onChange={(e) => setForm((f) => ({ ...f, reservationId: e.target.value }))}
             placeholder={repair.damageReportId ? `Leave blank to use damage report ${repair.damageReportId}` : 'R-…'}
           />
+          <div className="mt-2 space-y-0.5 rounded-xl border border-white/10 bg-white/5 p-3 text-xs">
+            <div className="flex justify-between text-muted"><span>Repair cost (parts + labor)</span><span>₱{repairCost.toLocaleString()}</span></div>
+            {handlingFee > 0 ? (
+              <div className="flex justify-between text-muted"><span>Handling fee ({handlingFeePercent}%)</span><span>₱{handlingFee.toLocaleString()}</span></div>
+            ) : null}
+            <div className="flex justify-between font-semibold"><span>Rule-based penalty</span><span>₱{rulePenalty.toLocaleString()}</span></div>
+          </div>
+          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+            <Input
+              label="Bill a different amount (optional)"
+              type="number"
+              min={1}
+              value={form.penaltyAmount}
+              onChange={(e) => setForm((f) => ({ ...f, penaltyAmount: e.target.value }))}
+            />
+            {overriding ? (
+              <Input label="Reason for this amount" value={form.overrideReason} onChange={(e) => setForm((f) => ({ ...f, overrideReason: e.target.value }))} />
+            ) : null}
+          </div>
           <div className="mt-1 text-xs text-muted">
-            {repairCost > 0 ? `₱${repairCost.toLocaleString()} will be added to this reservation's balance as a repair penalty.` : 'Enter the parts and labor cost to bill the player.'}
+            {billed > 0 ? `₱${billed.toLocaleString()} will be added to this reservation's balance as a repair penalty.` : 'Enter the parts and labor cost to bill the player.'}
           </div>
         </div>
       ) : null}

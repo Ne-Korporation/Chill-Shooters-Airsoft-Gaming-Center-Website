@@ -9,6 +9,7 @@ import { useAuth } from '../../context/AuthContext'
 import { isVerifiedPayment, printReceipt, type ReceiptPayment } from '../../utils/receiptPrint'
 import { clearBookingDraft, draftTimeLeft, markBookingDraftLeft, readBookingDraft, type BookingDraft } from '../../utils/bookingDraft'
 import { isPaymongoEnabled, startPaymongoCheckout } from '../../utils/paymongo'
+import { formatSlotRange, useSlotHours } from '../../utils/slotHours'
 
 type RescheduleEvent = {
   fromDate?: string
@@ -92,6 +93,7 @@ function formatPHP(value?: number) {
 }
 
 export function MyReservationsPage() {
+  const slotHours = useSlotHours()
   const navigate = useNavigate()
   const { user } = useAuth()
   const [payments, setPayments] = useState<PaymentDoc[]>([])
@@ -305,7 +307,7 @@ export function MyReservationsPage() {
                   </Button>
                 ) : null}
                 {hasVerifiedPayment ? (
-                  <Button variant="ghost" onClick={() => printReceipt(reservation, reservationPayments, user?.name || '')}>
+                  <Button variant="ghost" onClick={() => printReceipt(reservation, reservationPayments, user?.name || '').catch((err: any) => toast.error(err?.message || 'Unable to print the receipt'))}>
                     <FiPrinter /> Print receipt
                   </Button>
                 ) : null}
@@ -342,7 +344,7 @@ export function MyReservationsPage() {
                     onChange={(event) => setNewSlot(event.target.value)}
                     className="mt-1 w-full rounded-xl border border-white/10 bg-background px-3 py-2 text-sm capitalize text-text [&>option]:bg-background"
                   >
-                    {SLOTS.map((slot) => <option key={slot} value={slot}>{slot}</option>)}
+                    {SLOTS.map((slot) => <option key={slot} value={slot}>{slot} ({formatSlotRange(slotHours, slot)})</option>)}
                   </select>
                 </label>
                 <label className="block text-xs font-semibold text-muted md:col-span-3">

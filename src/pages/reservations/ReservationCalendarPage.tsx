@@ -34,6 +34,7 @@ import { loadPackagePrefill } from '../../utils/packagePrefill'
 import { modelOf } from '../../utils/inventoryModels'
 import { cancelBookingDraftLeft, markBookingDraftLeft, readBookingDraft, saveBookingDraft, scheduleBookingDraftLeft } from '../../utils/bookingDraft'
 import { PiecePicker, type PickerGroup } from '../../components/inventory/PiecePicker'
+import { formatSlotRange, useSlotHours } from '../../utils/slotHours'
 
 // Slot holds last 15 minutes on the server; refresh well before that while the player is booking.
 const SLOT_HOLD_REFRESH_MS = 4 * 60 * 1000
@@ -255,6 +256,7 @@ const ENTRANCE_FEE_PER_PLAYER = 150
 const MIN_PLAYERS = 2
 
 export function ReservationCalendarPage() {
+  const slotHours = useSlotHours()
   const navigate = useNavigate()
   const location = useLocation()
   const today = useMemo(() => new Date(), [])
@@ -1839,7 +1841,7 @@ export function ReservationCalendarPage() {
                           >
                             <div className="flex items-center justify-between gap-3">
                               <div>
-                                <div className="text-sm font-bold">{slotLabels[s]}</div>
+                                <div className="text-sm font-bold">{slotLabels[s]} <span className="text-xs font-semibold text-muted">{formatSlotRange(slotHours, s)}</span></div>
                                 <div className="mt-1 text-xs text-muted flex items-center gap-2">
                                   <FiClock />
                                   {isSlotFull ? (

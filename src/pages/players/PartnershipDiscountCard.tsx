@@ -2,10 +2,9 @@ import React from 'react'
 import toast from 'react-hot-toast'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
-import { apiBase, apiPost, getApiAuthHeaders } from '../../utils/apiClient'
+import { apiBase, apiGet, apiPost, getApiAuthHeaders } from '../../utils/apiClient'
 
-// Must match DISCOUNT_INSTITUTIONS in server/routes/operations.js
-const INSTITUTIONS = ['Cavite State University']
+type Institution = { name: string; discountPercent: number }
 
 type Props = {
   institution?: string
@@ -15,7 +14,18 @@ type Props = {
 }
 
 export function PartnershipDiscountCard({ institution, status, reviewReason, onSubmitted }: Props) {
-  const [selected, setSelected] = React.useState(institution || INSTITUTIONS[0])
+  // Partner organizations with a discount, set by the admin on the Partnerships page.
+  const [institutions, setInstitutions] = React.useState<Institution[]>([])
+  const [selected, setSelected] = React.useState(institution || '')
+  React.useEffect(() => {
+    apiGet<{ ok: boolean; data: Institution[] }>('/api/partnership-discount/institutions')
+      .then((res) => {
+        const list = Array.isArray(res.data) ? res.data : []
+        setInstitutions(list)
+        setSelected((current) => (list.some((entry) => entry.name === current) ? current : list[0]?.name || ''))
+      })
+      .catch(() => setInstitutions([]))
+  }, [])
   const [file, setFile] = React.useState<File | null>(null)
   const [saving, setSaving] = React.useState(false)
   const normalized = String(status || '').toLowerCase()
@@ -76,14 +86,17 @@ export function PartnershipDiscountCard({ institution, status, reviewReason, onS
           {normalized === 'rejected' && reviewReason ? (
             <div className="rounded-xl border border-danger/20 bg-danger/10 px-3 py-2 text-xs text-danger">Previous request rejected: {reviewReason}</div>
           ) : null}
+          {institutions.length === 0 ? (
+            <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-muted">No partner discounts are open right now.</div>
+          ) : null}
           <label className="block">
-            <div className="mb-2 text-sm font-semibold text-text">Institution</div>
+            <div className="mb-2 text-sm font-semibold text-text">Organization</div>
             <select
               value={selected}
               onChange={(e) => setSelected(e.target.value)}
               className="w-full rounded-xl border border-white/10 bg-background px-4 py-3 text-sm text-text focus:outline-none focus:ring-2 focus:ring-accent/40 [&>option]:bg-background"
             >
-              {INSTITUTIONS.map((name) => <option key={name} value={name}>{name}</option>)}
+              {institutions.map((entry) => <option key={entry.name} value={entry.name}>{entry.name} ({entry.discountPercent}% off)</option>)}
             </select>
           </label>
           <label className="block">
@@ -95,7 +108,7 @@ export function PartnershipDiscountCard({ institution, status, reviewReason, onS
               className="block w-full text-sm text-muted file:mr-3 file:rounded-lg file:border-0 file:bg-white/10 file:px-3 file:py-2 file:text-text"
             />
           </label>
-          <Button type="button" className="w-full" onClick={submit} disabled={saving || !file}>
+          <Button type="button" className="w-full" onClick={submit} disabled={saving || !file || !selected}>
             {saving ? 'Submitting…' : 'Request discount'}
           </Button>
         </div>

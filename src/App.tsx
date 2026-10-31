@@ -34,6 +34,7 @@ import { AdminAuditLogsPage } from './pages/admin/AdminAuditLogsPage'
 import { AdminPartnershipsPage } from './pages/admin/AdminPartnershipsPage'
 import { AdminFeedbackPage } from './pages/admin/AdminFeedbackPage'
 import { AdminReachFundPage } from './pages/admin/AdminReachFundPage'
+import { AdminWeatherPage } from './pages/admin/AdminWeatherPage'
 import { SafetyLogPage } from './pages/marshal/SafetyLogPage'
 import { TeamGroupingPage } from './pages/operations/TeamGroupingPage'
 import { FieldCheckInPage } from './pages/operations/FieldCheckInPage'
@@ -225,6 +226,7 @@ export default function App() {
         <Route path="counter" element={<RequireRole roles={['registrar', 'admin']}><CounterPage /></RequireRole>} />
         <Route path="rentals" element={<RequireRole roles={['marshal', 'registrar', 'admin']}><RentalsPage /></RequireRole>} />
         <Route path="repairs" element={<RequireRole roles={['marshal', 'admin']}><RepairsPage /></RequireRole>} />
+        <Route path="weather" element={<RequireRole roles={['registrar', 'marshal', 'admin']}><AdminWeatherPage /></RequireRole>} />
         <Route path="admin/reports" element={<AdminPageWrapper><AdminReportsPage /></AdminPageWrapper>} />
         <Route path="admin/notifications" element={<AdminPageWrapper><AdminNotificationsPage /></AdminPageWrapper>} />
         <Route path="admin/audit-logs" element={<AdminPageWrapper><AdminAuditLogsPage /></AdminPageWrapper>} />

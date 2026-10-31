@@ -32,6 +32,7 @@ import {
   FiShuffle,
   FiShoppingBag,
   FiLogOut,
+  FiCloudRain,
 } from 'react-icons/fi'
 
 type Role = 'user' | 'admin' | 'marshal' | 'registrar'
@@ -67,6 +68,7 @@ const marshalItems: Item[] = [
   { label: 'Team Grouping', to: '/app/team-grouping', icon: FiShuffle, roles: ['marshal'] },
   { label: 'Rental Check-out', to: '/app/rentals', icon: FiLogOut, roles: ['marshal'] },
   { label: 'Repairs', to: '/app/repairs', icon: FiTool, roles: ['marshal'] },
+  { label: 'Weather', to: '/app/weather', icon: FiCloudRain, roles: ['marshal'] },
 ]
 
 
@@ -84,6 +86,7 @@ const adminItems: Item[] = [
   { section: 'Game day', label: 'Field check-in', to: '/app/check-in', icon: FiClipboard, roles: ['admin'] },
   { section: 'Game day', label: 'Team grouping', to: '/app/team-grouping', icon: FiShuffle, roles: ['admin'] },
   { section: 'Game day', label: 'Safety logs', to: '/app/safety', icon: FiAlertTriangle, roles: ['admin'] },
+  { section: 'Game day', label: 'Weather', to: '/app/weather', icon: FiCloudRain, roles: ['admin'] },
   { section: 'Inventory', label: 'Weapons', to: '/app/admin/weapons', icon: FiTruck, roles: ['admin'] },
   { section: 'Inventory', label: 'Equipment', to: '/app/admin/equipment', icon: FiTool, roles: ['admin'] },
   { section: 'Inventory', label: 'Rental packages', to: '/app/admin/rental-packages', icon: FiPackage, roles: ['admin'] },
@@ -100,6 +103,7 @@ const registrarItems: Item[] = [
   { label: 'Counter', to: '/app/counter', icon: FiShoppingBag, roles: ['registrar'] },
   { label: 'Field Check-in', to: '/app/check-in', icon: FiClipboard, roles: ['registrar'] },
   { label: 'Rental Check-out', to: '/app/rentals', icon: FiLogOut, roles: ['registrar'] },
+  { label: 'Weather', to: '/app/weather', icon: FiCloudRain, roles: ['registrar'] },
   { label: 'Games', to: '/app/registrar/games', icon: FiZap, roles: ['registrar'] },
   { label: 'Availed Packages', to: '/app/registrar/availed-packages', icon: FiPackage, roles: ['registrar'] },
   { label: 'Submitted Waivers', to: '/app/registrar/waivers', icon: FiShield, roles: ['registrar'] },
