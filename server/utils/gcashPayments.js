@@ -21,7 +21,7 @@ export async function submitGcashPayment({
   // Optional: the PH mobile number the player paid from, for staff to cross-check.
   const sender = String(senderNumber || '').trim() ? normalizePhPhone(senderNumber) : ''
   if (sender === null) {
-    const invalid = new Error('Enter your GCash number as +63-9XX-XXX-XXXX.')
+    const invalid = new Error('Enter your GCash number as 09XX XXX XXXX.')
     invalid.statusCode = 400
     throw invalid
   }

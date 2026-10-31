@@ -9,8 +9,8 @@ import { verifyFirebaseIdToken } from '../utils/firebaseTokens.js'
 
 const router = express.Router()
 
-// Experience needed to start at each level (matches getExperienceLevel in utils/teamBalancing.js).
-const STARTING_LEVEL_ADJUSTMENT = { Beginner: 0, Intermediate: 3, Experienced: 10 }
+// Games a chosen starting level stands for: the first game of that tier (see getExperienceLevel in utils/teamBalancing.js).
+const STARTING_GAMES_PLAYED = { Beginner: 0, Intermediate: 11, Experienced: 26 }
 
 export function validatePasswordRequirements(password) {
   const value = typeof password === 'string' ? password : ''
@@ -178,9 +178,8 @@ router.post('/admin/add-player', requireAuth, requireRole('admin', 'marshal', 'r
       password: hashedPassword,
       role: 'user',
       experience: 0,
-      // Level is computed from games played; a starting level becomes an adjustment
-      // at that level's threshold (see getExperienceLevel), so later games still count.
-      experienceAdjustment: STARTING_LEVEL_ADJUSTMENT[skillLevel] || 0,
+      // Counted as games from before the system, so games completed at the field add to it.
+      experienceAdjustment: STARTING_GAMES_PLAYED[skillLevel] || 0,
       emailVerified: true,
       identityVerificationStatus: 'not_submitted',
       createdAtISO: new Date().toISOString(),
@@ -681,14 +680,15 @@ router.post('/social-login', async (req, res) => {
 
   try {
     const userAccounts = await getUserAccountsCollection()
-    let user = await userAccounts.findOne(sameEmailFilter(normalizedEmail))
-    const existed = Boolean(user)
+    const user = await userAccounts.findOne(sameEmailFilter(normalizedEmail))
 
-    // "Continue with Google" on the login page also works for a first visit:
-    // Google has verified the address, so create the player account.
+    // The login page only signs in existing accounts; new players sign up on the register page.
     if (!user) {
-      const trimmedName = verified.name || (typeof name === 'string' ? name.trim() : '')
-      user = (await createGoogleAccount(userAccounts, normalizedEmail, trimmedName)).newDoc
+      return res.status(404).json({
+        ok: false,
+        notRegistered: true,
+        error: `No account is registered with ${normalizedEmail}. Please create an account first using "Sign up with Google" on the registration page.`,
+      })
     }
 
     const eligibility = validateGoogleLoginEligibility(user)
@@ -698,10 +698,10 @@ router.post('/social-login', async (req, res) => {
     if (isSuspendedAccount(user)) return res.status(403).json({ ok: false, error: SUSPENDED_ACCOUNT_ERROR })
 
     // Existing accounts are only signed in after the player confirms it's theirs.
-    if (existed && body.confirmExisting !== true) {
+    if (body.confirmExisting !== true) {
       return res.json({ ok: true, needsConfirm: true, account: { name: user.name || '', email: user.email } })
     }
-    if (existed) await linkGoogleToAccount(userAccounts, user)
+    await linkGoogleToAccount(userAccounts, user)
 
     const authUser = {
       id: user.id ?? (user._id ? String(user._id) : undefined),

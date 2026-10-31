@@ -7,6 +7,8 @@ import { Button } from '../../components/ui/Button'
 import { apiGet, apiPost } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
 import { isVerifiedPayment, printReceipt, type ReceiptPayment } from '../../utils/receiptPrint'
+import { clearBookingDraft, draftTimeLeft, markBookingDraftLeft, readBookingDraft, type BookingDraft } from '../../utils/bookingDraft'
+import { isPaymongoEnabled, startPaymongoCheckout } from '../../utils/paymongo'
 
 type RescheduleEvent = {
   fromDate?: string
@@ -38,6 +40,7 @@ type ReservationDoc = {
   paymentDueAtISO?: string
   cancellationReason?: string
   pricingBreakdown?: Array<{ label?: string; amount?: number }>
+  sentBack?: { note: string; atISO: string }
 }
 
 type PaymentDoc = ReceiptPayment & { reservationId?: string }
@@ -121,6 +124,49 @@ export function MyReservationsPage() {
     void load()
   }, [load])
 
+  // Unpaid reservations can be paid online from here (e.g. after cancelling at PayMongo).
+  const [canPayOnline, setCanPayOnline] = useState(false)
+  const [payingId, setPayingId] = useState<string | null>(null)
+  useEffect(() => {
+    void isPaymongoEnabled().then(setCanPayOnline)
+  }, [])
+  const payOnline = async (reservationId: string) => {
+    setPayingId(reservationId)
+    try {
+      await startPaymongoCheckout(reservationId)
+    } catch (err: any) {
+      toast.error(err?.message || 'Could not open the payment page')
+      setPayingId(null)
+    }
+  }
+
+  // A booking the player left part-way: offered here until its one-minute grace runs out.
+  const [draft, setDraft] = useState<BookingDraft | null>(null)
+  const [draftSecondsLeft, setDraftSecondsLeft] = useState(0)
+  useEffect(() => {
+    // Read after the booking page's "left" mark lands (it fires 300 ms after leaving). Being on
+    // this page means the player isn't booking, so a draft still marked active is marked left now.
+    const timer = window.setTimeout(() => {
+      markBookingDraftLeft(user?.id)
+      const found = readBookingDraft(user?.id)
+      setDraft(found)
+      setDraftSecondsLeft(found ? Math.ceil(draftTimeLeft(found) / 1000) : 0)
+    }, 400)
+    return () => window.clearTimeout(timer)
+  }, [user?.id])
+  useEffect(() => {
+    if (!draft) return
+    const timer = window.setInterval(() => {
+      const left = Math.ceil(draftTimeLeft(draft) / 1000)
+      setDraftSecondsLeft(left)
+      if (left <= 0) {
+        clearBookingDraft(user?.id)
+        window.clearInterval(timer)
+      }
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [draft, user?.id])
+
   const sorted = useMemo(
     () => reservations.slice().sort((a, b) => dateOf(b).localeCompare(dateOf(a))),
     [reservations],
@@ -142,7 +188,8 @@ export function MyReservationsPage() {
       toast.error('Weekday dates are for private sessions only. Choose a Saturday or Sunday.')
       return
     }
-    if (!reason.trim()) {
+    const sentBack = Boolean(reservation.sentBack) && statusOf(reservation) === 'needs review'
+    if (!reason.trim() && !sentBack) {
       toast.error('Please give a reason for rescheduling.')
       return
     }
@@ -154,7 +201,9 @@ export function MyReservationsPage() {
         reservationTime: newSlot,
         reason: reason.trim(),
       })
-      toast.success('Reservation rescheduled. Your deposit carries over to the new date.')
+      toast.success(sentBack
+        ? 'New date sent. Staff will review your reservation again.'
+        : 'Reservation rescheduled. Your deposit carries over to the new date.')
       setEditingId(null)
       await load()
     } catch (err: any) {
@@ -178,6 +227,19 @@ export function MyReservationsPage() {
         </Button>
       </div>
 
+      {draft && draftSecondsLeft > 0 ? (
+        <Card className="flex flex-col gap-3 border-accent/40 p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <div className="font-semibold">You have an unfinished booking</div>
+            <div className="mt-1 text-sm text-muted">{draft.label}</div>
+            <div className="mt-1 text-xs text-warning">Your slot is kept for {draftSecondsLeft} more second{draftSecondsLeft === 1 ? '' : 's'}, then it opens up for other players.</div>
+          </div>
+          <Button variant="primary" onClick={() => navigate(draft.path)}>
+            <FiRefreshCw /> Continue booking reservation
+          </Button>
+        </Card>
+      ) : null}
+
       {loading ? <Card className="p-4 text-sm text-muted">Loading your reservations…</Card> : null}
       {!loading && sorted.length === 0 ? (
         <Card className="p-4 text-sm text-muted">You have no reservations yet.</Card>
@@ -189,7 +251,9 @@ export function MyReservationsPage() {
         const status = statusOf(reservation)
         const daysLeft = date ? daysBetweenISO(today, date) : -1
         const statusAllows = RESCHEDULABLE_STATUSES.includes(status)
-        const canReschedule = statusAllows && daysLeft >= RESCHEDULE_CUTOFF_DAYS
+        // Staff sent it back: the player can always pick a new date, whatever the cutoff.
+        const sentBack = Boolean(reservation.sentBack) && status === 'needs review'
+        const canReschedule = statusAllows && (sentBack || daysLeft >= RESCHEDULE_CUTOFF_DAYS)
         const blockedReason = !statusAllows
           ? `A ${status} reservation can't be rescheduled.`
           : daysLeft < RESCHEDULE_CUTOFF_DAYS
@@ -213,6 +277,13 @@ export function MyReservationsPage() {
                 <div className="mt-1 text-xs text-muted">
                   Total {formatPHP(reservation.totalAmount)} · Deposit {formatPHP(reservation.depositAmount)} · ID {id}
                 </div>
+                {sentBack ? (
+                  <div className="mt-2 rounded-xl border border-danger/30 bg-danger/10 p-3 text-sm text-danger">
+                    <div className="font-semibold">Staff sent this reservation back to you</div>
+                    <div className="mt-1 text-text">Reason: {reservation.sentBack?.note}</div>
+                    <div className="mt-1 text-xs text-muted">Choose a new date below. Staff will review it again; your deposit carries over.</div>
+                  </div>
+                ) : null}
                 {status === 'cancelled' && reservation.cancellationReason === 'payment_window_expired' ? (
                   <div className="mt-1 text-xs text-warning">Released because payment wasn't completed in time.</div>
                 ) : null}
@@ -227,14 +298,20 @@ export function MyReservationsPage() {
                 <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold uppercase tracking-widest">
                   {status}
                 </span>
+                {canPayOnline && status === 'pending' && reservation.paymentState !== 'finalized' &&
+                  !reservationPayments.some((payment: any) => String(payment.userId) === String(user?.id) && !['failed', 'rejected'].includes(String(payment.paymentStatus || '').toLowerCase())) ? (
+                  <Button variant="primary" disabled={payingId === id} onClick={() => payOnline(id)}>
+                    {payingId === id ? 'Opening PayMongo…' : 'Pay now'}
+                  </Button>
+                ) : null}
                 {hasVerifiedPayment ? (
                   <Button variant="ghost" onClick={() => printReceipt(reservation, reservationPayments, user?.name || '')}>
                     <FiPrinter /> Print receipt
                   </Button>
                 ) : null}
                 {!editing ? (
-                  <Button variant="ghost" disabled={!canReschedule} onClick={() => startEditing(reservation)}>
-                    <FiRefreshCw /> Reschedule
+                  <Button variant={sentBack ? 'primary' : 'ghost'} disabled={!canReschedule} onClick={() => startEditing(reservation)}>
+                    <FiRefreshCw /> {sentBack ? 'Choose a new date' : 'Reschedule'}
                   </Button>
                 ) : null}
                 {!canReschedule && blockedReason ? <div className="text-xs text-muted">{blockedReason}</div> : null}
@@ -269,7 +346,7 @@ export function MyReservationsPage() {
                   </select>
                 </label>
                 <label className="block text-xs font-semibold text-muted md:col-span-3">
-                  Reason
+                  {sentBack ? 'Note for staff (optional)' : 'Reason'}
                   <textarea
                     value={reason}
                     onChange={(event) => setReason(event.target.value.slice(0, 500))}

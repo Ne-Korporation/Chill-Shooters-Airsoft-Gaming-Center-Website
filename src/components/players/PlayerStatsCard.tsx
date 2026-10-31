@@ -7,7 +7,7 @@ import { apiGet, apiPut } from '../../utils/apiClient'
 
 type PlayerStats = {
   gamesPlayed: number
-  experienceAdjustment: number
+  gamesAtField: number
   experience: number
   experienceLevel: string
   age: number | null
@@ -21,11 +21,11 @@ type PlayerStats = {
   ownedGear: Array<{ id: string; name: string; kind: 'weapon' | 'equipment'; category?: string }>
 }
 
-// Experience (games played at the field + admin adjustment), age group, reservation history, and
-// approved gear for one player. Admins can change the adjustment here.
+// Experience (total games played: games at the field plus games from before the system), age group,
+// reservation history, and approved gear for one player. Admins can correct the total here.
 export function PlayerStatsCard({ playerId, canAdjust = false }: { playerId: string; canAdjust?: boolean }) {
   const [stats, setStats] = useState<PlayerStats | null>(null)
-  const [adjustment, setAdjustment] = useState('0')
+  const [gamesInput, setGamesInput] = useState('0')
   const [note, setNote] = useState('')
   const [saving, setSaving] = useState(false)
 
@@ -33,7 +33,7 @@ export function PlayerStatsCard({ playerId, canAdjust = false }: { playerId: str
     apiGet<{ data: PlayerStats }>(`/api/players/${encodeURIComponent(playerId)}/stats`)
       .then((res) => {
         setStats(res.data)
-        setAdjustment(String(res.data.experienceAdjustment || 0))
+        setGamesInput(String(res.data.gamesPlayed || 0))
       })
       .catch(() => setStats(null))
   }, [playerId])
@@ -42,10 +42,10 @@ export function PlayerStatsCard({ playerId, canAdjust = false }: { playerId: str
     load()
   }, [load])
 
-  const saveAdjustment = async () => {
+  const saveGames = async () => {
     setSaving(true)
     try {
-      await apiPut(`/api/players/${encodeURIComponent(playerId)}/experience`, { adjustment: Number(adjustment), note })
+      await apiPut(`/api/players/${encodeURIComponent(playerId)}/experience`, { gamesPlayed: Number(gamesInput), note })
       toast.success('Experience updated.')
       setNote('')
       load()
@@ -68,10 +68,7 @@ export function PlayerStatsCard({ playerId, canAdjust = false }: { playerId: str
         </div>
         <div>
           <div className="text-xs text-muted">Games played</div>
-          <div className="text-sm font-bold">
-            {stats.gamesPlayed}
-            {stats.experienceAdjustment ? <span className="text-xs font-normal text-muted"> {stats.experienceAdjustment > 0 ? '+' : ''}{stats.experienceAdjustment} adj.</span> : null}
-          </div>
+          <div className="text-sm font-bold">{stats.gamesPlayed}</div>
         </div>
         <div>
           <div className="text-xs text-muted">Age group</div>
@@ -101,11 +98,12 @@ export function PlayerStatsCard({ playerId, canAdjust = false }: { playerId: str
       {canAdjust ? (
         <div className="mt-4 flex flex-col gap-2 border-t border-white/10 pt-3 sm:flex-row sm:items-end">
           <label className="block">
-            <div className="mb-1 text-xs font-semibold">Experience adjustment</div>
+            <div className="mb-1 text-xs font-semibold">Total games played</div>
             <input
               type="number"
-              value={adjustment}
-              onChange={(e) => setAdjustment(e.target.value)}
+              min={stats.gamesAtField}
+              value={gamesInput}
+              onChange={(e) => setGamesInput(e.target.value)}
               className="w-28 rounded-xl border border-white/10 bg-background px-3 py-2 text-sm"
               aria-describedby="experience-adjustment-hint"
             />
@@ -115,16 +113,16 @@ export function PlayerStatsCard({ playerId, canAdjust = false }: { playerId: str
             <input
               value={note}
               onChange={(e) => setNote(e.target.value)}
-              placeholder="e.g. Played before the system existed"
+              placeholder="e.g. Games played before the system existed"
               className="w-full rounded-xl border border-white/10 bg-background px-3 py-2 text-sm"
             />
           </label>
-          <Button size="sm" variant="secondary" disabled={saving} onClick={saveAdjustment}>{saving ? 'Saving…' : 'Save'}</Button>
+          <Button size="sm" variant="secondary" disabled={saving} onClick={saveGames}>{saving ? 'Saving…' : 'Save'}</Button>
         </div>
       ) : null}
       {canAdjust ? (
         <div id="experience-adjustment-hint" className="mt-1 text-[11px] text-muted">
-          Added to the games played at the field (use a negative number to reduce). Total experience: {stats.experience}.
+          The player's total games, which replaces the number shown above. {stats.gamesAtField} of them were completed at the field and can't be removed; games played from now on are added automatically. Beginner 0–10, Intermediate 11–25, Experienced 26+.
         </div>
       ) : null}
     </div>

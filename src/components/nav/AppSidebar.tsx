@@ -136,6 +136,23 @@ function useHasOpenSplitPayment(enabled: boolean) {
   return open
 }
 
+// Recommended Packages is hidden until the admin has created at least one active package.
+function useHasPackages(enabled: boolean) {
+  const [hasPackages, setHasPackages] = useState(false)
+  useEffect(() => {
+    if (!enabled) return
+    let active = true
+    apiGet<{ ok: boolean; data: Array<{ status?: string }> }>('/api/packages?limit=200')
+      .then((res) => {
+        const docs = Array.isArray(res?.data) ? res.data : []
+        if (active) setHasPackages(docs.some((pkg) => !pkg.status || pkg.status === 'active'))
+      })
+      .catch(() => { if (active) setHasPackages(false) })
+    return () => { active = false }
+  }, [enabled])
+  return hasPackages
+}
+
 export function AppSidebar({
   role,
   onNavigate,
@@ -150,6 +167,7 @@ export function AppSidebar({
   const userUnread = user?.role ? getNotificationsForRole(user.role, user.id).filter((n) => !n.read).length : 0
   const profilePath = user?.id ? `/app/players/${encodeURIComponent(user.id)}` : '/app/players/1'
   const hasOpenSplitPayment = useHasOpenSplitPayment(role === 'user' && !!user?.id)
+  const hasPackages = useHasPackages(role === 'user')
 
   const items = [
     ...(role === 'user' || role === 'registrar' || role === 'marshal'
@@ -157,7 +175,7 @@ export function AppSidebar({
           { label: 'Profile', to: profilePath, icon: FiUser, roles: ['user', 'registrar', 'marshal'] },
         ]
       : []),
-    ...baseItems.filter((it) => !it.roles || it.roles.includes(role)),
+    ...baseItems.filter((it) => (!it.roles || it.roles.includes(role)) && (it.to !== '/app/packages' || hasPackages)),
     ...(hasOpenSplitPayment
       ? [{ label: 'Split Payment', to: '/app/split-payments', icon: FiDollarSign, roles: ['user'] }]
       : []),

@@ -265,7 +265,7 @@ export function PlayerManagementPage() {
               {pl.verificationLabel}
             </span>
             <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] font-semibold text-text">
-              {pl.level} · {pl.gamesPlayed} {pl.gamesPlayed === 1 ? 'game' : 'games'}
+              {pl.level} · {pl.gamesPlayed} {pl.gamesPlayed === 1 ? 'game' : 'games'} played
             </span>
           </div>
         </div>

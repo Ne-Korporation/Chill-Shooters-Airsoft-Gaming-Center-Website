@@ -1,12 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { CardElement, Elements, useElements, useStripe } from '@stripe/react-stripe-js'
-import { loadStripe } from '@stripe/stripe-js'
 import { useNavigate } from 'react-router-dom'
 import { apiBase, apiGet, apiPost, getApiAuthHeaders } from '../../utils/apiClient'
-import { formatPhPhone, isValidPhPhone, PH_PHONE_PLACEHOLDER } from '../../utils/phone'
+import { formatPhPhone, isValidPhPhone, PH_PHONE_PLACEHOLDER, toStoredPhPhone } from '../../utils/phone'
 import toast from 'react-hot-toast'
 import { useAuth } from '../../context/AuthContext'
-import { useTheme } from '../../context/ThemeContext'
 
 import { motion } from 'framer-motion'
 import { FiCheck, FiChevronRight, FiFileText, FiInfo, FiLock, FiUpload } from 'react-icons/fi'
@@ -15,18 +12,17 @@ import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { clearPackagePrefill } from '../../utils/packagePrefill'
+import { cancelBookingDraftLeft, clearBookingDraft, hasBookingDraft, markBookingDraftLeft, readBookingDraft, saveBookingDraft, scheduleBookingDraftLeft } from '../../utils/bookingDraft'
 
 // Online deposits: GCash and bank transfer are proof-of-payment submissions a registrar
-// verifies; card is charged through Stripe in TEST MODE for the demo (a production deployment
-// would use a Philippine gateway such as PayMongo). Card is online-only: the counter has no
-// card terminal, so remaining balances are settled at the field by GCash, bank transfer, or cash.
-type PaymentMethod = 'gcash' | 'bank' | 'card'
+// verifies, or PayMongo checkout when the server has it set up. Remaining balances are
+// settled at the field by GCash, bank transfer, or cash.
+type PaymentMethod = 'gcash' | 'bank' | 'paymongo'
 
-const METHOD_LABELS: Record<PaymentMethod, string> = { gcash: 'GCash', bank: 'Bank Transfer', card: 'Card (online)' }
+const METHOD_LABELS: Record<PaymentMethod, string> = { gcash: 'GCash', bank: 'Bank Transfer', paymongo: 'Online (PayMongo)' }
 
-// Test mode only: a live publishable key is ignored so no real card can be charged.
-const stripePublishableKey = String(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY || '')
-const stripePromise = stripePublishableKey.startsWith('pk_test_') ? loadStripe(stripePublishableKey) : null
+// Pay everything online, or the downpayment online and the rest in cash at the field.
+type PaymentPlan = 'full' | 'cash_balance'
 
 type BankDetails = {
   bankName: string
@@ -86,59 +82,23 @@ class PaymentPageErrorBoundary extends React.Component<{ children: React.ReactNo
   }
 }
 
-function CardPaymentField({ onChange }: { onChange: (complete: boolean) => void }) {
-  const { theme } = useTheme()
-
-  if (!stripePromise) {
-    return (
-      <div className="rounded-2xl border border-warning/30 bg-warning/10 p-4 text-sm text-warning">
-        <div className="font-bold">Card payments are not set up</div>
-        <div className="mt-1 text-xs text-muted">
-          Add a Stripe test publishable key (VITE_STRIPE_PUBLISHABLE_KEY=pk_test_…) to enable the demo. Please pay with GCash or bank transfer for now.
-        </div>
-      </div>
-    )
-  }
-
-  return (
-    <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-      <div className="flex items-center justify-between gap-3 text-xs uppercase tracking-widest text-muted">
-        <span>Card details</span>
-        <span>Visa / Mastercard</span>
-      </div>
-      <div className="mt-3 rounded-xl border border-white/10 bg-black/20 px-4 py-4">
-        <CardElement
-          onChange={(event) => onChange(event.complete)}
-          options={{
-            hidePostalCode: true,
-            style: {
-              base: {
-                color: theme === 'dark' ? '#ffffff' : '#0a1423',
-                fontFamily: 'system-ui, sans-serif',
-                fontSize: '16px',
-                '::placeholder': { color: '#9ca3af' },
-              },
-              invalid: { color: '#f87171' },
-            },
-          }}
-        />
-      </div>
-      <div className="mt-3 rounded-xl border border-accent/20 bg-accent/5 px-3 py-2 text-[11px] text-muted">
-        <span className="font-semibold text-text">Demo (Stripe test mode):</span> no real money moves. Use card 4242 4242 4242 4242, any future expiry, any CVC.
-      </div>
-    </div>
-  )
-}
-
 function PaymentPageContent() {
   const navigate = useNavigate()
   const { user } = useAuth()
-  const stripe = useStripe()
-  const elements = useElements()
-  const [cardComplete, setCardComplete] = useState(false)
   const proofInputRef = useRef<HTMLInputElement | null>(null)
 
   const [method, setMethod] = useState<PaymentMethod>('gcash')
+  // PayMongo (test mode) replaces the manual methods when the server has it set up.
+  const [paymongoEnabled, setPaymongoEnabled] = useState(false)
+  useEffect(() => {
+    apiGet<{ ok: boolean; data: { enabled: boolean } }>('/api/paymongo/config')
+      .then((res) => {
+        if (!res?.data?.enabled) return
+        setPaymongoEnabled(true)
+        setMethod('paymongo')
+      })
+      .catch(() => null)
+  }, [])
   const [bankDetails, setBankDetails] = useState<BankDetails | null>(null)
   const [refNo, setRefNo] = useState('')
   const [phoneNumber, setPhoneNumber] = useState('')
@@ -147,18 +107,49 @@ function PaymentPageContent() {
   const [success, setSuccess] = useState(false)
   const [breakdown, setBreakdown] = useState({ field: 0, equipment: 0, entranceFee: 0, service: 0, total: 0, itemized: [] as Array<{ label: string; amount: number }> })
   const [paymentMode, setPaymentMode] = useState<PaymentMode>('self')
+  const [paymentPlan, setPaymentPlan] = useState<PaymentPlan>('cash_balance')
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([])
-  const [teamSize, setTeamSize] = useState(1)
-  const [payerShareAmount, setPayerShareAmount] = useState(0)
+  const [isOwnGear, setIsOwnGear] = useState(false)
+  // Set once the server amount is known after submitting.
   const [amountDue, setAmountDue] = useState(0)
+  // Who pays and how can change until the reservation is created; then the server has fixed them.
+  const [choicesLocked, setChoicesLocked] = useState(() => Boolean(localStorage.getItem('pending_reservation_id')))
+  const canSplit = teamMembers.length > 0
+  const teamSize = paymentMode === 'split' ? teamMembers.length + 1 : 1
+  const paysInFull = paymentPlan === 'full'
+  // Estimate shown before submitting; the server recalculates the exact amount.
+  const payerShareAmount = useMemo(() => {
+    const total = breakdown.total
+    const online = paysInFull ? total : isOwnGear ? Math.min(total, 350) : Math.min(total, Math.round(total * 0.5))
+    return paymentMode === 'split' ? Math.round((online / teamSize) * 100) / 100 : online
+  }, [breakdown.total, isOwnGear, paymentMode, paysInFull, teamSize])
+
+  // Saves the choice into the booking draft, which is what gets sent when the reservation is created.
+  const updateChoice = (changes: { paymentMode?: PaymentMode; paymentPlan?: PaymentPlan }) => {
+    if (choicesLocked) return
+    const nextMode = changes.paymentMode ?? paymentMode
+    const nextPlan = changes.paymentPlan ?? paymentPlan
+    setPaymentMode(nextMode)
+    setPaymentPlan(nextPlan)
+    try {
+      const pending = JSON.parse(localStorage.getItem('pending_reservation') || 'null')
+      if (!pending) return
+      localStorage.setItem('pending_reservation', JSON.stringify({
+        ...pending,
+        paymentMode: nextMode,
+        paymentPlan: nextPlan,
+        teamSize: nextMode === 'split' ? teamMembers.length + 1 : 1,
+      }))
+    } catch {
+      // ignore malformed pending data; submit() reports it
+    }
+  }
   const [gcashQrUrl, setGcashQrUrl] = useState('')
   const [gcashPhoneNumber, setGcashPhoneNumber] = useState('')
   const [gcashQrLoading, setGcashQrLoading] = useState(true)
   const [receiptReference, setReceiptReference] = useState('')
   const [amountPaid, setAmountPaid] = useState(0)
   const [balanceDue, setBalanceDue] = useState(0)
-  // Chosen when booking: pay everything online, or the downpayment online and the rest in cash at the field.
-  const [paysInFull, setPaysInFull] = useState(false)
 
   useEffect(() => {
     const pendingReservationJson = localStorage.getItem('pending_reservation')
@@ -179,14 +170,9 @@ function PaymentPageContent() {
             email: String(member?.email || ''),
           })).filter((member: TeamMember) => !!member.id)
         : []
-      const nextTeamSize = Math.max(1, Number(pendingReservation?.teamSize || nextTeamMembers.length + 1 || 1))
-      const isOwnGear = String(pendingReservation?.selectionMode || '').toLowerCase() === 'custom' &&
-        !(pendingReservation?.customWeaponIds?.length || pendingReservation?.customEquipmentIds?.length)
-      const fullPlan = pendingReservation?.paymentPlan === 'full'
-      setPaysInFull(fullPlan)
-      const estimatedDeposit = fullPlan ? total : isOwnGear ? Math.min(total, 350) : Math.min(total, Math.round(total * 0.5))
-      const nextPayerShareAmount = nextPaymentMode === 'split' ? Math.round((estimatedDeposit / nextTeamSize) * 100) / 100 : estimatedDeposit
-      const nextAmountDue = nextPayerShareAmount
+      setIsOwnGear(String(pendingReservation?.selectionMode || '').toLowerCase() === 'custom' &&
+        !(pendingReservation?.customWeaponIds?.length || pendingReservation?.customEquipmentIds?.length))
+      setPaymentPlan(pendingReservation?.paymentPlan === 'full' ? 'full' : 'cash_balance')
       const itemized = Array.isArray(pendingReservation?.itemizedBreakdown)
         ? pendingReservation.itemizedBreakdown.map((item: any) => ({
             label: String(item?.label || 'Charge'),
@@ -199,24 +185,50 @@ function PaymentPageContent() {
             { label: 'Service fee', amount: service },
           ]
       setBreakdown({ field, equipment, entranceFee, service, total, itemized })
-      setPaymentMode(nextPaymentMode)
+      // Splitting needs at least one registered teammate.
+      setPaymentMode(nextTeamMembers.length > 0 ? nextPaymentMode : 'self')
       setTeamMembers(nextTeamMembers)
-      setTeamSize(nextTeamSize)
-      setPayerShareAmount(nextPayerShareAmount)
-      setAmountDue(nextAmountDue)
     } catch {
       setBreakdown({ field: 0, equipment: 0, entranceFee: 0, service: 0, total: 0, itemized: [] })
       setPaymentMode('self')
       setTeamMembers([])
-      setTeamSize(1)
-      setPayerShareAmount(0)
-      setAmountDue(0)
     }
   }, [])
 
+  // Unfinished-booking draft (utils/bookingDraft): a player who left more than a minute ago lost
+  // their slot and starts over; one who came back in time stops the countdown.
+  const [draftExpired] = useState(() => {
+    if (!user?.id || !hasBookingDraft(user.id)) return false
+    const draft = readBookingDraft(user.id)
+    if (!draft) return true
+    saveBookingDraft(user.id, { path: '/app/payment', label: draft.label, state: {} })
+    return false
+  })
+  useEffect(() => {
+    if (!draftExpired) return
+    localStorage.removeItem('pending_reservation')
+    localStorage.removeItem('pending_reservation_id')
+    toast.error('You were away for more than a minute, so the slot was released. Please book again.')
+    navigate('/app/reservations', { replace: true })
+  }, [draftExpired, navigate])
+
+  // Leaving before paying keeps the slot for one more minute so the player can come back.
+  const successRef = useRef(false)
+  successRef.current = success
+  useEffect(() => {
+    cancelBookingDraftLeft()
+    const leaving = () => !successRef.current && !draftExpired
+    const onPageHide = () => { if (leaving()) markBookingDraftLeft(user?.id) }
+    window.addEventListener('pagehide', onPageHide)
+    return () => {
+      window.removeEventListener('pagehide', onPageHide)
+      if (leaving()) scheduleBookingDraftLeft(user?.id)
+    }
+  }, [user?.id, draftExpired])
+
   // Keep the slot locked until the reservation itself is created (which then holds the slot).
   useEffect(() => {
-    if (success) return
+    if (success || draftExpired) return
     const refreshHold = () => {
       if (localStorage.getItem('pending_reservation_id')) return
       try {
@@ -237,7 +249,7 @@ function PaymentPageContent() {
     refreshHold()
     const timer = window.setInterval(refreshHold, 4 * 60 * 1000)
     return () => window.clearInterval(timer)
-  }, [success])
+  }, [success, draftExpired])
 
   useEffect(() => {
     let cancelled = false
@@ -269,9 +281,9 @@ function PaymentPageContent() {
 
   const canSubmit = useMemo(() => {
     if (submitting) return false
-    if (method === 'card') return Boolean(stripe && elements && cardComplete && paymentMode !== 'split')
-    return Boolean(refNo.trim()) && Boolean(upload.fileName)
-  }, [cardComplete, elements, method, paymentMode, refNo, stripe, submitting, upload.fileName])
+    if (method === 'paymongo') return true
+    return Boolean(refNo.trim()) && Boolean(upload.fileName) && (!phoneNumber || isValidPhPhone(phoneNumber))
+  }, [method, phoneNumber, refNo, submitting, upload.fileName])
 
   const onPickFile = (f: File | null) => {
     if (!f) return
@@ -299,14 +311,16 @@ function PaymentPageContent() {
         throw new Error('Invalid pending reservation data.')
       }
 
-      if (method === 'card') {
-        if (!stripe || !elements) throw new Error('Card payments are not configured. Use GCash or bank transfer.')
-        if (!cardComplete) throw new Error('Enter valid card details.')
-        if (paymentMode === 'split') throw new Error('Split shares are paid by GCash or bank transfer.')
-        if (!elements.getElement(CardElement)) throw new Error('Card form is unavailable. Please reload and try again.')
-      } else {
+      // The choices made on this page are what the reservation is created with.
+      pendingReservation = { ...pendingReservation, paymentMode, paymentPlan, teamSize }
+
+      if (method !== 'paymongo') {
+        // Every check runs before the reservation is created, so a mistake never leaves a booking behind.
         if (!upload.fileName) throw new Error('Proof image is required')
         if (!refNo.trim()) throw new Error('Reference number is required')
+        if (phoneNumber && !isValidPhPhone(phoneNumber)) throw new Error('Enter your GCash number as 09XX XXX XXXX, or leave it blank.')
+        const file = proofInputRef.current?.files?.[0]
+        if (!file || !file.type.startsWith('image/')) throw new Error('Only image files are allowed as proof of payment.')
       }
 
       let reservationId = localStorage.getItem('pending_reservation_id') || ''
@@ -317,6 +331,7 @@ function PaymentPageContent() {
         if (reservationId) localStorage.setItem('pending_reservation_id', reservationId)
         serverReservation = reservationResult?.data
       }
+      setChoicesLocked(true)
       if (!reservationId) throw new Error('Reservation ID missing from API response')
       if (!serverReservation) {
         const reservationResult = await apiGet<{ ok: boolean; data: any }>(`/api/reservations/${encodeURIComponent(reservationId)}`)
@@ -327,10 +342,14 @@ function PaymentPageContent() {
       if (!Number.isFinite(serverTotal) || serverTotal <= 0 || !Number.isFinite(serverDeposit) || serverDeposit <= 0) {
         throw new Error('The server could not verify a valid reservation price and deposit.')
       }
-      if (paymentMode === 'split' && (!Number.isInteger(Number(serverReservation.teamSize)) || Number(serverReservation.teamSize) < 2)) {
+      // The reservation's saved choices win (it may have been created on an earlier attempt).
+      const serverMode: PaymentMode = String(serverReservation.paymentMode || 'self').toLowerCase() === 'split' ? 'split' : 'self'
+      setPaymentMode(serverMode)
+      if (serverReservation.paymentPlan === 'full' || serverReservation.paymentPlan === 'cash_balance') setPaymentPlan(serverReservation.paymentPlan)
+      if (serverMode === 'split' && (!Number.isInteger(Number(serverReservation.teamSize)) || Number(serverReservation.teamSize) < 2)) {
         throw new Error('The server could not verify your group payment settings.')
       }
-      const amount = paymentMode === 'split'
+      const amount = serverMode === 'split'
         ? Math.round((serverDeposit / Number(serverReservation.teamSize)) * 100) / 100
         : serverDeposit
       setBalanceDue(Number(serverReservation.balanceAmount) || 0)
@@ -343,29 +362,21 @@ function PaymentPageContent() {
 
       localStorage.setItem('active_reservation_id', String(reservationId))
 
-      if (method === 'card') {
-        const cardElement = elements?.getElement(CardElement)
-        if (!stripe || !cardElement) throw new Error('Card form is unavailable. Please reload and try again.')
-        const intent = await apiPost<{ ok: boolean; clientSecret: string; paymentIntentId: string }>(
-          '/api/create-payment-intent',
-          { reservationId: String(reservationId) },
-        )
-        const paymentResult = await stripe.confirmCardPayment(intent.clientSecret, {
-          payment_method: { card: cardElement, billing_details: { name: user.name, email: user.email } },
-        })
-        if (paymentResult.error) throw new Error(paymentResult.error.message || 'Card payment failed')
-        if (paymentResult.paymentIntent?.status !== 'succeeded') {
-          throw new Error(`Payment is not complete (status: ${paymentResult.paymentIntent?.status || 'unknown'}).`)
-        }
-        const receipt = await apiPost<{ ok: boolean; data: { id?: string; paymentIntentId: string } }>(
-          '/api/payments/stripe-confirm',
-          { reservationId: String(reservationId), paymentIntentId: intent.paymentIntentId },
-        )
-        setReceiptReference(receipt.data.id || receipt.data.paymentIntentId)
-      } else {
-        if (phoneNumber && !isValidPhPhone(phoneNumber)) throw new Error('Enter your GCash number as +63-9XX-XXX-XXXX, or leave it blank.')
+      if (method === 'paymongo') {
+        // Off to PayMongo's checkout. The reservation now holds the slot, so the draft and the
+        // pending booking data are no longer needed; the payment is verified when the player returns.
+        const checkout = await apiPost<{ ok: boolean; data: { checkoutUrl: string } }>('/api/paymongo/checkout', { reservationId: String(reservationId) })
+        successRef.current = true
+        localStorage.removeItem('pending_reservation')
+        localStorage.removeItem('pending_reservation_id')
+        clearPackagePrefill()
+        clearBookingDraft(user.id)
+        window.location.assign(checkout.data.checkoutUrl)
+        return
+      }
+      {
         const file = proofInputRef.current?.files?.[0]
-        if (!file || !file.type.startsWith('image/')) throw new Error('Only image files are allowed as proof of payment.')
+        if (!file) throw new Error('Proof image is required')
         const formData = new FormData()
         formData.append('file', file)
         const uploadRes = await fetch(`${apiBase}/api/upload-image`, { method: 'POST', headers: getApiAuthHeaders(), body: formData })
@@ -380,9 +391,9 @@ function PaymentPageContent() {
           paymentMethod: METHOD_LABELS[method],
           paymentStatus: 'pending',
           gcashImageUrl: proofImageUrl,
-          paymentMode,
+          paymentMode: serverMode,
           transactionReference: refNo.trim(),
-          ...(phoneNumber ? { senderNumber: phoneNumber } : {}),
+          ...(phoneNumber ? { senderNumber: toStoredPhPhone(phoneNumber) } : {}),
           createdAt: new Date().toISOString(),
         })
         setReceiptReference(payment.data?.id || refNo.trim())
@@ -392,9 +403,10 @@ function PaymentPageContent() {
       localStorage.removeItem('pending_reservation')
       localStorage.removeItem('pending_reservation_id')
       clearPackagePrefill()
+      clearBookingDraft(user.id)
 
       setSuccess(true)
-      toast.success(method === 'card' ? 'Card payment confirmed (test mode).' : 'Payment submitted for staff review.')
+      toast.success('Payment submitted for staff review.')
     } catch (e: any) {
       toast.error(String(e?.message || e))
     } finally {
@@ -407,12 +419,67 @@ function PaymentPageContent() {
       <div className="space-y-2">
         <div className="text-sm font-medium text-accent">Payment</div>
         <h1 className="text-3xl font-bold">Reservation Payment</h1>
-        <p className="text-muted text-sm">The server recalculates the reservation total and deposit. Pay the deposit online by GCash or bank transfer (upload your proof for registrar verification) or by card. The remaining balance is settled at the field by GCash, bank transfer, or cash — cards are not accepted onsite.</p>
+        <p className="text-muted text-sm">
+          {paymongoEnabled
+            ? 'The server recalculates the reservation total and downpayment. Pay online through PayMongo and your reservation is confirmed automatically. If you chose the downpayment, the rest is paid in cash at the field.'
+            : 'The server recalculates the reservation total and deposit. Pay online by GCash or bank transfer and upload your proof for registrar verification. If you chose the downpayment, the rest is paid in cash at the field.'}
+        </p>
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[1.6fr_0.9fr]">
         <Card className="p-4 md:p-6">
-          <div className="flex items-center justify-between gap-3">
+          <div className="text-xs uppercase tracking-widest text-muted">Who pays</div>
+          <p className="mt-1 text-xs text-muted">
+            {choicesLocked ? 'These were saved with your reservation and can no longer be changed.' : 'Choose who pays for this reservation.'}
+          </p>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            {([
+              ['self', "I'll pay for everyone", 'This player pays the full reservation.'],
+              ['split', 'Split among the team', canSplit
+                ? 'Divide the total equally among you and your selected teammates.'
+                : 'Add at least one registered teammate when booking to split the payment.'],
+            ] as const).map(([mode, title, description]) => (
+              <button
+                key={mode}
+                type="button"
+                disabled={choicesLocked || (mode === 'split' && !canSplit)}
+                onClick={() => updateChoice({ paymentMode: mode })}
+                className={[
+                  'w-full rounded-2xl border px-4 py-3 text-left transition disabled:cursor-not-allowed',
+                  paymentMode === mode ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
+                  paymentMode !== mode && (choicesLocked || (mode === 'split' && !canSplit)) ? 'opacity-50' : '',
+                ].join(' ')}
+              >
+                <div className="text-sm font-bold">{title}</div>
+                <div className="mt-1 text-xs text-muted">{description}</div>
+              </button>
+            ))}
+          </div>
+
+          <div className="mt-5 text-xs uppercase tracking-widest text-muted">How you'll pay</div>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            {([
+              ['full', 'Pay in full online', 'Pay the whole amount now. Nothing to pay at the field.'],
+              ['cash_balance', '50% online + cash at the field', 'Pay the 50% downpayment online now, then the rest in cash at the counter on game day.'],
+            ] as const).map(([plan, title, description]) => (
+              <button
+                key={plan}
+                type="button"
+                disabled={choicesLocked}
+                onClick={() => updateChoice({ paymentPlan: plan })}
+                className={[
+                  'w-full rounded-2xl border px-4 py-3 text-left transition disabled:cursor-not-allowed',
+                  paymentPlan === plan ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
+                  paymentPlan !== plan && choicesLocked ? 'opacity-50' : '',
+                ].join(' ')}
+              >
+                <div className="text-sm font-bold">{title}</div>
+                <div className="mt-1 text-xs text-muted">{description}</div>
+              </button>
+            ))}
+          </div>
+
+          <div className="mt-6 flex items-center justify-between gap-3">
             <div className="text-xs uppercase tracking-widest text-muted">Payment method</div>
             <div className="hidden md:flex items-center gap-2 text-[11px] text-muted">
               <FiLock />
@@ -420,17 +487,17 @@ function PaymentPageContent() {
             </div>
           </div>
 
-          <div className="mt-4 grid gap-2 sm:grid-cols-3">
-            {([
+          <div className="mt-4 grid gap-2 sm:grid-cols-2">
+            {((paymongoEnabled ? [
+              { key: 'paymongo', title: 'Pay online', hint: 'GCash, QR Ph, Maya or card · PayMongo test mode' },
+            ] : [
               { key: 'gcash', title: 'GCash', hint: 'Scan the QR → pay → upload proof' },
               { key: 'bank', title: 'Bank Transfer', hint: 'Transfer to our account → upload proof' },
-              { key: 'card', title: 'Card', hint: paymentMode === 'split' ? 'Not available for split shares' : 'Online only · Stripe test mode' },
-            ] as const).map((option) => (
+            ]) as Array<{ key: PaymentMethod; title: string; hint: string }>).map((option) => (
               <button
                 key={option.key}
                 type="button"
                 onClick={() => setMethod(option.key)}
-                disabled={option.key === 'card' && paymentMode === 'split'}
                 className={[
                   'w-full text-left rounded-2xl border px-4 py-3 transition disabled:cursor-not-allowed disabled:opacity-50',
                   method === option.key
@@ -449,11 +516,11 @@ function PaymentPageContent() {
               <FiInfo className="text-gold" />
               <span>Submission rules</span>
             </div>
-            {method === 'card' ? (
+            {method === 'paymongo' ? (
               <ul className="mt-2 space-y-1 text-xs text-muted list-disc pl-5">
-                <li>Card details go straight to Stripe and are never stored by this app.</li>
-                <li>The payment is recorded as paid only after Stripe confirms the charge.</li>
-                <li>Cards are accepted online only; there is no card terminal at the field.</li>
+                <li>You'll be taken to PayMongo's secure checkout to pay with GCash, QR Ph, Maya, or a card.</li>
+                <li>Your reservation is confirmed automatically as soon as PayMongo confirms the payment. No proof to upload.</li>
+                <li>Test mode: no real money is charged. Use PayMongo's test payment options.</li>
               </ul>
             ) : (
               <ul className="mt-2 space-y-1 text-xs text-muted list-disc pl-5">
@@ -486,12 +553,12 @@ function PaymentPageContent() {
 
           <div className="mt-5 space-y-5">
             <div className="space-y-4">
-              {method === 'gcash' ? (
+              {method === 'paymongo' ? null : method === 'gcash' ? (
                 <>
                   {gcashPhoneNumber ? (
                     <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
                       <div className="text-xs uppercase tracking-widest text-muted">Send payment to</div>
-                      <div className="mt-1 text-lg font-bold tracking-wide">{gcashPhoneNumber}</div>
+                      <div className="mt-1 text-lg font-bold tracking-wide">{formatPhPhone(gcashPhoneNumber)}</div>
                     </div>
                   ) : null}
 
@@ -503,7 +570,7 @@ function PaymentPageContent() {
                     inputMode="tel"
                     placeholder={PH_PHONE_PLACEHOLDER}
                     hint="The number you paid from, so staff can match your payment."
-                    error={phoneNumber && !isValidPhPhone(phoneNumber) ? 'Enter a mobile number as +63-9XX-XXX-XXXX.' : undefined}
+                    error={phoneNumber && !isValidPhPhone(phoneNumber) ? 'Enter a mobile number as 09XX XXX XXXX.' : undefined}
                   />
 
                   <div className="rounded-2xl border border-dashed border-accent/30 bg-accent/5 p-4">
@@ -519,8 +586,6 @@ function PaymentPageContent() {
                       </div>
                   </div>
                 </>
-              ) : method === 'card' ? (
-                <CardPaymentField onChange={setCardComplete} />
               ) : (
                 <div className="rounded-2xl border border-dashed border-accent/30 bg-accent/5 p-4">
                   <div className="text-xs uppercase tracking-widest text-muted">Transfer to</div>
@@ -536,7 +601,7 @@ function PaymentPageContent() {
                 </div>
               )}
 
-              {method !== 'card' ? (
+              {method !== 'paymongo' ? (
                 <Input
                   label={method === 'gcash' ? 'GCash Reference Number' : 'Bank Reference / Confirmation Number'}
                   value={refNo}
@@ -546,7 +611,7 @@ function PaymentPageContent() {
               ) : null}
             </div>
 
-            {method !== 'card' ? (
+            {method !== 'paymongo' ? (
             <div className="mt-6">
               <div className="text-xs uppercase tracking-widest text-muted">Upload proof</div>
               <div className="mt-2">
@@ -590,7 +655,7 @@ function PaymentPageContent() {
                 </div>
                 <div className="mt-2 flex items-center justify-between gap-3">
                   <div className="text-xs text-muted">Reference</div>
-                  <div className="text-xs font-bold">{method === 'card' ? receiptReference || 'Issued by Stripe' : refNo || '—'}</div>
+                  <div className="text-xs font-bold">{method === 'paymongo' ? 'Issued by PayMongo' : refNo || '—'}</div>
                 </div>
                 {method === 'gcash' ? (
                   <div className="mt-2 flex items-center justify-between gap-3">
@@ -624,7 +689,7 @@ function PaymentPageContent() {
 
           <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:items-center">
             <Button variant="primary" disabled={!canSubmit} onClick={submit}>
-              {submitting ? 'Submitting…' : success ? 'Submitted' : method === 'card' ? 'Pay with Card' : 'Submit Payment'}
+              {submitting ? (method === 'paymongo' ? 'Opening PayMongo…' : 'Submitting…') : success ? 'Submitted' : method === 'paymongo' ? 'Continue to payment' : 'Submit Payment'}
               <FiChevronRight />
             </Button>
           </div>
@@ -637,12 +702,10 @@ function PaymentPageContent() {
               className="mt-4 rounded-2xl border border-success/25 bg-success/10 p-4"
             >
               <div className="flex items-center gap-2 text-sm font-bold text-success">
-                <FiCheck /> {method === 'card' ? 'Card Payment Confirmed' : 'Payment Submitted'}
+                <FiCheck /> Payment Submitted
               </div>
               <div className="mt-2 text-xs text-muted">
-                {method === 'card'
-                  ? 'Stripe confirmed the charge (test mode) and the payment was recorded.'
-                  : `Your ${METHOD_LABELS[method]} proof has been submitted. The registrar/admin will review and verify it.`}
+                {`Your ${METHOD_LABELS[method]} proof has been submitted. The registrar/admin will review and verify it.`}
                 {paymentMode === 'split'
                   ? ' Your teammates have been notified of their shares. Track who has paid under Split Payment in the menu — the slot stays reserved for 24 hours while the team pays.'
                   : ''}
@@ -723,9 +786,7 @@ function PaymentPageContent() {
 export function PaymentPage() {
   return (
     <PaymentPageErrorBoundary>
-      <Elements stripe={stripePromise}>
-        <PaymentPageContent />
-      </Elements>
+      <PaymentPageContent />
     </PaymentPageErrorBoundary>
   )
 }

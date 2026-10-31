@@ -7,8 +7,9 @@ import { Input } from '../../components/ui/Input'
 import toast from 'react-hot-toast'
 import { apiBase, apiDelete, apiGet, apiPut, getApiAuthHeaders } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
-import { formatPhPhone, isValidPhPhone, PH_PHONE_PLACEHOLDER } from '../../utils/phone'
+import { formatPhPhone, isValidPhPhone, PH_PHONE_PLACEHOLDER, toStoredPhPhone } from '../../utils/phone'
 import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
+import { BookingPaymentReview } from '../../components/payments/BookingPaymentReview'
 
 
 type PaymentStatus = 'paid' | 'pending' | 'failed' | 'review' | 'confirmed'
@@ -23,6 +24,9 @@ type PaymentItem = {
   note: string
   receiptUrl: string
   stripe: boolean
+  // Set for payments verified by PayMongo; reviewReason explains one held for staff.
+  paymongo: boolean
+  reviewReason: string
 }
 
 const KNOWN_STATUSES: PaymentStatus[] = ['paid', 'pending', 'failed', 'review', 'confirmed']
@@ -98,6 +102,8 @@ export function AdminPaymentsPage() {
           note: d.transactionReference ?? d.refNo ?? d.note ?? '',
           receiptUrl: d.gcashImageUrl ?? d.proofUrl ?? d.receiptUrl ?? '',
           stripe: Boolean(d.stripePaymentIntentId),
+          paymongo: Boolean(d.paymongoCheckoutId),
+          reviewReason: d.reviewReason ?? '',
         }))
       )
     } catch (e: any) {
@@ -123,7 +129,7 @@ export function AdminPaymentsPage() {
         if (!cancelled) {
           setQrSettings(res?.data || { imageUrl: '' })
           setQrPreview(res?.data?.imageUrl || '')
-          setPhoneNumber(res?.data?.phoneNumber || '')
+          setPhoneNumber(formatPhPhone(res?.data?.phoneNumber || ''))
         }
       } catch (e: any) {
         if (!cancelled) {
@@ -166,7 +172,7 @@ export function AdminPaymentsPage() {
       return
     }
     if (!isValidPhPhone(phoneNumber)) {
-      toast.error('Enter the GCash number as +63-9XX-XXX-XXXX.')
+      toast.error('Enter the GCash number as 09XX XXX XXXX.')
       return
     }
     if (!qrFile.type.startsWith('image/')) {
@@ -192,7 +198,7 @@ export function AdminPaymentsPage() {
       const imageUrl = String(uploadJson?.url || '').trim()
       if (!imageUrl) throw new Error('Upload returned no image URL')
 
-      const saved = await apiPut<{ ok: boolean; data: GcashQrSettings }>('/api/payments/gcash-qr', { imageUrl, phoneNumber: phoneNumber.trim() })
+      const saved = await apiPut<{ ok: boolean; data: GcashQrSettings }>('/api/payments/gcash-qr', { imageUrl, phoneNumber: toStoredPhPhone(phoneNumber) })
       setQrSettings(saved?.data || { imageUrl })
       setQrPreview(imageUrl)
       setQrFile(null)
@@ -267,20 +273,11 @@ export function AdminPaymentsPage() {
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h1 className="text-3xl font-bold">Payments</h1>
-          <p className="mt-1 text-sm text-muted">Review submitted receipts, resolve pending transactions, and confirm booking payments.</p>
+          <p className="mt-1 text-sm text-muted">Review each booking's payment and decide it, then verify the individual receipts below.</p>
         </div>
-
-        <FilterTabs
-          ariaLabel="Filter payments by status"
-          value={active}
-          onChange={setActive}
-          options={(['all', 'pending', 'review', 'paid', 'confirmed', 'failed'] as const).map((status) => ({
-            value: status,
-            label: status === 'all' ? 'All' : status === 'failed' ? 'Sent back' : titleCaseLabel(status),
-            count: status === 'all' ? payments.length : payments.filter((p) => p.status === status).length,
-          }))}
-        />
       </div>
+
+      <BookingPaymentReview />
 
       <div className="grid gap-4 md:grid-cols-3">
         <Card className="p-4">
@@ -459,10 +456,16 @@ export function AdminPaymentsPage() {
             <div className="text-xs uppercase tracking-widest text-muted">Verification & receipts</div>
             <div className="mt-2 text-sm text-muted">Approve payments, request corrections, or flag suspicious transactions.</div>
           </div>
-          <div className="rounded-xl border border-white/5 bg-white/5 px-3 py-2">
-            <div className="text-[11px] text-muted">Settlement window</div>
-            <div className="mt-1 text-sm font-semibold">Today • 4:00 PM cutoff</div>
-          </div>
+          <FilterTabs
+            ariaLabel="Filter payments by status"
+            value={active}
+            onChange={setActive}
+            options={(['all', 'pending', 'review', 'paid', 'confirmed', 'failed'] as const).map((status) => ({
+              value: status,
+              label: status === 'all' ? 'All' : status === 'failed' ? 'Sent back' : titleCaseLabel(status),
+              count: status === 'all' ? payments.length : payments.filter((p) => p.status === status).length,
+            }))}
+          />
         </div>
 
         <div className="mt-4 overflow-x-auto rounded-2xl border border-white/5">
@@ -487,6 +490,7 @@ export function AdminPaymentsPage() {
                   <div className="min-w-0 lg:col-span-2">
                     <div className="truncate text-sm font-semibold">{payment.player}</div>
                     <div className="mt-1 truncate text-xs text-muted">{payment.note}</div>
+                    {payment.reviewReason ? <div className="mt-1 text-xs text-warning">{payment.reviewReason}</div> : null}
                   </div>
                   <div className="text-sm font-semibold lg:col-span-1 lg:text-right">₱{payment.amount}</div>
                   <div className="lg:col-span-2 lg:text-right">
@@ -508,7 +512,7 @@ export function AdminPaymentsPage() {
                         <span className="inline-flex h-8 items-center px-1 text-xs text-muted">No receipt</span>
                       )}
                       {payment.status === 'paid' || payment.status === 'confirmed' ? (
-                        <span className="inline-flex h-8 items-center px-1 text-xs font-semibold text-success">Verified</span>
+                        <span className="inline-flex h-8 items-center px-1 text-xs font-semibold text-success">{payment.paymongo ? 'Verified by PayMongo' : 'Verified'}</span>
                       ) : payment.status === 'failed' ? (
                         <span className="inline-flex h-8 items-center px-1 text-xs text-muted">Sent back</span>
                       ) : payment.stripe ? (

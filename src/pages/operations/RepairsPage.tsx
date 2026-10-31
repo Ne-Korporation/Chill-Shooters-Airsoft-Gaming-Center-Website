@@ -109,6 +109,19 @@ export function RepairsPage() {
   const [form, setForm] = useState({ itemKey: '', damage: '', gunsmith: '', damageReportId: '', reservationId: '', playerInduced: false })
   const [completingId, setCompletingId] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  // The item dropdown narrows with every letter typed in the search box above it.
+  const [itemSearch, setItemSearch] = useState('')
+  const matchingItems = (text: string) => {
+    const needle = text.trim().toLowerCase()
+    if (!needle) return inventory
+    return inventory.filter((item) => [item.name, item.id, item.category, item.collection].some((value) => String(value || '').toLowerCase().includes(needle)))
+  }
+  // The chosen item stays listed even when it no longer matches the search.
+  const shownItems = (() => {
+    const matches = matchingItems(itemSearch)
+    const chosen = inventory.find((item) => `${item.collection}:${item.id}` === form.itemKey)
+    return chosen && !matches.includes(chosen) ? [chosen, ...matches] : matches
+  })()
 
   const load = useCallback(async () => {
     try {
@@ -148,6 +161,7 @@ export function RepairsPage() {
 
       toast.success(`${item.name} is now under repair.`)
       setForm({ itemKey: '', damage: '', gunsmith: form.gunsmith, damageReportId: '', reservationId: '', playerInduced: false })
+      setItemSearch('')
       await load()
     } catch (e: any) {
       toast.error(e?.message || 'Could not open the repair')
@@ -191,13 +205,26 @@ export function RepairsPage() {
         <Card className="h-fit p-4 md:p-5">
           <div className="flex items-center gap-2 text-sm font-bold"><FiTool /> Open a repair</div>
           <form className="mt-3 space-y-3" onSubmit={open}>
-            <label className="block">
+            <div>
               <div className="mb-2 text-sm font-semibold">Item</div>
-              <select value={form.itemKey} onChange={(e) => setForm((f) => ({ ...f, itemKey: e.target.value }))} className={selectClass}>
-                <option value="">Choose…</option>
-                {inventory.map((item) => <option key={`${item.collection}:${item.id}`} value={`${item.collection}:${item.id}`}>{item.name} ({item.category || item.collection})</option>)}
+              <input
+                value={itemSearch}
+                onChange={(e) => {
+                  const next = e.target.value
+                  setItemSearch(next)
+                  // One match left: pick it, so typing the name is enough.
+                  const matches = matchingItems(next)
+                  if (next.trim() && matches.length === 1) setForm((f) => ({ ...f, itemKey: `${matches[0].collection}:${matches[0].id}` }))
+                }}
+                placeholder="Search by name, ID, or category…"
+                aria-label="Search items"
+                className={`${selectClass} mb-2`}
+              />
+              <select value={form.itemKey} onChange={(e) => setForm((f) => ({ ...f, itemKey: e.target.value }))} className={selectClass} aria-label="Item">
+                <option value="">{itemSearch.trim() ? `Choose… (${shownItems.length} match${shownItems.length === 1 ? '' : 'es'})` : 'Choose…'}</option>
+                {shownItems.map((item) => <option key={`${item.collection}:${item.id}`} value={`${item.collection}:${item.id}`}>{item.name} ({item.category || item.collection})</option>)}
               </select>
-            </label>
+            </div>
             <Input label="Damage" value={form.damage} onChange={(e) => setForm((f) => ({ ...f, damage: e.target.value }))} placeholder="e.g. Cracked gearbox" />
             <div className="grid gap-3 sm:grid-cols-2">
               <Input label="Gunsmith" value={form.gunsmith} onChange={(e) => setForm((f) => ({ ...f, gunsmith: e.target.value }))} />

@@ -75,12 +75,22 @@ export async function signInWithGoogle(): Promise<GoogleProfile | null> {
 export async function completeGoogleRedirect(): Promise<GoogleProfile | null> {
   if (!sessionStorage.getItem(REDIRECT_PENDING_KEY)) return null
   sessionStorage.removeItem(REDIRECT_PENDING_KEY)
+  let user: User | null = null
   try {
-    const result = await getRedirectResult(auth)
-    return result?.user ? await toProfile(result.user) : null
+    user = (await getRedirectResult(auth))?.user ?? null
   } catch (err) {
     throw new Error(describeFirebaseError(err))
   }
+  // Some browsers drop the redirect result but still keep the Google session; use it if so.
+  if (!user) {
+    await auth.authStateReady()
+    user = auth.currentUser
+  }
+  if (!user) {
+    // Never fail silently: the redirect came back without a Google account.
+    throw new Error('Google sign-in did not finish in this browser. Allow pop-ups for this site (the icon at the right of the address bar) and try again.')
+  }
+  return toProfile(user)
 }
 
 export { auth, googleProvider }

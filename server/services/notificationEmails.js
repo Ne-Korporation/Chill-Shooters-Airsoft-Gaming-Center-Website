@@ -92,7 +92,9 @@ const RESERVATION_MESSAGES = {
   'needs review': {
     subject: 'Your Chill Shooters reservation needs attention',
     title: 'Reservation needs review',
-    line: (r) => `Staff need more information about your reservation for ${reservationLabel(r)}. Please check your account or contact us.`,
+    line: (r) => r.sentBack?.note
+      ? `Staff sent your reservation for ${reservationLabel(r)} back to you. Reason: ${escapeHtml(r.sentBack.note)} Log in and open <b>My Reservations</b> to choose a new date.`
+      : `Staff need more information about your reservation for ${reservationLabel(r)}. Please check your account or contact us.`,
   },
   cancelled: {
     subject: 'Your Chill Shooters reservation was cancelled',

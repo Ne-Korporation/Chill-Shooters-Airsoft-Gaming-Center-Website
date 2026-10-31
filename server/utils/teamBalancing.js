@@ -1,8 +1,9 @@
-// Experience is the number of games a player has completed at the field plus any admin adjustment.
+// Experience is the player's total games played (games completed at the field plus games from
+// before the system). Tiers: Beginner 0-10 games, Intermediate 11-25, Experienced 26 or more.
 export function getExperienceLevel(experience) {
   const games = Number(experience) || 0
-  if (games >= 10) return 'Experienced'
-  if (games >= 3) return 'Intermediate'
+  if (games >= 26) return 'Experienced'
+  if (games >= 11) return 'Intermediate'
   return 'Beginner'
 }
 

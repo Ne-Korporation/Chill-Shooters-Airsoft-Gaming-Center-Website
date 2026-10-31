@@ -4,8 +4,10 @@ import { getAgeGroup, getExperienceLevel, suggestBalancedTeams } from '../utils/
 
 test('experience levels and age groups', () => {
   assert.equal(getExperienceLevel(0), 'Beginner')
-  assert.equal(getExperienceLevel(3), 'Intermediate')
-  assert.equal(getExperienceLevel(12), 'Experienced')
+  assert.equal(getExperienceLevel(10), 'Beginner')
+  assert.equal(getExperienceLevel(11), 'Intermediate')
+  assert.equal(getExperienceLevel(25), 'Intermediate')
+  assert.equal(getExperienceLevel(26), 'Experienced')
   assert.equal(getAgeGroup(16), 'Under 18')
   assert.equal(getAgeGroup(30), '25–34')
   assert.equal(getAgeGroup(null), 'Unknown')

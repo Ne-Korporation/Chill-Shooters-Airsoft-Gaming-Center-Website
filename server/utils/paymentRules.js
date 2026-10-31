@@ -106,8 +106,10 @@ export function stripeIntentMatchesReservation(intent, reservation, reservationI
 
 export function buildPaymentStatusUpdate({ payment, nextStatus, actorId, actorRole, reason, changedAtISO }) {
   const currentStatus = String(payment.paymentStatus || payment.status || 'pending').toLowerCase()
-  if (payment.stripePaymentIntentId && nextStatus !== currentStatus) {
-    const immutable = new Error('Stripe payment status can only be changed by server-side provider verification.')
+  // A gateway payment held for review (wrong amount, cancelled booking) is the one staff can decide.
+  const heldForReview = payment.paymongoCheckoutId && currentStatus === 'review'
+  if ((payment.stripePaymentIntentId || payment.paymongoCheckoutId) && !heldForReview && nextStatus !== currentStatus) {
+    const immutable = new Error('Payments verified by the payment gateway can only be changed by the gateway itself.')
     immutable.statusCode = 409
     throw immutable
   }
