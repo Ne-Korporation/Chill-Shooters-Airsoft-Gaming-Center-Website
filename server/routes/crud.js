@@ -128,53 +128,75 @@ router.get('/health', async (req, res) => {
   }
 })
 
-// GET /api/team-directory/lookup?email=... — finds one registered player by exact
-// email so a captain can add them as a teammate without browsing every account.
-// Players can only read their own waivers, so the teammate's approval is
-// reported as a flag instead of exposing their waiver record.
+// "juan.delacruz@gmail.com" -> "ju***@gmail.com": enough to tell two same-named players apart
+// without handing out every player's address through a name search.
+function maskEmail(email) {
+  const [local = '', domain = ''] = String(email || '').split('@')
+  return domain ? `${local.slice(0, 2)}***@${domain}` : ''
+}
+
+// GET /api/team-directory/lookup?q=... — finds registered players by exact email, or by name
+// (up to 5 matches, emails partly hidden) so a captain can add teammates without browsing every
+// account. Players can only read their own waivers, so each teammate's approval is reported as a
+// flag instead of exposing their waiver record.
 router.get('/team-directory/lookup', requireAuth, requireRole('user'), async (req, res) => {
-  const email = normalizeEmail(req.query.email)
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+  const query = String(req.query.q ?? req.query.email ?? '').trim()
+  const byEmail = query.includes('@')
+  const email = byEmail ? normalizeEmail(query) : ''
+  if (byEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return res.status(400).json({ ok: false, error: 'Enter a valid email address.' })
+  }
+  if (!byEmail && query.length < 3) {
+    return res.status(400).json({ ok: false, error: 'Type at least 3 letters of the name, or the full email.' })
   }
 
   try {
     const db = await getDb()
-    const player = await db.collection('user_accounts').findOne(
-      { $and: [sameEmailFilter(email), { role: { $in: ['user', null] } }] },
-      { projection: { id: 1, name: 1, email: 1, emailVerified: 1 } },
-    )
-    if (!player) {
-      return res.status(404).json({ ok: false, error: 'No registered player uses that email. They can join as a walk-in instead.' })
-    }
-    const playerId = String(player.id || player._id)
-    if (playerId === String(req.user.id)) {
-      return res.status(400).json({ ok: false, error: 'You are already counted as the team captain.' })
-    }
-    if (player.emailVerified === false) {
-      return res.status(409).json({ ok: false, error: 'That player has not verified their email yet.' })
+    const isPlayer = { role: { $in: ['user', null] } }
+    const candidates = await db.collection('user_accounts').find(
+      byEmail
+        ? { $and: [sameEmailFilter(email), isPlayer] }
+        : { $and: [{ name: { $regex: query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' } }, isPlayer] },
+      { projection: { id: 1, name: 1, email: 1, emailVerified: 1, status: 1 } },
+    ).limit(byEmail ? 1 : 6).toArray()
+
+    const players = candidates.filter((player) =>
+      String(player.id || player._id) !== String(req.user.id) && player.emailVerified !== false && player.status !== 'suspended')
+    if (!players.length) {
+      if (byEmail && candidates.length && String(candidates[0].id || candidates[0]._id) === String(req.user.id)) {
+        return res.status(400).json({ ok: false, error: 'You are already counted as the team captain.' })
+      }
+      if (byEmail && candidates.length) {
+        return res.status(409).json({ ok: false, error: 'That player has not verified their email yet.' })
+      }
+      return res.status(404).json({
+        ok: false,
+        error: byEmail
+          ? 'No registered player uses that email. They can join as a walk-in instead.'
+          : 'No registered player matches that name. Try their email, or they can join as a walk-in.',
+      })
     }
 
-    const approvedWaiver = await db.collection('waivers').findOne(
-      {
-        status: { $regex: '^approved$', $options: 'i' },
-        $or: [{ userId: playerId }, { playerId }, { accountId: playerId }],
-      },
-      { projection: { _id: 1 } },
-    )
-    const weaponOwnerIds = await getApprovedWeaponOwnerIds(db, [playerId])
+    const ids = players.slice(0, 5).map((player) => String(player.id || player._id))
+    const approved = new Set((await db.collection('waivers').find(
+      { status: { $regex: '^approved$', $options: 'i' }, userId: { $in: ids } },
+      { projection: { userId: 1 } },
+    ).toArray()).map((waiver) => String(waiver.userId)))
+    const weaponOwnerIds = await getApprovedWeaponOwnerIds(db, ids)
 
-    return res.json({
-      ok: true,
-      data: {
+    const matches = players.slice(0, 5).map((player) => {
+      const playerId = String(player.id || player._id)
+      return {
         id: playerId,
         name: player.name || '',
-        email: player.email,
-        waiverApproved: Boolean(approvedWaiver),
+        // The full address only comes back when the captain already typed it.
+        email: byEmail ? player.email : maskEmail(player.email),
+        waiverApproved: approved.has(playerId),
         // Only a yes/no flag: teammates don't see each other's registered gear.
         hasApprovedWeapon: weaponOwnerIds.has(playerId),
-      },
+      }
     })
+    return res.json({ ok: true, data: matches[0], matches })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
   }
@@ -423,6 +445,23 @@ router.post('/slot-holds', requireAuth, requireRole('user'), async (req, res) =>
   }
 })
 
+// POST /api/slot-holds/mine/leave — the player left mid-booking: keep their slot for one more
+// minute so they can come back to it, then it opens up for everyone else.
+const LEFT_BOOKING_GRACE_MS = 60_000
+router.post('/slot-holds/mine/leave', requireAuth, requireRole('user'), async (req, res) => {
+  try {
+    const db = await getDb()
+    const expiresAt = new Date(Date.now() + LEFT_BOOKING_GRACE_MS)
+    await db.collection('slot_holds').updateOne(
+      { _id: `user:${req.user.id}`, expiresAt: { $gt: expiresAt } },
+      { $set: { expiresAt, updatedAtISO: new Date().toISOString() } },
+    )
+    return res.json({ ok: true, data: { expiresAtISO: expiresAt.toISOString() } })
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: String(err) })
+  }
+})
+
 router.delete('/slot-holds/mine', requireAuth, requireRole('user'), async (req, res) => {
   try {
     const db = await getDb()
@@ -456,7 +495,7 @@ router.post('/walk-ins', requireAuth, requireRole('admin', 'registrar'), async (
   const walkInContact = String(body.contact || '').trim() ? normalizePhPhone(body.contact) : ''
 
   if (!walkInName) return res.status(400).json({ ok: false, error: 'Enter the walk-in name.' })
-  if (walkInContact === null) return res.status(400).json({ ok: false, error: 'Enter the contact number as +63-9XX-XXX-XXXX.' })
+  if (walkInContact === null) return res.status(400).json({ ok: false, error: 'Enter the contact number as 09XX XXX XXXX.' })
   if (!LOCATION_FIELD_DEFS[locationId]) return res.status(400).json({ ok: false, error: 'Choose a location.' })
   if (!SLOT_NAMES.includes(reservationTime)) return res.status(400).json({ ok: false, error: 'Choose a time slot.' })
   if (!Number.isInteger(playersCount) || playersCount < 1 || playersCount > 100) {
@@ -617,7 +656,7 @@ router.post('/reservations/:id/reschedule', requireAuth, requireRole('user', 'ad
   const body = req.body || {}
   const newDate = String(body.reservationDate || '').trim()
   const newTime = String(body.reservationTime || '').trim().toLowerCase()
-  const reason = String(body.reason || '').trim().slice(0, 500)
+  let reason = String(body.reason || '').trim().slice(0, 500)
 
   if (!/^\d{4}-\d{2}-\d{2}$/.test(newDate) || Number.isNaN(Date.parse(`${newDate}T00:00:00Z`))) {
     return res.status(400).json({ ok: false, error: 'reservationDate must be a valid YYYY-MM-DD date' })
@@ -625,8 +664,6 @@ router.post('/reservations/:id/reschedule', requireAuth, requireRole('user', 'ad
   if (!SLOT_NAMES.includes(newTime)) {
     return res.status(400).json({ ok: false, error: 'reservationTime must be morning, afternoon, or evening' })
   }
-  if (!reason) return res.status(400).json({ ok: false, error: 'Please give a reason for rescheduling.' })
-
   const todayISO = manilaTodayISO()
   if (newDate <= todayISO) {
     return res.status(400).json({ ok: false, error: 'The new date must be after today.' })
@@ -645,9 +682,14 @@ router.post('/reservations/:id/reschedule', requireAuth, requireRole('user', 'ad
       return res.status(409).json({ ok: false, error: `A ${status} reservation cannot be rescheduled.` })
     }
 
+    // A booking staff sent back can be moved any time, and goes back to pending for staff to re-check.
+    const sentBack = Boolean(reservation.sentBack) && status === 'needs review'
+    if (!reason && sentBack) reason = `New date chosen after staff sent it back: ${reservation.sentBack.note}`.slice(0, 500)
+    if (!reason) return res.status(400).json({ ok: false, error: 'Please give a reason for rescheduling.' })
+
     const originalDate = String(reservation.reservationDate || reservation.dateISO || '')
     const originalTime = String(reservation.reservationTime || reservation.slot || '').toLowerCase()
-    if (req.user.role === 'user' && daysBetweenISO(todayISO, originalDate) < RESCHEDULE_CUTOFF_DAYS) {
+    if (req.user.role === 'user' && !sentBack && daysBetweenISO(todayISO, originalDate) < RESCHEDULE_CUTOFF_DAYS) {
       return res.status(409).json({
         ok: false,
         error: `Reservations can only be rescheduled at least ${RESCHEDULE_CUTOFF_DAYS} days before the original date.`,
@@ -739,8 +781,13 @@ router.post('/reservations/:id/reschedule', requireAuth, requireRole('user', 'ad
               fieldId: fieldIds[0],
               rescheduledAtISO: nowISO,
               updatedAtISO: nowISO,
+              ...(sentBack ? { reservationStatus: 'pending' } : {}),
             },
-            $push: { rescheduleHistory: rescheduleEvent },
+            ...(sentBack ? { $unset: { sentBack: '' } } : {}),
+            $push: {
+              rescheduleHistory: rescheduleEvent,
+              ...(sentBack ? { statusHistory: { status: 'pending', changedBy: String(req.user.id || ''), changedByRole: req.user.role, changedAtISO: nowISO, reason: 'New date chosen after being sent back' } } : {}),
+            },
           },
           { session, returnDocument: 'after' },
         )
@@ -931,26 +978,37 @@ function canCreateCollection(role, collection) {
   return false
 }
 
+// Private-session minimums: Upper Ground 10, Lower Ground 20, Forest 50.
 const LOCATION_FIELD_DEFS = {
   salawag: [
-    { id: 'salawag-field-1', name: 'Upper Ground' },
-    { id: 'salawag-field-2', name: 'Lower Ground' },
-    { id: 'salawag-field-3', name: 'Forest' },
+    { id: 'salawag-field-1', name: 'Upper Ground', min: 10 },
+    { id: 'salawag-field-2', name: 'Lower Ground', min: 20 },
+    { id: 'salawag-field-3', name: 'Forest', min: 50 },
   ],
   langkaan: [
-    { id: 'langkaan-field-1', name: 'Upper Ground' },
-    { id: 'langkaan-field-2', name: 'Lower Ground' },
-    { id: 'langkaan-field-3', name: 'Forest' },
+    { id: 'langkaan-field-1', name: 'Upper Ground', min: 10 },
+    { id: 'langkaan-field-2', name: 'Lower Ground', min: 20 },
+    { id: 'langkaan-field-3', name: 'Forest', min: 50 },
   ],
   binan: [
-    { id: 'binan-field-1', name: 'Upper Ground' },
-    { id: 'binan-field-2', name: 'Lower Ground' },
-    { id: 'binan-field-3', name: 'Forest' },
+    { id: 'binan-field-1', name: 'Upper Ground', min: 10 },
+    { id: 'binan-field-2', name: 'Lower Ground', min: 20 },
+    { id: 'binan-field-3', name: 'Forest', min: 50 },
   ],
 }
 
-function getFieldBandById(fieldId) {
-  return { min: 10 }
+const SMALL_GROUP_MIN = 10
+
+// A field's minimum for this slot. Lower Ground opens to 10 once Upper Ground is booked, and
+// Forest opens to 10 once both Upper and Lower Ground are booked.
+export function effectiveFieldMinimum(locationId, fieldId, bookedFieldIds) {
+  const fields = LOCATION_FIELD_DEFS[locationId] || []
+  const field = fields.find((item) => item.id === fieldId)
+  if (!field) return SMALL_GROUP_MIN
+  const booked = (name) => fields.some((item) => item.name === name && bookedFieldIds.has(item.id))
+  if (field.name === 'Lower Ground' && booked('Upper Ground')) return SMALL_GROUP_MIN
+  if (field.name === 'Forest' && booked('Upper Ground') && booked('Lower Ground')) return SMALL_GROUP_MIN
+  return field.min
 }
 
 function isWeekdayDateISO(isoDate) {
@@ -984,36 +1042,13 @@ function validatePrivateFieldSelection({ locationId, fieldIds, playersCount, boo
     return { ok: false, reason: 'One or more selected fields are already booked for this location and time slot.' }
   }
 
-  const allMeetSelectedMinimums = selectedFields.every((field) => playersCount >= getFieldBandById(field.id).min)
-  if (allMeetSelectedMinimums) return { ok: true }
-
-  const suitableFields = locationFields
-    .filter((field) => {
-      const band = getFieldBandById(field.id)
-      return playersCount >= band.min && (band.max === undefined || playersCount <= band.max)
-    })
-    .sort((a, b) => getFieldBandById(a.id).min - getFieldBandById(b.id).min)
-
-  const smallestSuitableField = suitableFields[0]
-  if (!smallestSuitableField) {
-    return { ok: false, reason: 'Selected field combination is not valid for this group size.' }
+  for (const field of selectedFields) {
+    const min = effectiveFieldMinimum(locationId, field.id, bookedFieldIds)
+    if (playersCount < min) {
+      return { ok: false, reason: `${field.name} needs at least ${min} players for this time slot.` }
+    }
   }
-
-  const smallestMin = getFieldBandById(smallestSuitableField.id).min
-  const smallestFieldBooked = bookedFieldIds.has(smallestSuitableField.id)
-
-  const allBelowMinimumSelectionsAreLarger = selectedFields
-    .filter((field) => playersCount < getFieldBandById(field.id).min)
-    .every((field) => {
-    const band = getFieldBandById(field.id)
-      return band.min > smallestMin
-  })
-
-  if (smallestFieldBooked && allBelowMinimumSelectionsAreLarger) {
-    return { ok: true, usedException: true }
-  }
-
-  return { ok: false, reason: 'Selected field combination is not valid for this group size.' }
+  return { ok: true }
 }
 
 async function findDocumentById(db, collection, id) {
@@ -1362,7 +1397,7 @@ router.post('/:collection', requireAuth, async (req, res) => {
       }
       if (payload.isMinor) {
         payload.guardianPhone = normalizePhPhone(payload.guardianPhone)
-        if (!payload.guardianPhone) return res.status(400).json({ ok: false, error: 'Enter the guardian phone number as +63-9XX-XXX-XXXX.' })
+        if (!payload.guardianPhone) return res.status(400).json({ ok: false, error: 'Enter the guardian phone number as 09XX XXX XXXX.' })
       }
       // The participant (and a minor's guardian) state their ID type and attach a photo of it;
       // staff check both before approving.

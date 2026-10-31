@@ -12,7 +12,6 @@ type RosterPlayer = {
   id: string
   name: string
   gamesPlayed: number
-  experienceAdjustment: number
   experience: number
   experienceLevel: string
   age: number | null
@@ -112,7 +111,7 @@ export function TeamGroupingPage() {
       <div>
         <h1 className="text-3xl font-bold">Team Grouping</h1>
         <p className="mt-1 text-sm text-muted">
-          Suggested teams balance experience (games played at the field plus admin adjustments) and age. The marshal makes the final call.
+          Suggested teams balance experience (total games played: Beginner 0–10, Intermediate 11–25, Experienced 26+) and age groups. The marshal makes the final call.
         </p>
       </div>
 
@@ -179,7 +178,7 @@ export function TeamGroupingPage() {
                     <FiUsers className="flex-none text-gold" />
                   </div>
                   <div className="mt-1 text-xs text-muted">
-                    {stats.players.length} players · {stats.experience} total experience
+                    {stats.players.length} players · {stats.experience} total games played
                     {stats.averageAge ? ` · avg age ${stats.averageAge}` : ''}
                     {stats.minors ? ` · ${stats.minors} under 18` : ''}
                   </div>
@@ -189,7 +188,7 @@ export function TeamGroupingPage() {
                         <div className="min-w-0">
                           <div className="truncate text-sm font-semibold">{player.name}</div>
                           <div className="text-[11px] text-muted">
-                            {player.guest ? 'Guest (no account)' : `${player.gamesPlayed} games${player.experienceAdjustment ? ` ${player.experienceAdjustment > 0 ? '+' : ''}${player.experienceAdjustment} adj.` : ''}`}
+                            {player.guest ? 'Guest (no account)' : `${player.gamesPlayed} ${player.gamesPlayed === 1 ? 'game' : 'games'} played`}
                             {' · '}{player.ageGroup}
                           </div>
                         </div>

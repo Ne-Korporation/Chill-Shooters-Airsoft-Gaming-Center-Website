@@ -202,7 +202,7 @@ router.put('/payments/gcash-qr', requireAuth, requireRole('admin'), async (req, 
   const imageUrl = String(req.body?.imageUrl || '').trim()
   const phoneNumber = normalizePhPhone(req.body?.phoneNumber)
   if (!imageUrl) return res.status(400).json({ ok: false, error: 'imageUrl is required' })
-  if (!phoneNumber) return res.status(400).json({ ok: false, error: 'Enter the GCash number as +63-9XX-XXX-XXXX.' })
+  if (!phoneNumber) return res.status(400).json({ ok: false, error: 'Enter the GCash number as 09XX XXX XXXX.' })
 
   try {
     const db = await getDb()

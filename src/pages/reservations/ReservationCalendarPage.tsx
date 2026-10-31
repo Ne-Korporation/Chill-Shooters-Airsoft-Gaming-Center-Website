@@ -22,7 +22,7 @@ import {
   FiX,
 } from 'react-icons/fi'
 
-import { apiBase, apiDelete, apiGet, apiPost, getApiAuthHeaders } from '../../utils/apiClient'
+import { apiBase, apiGet, apiPost, getApiAuthHeaders } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
 import { LANDING_PREFILL_KEY, type LandingReservationPrefill } from '../auth/LandingPage'
 import { Card } from '../../components/ui/Card'
@@ -32,6 +32,7 @@ import { calculatePackagePricing, packageEquipmentQty } from '../../utils/packag
 import { formatDiscountTargetLabel, resolvePackageDiscountConfig } from '../../utils/packagePricing'
 import { loadPackagePrefill } from '../../utils/packagePrefill'
 import { modelOf } from '../../utils/inventoryModels'
+import { cancelBookingDraftLeft, markBookingDraftLeft, readBookingDraft, saveBookingDraft, scheduleBookingDraftLeft } from '../../utils/bookingDraft'
 import { PiecePicker, type PickerGroup } from '../../components/inventory/PiecePicker'
 
 // Slot holds last 15 minutes on the server; refresh well before that while the player is booking.
@@ -149,18 +150,18 @@ type WaiverRecord = {
 const locationFields: Record<LocationOption, Field[]> = {
   salawag: [
     { id: 'salawag-field-1', name: 'Upper Ground', location: 'Delta Stronghold Salawag', minPlayersPrivate: 10, locationId: 'salawag' },
-    { id: 'salawag-field-2', name: 'Lower Ground', location: 'Delta Stronghold Salawag', minPlayersPrivate: 10, locationId: 'salawag' },
-    { id: 'salawag-field-3', name: 'Forest', location: 'Delta Stronghold Salawag', minPlayersPrivate: 10, locationId: 'salawag' },
+    { id: 'salawag-field-2', name: 'Lower Ground', location: 'Delta Stronghold Salawag', minPlayersPrivate: 20, locationId: 'salawag' },
+    { id: 'salawag-field-3', name: 'Forest', location: 'Delta Stronghold Salawag', minPlayersPrivate: 50, locationId: 'salawag' },
   ],
   langkaan: [
     { id: 'langkaan-field-1', name: 'Upper Ground', location: 'Delta Stronghold Langkaan', minPlayersPrivate: 10, locationId: 'langkaan' },
-    { id: 'langkaan-field-2', name: 'Lower Ground', location: 'Delta Stronghold Langkaan', minPlayersPrivate: 10, locationId: 'langkaan' },
-    { id: 'langkaan-field-3', name: 'Forest', location: 'Delta Stronghold Langkaan', minPlayersPrivate: 10, locationId: 'langkaan' },
+    { id: 'langkaan-field-2', name: 'Lower Ground', location: 'Delta Stronghold Langkaan', minPlayersPrivate: 20, locationId: 'langkaan' },
+    { id: 'langkaan-field-3', name: 'Forest', location: 'Delta Stronghold Langkaan', minPlayersPrivate: 50, locationId: 'langkaan' },
   ],
   binan: [
     { id: 'binan-field-1', name: 'Upper Ground', location: 'LOMA Binan Laguna', minPlayersPrivate: 10, locationId: 'binan' },
-    { id: 'binan-field-2', name: 'Lower Ground', location: 'LOMA Binan Laguna', minPlayersPrivate: 10, locationId: 'binan' },
-    { id: 'binan-field-3', name: 'Forest', location: 'LOMA Binan Laguna', minPlayersPrivate: 10, locationId: 'binan' },
+    { id: 'binan-field-2', name: 'Lower Ground', location: 'LOMA Binan Laguna', minPlayersPrivate: 20, locationId: 'binan' },
+    { id: 'binan-field-3', name: 'Forest', location: 'LOMA Binan Laguna', minPlayersPrivate: 50, locationId: 'binan' },
   ],
 }
 
@@ -181,14 +182,6 @@ type SlotCapacities = Record<LocationOption, Record<TimeSlot, number>>
 
 function getFieldsForLocation(location: LocationOption): Field[] {
   return locationFields[location] || []
-}
-
-function getMinPlayersForSelectedFields(selectedFieldIds: string[], location: LocationOption): number {
-  if (selectedFieldIds.length === 0) return 0
-  const fields = getFieldsForLocation(location)
-  return selectedFieldIds
-    .map((fieldId) => fields.find((f) => f.id === fieldId)?.minPlayersPrivate ?? 0)
-    .reduce((max, value) => Math.max(max, value), 0)
 }
 
 function getFieldById(fieldId: string): Field | undefined {
@@ -267,6 +260,13 @@ export function ReservationCalendarPage() {
   const today = useMemo(() => new Date(), [])
   const { user } = useAuth()
 
+  // A booking the player left less than a minute ago (see utils/bookingDraft); its choices are restored below.
+  const [restoredDraft] = useState(() => {
+    const draft = readBookingDraft(user?.id)
+    return draft?.path === '/app/reservations' ? draft : null
+  })
+  const draftState = (restoredDraft?.state || {}) as Record<string, any>
+
   // Package picked in the Recommendation Engine (router state, or sessionStorage after a refresh).
   const [packagePrefill] = useState(() => loadPackagePrefill(location.state))
 
@@ -291,7 +291,7 @@ export function ReservationCalendarPage() {
     }
   }, [])
 
-  const [step, setStep] = useState<1 | 2 | 3 | 4>(1)
+  const [step, setStep] = useState<1 | 2 | 3 | 4>(() => draftState.step ?? 1)
   const [isConfirming, setIsConfirming] = useState(false)
   const [packages, setPackages] = useState<RentalPackage[]>([])
   const [weapons, setWeapons] = useState<WeaponItem[]>([])
@@ -303,12 +303,12 @@ export function ReservationCalendarPage() {
   const [serverCapacities, setServerCapacities] = useState<SlotCapacities | null>(null)
   const [loadingWaiverEligibility, setLoadingWaiverEligibility] = useState(true)
   // Teammates are found one at a time by email rather than from a list of every player.
-  const [selectedTeammates, setSelectedTeammates] = useState<TeamMember[]>([])
+  const [selectedTeammates, setSelectedTeammates] = useState<TeamMember[]>(() => draftState.selectedTeammates ?? [])
   const selectedTeammateIds = useMemo(() => selectedTeammates.map((member) => member.id), [selectedTeammates])
   const [teamEmail, setTeamEmail] = useState('')
-  const [teamLookup, setTeamLookup] = useState<{ status: 'idle' | 'searching' | 'found' | 'error'; member?: TeamMember; error?: string }>({ status: 'idle' })
-  const [paymentMode, setPaymentMode] = useState<PaymentMode>('self')
-  const [paymentPlan, setPaymentPlan] = useState<PaymentPlan>('cash_balance')
+  const [teamLookup, setTeamLookup] = useState<{ status: 'idle' | 'searching' | 'found' | 'error'; members?: TeamMember[]; error?: string }>({ status: 'idle' })
+  const [paymentMode, setPaymentMode] = useState<PaymentMode>(() => draftState.paymentMode ?? 'self')
+  const [paymentPlan, setPaymentPlan] = useState<PaymentPlan>(() => draftState.paymentPlan ?? 'cash_balance')
   const [waiverEligibleUserIds, setWaiverEligibleUserIds] = useState<string[]>([])
   // Status of the logged-in user's own waiver: none = never submitted
   const [currentWaiverStatus, setCurrentWaiverStatus] = useState<'none' | 'pending' | 'approved' | 'denied'>('none')
@@ -345,13 +345,14 @@ export function ReservationCalendarPage() {
     })
   }, [today])
 
-  const [selectedLocation, setSelectedLocation] = useState<LocationOption>(landingPrefill?.location ?? 'salawag')
+  const [selectedLocation, setSelectedLocation] = useState<LocationOption>(() => draftState.selectedLocation ?? landingPrefill?.location ?? 'salawag')
 
   const availableFields = useMemo(() => {
     return getFieldsForLocation(selectedLocation)
   }, [selectedLocation])
 
   const [selectedFieldIds, setSelectedFieldIds] = useState<string[]>(() => {
+    if (Array.isArray(draftState.selectedFieldIds)) return draftState.selectedFieldIds
     const fields = getFieldsForLocation(landingPrefill?.location ?? 'salawag')
     const prefilled = fields.find((f) => f.name === landingPrefill?.fieldArea)
     if (prefilled) return [prefilled.id]
@@ -363,14 +364,11 @@ export function ReservationCalendarPage() {
   // ISO dates compare correctly as strings; ignore a prefilled date that has already passed.
   const startDateISO =
     landingPrefill?.dateISO && landingPrefill.dateISO >= initialDateISO ? landingPrefill.dateISO : initialDateISO
-  const [dateISO, setDateISO] = useState(startDateISO)
-  const initialIsWeekend = isWeekend(startDateISO)
-  const [slot, setSlot] = useState<TimeSlot>(landingPrefill?.slot ?? 'morning')
-  const [selectedSlots, setSelectedSlots] = useState<TimeSlot[]>([])
-  const [slotTouched, setSlotTouched] = useState(false)
-  const [sessionType, setSessionType] = useState<SessionType>(
-    initialIsWeekend ? 'public' : 'private'
-  )
+  const [dateISO, setDateISO] = useState<string>(() => (draftState.dateISO > todayDateISO ? draftState.dateISO : startDateISO))
+  const [slot, setSlot] = useState<TimeSlot>(() => draftState.slot ?? landingPrefill?.slot ?? 'morning')
+  const [selectedSlots, setSelectedSlots] = useState<TimeSlot[]>(() => draftState.selectedSlots ?? [])
+  const [slotTouched, setSlotTouched] = useState(Boolean(restoredDraft))
+  const [sessionType, setSessionType] = useState<SessionType>(() => (isWeekend(dateISO) ? 'public' : 'private'))
 
   // Update selected fields when location changes
   useEffect(() => {
@@ -440,8 +438,14 @@ export function ReservationCalendarPage() {
     }
   }, [fetchReservations])
 
-  // Enforce session type when date changes
+  // Enforce session type when date changes. A restored draft already has a valid slot and
+  // session for its date, so the first run must not reset them.
+  const skipDateResetRef = useRef(Boolean(restoredDraft))
   useEffect(() => {
+    if (skipDateResetRef.current) {
+      skipDateResetRef.current = false
+      return
+    }
     const isWd = isWeekday(dateISO)
     if (isWd) {
       setSessionType('private')
@@ -461,13 +465,13 @@ export function ReservationCalendarPage() {
     return isWd ? 10 : MIN_PLAYERS
   }, [dateISO, packagePrefill?.players])
 
-  const [players, setPlayers] = useState(defaultPlayers)
-  const [playersInput, setPlayersInput] = useState(String(defaultPlayers))
-  const [notes, setNotes] = useState('')
-  const [gameModePreference, setGameModePreference] = useState<string>(GAME_MODES[0])
-  const [layoutRequest, setLayoutRequest] = useState('')
+  const [players, setPlayers] = useState<number>(() => draftState.players ?? defaultPlayers)
+  const [playersInput, setPlayersInput] = useState(() => String(draftState.players ?? defaultPlayers))
+  const [notes, setNotes] = useState<string>(() => draftState.notes ?? '')
+  const [gameModePreference, setGameModePreference] = useState<string>(() => draftState.gameModePreference ?? GAME_MODES[0])
+  const [layoutRequest, setLayoutRequest] = useState<string>(() => draftState.layoutRequest ?? '')
   // Optional sketch of the custom field layout the marshals should set up.
-  const [layoutBlueprintUrl, setLayoutBlueprintUrl] = useState('')
+  const [layoutBlueprintUrl, setLayoutBlueprintUrl] = useState<string>(() => draftState.layoutBlueprintUrl ?? '')
   const [uploadingBlueprint, setUploadingBlueprint] = useState(false)
   const uploadBlueprint = async (file: File) => {
     if (!file.type.startsWith('image/')) return toast.error('Upload an image file (PNG or JPG).')
@@ -486,52 +490,56 @@ export function ReservationCalendarPage() {
       setUploadingBlueprint(false)
     }
   }
-  const [selectedPackageId, setSelectedPackageId] = useState<string>('')
+  const [selectedPackageId, setSelectedPackageId] = useState<string>(() => draftState.selectedPackageId ?? '')
 
-  const [selectionMode, setSelectionMode] = useState<SelectionMode>('package')
-  const [customWeaponIds, setCustomWeaponIds] = useState<string[]>([])
-  const [customEquipmentIds, setCustomEquipmentIds] = useState<string[]>([])
-  const [ownWeapons, setOwnWeapons] = useState('')
-  const [ownEquipment, setOwnEquipment] = useState('')
+  const [selectionMode, setSelectionMode] = useState<SelectionMode>(() => draftState.selectionMode ?? 'package')
+  const [customWeaponIds, setCustomWeaponIds] = useState<string[]>(() => draftState.customWeaponIds ?? [])
+  const [customEquipmentIds, setCustomEquipmentIds] = useState<string[]>(() => draftState.customEquipmentIds ?? [])
+  const [ownWeapons, setOwnWeapons] = useState<string>(() => draftState.ownWeapons ?? '')
+  const [ownEquipment, setOwnEquipment] = useState<string>(() => draftState.ownEquipment ?? '')
 
   const [playerApprovedWeapons, setPlayerApprovedWeapons] = useState<any[]>([])
   const [playerApprovedEquipment, setPlayerApprovedEquipment] = useState<any[]>([])
-  const [selectedOwnWeaponIds, setSelectedOwnWeaponIds] = useState<string[]>([])
-  const [selectedOwnEquipmentIds, setSelectedOwnEquipmentIds] = useState<string[]>([])
+  const [selectedOwnWeaponIds, setSelectedOwnWeaponIds] = useState<string[]>(() => draftState.selectedOwnWeaponIds ?? [])
+  const [selectedOwnEquipmentIds, setSelectedOwnEquipmentIds] = useState<string[]>(() => draftState.selectedOwnEquipmentIds ?? [])
   // How many players the group said will bring their own weapon, and which teammates were assigned.
-  const [ownWeaponTarget, setOwnWeaponTarget] = useState(() => Math.max(0, Math.round(packagePrefill?.ownWeapons ?? 0)))
-  const [teammateOwnWeaponIds, setTeammateOwnWeaponIds] = useState<string[]>([])
+  const [ownWeaponTarget, setOwnWeaponTarget] = useState<number>(() => draftState.ownWeaponTarget ?? Math.max(0, Math.round(packagePrefill?.ownWeapons ?? 0)))
+  const [teammateOwnWeaponIds, setTeammateOwnWeaponIds] = useState<string[]>(() => draftState.teammateOwnWeaponIds ?? [])
   const [noWeaponWarning, setNoWeaponWarning] = useState<TeamMember | null>(null)
   const [slotHoldExpiresAt, setSlotHoldExpiresAt] = useState<string | null>(null)
   const [placingHold, setPlacingHold] = useState(false)
 
   const findTeammate = async () => {
-    const email = teamEmail.trim().toLowerCase()
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    // A name or an email: "@" means an exact email, anything else searches names.
+    const query = teamEmail.trim()
+    const byEmail = query.includes('@')
+    if (byEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(query)) {
       setTeamLookup({ status: 'error', error: 'Enter a valid email address.' })
       return
     }
-    if (user?.email && email === user.email.toLowerCase()) {
+    if (!byEmail && query.length < 3) {
+      setTeamLookup({ status: 'error', error: 'Type at least 3 letters of the name, or the full email.' })
+      return
+    }
+    if (byEmail && user?.email && query.toLowerCase() === user.email.toLowerCase()) {
       setTeamLookup({ status: 'error', error: 'You are already counted as the team captain.' })
       return
     }
     setTeamLookup({ status: 'searching' })
     try {
-      const res = await apiGet<{
-        ok: boolean
-        data: { id: string; name: string; email: string; waiverApproved: boolean; hasApprovedWeapon: boolean }
-      }>(`/api/team-directory/lookup?email=${encodeURIComponent(email)}`)
-      const found = res.data
+      type Found = { id: string; name: string; email: string; waiverApproved: boolean; hasApprovedWeapon: boolean }
+      const res = await apiGet<{ ok: boolean; data: Found; matches?: Found[] }>(`/api/team-directory/lookup?q=${encodeURIComponent(query)}`)
+      const found = Array.isArray(res.matches) && res.matches.length ? res.matches : [res.data]
       setTeamLookup({
         status: 'found',
-        member: {
-          id: String(found.id),
-          name: found.name || found.email,
-          email: found.email,
+        members: found.map((match) => ({
+          id: String(match.id),
+          name: match.name || match.email,
+          email: match.email,
           status: 'active',
-          waiverSubmitted: found.waiverApproved === true,
-          hasApprovedWeapon: found.hasApprovedWeapon === true,
-        },
+          waiverSubmitted: match.waiverApproved === true,
+          hasApprovedWeapon: match.hasApprovedWeapon === true,
+        })),
       })
     } catch (err: any) {
       setTeamLookup({ status: 'error', error: err?.message || 'Could not look up that player.' })
@@ -794,6 +802,15 @@ export function ReservationCalendarPage() {
     )
   }, [packages])
 
+  // With no packages from the admin, custom selection is the only way to book.
+  const noPackages = !loadingPackages && packages.length === 0
+  useEffect(() => {
+    if (noPackages && selectionMode !== 'custom') {
+      setSelectionMode('custom')
+      setSelectedPackageId('')
+    }
+  }, [noPackages, selectionMode])
+
   // Pre-pick a package only in package mode; choosing Custom Selection clears the package and
   // must not be undone by this effect.
   useEffect(() => {
@@ -849,33 +866,22 @@ export function ReservationCalendarPage() {
     return lower ? !isFieldSlotAvailable(lower.id, slotToCheck) : false
   }, [selectedLocation, isFieldSlotAvailable])
 
-  // Single source of truth for the minimum players of a field selection
+  // Single source of truth for the minimum players of a field selection (matches the server's
+  // effectiveFieldMinimum): each field's own minimum for this slot, and the largest one wins.
   const getMinPlayersForSelection = useCallback((ids: string[], slotToCheck: TimeSlot): number => {
     if (ids.length === 0) return 0
-
-    if (ids.length === 1) {
-      const field = getFieldById(ids[0])
-      if (!field) return 0
+    return ids.reduce((max, id) => {
+      const field = getFieldById(id)
+      if (!field) return max
       const name = field.name.toLowerCase()
-
-      // Exception 1: Lower Ground drops to 10 when Upper Ground is taken
-      if (name.includes('lower') && isUpperGroundTaken(slotToCheck)) {
-        return 10
-      }
-      // Exception 2: Forest drops to 10 when BOTH Upper and Lower Ground are taken
-      if (
-        !name.includes('upper') &&
-        !name.includes('lower') &&
-        isUpperGroundTaken(slotToCheck) &&
-        isLowerGroundTaken(slotToCheck)
-      ) {
-        return 10
-      }
-      return field.minPlayersPrivate
-    }
-
-    return getMinPlayersForSelectedFields(ids, selectedLocation)
-  }, [selectedLocation, isUpperGroundTaken, isLowerGroundTaken])
+      let min = field.minPlayersPrivate
+      // Lower Ground opens to 10 when Upper Ground is taken
+      if (name.includes('lower') && isUpperGroundTaken(slotToCheck)) min = 10
+      // Forest opens to 10 when BOTH Upper and Lower Ground are taken
+      if (name.includes('forest') && isUpperGroundTaken(slotToCheck) && isLowerGroundTaken(slotToCheck)) min = 10
+      return Math.max(max, min)
+    }, 0)
+  }, [isUpperGroundTaken, isLowerGroundTaken])
 
   const getFieldSelectionValidity = useCallback(
     (candidateIds: string[], playersCount: number, slotToCheck: TimeSlot) => {
@@ -997,26 +1003,30 @@ export function ReservationCalendarPage() {
   }, [packageWeapons, packageEquipment])
 
   // Pieces the player picked for a package (optional; the rest are assigned automatically).
-  const [pickedUnitIds, setPickedUnitIds] = useState<string[]>([])
+  const [pickedUnitIds, setPickedUnitIds] = useState<string[]>(() => draftState.pickedUnitIds ?? [])
   const packageWeaponModels = useMemo(() => (selectedPackage ? modelsOfIds(rentalWeapons, selectedPackage.weaponIds) : []), [selectedPackage, modelsOfIds, rentalWeapons])
   const packageEquipmentModels = useMemo(() => (selectedPackage ? modelsOfIds(rentalEquipment, selectedPackage.equipmentIds) : []), [selectedPackage, modelsOfIds, rentalEquipment])
   const packageWeaponGroups = useMemo(() => weaponGroups.filter((group) => packageWeaponModels.includes(group.model)), [weaponGroups, packageWeaponModels])
   const packageEquipmentGroups = useMemo(() => equipmentGroups.filter((group) => packageEquipmentModels.includes(group.model)), [equipmentGroups, packageEquipmentModels])
 
   // Drop picks that no longer apply (package, slot, or headcount changed).
+  // Drop picks that are no longer free. Waits for the inventory so restored picks aren't wiped
+  // while the lists are still empty.
   useEffect(() => {
+    if (loadingPackages) return
     const allowed = new Set([...packageWeaponGroups, ...packageEquipmentGroups].flatMap((group) => group.pieces.filter((piece) => piece.free).map((piece) => piece.id)))
     setPickedUnitIds((current) => {
       const next = current.filter((id) => allowed.has(id))
       return next.length === current.length ? current : next
     })
-  }, [packageWeaponGroups, packageEquipmentGroups])
+  }, [packageWeaponGroups, packageEquipmentGroups, loadingPackages])
 
   useEffect(() => {
+    if (loadingPackages) return
     const free = new Set([...weaponGroups, ...equipmentGroups].flatMap((group) => group.pieces.filter((piece) => piece.free).map((piece) => piece.id)))
     setCustomWeaponIds((current) => (current.every((id) => free.has(id)) ? current : current.filter((id) => free.has(id))))
     setCustomEquipmentIds((current) => (current.every((id) => free.has(id)) ? current : current.filter((id) => free.has(id))))
-  }, [weaponGroups, equipmentGroups])
+  }, [weaponGroups, equipmentGroups, loadingPackages])
 
   const togglePickedUnit = (id: string) => {
     setPickedUnitIds((current) => (current.includes(id) ? current.filter((unit) => unit !== id) : [...current, id]))
@@ -1209,9 +1219,6 @@ export function ReservationCalendarPage() {
   const payerShareAmount = paymentMode === 'split'
     ? Number((dynamicPricing.total / splitPartySize).toFixed(2))
     : dynamicPricing.total
-  const teamPaymentLabel = paymentMode === 'split'
-    ? `Split among ${splitPartySize} player${splitPartySize === 1 ? '' : 's'}`
-    : 'This player pays for all'
   const canSubmitReservation = canProceed && hasCurrentUserWaiver
   // true only once we KNOW the user has no waiver (avoids flashing the warning while loading)
   const waiverBlocked = !!user?.id && !loadingWaiverEligibility && !hasCurrentUserWaiver
@@ -1272,15 +1279,52 @@ export function ReservationCalendarPage() {
     if (held) setStep(2)
   }
 
-  // Leaving the page without booking frees the slot right away instead of waiting for it to expire.
+  // Once the slot is held, every choice is saved as a draft so a player who leaves can come back
+  // to it within a minute (see utils/bookingDraft).
+  const draftLabel = `${dateISO} • ${slot} • ${locationOptions.find((l) => l.id === selectedLocation)?.name || selectedLocation}`
+  useEffect(() => {
+    if (!user?.id || step === 1) return
+    saveBookingDraft(user.id, {
+      path: '/app/reservations',
+      label: draftLabel,
+      state: {
+        step, selectedLocation, selectedFieldIds, dateISO, slot, selectedSlots, players, notes, gameModePreference,
+        layoutRequest, layoutBlueprintUrl, selectedPackageId, selectionMode, customWeaponIds, customEquipmentIds,
+        ownWeapons, ownEquipment, selectedOwnWeaponIds, selectedOwnEquipmentIds, ownWeaponTarget, teammateOwnWeaponIds,
+        pickedUnitIds, selectedTeammates, paymentMode, paymentPlan,
+      },
+    })
+  }, [
+    user?.id, step, draftLabel, selectedLocation, selectedFieldIds, dateISO, slot, selectedSlots, players, notes,
+    gameModePreference, layoutRequest, layoutBlueprintUrl, selectedPackageId, selectionMode, customWeaponIds,
+    customEquipmentIds, ownWeapons, ownEquipment, selectedOwnWeaponIds, selectedOwnEquipmentIds, ownWeaponTarget,
+    teammateOwnWeaponIds, pickedUnitIds, selectedTeammates, paymentMode, paymentPlan,
+  ])
+
+  // Coming back to a draft: hold the slot again (it may have been taken in the meantime).
+  useEffect(() => {
+    if (!restoredDraft) return
+    toast.success('Welcome back. Your booking was restored.')
+    if (step > 1) void placeSlotHold(true)
+    // Runs once, for the draft found when the page opened.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Leaving the page (another page, a refresh, or closing the tab) keeps the slot for one more
+  // minute instead of freeing it at once, so the player can still come back.
   const proceedingToPaymentRef = useRef(false)
   const hasSlotHoldRef = useRef(false)
   hasSlotHoldRef.current = !!slotHoldExpiresAt
-  useEffect(() => () => {
-    if (hasSlotHoldRef.current && !proceedingToPaymentRef.current) {
-      apiDelete('/api/slot-holds/mine').catch(() => null)
+  useEffect(() => {
+    cancelBookingDraftLeft()
+    const leaving = () => hasSlotHoldRef.current && !proceedingToPaymentRef.current
+    const onPageHide = () => { if (leaving()) markBookingDraftLeft(user?.id) }
+    window.addEventListener('pagehide', onPageHide)
+    return () => {
+      window.removeEventListener('pagehide', onPageHide)
+      if (leaving()) scheduleBookingDraftLeft(user?.id)
     }
-  }, [])
+  }, [user?.id])
 
   const formatCurrency = (value: number | string | null | undefined) => {
     const numeric = Number(value ?? 0)
@@ -1430,6 +1474,8 @@ export function ReservationCalendarPage() {
       localStorage.setItem('refresh_reservations', 'true')
 
       proceedingToPaymentRef.current = true
+      // From here the unfinished booking continues on the payment page.
+      saveBookingDraft(user?.id, { path: '/app/payment', label: draftLabel, state: {} })
       toast.success('Proceed to payment to complete your reservation.')
       navigate('/app/payment')
     } catch (e: any) {
@@ -1444,7 +1490,7 @@ export function ReservationCalendarPage() {
       case 1: return 'Choose Field & Slot'
       case 2: return 'Select Package & Equipment'
       case 3: return 'Reservation Summary'
-      default: return 'Teammates & Payment'
+      default: return 'Select Teammates'
     }
   }
 
@@ -1526,7 +1572,7 @@ export function ReservationCalendarPage() {
             1: 'Select field location',
             2: 'Choose package',
             3: 'Review details',
-            4: 'Teammates & payment',
+            4: 'Select teammates',
           }
 
           return (
@@ -2033,6 +2079,7 @@ export function ReservationCalendarPage() {
       {step === 2 && (
         <div className="grid gap-4 lg:grid-cols-3">
           <div className="lg:col-span-2 space-y-4">
+            {noPackages ? null : (
             <Card className="p-4 md:p-6">
               <div className="flex items-center gap-2 text-sm font-bold">
                 <FiSliders /> <span>Selection Mode</span>
@@ -2078,6 +2125,7 @@ export function ReservationCalendarPage() {
                 </button>
               </div>
             </Card>
+            )}
 
             {selectionMode === 'package' ? (
               <>
@@ -2709,7 +2757,7 @@ export function ReservationCalendarPage() {
         </div>
       )}
 
-      {/* Step 4 - Teammates & Payment (after confirm, before payment) */}
+      {/* Step 4 - Teammates (payment choices are made on the payment page) */}
       {step === 4 && (
         <div className="grid gap-4 lg:grid-cols-3">
           <div className="lg:col-span-2 space-y-4">
@@ -2731,14 +2779,13 @@ export function ReservationCalendarPage() {
                 >
                   <div className="min-w-0 flex-1">
                     <Input
-                      label="Teammate email"
-                      type="email"
+                      label="Teammate name or email"
                       value={teamEmail}
                       onChange={(e) => {
                         setTeamEmail(e.target.value)
                         if (teamLookup.status !== 'idle') setTeamLookup({ status: 'idle' })
                       }}
-                      placeholder="teammate@gmail.com"
+                      placeholder="e.g., Juan Dela Cruz or teammate@gmail.com"
                       disabled={!hasCurrentUserWaiver || selectedTeammates.length >= maxTeammates}
                     />
                   </div>
@@ -2755,11 +2802,10 @@ export function ReservationCalendarPage() {
                   <div className="rounded-2xl border border-danger/30 bg-danger/10 p-3 text-sm text-danger">{teamLookup.error}</div>
                 )}
 
-                {teamLookup.status === 'found' && teamLookup.member && (() => {
-                  const member = teamLookup.member
+                {teamLookup.status === 'found' && teamLookup.members?.map((member) => {
                   const alreadyAdded = selectedTeammateIds.includes(member.id)
                   return (
-                    <div className="flex flex-col gap-3 rounded-2xl border border-accent/30 bg-accent/5 p-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div key={member.id} className="flex flex-col gap-3 rounded-2xl border border-accent/30 bg-accent/5 p-3 sm:flex-row sm:items-center sm:justify-between">
                       <div className="min-w-0">
                         <div className="truncate text-sm font-bold">{member.name}</div>
                         <div className="truncate text-xs text-muted">{member.email}</div>
@@ -2777,7 +2823,7 @@ export function ReservationCalendarPage() {
                       </Button>
                     </div>
                   )
-                })()}
+                })}
 
                 {loadingWaiverEligibility ? (
                   <div className="rounded-2xl border border-dashed border-white/10 bg-black/20 p-4 text-sm text-muted">
@@ -2887,92 +2933,20 @@ export function ReservationCalendarPage() {
           <div className="space-y-4">
             <Card className="p-4 md:p-6">
               <div className="flex items-center gap-2 text-sm font-bold">
-                <FiTag /> <span>Payment</span>
+                <FiTag /> <span>Summary</span>
               </div>
-              <p className="mt-1 text-xs text-muted">Choose who pays for this reservation.</p>
-
-              <div className="mt-4 grid gap-2">
-                <button
-                  type="button"
-                  onClick={() => setPaymentMode('self')}
-                  className={[
-                    'rounded-2xl border px-4 py-3 text-left transition',
-                    paymentMode === 'self' ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
-                  ].join(' ')}
-                >
-                  <div className="text-sm font-bold">I'll pay for everyone</div>
-                  <div className="mt-1 text-xs text-muted">This player pays the full reservation.</div>
-                </button>
-
-                <button
-                  type="button"
-                  disabled={!canSplitPayment}
-                  onClick={() => setPaymentMode('split')}
-                  className={[
-                    'rounded-2xl border px-4 py-3 text-left transition',
-                    paymentMode === 'split' ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
-                    !canSplitPayment ? 'cursor-not-allowed opacity-50' : '',
-                  ].join(' ')}
-                >
-                  <div className="text-sm font-bold">Split among the team</div>
-                  <div className="mt-1 text-xs text-muted">
-                    {canSplitPayment
-                      ? 'Divide the total equally among you and your selected teammates.'
-                      : 'Add at least one registered teammate to enable splitting.'}
-                  </div>
-                </button>
-              </div>
-
-              <div className="mt-5 text-xs uppercase tracking-widest text-muted">How you'll pay</div>
-              <div className="mt-2 grid gap-2">
-                {([
-                  ['full', 'Pay in full online', 'Pay the whole amount now with GCash or card. Nothing to pay at the field.'],
-                  ['cash_balance', '50% online + cash at the field', 'Pay the 50% downpayment online now, then the rest in cash at the counter on game day.'],
-                ] as const).map(([plan, title, description]) => (
-                  <button
-                    key={plan}
-                    type="button"
-                    onClick={() => setPaymentPlan(plan)}
-                    className={[
-                      'rounded-2xl border px-4 py-3 text-left transition',
-                      paymentPlan === plan ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
-                    ].join(' ')}
-                  >
-                    <div className="text-sm font-bold">{title}</div>
-                    <div className="mt-1 text-xs text-muted">{description}</div>
-                  </button>
-                ))}
-              </div>
+              <p className="mt-1 text-xs text-muted">You'll choose who pays and how on the payment page.</p>
 
               <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4">
-                <div className="flex items-center justify-between gap-3 text-xs text-muted">
-                  <span>Payment mode</span>
-                  <span>{teamPaymentLabel}</span>
-                </div>
-                <div className="mt-2 flex items-center justify-between gap-3 text-xs text-muted">
-                  <span>Pay online now</span>
-                  <span>
-                    {paymentPlan === 'full'
-                      ? formatCurrency(payerShareAmount)
-                      : `about ${formatCurrency(Math.round(payerShareAmount * 0.5))} (50% downpayment)`}
-                  </span>
-                </div>
-                {paymentPlan === 'cash_balance' ? (
-                  <div className="mt-1 text-[11px] text-muted">The exact downpayment is confirmed on the next page; the balance is paid in cash at the field.</div>
-                ) : null}
-                <div className="mt-3 flex items-center justify-between gap-3">
+                <div className="flex items-center justify-between gap-3">
                   <span className="text-xs text-muted">Reservation total</span>
-                  <span className="text-sm font-bold">{formatCurrency(dynamicPricing.total)}</span>
+                  <span className="text-xl font-bold text-gold">{formatCurrency(dynamicPricing.total)}</span>
                 </div>
-                <div className="mt-2 flex items-center justify-between gap-3">
-                  <span className="text-xs text-muted">Your share</span>
-                  <span className="text-xl font-bold text-gold">{formatCurrency(payerShareAmount)}</span>
+                <div className="mt-3 text-xs text-muted">
+                  {selectedTeammates.length > 0
+                    ? `Team: you, ${selectedTeammates.map((member) => member.name).join(', ')}`
+                    : 'No teammates added yet. You can still continue.'}
                 </div>
-                {selectedTeammates.length > 0 && (
-                  <div className="mt-3 text-xs text-muted">
-                    Team: you, {selectedTeammates.map((member) => member.name).join(', ')}
-                  </div>
-                )}
               </div>
 
               <div className="mt-4 flex flex-col gap-2">

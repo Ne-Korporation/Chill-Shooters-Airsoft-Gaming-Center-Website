@@ -37,3 +37,8 @@ services:
       # The frontend also needs VITE_STRIPE_PUBLISHABLE_KEY=pk_test_… on Vercel.
       - key: STRIPE_SECRET_KEY
         sync: false
+      # Online payment through PayMongo (test mode only); see .env.example.
+      - key: PAYMONGO_SECRET_KEY
+        sync: false
+      - key: PAYMONGO_WEBHOOK_SECRET
+        sync: false

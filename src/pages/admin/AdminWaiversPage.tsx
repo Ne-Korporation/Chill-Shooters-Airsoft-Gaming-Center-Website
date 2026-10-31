@@ -10,6 +10,7 @@ import { apiDelete, apiGet, apiPut } from '../../utils/apiClient'
 import { signedWaiverText, type WaiverText } from '../../utils/waiverText'
 import { WaiverTextEditor } from '../../components/waivers/WaiverTextEditor'
 import { printWaiverDocument } from '../../utils/waiverPrint'
+import { formatPhPhone } from '../../utils/phone'
 import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
 
 type WaiverRecord = {
@@ -284,7 +285,7 @@ export function AdminWaiversPage() {
                 <>
                   <p className="mt-3"><span className="font-semibold">Guardian name:</span> {selectedWaiver.guardianName || '-'}</p>
                   <p className="mt-2"><span className="font-semibold">Guardian consent:</span> {selectedWaiver.guardianConsent ? 'Yes' : 'No'}</p>
-                  <p className="mt-2"><span className="font-semibold">Guardian phone:</span> {selectedWaiver.guardianPhone || '-'}</p>
+                  <p className="mt-2"><span className="font-semibold">Guardian phone:</span> {selectedWaiver.guardianPhone ? formatPhPhone(selectedWaiver.guardianPhone) : '-'}</p>
                   <p className="mt-2"><span className="font-semibold">Guardian email:</span> {selectedWaiver.guardianEmail || '-'}</p>
                   <p className="mt-2">
                     <span className="font-semibold">Guardian ID type:</span> {selectedWaiver.guardianIdType || '-'}

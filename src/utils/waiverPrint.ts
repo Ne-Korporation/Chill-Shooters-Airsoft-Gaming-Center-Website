@@ -1,4 +1,5 @@
 import { signedWaiverText, type WaiverText } from './waiverText'
+import { formatPhPhone } from './phone'
 
 export type PrintableWaiver = {
   id?: string
@@ -31,7 +32,7 @@ export function buildWaiverPrintHtml(w: PrintableWaiver) {
   const submitted = w.submittedAtISO ? esc(new Date(w.submittedAtISO).toLocaleString()) : '-'
   const guardian = w.isMinor
     ? `<div class="guardian"><b>${esc(T.guardianTitle)}</b><p>${esc(T.guardianCertification)}</p>
-       <p><b>Guardian:</b> ${esc(w.guardianName || '-')} &nbsp; <b>Phone:</b> ${esc(w.guardianPhone || '-')} &nbsp; <b>Consent:</b> ${w.guardianConsent ? 'Yes' : 'No'}</p></div>`
+       <p><b>Guardian:</b> ${esc(w.guardianName || '-')} &nbsp; <b>Phone:</b> ${esc(w.guardianPhone ? formatPhPhone(w.guardianPhone) : '-')} &nbsp; <b>Consent:</b> ${w.guardianConsent ? 'Yes' : 'No'}</p></div>`
     : ''
 
   const idThumb = (src: string | undefined, label: string) =>

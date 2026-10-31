@@ -16,7 +16,6 @@ const router = express.Router()
 
 const STAFF = ['admin', 'registrar', 'marshal']
 const ACTIVE_RESERVATION_STATUSES = ['pending', 'needs review', 'confirmed', 'approved']
-const COMPLETED_GAME_STATUSES = ['completed', 'archived']
 // Status each inventory page treats as its maintenance queue.
 const MAINTENANCE_STATUS = { weapons: 'needs-check', equipments: 'maintenance' }
 
@@ -49,14 +48,15 @@ function sendError(res, err) {
 }
 
 // ---------------------------------------------------------------------------
-// Player experience: games played at the field, plus an admin adjustment
+// Player experience: total games played. That is the games completed at the field, plus games
+// played before the system existed (stored as experienceAdjustment, set by an admin).
 // ---------------------------------------------------------------------------
 
 // Counts completed games per player: the captain and every registered teammate of each
 // reservation whose game was completed or archived.
-async function getGamesPlayed(db, userIds) {
+async function getGamesAtField(db, userIds) {
   const games = await db.collection('gameplay').find(
-    { $or: [{ Status: { $in: ['Completed', 'Archived'] } }, { status: { $in: COMPLETED_GAME_STATUSES } }] },
+    { $or: [{ Status: { $in: ['Completed', 'Archived'] } }, { status: { $in: ['completed', 'archived'] } }] },
     { projection: { reservationId: 1 } },
   ).toArray()
   const reservationIds = [...new Set(games.map((game) => String(game.reservationId || '')).filter(Boolean))]
@@ -68,12 +68,12 @@ async function getGamesPlayed(db, userIds) {
     ).toArray()
     : []
 
-  const wanted = userIds ? new Set(userIds.map(String)) : null
+  const wanted = new Set(userIds.map(String))
   const counts = new Map()
   for (const reservation of reservations) {
     const players = new Set([reservation.userId, ...(reservation.teamMembers || []).map((member) => member.id)].map(String))
     for (const id of players) {
-      if (!id || (wanted && !wanted.has(id))) continue
+      if (!id || !wanted.has(id)) continue
       counts.set(id, (counts.get(id) || 0) + 1)
     }
   }
@@ -106,20 +106,19 @@ async function getPlayerProfiles(db, userIds) {
     { $or: [{ id: { $in: ids } }, ...(objectIds.length ? [{ _id: { $in: objectIds } }] : [])] },
     { projection: { id: 1, name: 1, email: 1, age: 1, experienceAdjustment: 1 } },
   ).toArray()
-  const [games, ages] = await Promise.all([getGamesPlayed(db, ids), getAges(db, accounts)])
+  const [atField, ages] = await Promise.all([getGamesAtField(db, ids), getAges(db, accounts)])
   return new Map(accounts.map((account) => {
     const id = keyOf(account)
-    const gamesPlayed = games.get(id) || 0
-    const adjustment = Math.round(Number(account.experienceAdjustment) || 0)
-    const experience = Math.max(0, gamesPlayed + adjustment)
+    const gamesAtField = atField.get(id) || 0
+    const gamesPlayed = Math.max(0, gamesAtField + Math.round(Number(account.experienceAdjustment) || 0))
     const age = ages.get(id) ?? null
     return [id, {
       id,
       name: account.name || account.email || id,
       gamesPlayed,
-      experienceAdjustment: adjustment,
-      experience,
-      experienceLevel: getExperienceLevel(experience),
+      gamesAtField,
+      experience: gamesPlayed,
+      experienceLevel: getExperienceLevel(gamesPlayed),
       age,
       ageGroup: getAgeGroup(age),
     }]
@@ -198,24 +197,30 @@ router.get('/players/:id/stats', requireAuth, async (req, res) => {
   }
 })
 
-// PUT /api/players/:id/experience { adjustment, note } — admin adds (or removes) experience,
-// e.g. for games played before the system existed.
+// PUT /api/players/:id/experience { gamesPlayed, note } — admin sets the player's total games
+// played (e.g. to count games from before the system). The total shown becomes exactly that
+// number; games completed at the field from then on keep adding to it.
 router.put('/players/:id/experience', requireAuth, requireRole('admin'), async (req, res) => {
-  const adjustment = Number(req.body?.adjustment)
-  if (!Number.isInteger(adjustment) || Math.abs(adjustment) > 1000) {
-    return res.status(400).json({ ok: false, error: 'Adjustment must be a whole number between -1000 and 1000.' })
+  const gamesPlayed = Number(req.body?.gamesPlayed)
+  if (!Number.isInteger(gamesPlayed) || gamesPlayed < 0 || gamesPlayed > 5000) {
+    return res.status(400).json({ ok: false, error: 'Total games played must be a whole number from 0 to 5000.' })
   }
   const note = String(req.body?.note || '').trim().slice(0, 300)
   try {
     const db = await getDb()
     const account = await findById(db, 'user_accounts', req.params.id)
     if (!account || String(account.role || 'user') !== 'user') return res.status(404).json({ ok: false, error: 'Player not found' })
+    const current = (await getPlayerProfiles(db, [keyOf(account)])).get(keyOf(account))
+    const gamesAtField = current?.gamesAtField || 0
+    if (gamesPlayed < gamesAtField) {
+      return res.status(400).json({ ok: false, error: `This player has already completed ${gamesAtField} game(s) at the field, so the total can't be lower than that.` })
+    }
     const nowISO = new Date().toISOString()
     await db.collection('user_accounts').updateOne(
       { _id: account._id },
       {
-        $set: { experienceAdjustment: adjustment, updatedAtISO: nowISO },
-        $push: { experienceHistory: { adjustment, previous: Number(account.experienceAdjustment) || 0, note, atISO: nowISO, ...actorOf(req) } },
+        $set: { experienceAdjustment: gamesPlayed - gamesAtField, updatedAtISO: nowISO },
+        $push: { experienceHistory: { gamesPlayed, previous: current?.gamesPlayed ?? 0, note, atISO: nowISO, ...actorOf(req) } },
       },
     )
     const profile = (await getPlayerProfiles(db, [keyOf(account)])).get(keyOf(account))
@@ -274,7 +279,7 @@ async function getSessionRoster(db, { location, date, slot }) {
         id: '',
         name: guests > 1 || reservation.walkIn ? `${label} #${n}` : label,
         gamesPlayed: 0,
-        experienceAdjustment: 0,
+        gamesAtField: 0,
         experience: 0,
         experienceLevel: getExperienceLevel(0),
         age: null,

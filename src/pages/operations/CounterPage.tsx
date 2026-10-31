@@ -6,7 +6,7 @@ import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { apiGet, apiPost } from '../../utils/apiClient'
-import { formatPhPhone, PH_PHONE_PLACEHOLDER } from '../../utils/phone'
+import { formatPhPhone, isValidPhPhone, PH_PHONE_PLACEHOLDER, toStoredPhPhone } from '../../utils/phone'
 import { LOCATIONS, SLOTS, formatDateTime, formatPHP, selectClass, toInventoryOptions, type InventoryOption } from './shared'
 
 type Ledger = {
@@ -66,10 +66,15 @@ function WalkInForm({ onCreated }: { onCreated: (reservationId: string) => void 
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault()
+    if (form.contact && !isValidPhPhone(form.contact)) {
+      toast.error('Enter the contact number as 09XX XXX XXXX, or leave it blank.')
+      return
+    }
     setSaving(true)
     try {
       const res = await apiPost<{ ok: boolean; data: { id: string; totalAmount: number } }>('/api/walk-ins', {
         ...form,
+        contact: toStoredPhPhone(form.contact),
         players: Number(form.players),
         customWeaponIds: picked.filter((id) => inventory.find((i) => i.id === id)?.collection === 'weapons'),
         customEquipmentIds: picked.filter((id) => inventory.find((i) => i.id === id)?.collection === 'equipments'),

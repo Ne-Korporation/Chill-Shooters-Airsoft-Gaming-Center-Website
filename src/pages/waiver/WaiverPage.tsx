@@ -20,7 +20,7 @@ import { Input } from '../../components/ui/Input'
 import { IdUpload } from './IdUpload'
 import { SignaturePad } from './SignaturePad'
 import { apiGet, apiPost } from '../../utils/apiClient'
-import { formatPhPhone, isValidPhPhone, PH_PHONE_PLACEHOLDER } from '../../utils/phone'
+import { formatPhPhone, isValidPhPhone, PH_PHONE_PLACEHOLDER, toStoredPhPhone } from '../../utils/phone'
 import { signedWaiverText, useCurrentWaiverText, type WaiverText } from '../../utils/waiverText'
 import { printWaiverDocument } from '../../utils/waiverPrint'
 import { useAuth } from '../../context/AuthContext'
@@ -107,7 +107,6 @@ function WaiverTermsBody({
   )
 }
 
-// 10 to 13 digits (e.g. 09171234567 or +63 917 123 4567)
 
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n))
@@ -274,7 +273,7 @@ export function WaiverPage({
             setHasSignature(false)
             setSignatureImage('')
             // Guardian phone, email and both IDs are kept; signatures must be redone.
-            setGuardianPhone(existingWaiver.guardianPhone || '')
+            setGuardianPhone(formatPhPhone(existingWaiver.guardianPhone || ''))
             setGuardianEmail(existingWaiver.guardianEmail || '')
             setGuardianIdImage(existingWaiver.guardianIdImage || '')
             setGuardianIdType(existingWaiver.guardianIdType || '')
@@ -297,7 +296,7 @@ export function WaiverPage({
             }))
             setHasSignature(Boolean(existingWaiver.hasSignature))
             setSignatureImage(existingWaiver.signatureImage || '')
-            setGuardianPhone(existingWaiver.guardianPhone || '')
+            setGuardianPhone(formatPhPhone(existingWaiver.guardianPhone || ''))
             setGuardianEmail(existingWaiver.guardianEmail || '')
             setGuardianIdImage(existingWaiver.guardianIdImage || '')
             setGuardianIdType(existingWaiver.guardianIdType || '')
@@ -360,7 +359,7 @@ export function WaiverPage({
       if (!state.guardianName.trim()) e.guardianName = 'Guardian name is required for minors.'
       if (!state.guardianConsent) e.guardianConsent = 'Guardian consent is required.'
       if (!guardianPhone.trim()) e.guardianPhone = 'Guardian phone number is required.'
-      else if (!isValidPhPhone(guardianPhone)) e.guardianPhone = 'Enter the phone number as +63-9XX-XXX-XXXX.'
+      else if (!isValidPhPhone(guardianPhone)) e.guardianPhone = 'Enter the phone number as 09XX XXX XXXX.'
       if (!guardianEmail.trim()) e.guardianEmail = 'Guardian email is required so they can approve your bookings.'
       else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(guardianEmail.trim())) e.guardianEmail = 'Enter a valid email address.'
       else if (guardianEmail.trim().toLowerCase() === String(user?.email || '').toLowerCase()) e.guardianEmail = "Use your parent or guardian's own email, not yours."
@@ -696,7 +695,7 @@ export function WaiverPage({
         hasSignature,
         signatureImage: compressedPlayerSig,
         signatureMethod,
-        guardianPhone: isMinor ? guardianPhone.trim() : '',
+        guardianPhone: isMinor ? toStoredPhPhone(guardianPhone) : '',
         guardianEmail: isMinor ? guardianEmail.trim().toLowerCase() : '',
         guardianIdImage: isMinor ? compressedGuardianId : '',
         guardianIdType: isMinor ? guardianIdType : '',
@@ -947,7 +946,7 @@ export function WaiverPage({
                 <>
                   <p className="mt-3"><span className="font-semibold">Guardian name:</span> {submittedWaiver.guardianName || '-'}</p>
                   <p className="mt-2"><span className="font-semibold">Guardian consent:</span> {submittedWaiver.guardianConsent ? 'Yes' : 'No'}</p>
-                  <p className="mt-2"><span className="font-semibold">Guardian phone:</span> {submittedWaiver.guardianPhone || '-'}</p>
+                  <p className="mt-2"><span className="font-semibold">Guardian phone:</span> {submittedWaiver.guardianPhone ? formatPhPhone(submittedWaiver.guardianPhone) : '-'}</p>
                   <p className="mt-2"><span className="font-semibold">Guardian ID type:</span> {submittedWaiver.guardianIdType || '-'}</p>
                   <div className="mt-2 flex flex-wrap gap-4">
                     {submittedWaiver.guardianIdImage ? (

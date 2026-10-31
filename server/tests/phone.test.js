@@ -2,9 +2,9 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { normalizePhPhone } from '../utils/phone.js'
 
-test('PH mobile numbers are stored as +63-9XX-XXX-XXXX whatever way they are typed', () => {
+test('PH mobile numbers are stored as 09XXXXXXXXX whatever way they are typed', () => {
   for (const typed of ['09171234567', '9171234567', '+639171234567', '+63-917-123-4567', '0917 123 4567', '63 917 123 4567']) {
-    assert.equal(normalizePhPhone(typed), '+63-917-123-4567', typed)
+    assert.equal(normalizePhPhone(typed), '09171234567', typed)
   }
 })
 

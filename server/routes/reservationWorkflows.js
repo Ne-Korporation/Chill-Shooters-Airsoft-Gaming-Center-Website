@@ -3,9 +3,10 @@ import { ObjectId } from 'mongodb'
 import { getDb, startDbSession, toObjectId } from '../db/mongo.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
 import { updateReservationStatusAtomically } from '../utils/reservationStatus.js'
-import { nextShortId } from '../utils/shortIds.js'
+import { ensureGameplayForReservation } from '../utils/reservationGameplay.js'
 import { emailReservationEvent } from '../services/notificationEmails.js'
 import { assertGuardianApprovalsComplete } from './guardianApprovals.js'
+import { notifyUser } from '../utils/paymentProgress.js'
 
 const router = express.Router()
 
@@ -40,44 +41,6 @@ function parseStatus(body) {
   return null
 }
 
-function mapReservationToGameplay({ reservation }) {
-  const scheduleParts = [reservation?.reservationDate, reservation?.reservationTime].filter(Boolean)
-  const schedule = scheduleParts.join(' • ') || reservation?.createdAtISO || ''
-
-  const game =
-    reservation?.game ||
-    reservation?.packageName ||
-    reservation?.selectedGameplayName ||
-    reservation?.selectedPackageId ||
-    reservation?.mode ||
-    '—'
-
-  const mode = reservation?.gameModePreference || reservation?.mode || reservation?.gameMode || reservation?.sessionType || '—'
-  const group = reservation?.group || reservation?.sessionType || `${reservation?.numberOfPlayers || '—'} players`
-  const pkg = reservation?.packageName || reservation?.selectedGameplayName || reservation?.selectedPackageId || reservation?.package || '—'
-
-  return {
-    Game: game,
-    Schedule: schedule,
-    Mode: mode,
-    Group: group,
-    Package: pkg,
-    LayoutRequest: reservation?.layoutRequest || '',
-    LayoutBlueprintUrl: reservation?.layoutBlueprintUrl || '',
-    Notes: reservation?.notes || '',
-    Status: 'Scheduled',
-    Actions: {
-      canStart: true,
-      canComplete: false,
-      canDelete: false,
-    },
-    userId: reservation.userId,
-    reservationId: reservation._id ? String(reservation._id) : reservation.reservationId,
-    createdAtISO: new Date().toISOString(),
-    updatedAtISO: new Date().toISOString(),
-  }
-}
-
 async function updateReservationStatus(req, res) {
   const { id } = req.params
   if (!id) return res.status(400).json({ ok: false, error: 'invalid id' })
@@ -85,6 +48,11 @@ async function updateReservationStatus(req, res) {
   const { reservationStatus } = req.body || {}
   const nextStatus = parseStatus({ reservationStatus })
   if (!nextStatus) return res.status(400).json({ ok: false, error: 'reservationStatus is required' })
+  // Sending a booking back to the player: staff explain why, and the player can pick a new date.
+  const sendBackNote = req.body?.sendBack === true ? String(req.body?.note || '').trim().slice(0, 500) : ''
+  if (req.body?.sendBack === true && (nextStatus !== 'needs review' || !sendBackNote)) {
+    return res.status(400).json({ ok: false, error: 'Write a short note telling the player why the reservation is being sent back.' })
+  }
 
   try {
     const db = await getDb()
@@ -114,7 +82,25 @@ async function updateReservationStatus(req, res) {
       reservationId: reservationKey(reservation),
       nextStatus,
       actor: req.user,
+      reason: sendBackNote,
     })
+
+    if (sendBackNote) {
+      const sentBack = { note: sendBackNote, atISO: new Date().toISOString(), byId: String(req.user.id || ''), byRole: req.user.role }
+      await db.collection('reservations').updateOne(reservationFilter, { $set: { sentBack } })
+      updatedReservation.sentBack = sentBack
+      await notifyUser(db, {
+        userId: updatedReservation.userId,
+        type: 'reservation_status_update',
+        title: 'Your reservation was sent back',
+        message: `Reason: ${sendBackNote} Open My Reservations to choose a new date.`,
+        linkedResourceId: reservationKey(updatedReservation),
+      })
+    } else if (reservation.sentBack) {
+      // Any other decision (or a fresh "needs review" without a note) closes the send-back.
+      await db.collection('reservations').updateOne(reservationFilter, { $unset: { sentBack: '' } })
+      delete updatedReservation.sentBack
+    }
 
     const payment = await db.collection('payments').findOne({
       reservationId: reservationKey(updatedReservation),
@@ -125,41 +111,9 @@ async function updateReservationStatus(req, res) {
 
     // Auto-create gameplay only when confirmed.
     if (nextStatus === 'confirmed') {
-      const already = await db.collection('gameplay').findOne({ reservationId: reservationKey(updatedReservation) })
-      if (already) {
-        const normalizedGameplay = {
-          ...already,
-          Game: already.Game || already.game || updatedReservation.packageName || updatedReservation.selectedGameplayName || updatedReservation.selectedPackageId || '—',
-          Schedule: already.Schedule || [updatedReservation.reservationDate, updatedReservation.reservationTime].filter(Boolean).join(' • ') || updatedReservation.createdAtISO || '',
-          Mode: already.Mode || already.mode || updatedReservation.gameModePreference || updatedReservation.mode || updatedReservation.gameMode || updatedReservation.sessionType || '—',
-          LayoutRequest: already.LayoutRequest || updatedReservation.layoutRequest || '',
-          LayoutBlueprintUrl: already.LayoutBlueprintUrl || updatedReservation.layoutBlueprintUrl || '',
-          Notes: already.Notes || updatedReservation.notes || '',
-          Group: already.Group || already.group || updatedReservation.group || updatedReservation.sessionType || `${updatedReservation.numberOfPlayers || '—'} players`,
-          Package: already.Package || already.package || updatedReservation.packageName || updatedReservation.selectedGameplayName || updatedReservation.selectedPackageId || '—',
-          Status: already.Status || already.status || 'Scheduled',
-          updatedAtISO: new Date().toISOString(),
-        }
-        await db.collection('gameplay').updateOne({ _id: already._id }, { $set: normalizedGameplay })
-        gameplay = already
-      } else {
-        const gameplayDoc = mapReservationToGameplay({ reservation: updatedReservation })
-
-        // Ensure reservationId + userId exist
-        gameplayDoc.reservationId = reservationKey(updatedReservation)
-        gameplayDoc.userId = String(updatedReservation.userId)
-
-        // Generate sequential GP id like GP-000001 (matching reservation R- prefix pattern)
-        const gameplayId = await nextShortId(db, 'gameplay', 'GP')
-
-        const insert = await db.collection('gameplay').insertOne({
-          ...gameplayDoc,
-          id: gameplayId,
-        })
-
-        gameplay = await db.collection('gameplay').findOne({ _id: insert.insertedId })
-        gameplayCreated = true
-      }
+      const result = await ensureGameplayForReservation(db, updatedReservation)
+      gameplay = result.gameplay
+      gameplayCreated = result.created
     }
 
     void emailReservationEvent(db, updatedReservation, nextStatus, String(updatedReservation?.statusHistory?.length || ''))
