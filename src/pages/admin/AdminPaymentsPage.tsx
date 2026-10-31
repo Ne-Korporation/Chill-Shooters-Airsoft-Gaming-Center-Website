@@ -24,8 +24,8 @@ type PaymentItem = {
   note: string
   receiptUrl: string
   stripe: boolean
-  // Set for payments verified by PayMongo; reviewReason explains one held for staff.
-  paymongo: boolean
+  // Set for payments verified by the online gateway (Xendit, or PayMongo before it); reviewReason explains one held for staff.
+  gatewayName: string
   reviewReason: string
 }
 
@@ -102,7 +102,7 @@ export function AdminPaymentsPage() {
           note: d.transactionReference ?? d.refNo ?? d.note ?? '',
           receiptUrl: d.gcashImageUrl ?? d.proofUrl ?? d.receiptUrl ?? '',
           stripe: Boolean(d.stripePaymentIntentId),
-          paymongo: Boolean(d.paymongoCheckoutId),
+          gatewayName: d.xenditInvoiceId ? 'Xendit' : d.paymongoCheckoutId ? 'PayMongo' : '',
           reviewReason: d.reviewReason ?? '',
         }))
       )
@@ -512,7 +512,7 @@ export function AdminPaymentsPage() {
                         <span className="inline-flex h-8 items-center px-1 text-xs text-muted">No receipt</span>
                       )}
                       {payment.status === 'paid' || payment.status === 'confirmed' ? (
-                        <span className="inline-flex h-8 items-center px-1 text-xs font-semibold text-success">{payment.paymongo ? 'Verified by PayMongo' : 'Verified'}</span>
+                        <span className="inline-flex h-8 items-center px-1 text-xs font-semibold text-success">{payment.gatewayName ? `Verified by ${payment.gatewayName}` : 'Verified'}</span>
                       ) : payment.status === 'failed' ? (
                         <span className="inline-flex h-8 items-center px-1 text-xs text-muted">Sent back</span>
                       ) : payment.stripe ? (

@@ -61,7 +61,9 @@ export async function signInWithGoogle(): Promise<GoogleProfile | null> {
     const result = await signInWithPopup(auth, googleProvider)
     return await toProfile(result.user)
   } catch (err: any) {
-    if (err?.code === 'auth/popup-blocked') {
+    // Browsers drop the redirect's sign-in unless it runs on this site's own domain, so the
+    // fallback is only used where it can work (the deployed site with the auth proxy set up).
+    if (err?.code === 'auth/popup-blocked' && firebaseConfig.authDomain === window.location.hostname) {
       sessionStorage.setItem(REDIRECT_PENDING_KEY, '1')
       await signInWithRedirect(auth, googleProvider)
       return null
@@ -70,9 +72,22 @@ export async function signInWithGoogle(): Promise<GoogleProfile | null> {
   }
 }
 
-// Call once when the login/register page loads: returns the Google profile if the player just
-// came back from the redirect sign-in, otherwise null.
-export async function completeGoogleRedirect(): Promise<GoogleProfile | null> {
+// The result is shared, so a page that mounts twice (React development mode does this on every
+// load) gets the same answer both times instead of the first, discarded mount using it up.
+let redirectResult: Promise<GoogleProfile | null> | null = null
+
+// Call when the login/register page loads: returns the Google profile if the player just came
+// back from the redirect sign-in, otherwise null.
+export function completeGoogleRedirect(): Promise<GoogleProfile | null> {
+  if (!redirectResult) {
+    redirectResult = readGoogleRedirect()
+    // Once settled, a later visit to the page can check again for a new redirect.
+    redirectResult.finally(() => window.setTimeout(() => { redirectResult = null }, 1000)).catch(() => null)
+  }
+  return redirectResult
+}
+
+async function readGoogleRedirect(): Promise<GoogleProfile | null> {
   if (!sessionStorage.getItem(REDIRECT_PENDING_KEY)) return null
   sessionStorage.removeItem(REDIRECT_PENDING_KEY)
   let user: User | null = null

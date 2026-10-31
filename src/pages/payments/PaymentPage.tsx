@@ -16,12 +16,12 @@ import { StripeCardPayment } from '../../components/payments/StripeCardPayment'
 import { cancelBookingDraftLeft, clearBookingDraft, hasBookingDraft, markBookingDraftLeft, readBookingDraft, saveBookingDraft, scheduleBookingDraftLeft } from '../../utils/bookingDraft'
 
 // Online deposits: GCash and bank transfer are proof-of-payment submissions a registrar
-// verifies, or PayMongo checkout when the server has it set up. Remaining balances are
+// verifies, or Xendit's payment page when the server has it set up. Remaining balances are
 // settled at the field by GCash, bank transfer, or cash. Card payments through Stripe (test mode)
 // are offered alongside them when the server has Stripe keys.
-type PaymentMethod = 'gcash' | 'bank' | 'paymongo' | 'stripe'
+type PaymentMethod = 'gcash' | 'bank' | 'xendit' | 'stripe'
 
-const METHOD_LABELS: Record<PaymentMethod, string> = { gcash: 'GCash', bank: 'Bank Transfer', paymongo: 'Online (PayMongo)', stripe: 'Card (Stripe)' }
+const METHOD_LABELS: Record<PaymentMethod, string> = { gcash: 'GCash', bank: 'Bank Transfer', xendit: 'Online (Xendit)', stripe: 'Card (Stripe)' }
 
 // Pay everything online, or the downpayment online and the rest in cash at the field.
 type PaymentPlan = 'full' | 'cash_balance'
@@ -90,14 +90,15 @@ function PaymentPageContent() {
   const proofInputRef = useRef<HTMLInputElement | null>(null)
 
   const [method, setMethod] = useState<PaymentMethod>('gcash')
-  // PayMongo (test mode) replaces the manual methods when the server has it set up.
-  const [paymongoEnabled, setPaymongoEnabled] = useState(false)
+  // Xendit (test mode) is offered first when the server has it set up. GCash and bank transfer
+  // stay available next to it, so a Xendit outage never blocks payment.
+  const [xenditEnabled, setXenditEnabled] = useState(false)
   useEffect(() => {
-    apiGet<{ ok: boolean; data: { enabled: boolean } }>('/api/paymongo/config')
+    apiGet<{ ok: boolean; data: { enabled: boolean } }>('/api/xendit/config')
       .then((res) => {
         if (!res?.data?.enabled) return
-        setPaymongoEnabled(true)
-        setMethod('paymongo')
+        setXenditEnabled(true)
+        setMethod('xendit')
       })
       .catch(() => null)
   }, [])
@@ -291,7 +292,7 @@ function PaymentPageContent() {
 
   const canSubmit = useMemo(() => {
     if (submitting) return false
-    if (method === 'paymongo') return true
+    if (method === 'xendit') return true
     if (method === 'stripe') return !stripeSession && paymentMode !== 'split'
     return Boolean(refNo.trim()) && Boolean(upload.fileName) && (!phoneNumber || isValidPhPhone(phoneNumber))
   }, [method, phoneNumber, refNo, submitting, upload.fileName, stripeSession, paymentMode])
@@ -326,7 +327,7 @@ function PaymentPageContent() {
       pendingReservation = { ...pendingReservation, paymentMode, paymentPlan, teamSize }
 
       if (method === 'stripe' && paymentMode === 'split') throw new Error('Split payments are paid by GCash; card payment covers the whole amount.')
-      if (method !== 'paymongo' && method !== 'stripe') {
+      if (method !== 'xendit' && method !== 'stripe') {
         // Every check runs before the reservation is created, so a mistake never leaves a booking behind.
         if (!upload.fileName) throw new Error('Proof image is required')
         if (!refNo.trim()) throw new Error('Reference number is required')
@@ -374,10 +375,10 @@ function PaymentPageContent() {
 
       localStorage.setItem('active_reservation_id', String(reservationId))
 
-      if (method === 'paymongo') {
-        // Off to PayMongo's checkout. The reservation now holds the slot, so the draft and the
+      if (method === 'xendit') {
+        // Off to Xendit's payment page. The reservation now holds the slot, so the draft and the
         // pending booking data are no longer needed; the payment is verified when the player returns.
-        const checkout = await apiPost<{ ok: boolean; data: { checkoutUrl: string } }>('/api/paymongo/checkout', { reservationId: String(reservationId) })
+        const checkout = await apiPost<{ ok: boolean; data: { checkoutUrl: string } }>('/api/xendit/checkout', { reservationId: String(reservationId) })
         successRef.current = true
         localStorage.removeItem('pending_reservation')
         localStorage.removeItem('pending_reservation_id')
@@ -438,8 +439,8 @@ function PaymentPageContent() {
         <div className="text-sm font-medium text-accent">Payment</div>
         <h1 className="text-3xl font-bold">Reservation Payment</h1>
         <p className="text-muted text-sm">
-          {paymongoEnabled
-            ? 'The server recalculates the reservation total and downpayment. Pay online through PayMongo and your reservation is confirmed automatically. If you chose the downpayment, the rest is paid in cash at the field.'
+          {xenditEnabled
+            ? 'The server recalculates the reservation total and downpayment. Pay online through Xendit and your reservation is confirmed automatically, or pay by GCash or bank transfer and upload your proof. If you chose the downpayment, the rest is paid in cash at the field.'
             : 'The server recalculates the reservation total and deposit. Pay online by GCash or bank transfer and upload your proof for registrar verification. If you chose the downpayment, the rest is paid in cash at the field.'}
         </p>
       </div>
@@ -507,12 +508,11 @@ function PaymentPageContent() {
 
           <div className="mt-4 grid gap-2 sm:grid-cols-2">
             {([
-              ...(paymongoEnabled ? [
-                { key: 'paymongo', title: 'Pay online', hint: 'GCash, QR Ph, Maya or card · PayMongo test mode' },
-              ] : [
-                { key: 'gcash', title: 'GCash', hint: 'Scan the QR → pay → upload proof' },
-                { key: 'bank', title: 'Bank Transfer', hint: 'Transfer to our account → upload proof' },
-              ]),
+              ...(xenditEnabled ? [
+                { key: 'xendit', title: 'Pay online', hint: 'GCash, Maya or card · confirmed automatically · Xendit test mode' },
+              ] : []),
+              { key: 'gcash', title: 'GCash', hint: 'Scan the QR → pay → upload proof' },
+              { key: 'bank', title: 'Bank Transfer', hint: 'Transfer to our account → upload proof' },
               ...(stripeConfig.enabled ? [{ key: 'stripe', title: 'Credit / debit card', hint: 'Visa, Mastercard · Stripe test mode' }] : []),
             ] as Array<{ key: PaymentMethod; title: string; hint: string }>).map((option) => (
               <button
@@ -545,11 +545,12 @@ function PaymentPageContent() {
                 <li>Card payment covers the whole online amount; split payments use GCash.</li>
                 <li>Test mode: no real money is charged.</li>
               </ul>
-            ) : method === 'paymongo' ? (
+            ) : method === 'xendit' ? (
               <ul className="mt-2 space-y-1 text-xs text-muted list-disc pl-5">
-                <li>You'll be taken to PayMongo's secure checkout to pay with GCash, QR Ph, Maya, or a card.</li>
-                <li>Your reservation is confirmed automatically as soon as PayMongo confirms the payment. No proof to upload.</li>
-                <li>Test mode: no real money is charged. Use PayMongo's test payment options.</li>
+                <li>You'll be taken to Xendit's secure payment page to pay with GCash, Maya, a card, or another listed option.</li>
+                <li>Your reservation is confirmed automatically as soon as Xendit confirms the payment. No proof to upload.</li>
+                <li>Test mode: no real money is charged. Use Xendit's test payment options.</li>
+                <li>If the payment page doesn't open, choose GCash or Bank Transfer instead.</li>
               </ul>
             ) : (
               <ul className="mt-2 space-y-1 text-xs text-muted list-disc pl-5">
@@ -608,7 +609,7 @@ function PaymentPageContent() {
                     Press Continue to card payment to save your reservation and open the secure card form.
                   </div>
                 )
-              ) : method === 'paymongo' ? null : method === 'gcash' ? (
+              ) : method === 'xendit' ? null : method === 'gcash' ? (
                 <>
                   {gcashPhoneNumber ? (
                     <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
@@ -656,7 +657,7 @@ function PaymentPageContent() {
                 </div>
               )}
 
-              {method !== 'paymongo' && method !== 'stripe' ? (
+              {method !== 'xendit' && method !== 'stripe' ? (
                 <Input
                   label={method === 'gcash' ? 'GCash Reference Number' : 'Bank Reference / Confirmation Number'}
                   value={refNo}
@@ -666,7 +667,7 @@ function PaymentPageContent() {
               ) : null}
             </div>
 
-            {method !== 'paymongo' && method !== 'stripe' ? (
+            {method !== 'xendit' && method !== 'stripe' ? (
             <div className="mt-6">
               <div className="text-xs uppercase tracking-widest text-muted">Upload proof</div>
               <div className="mt-2">
@@ -710,7 +711,7 @@ function PaymentPageContent() {
                 </div>
                 <div className="mt-2 flex items-center justify-between gap-3">
                   <div className="text-xs text-muted">Reference</div>
-                  <div className="text-xs font-bold">{method === 'paymongo' ? 'Issued by PayMongo' : method === 'stripe' ? 'Issued by Stripe' : refNo || '—'}</div>
+                  <div className="text-xs font-bold">{method === 'xendit' ? 'Issued by Xendit' : method === 'stripe' ? 'Issued by Stripe' : refNo || '—'}</div>
                 </div>
                 {method === 'gcash' ? (
                   <div className="mt-2 flex items-center justify-between gap-3">
@@ -744,7 +745,7 @@ function PaymentPageContent() {
 
           <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:items-center">
             <Button variant="primary" disabled={!canSubmit} onClick={submit}>
-              {submitting ? (method === 'paymongo' ? 'Opening PayMongo…' : 'Submitting…') : success ? 'Submitted' : method === 'paymongo' ? 'Continue to payment' : method === 'stripe' ? 'Continue to card payment' : 'Submit Payment'}
+              {submitting ? (method === 'xendit' ? 'Opening Xendit…' : 'Submitting…') : success ? 'Submitted' : method === 'xendit' ? 'Continue to payment' : method === 'stripe' ? 'Continue to card payment' : 'Submit Payment'}
               <FiChevronRight />
             </Button>
           </div>
