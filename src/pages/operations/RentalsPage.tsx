@@ -5,8 +5,9 @@ import { FiAlertTriangle, FiCheck, FiLogOut } from 'react-icons/fi'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
-import { apiGet, apiPost, apiPut } from '../../utils/apiClient'
-import { formatDateTime, selectClass, toInventoryOptions, type InventoryOption } from './shared'
+import { apiGet, apiGetAll, apiPost, apiPut } from '../../utils/apiClient'
+import { Paged } from '../../components/ui/Pagination'
+import { categoryLabel, formatDateTime, selectClass, toInventoryOptions, type InventoryOption } from './shared'
 
 type Rental = {
   id: string
@@ -36,19 +37,67 @@ export function RentalsPage() {
   const [inventory, setInventory] = useState<InventoryOption[]>([])
   const [rentals, setRentals] = useState<Rental[]>([])
   const [outstanding, setOutstanding] = useState<Rental[]>([])
-  const [form, setForm] = useState({ playerName: '', playerId: '', itemKey: '', unitLabel: '' })
+  const [form, setForm] = useState({ playerName: '', playerId: '', category: '', model: '', itemKey: '', unitLabel: '' })
   const [busy, setBusy] = useState(false)
+  const [inventoryState, setInventoryState] = useState<'loading' | 'ready' | 'error'>('loading')
 
   const loadOutstanding = useCallback(() => {
     apiGet<{ data: Rental[] }>('/api/rentals?status=out').then((res) => setOutstanding(res.data)).catch(() => null)
   }, [])
 
+  // Every piece is its own record, so the inventory easily runs past one 200-record page: read it all.
+  const loadInventory = useCallback(() => {
+    setInventoryState('loading')
+    Promise.all([apiGetAll<any>('weapons'), apiGetAll<any>('equipments')])
+      .then(([w, e]) => {
+        setInventory([...toInventoryOptions(w, 'weapons'), ...toInventoryOptions(e, 'equipments')])
+        setInventoryState('ready')
+      })
+      .catch(() => {
+        setInventoryState('error')
+        toast.error('Could not load inventory')
+      })
+  }, [])
+
   useEffect(() => {
     loadOutstanding()
-    Promise.all([apiGet<{ data: any[] }>('/api/weapons?limit=200'), apiGet<{ data: any[] }>('/api/equipments?limit=200')])
-      .then(([w, e]) => setInventory([...toInventoryOptions(w.data || [], 'weapons'), ...toInventoryOptions(e.data || [], 'equipments')]))
-      .catch(() => toast.error('Could not load inventory'))
-  }, [loadOutstanding])
+    loadInventory()
+  }, [loadOutstanding, loadInventory])
+
+  // Pieces already handed out (from the rental records), so they can't be issued twice.
+  const outByItemId = useMemo(() => new Map(outstanding.map((rental: any) => [String(rental.itemId || ''), rental])), [outstanding])
+  const pieceFree = (item: InventoryOption) => item.status === 'available' && !outByItemId.has(item.id)
+
+  // Category -> item (model) -> piece.
+  const categories = useMemo(() => {
+    const counts = new Map<string, { total: number; free: number }>()
+    for (const item of inventory) {
+      const entry = counts.get(item.category) || { total: 0, free: 0 }
+      entry.total += 1
+      if (pieceFree(item)) entry.free += 1
+      counts.set(item.category, entry)
+    }
+    return [...counts.entries()].sort(([a], [b]) => a.localeCompare(b))
+    // pieceFree only depends on outByItemId
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inventory, outByItemId])
+  const modelsInCategory = useMemo(() => {
+    const counts = new Map<string, { total: number; free: number }>()
+    for (const item of inventory.filter((entry) => entry.category === form.category)) {
+      const entry = counts.get(item.model) || { total: 0, free: 0 }
+      entry.total += 1
+      if (pieceFree(item)) entry.free += 1
+      counts.set(item.model, entry)
+    }
+    return [...counts.entries()].sort(([a], [b]) => a.localeCompare(b))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inventory, form.category, outByItemId])
+  const piecesOfModel = useMemo(
+    () => inventory
+      .filter((item) => item.category === form.category && item.model === form.model)
+      .sort((a, b) => a.unitNumber - b.unitNumber),
+    [inventory, form.category, form.model],
+  )
 
   const openReservation = async (id: string) => {
     try {
@@ -82,6 +131,7 @@ export function RentalsPage() {
         unitLabel: form.unitLabel,
       })
       toast.success(`${item.name} issued to ${form.playerName}.`)
+      // Keep the category and item picked: staff usually hand out several of the same.
       setForm((f) => ({ ...f, itemKey: '', unitLabel: '' }))
       await openReservation(activeReservation)
       loadOutstanding()
@@ -173,18 +223,79 @@ export function RentalsPage() {
               {!form.playerId ? (
                 <Input label="Player name" value={form.playerName} onChange={(e) => setForm((f) => ({ ...f, playerName: e.target.value }))} />
               ) : null}
+              {inventoryState === 'loading' ? <div className="text-xs text-muted">Loading inventory…</div> : null}
+              {inventoryState === 'error' ? (
+                <div className="flex items-center justify-between gap-2 rounded-xl border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger">
+                  Could not load the inventory.
+                  <Button size="xs" variant="ghost" type="button" onClick={loadInventory}>Try again</Button>
+                </div>
+              ) : null}
               <label className="block">
-                <div className="mb-2 text-sm font-semibold">Item</div>
-                <select value={form.itemKey} onChange={(e) => setForm((f) => ({ ...f, itemKey: e.target.value }))} className={selectClass}>
-                  <option value="">Choose…</option>
-                  {inventory.map((item) => (
-                    <option key={`${item.collection}:${item.id}`} value={`${item.collection}:${item.id}`}>
-                      {item.name} ({item.category || item.collection})
-                    </option>
+                <div className="mb-2 text-sm font-semibold">Category</div>
+                <select
+                  value={form.category}
+                  onChange={(e) => setForm((f) => ({ ...f, category: e.target.value, model: '', itemKey: '', unitLabel: '' }))}
+                  className={selectClass}
+                  disabled={inventoryState !== 'ready'}
+                >
+                  <option value="">Choose a category…</option>
+                  {categories.map(([category, count]) => (
+                    <option key={category} value={category}>{categoryLabel(category)} ({count.free} of {count.total} free)</option>
                   ))}
                 </select>
               </label>
-              <Input label="Unit number / tag" hint="The number on the gun or gear, so each unit can be traced." value={form.unitLabel} onChange={(e) => setForm((f) => ({ ...f, unitLabel: e.target.value }))} />
+              {form.category ? (
+                <label className="block">
+                  <div className="mb-2 text-sm font-semibold">Item</div>
+                  <select
+                    value={form.model}
+                    onChange={(e) => {
+                      const model = e.target.value
+                      // Pick the first free piece of the item straight away; staff can change it.
+                      const first = inventory
+                        .filter((item) => item.category === form.category && item.model === model && pieceFree(item))
+                        .sort((a, b) => a.unitNumber - b.unitNumber)[0]
+                      setForm((f) => ({
+                        ...f,
+                        model,
+                        itemKey: first ? `${first.collection}:${first.id}` : '',
+                        unitLabel: first?.unitNumber ? `#${first.unitNumber}` : '',
+                      }))
+                    }}
+                    className={selectClass}
+                  >
+                    <option value="">Choose {categoryLabel(form.category).toLowerCase()}…</option>
+                    {modelsInCategory.map(([model, count]) => (
+                      <option key={model} value={model} disabled={count.free === 0}>{model} ({count.free} of {count.total} free)</option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+              {form.model ? (
+                <label className="block">
+                  <div className="mb-2 text-sm font-semibold">Piece</div>
+                  <select
+                    value={form.itemKey}
+                    onChange={(e) => {
+                      const piece = inventory.find((item) => `${item.collection}:${item.id}` === e.target.value)
+                      setForm((f) => ({ ...f, itemKey: e.target.value, unitLabel: piece?.unitNumber ? `#${piece.unitNumber}` : f.unitLabel }))
+                    }}
+                    className={selectClass}
+                  >
+                    <option value="">Choose a piece…</option>
+                    {piecesOfModel.map((item) => {
+                      const out = outByItemId.get(item.id) as Rental | undefined
+                      const reason = out ? `out with ${out.playerName}` : item.status !== 'available' ? item.status.replace('-', ' ') : ''
+                      return (
+                        <option key={item.id} value={`${item.collection}:${item.id}`} disabled={Boolean(reason)}>
+                          {item.name}{item.unitNumber && !item.name.includes('#') ? ` #${item.unitNumber}` : ''} · {item.id}{reason ? ` (${reason})` : ''}
+                        </option>
+                      )
+                    })}
+                  </select>
+                </label>
+              ) : null}
+              <Input label="Unit number / tag" hint="Filled in from the piece. Change it if the tag on the gun or gear differs." value={form.unitLabel} onChange={(e) => setForm((f) => ({ ...f, unitLabel: e.target.value }))} />
               <Button type="submit" className="w-full" disabled={busy || !form.playerName.trim() || !form.itemKey}>
                 {busy ? 'Saving…' : 'Issue item'}
               </Button>
@@ -204,9 +315,13 @@ export function RentalsPage() {
 
           <Card className="p-4 md:p-5">
             <div className="flex items-center gap-2 text-sm font-bold"><FiAlertTriangle className="text-warning" /> Still out ({outstanding.length})</div>
-            <ul className="mt-3 space-y-2">
-              {outstanding.length === 0 ? <li className="text-sm text-muted">Every rental is checked in.</li> : outstanding.map((r) => <RentalRow key={r.id} rental={r} showReservation />)}
-            </ul>
+            {outstanding.length === 0 ? (
+              <ul className="mt-3 space-y-2"><li className="text-sm text-muted">Every rental is checked in.</li></ul>
+            ) : (
+              <Paged items={outstanding}>
+                {(pageItems) => <ul className="mt-3 space-y-2">{pageItems.map((r) => <RentalRow key={r.id} rental={r} showReservation />)}</ul>}
+              </Paged>
+            )}
           </Card>
         </div>
       </div>

@@ -146,6 +146,7 @@ type WaiverRecord = {
   playerId?: string
   accountId?: string
   status?: string
+  archived?: boolean
 }
 
 const locationFields: Record<LocationOption, Field[]> = {
@@ -583,7 +584,7 @@ export function ReservationCalendarPage() {
         const res = await apiGet<{ ok: boolean; data: WaiverRecord[] }>('/api/waivers?limit=500')
         if (cancelled) return
 
-        const docs = Array.isArray(res?.data) ? res.data : []
+        const docs = (Array.isArray(res?.data) ? res.data : []).filter((doc) => !doc.archived)
         const normStatus = (doc: WaiverRecord) => String(doc.status || '').trim().toLowerCase()
         const idsOf = (doc: WaiverRecord) =>
           [doc.userId, doc.playerId, doc.accountId].map((value) => String(value || '').trim()).filter(Boolean)
@@ -1202,9 +1203,9 @@ export function ReservationCalendarPage() {
 
   const maxTeammates = Math.max(0, players - 1)
   const hasCurrentUserWaiver = !user?.id ? false : waiverEligibleSet.has(String(user.id))
-  // Teammates are optional: any spots not filled with registered players are walk-ins.
+  // Only registered players can be booked: every spot besides the captain needs a teammate account.
   const teamSelectionComplete = maxTeammates === 0 || selectedTeammateIds.length === maxTeammates
-  const walkInSpots = Math.max(0, maxTeammates - selectedTeammateIds.length)
+  const missingTeammates = Math.max(0, maxTeammates - selectedTeammateIds.length)
   const toggleTeammateOwnWeapon = (member: TeamMember) => {
     if (teammateOwnWeaponIds.includes(member.id)) {
       setTeammateOwnWeaponIds((current) => current.filter((id) => id !== member.id))
@@ -1393,6 +1394,10 @@ export function ReservationCalendarPage() {
 
     if (selectedTeammateIds.length > maxTeammates) {
       toast.error(`You can add at most ${maxTeammates} teammate${maxTeammates === 1 ? '' : 's'} for ${players} players.`)
+      return
+    }
+    if (!teamSelectionComplete) {
+      toast.error(`Add ${missingTeammates} more registered teammate${missingTeammates === 1 ? '' : 's'}. Every player needs an account.`)
       return
     }
 
@@ -2449,19 +2454,32 @@ export function ReservationCalendarPage() {
                   )}
                 </div>
 
-                {/* Single column: this panel is a narrow sidebar, and two columns cut off longer mode names. */}
+                {/* The game mode gets its own block, with every mode written out in full: in this narrow
+                    sidebar a dropdown cut off the longer names. */}
+                <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                  <div className="text-sm font-semibold text-text" id="game-mode-label">Preferred game mode</div>
+                  <div className="mt-2 flex flex-wrap gap-2" role="radiogroup" aria-labelledby="game-mode-label">
+                    {GAME_MODES.map((mode) => {
+                      const active = gameModePreference === mode
+                      return (
+                        <button
+                          key={mode}
+                          type="button"
+                          role="radio"
+                          aria-checked={active}
+                          onClick={() => setGameModePreference(mode)}
+                          className={[
+                            'rounded-xl border px-3 py-2 text-left text-xs font-semibold transition focus:outline-none focus:ring-2 focus:ring-accent/40',
+                            active ? 'border-accent/50 bg-accent/15 text-accent' : 'border-white/10 bg-black/10 text-text hover:border-accent/30',
+                          ].join(' ')}
+                        >
+                          {mode}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
                 <div className="grid gap-3">
-                  <label className="block min-w-0">
-                    <div className="mb-2 text-sm font-semibold text-text">Preferred game mode</div>
-                    <select
-                      value={gameModePreference}
-                      onChange={(e) => setGameModePreference(e.target.value)}
-                      title={gameModePreference}
-                      className="w-full min-w-0 truncate rounded-xl border border-white/10 bg-background py-3 pl-4 pr-10 text-sm text-text focus:outline-none focus:ring-2 focus:ring-accent/40"
-                    >
-                      {GAME_MODES.map((mode) => <option key={mode} value={mode}>{mode}</option>)}
-                    </select>
-                  </label>
                   <Input
                     label="Field layout request (Optional)"
                     hint="Obstacles, objectives, or spawn setup for the marshals to prepare."
@@ -2768,7 +2786,7 @@ export function ReservationCalendarPage() {
                 <FiUsers /> <span>Select Your Teammates</span>
               </div>
               <p className="mt-1 text-xs text-muted">
-                Optionally add registered players joining this reservation (up to {maxTeammates}). Find each one by the email on their account. You are already counted, and any spots you don't fill are treated as walk-in players. Only players with an approved waiver can be added.
+                Add the {maxTeammates} registered player{maxTeammates === 1 ? '' : 's'} joining this reservation. Find each one by name or by the email on their account. You are already counted. Every player needs an account with an approved waiver.
               </p>
 
               <div className="mt-4 space-y-4">
@@ -2904,11 +2922,9 @@ export function ReservationCalendarPage() {
                   </div>
                 </div>
 
-                {maxTeammates > 0 && (
-                  <div className="rounded-2xl border border-white/10 bg-white/5 p-3 text-xs text-muted">
-                    {walkInSpots === 0
-                      ? `All ${players} players have accounts.`
-                      : `${walkInSpots} of ${players} player${players === 1 ? '' : 's'} will be walk-in${walkInSpots === 1 ? '' : 's'} without an account. They'll sign their waiver at the field.`}
+                {maxTeammates > 0 && missingTeammates > 0 && (
+                  <div className="rounded-2xl border border-warning/25 bg-warning/10 p-3 text-xs text-warning">
+                    Add {missingTeammates} more teammate{missingTeammates === 1 ? '' : 's'} to continue.
                   </div>
                 )}
 
@@ -2947,7 +2963,7 @@ export function ReservationCalendarPage() {
                 <div className="mt-3 text-xs text-muted">
                   {selectedTeammates.length > 0
                     ? `Team: you, ${selectedTeammates.map((member) => member.name).join(', ')}`
-                    : 'No teammates added yet. You can still continue.'}
+                    : maxTeammates > 0 ? 'No teammates added yet.' : 'Just you.'}
                 </div>
               </div>
 
@@ -2955,7 +2971,7 @@ export function ReservationCalendarPage() {
                 <Button variant="ghost" onClick={() => setStep(3)}>Back</Button>
                 <Button
                   variant="primary"
-                  disabled={isConfirming || !canSubmitReservation}
+                  disabled={isConfirming || !canSubmitReservation || !teamSelectionComplete}
                   onClick={handleConfirm}
                 >
                   {isConfirming ? 'Processing...' : 'Proceed to Payment'} <FiChevronRight />

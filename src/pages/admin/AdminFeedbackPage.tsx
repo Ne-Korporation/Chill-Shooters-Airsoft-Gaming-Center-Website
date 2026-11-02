@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
 import { apiGet } from '../../utils/apiClient'
 import { Card } from '../../components/ui/Card'
+import { Paged } from '../../components/ui/Pagination'
 
 type FeedbackRecord = {
   id?: string
@@ -69,7 +70,7 @@ export function AdminFeedbackPage() {
         <div className="pb-3 text-xs uppercase tracking-widest text-muted">Recent submissions</div>
         {loading ? <p className="py-4 text-sm text-muted">Loading feedback…</p> : null}
         {!loading && items.length === 0 ? <p className="py-4 text-sm text-muted">No player feedback submitted yet.</p> : null}
-        {items.map((item) => (
+        <Paged items={items}>{(pageItems) => pageItems.map((item) => (
           <article key={String(item.id || `${item.gameplayId}-${item.userId}`)} className="py-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="text-sm font-semibold">Gameplay {item.gameplayId || '—'}</div>
@@ -80,7 +81,7 @@ export function AdminFeedbackPage() {
             </div>
             {item.comment ? <p className="mt-2 whitespace-pre-wrap text-sm">{item.comment}</p> : null}
           </article>
-        ))}
+        ))}</Paged>
       </Card>
     </div>
   )

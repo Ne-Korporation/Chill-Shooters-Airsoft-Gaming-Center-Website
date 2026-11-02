@@ -10,10 +10,16 @@ import { PlayerStatsCard } from '../../components/players/PlayerStatsCard'
 import { PartnershipDiscountCard } from './PartnershipDiscountCard'
 import { useAuth } from '../../context/AuthContext'
 import { ageFromBirthDate, isValidBirthDate, maxBirthDate } from '../../utils/age'
+import { composeFullName, splitFullName } from '../../utils/names'
+import { formatPhPhone } from '../../utils/phone'
 
 type PlayerProfileDoc = {
   id?: string
   name?: string
+  firstName?: string
+  middleInitial?: string
+  lastName?: string
+  nickname?: string
   email?: string
   role?: string
   experience?: number
@@ -28,6 +34,20 @@ type PlayerProfileDoc = {
   partnershipEligibilityStatus?: string
   partnershipReviewReason?: string
   birthDate?: string
+}
+
+type ProfileWaiver = {
+  id?: string
+  status?: string
+  archived?: boolean
+  isMinor?: boolean
+  age?: number
+  guardianName?: string
+  guardianEmail?: string
+  guardianPhone?: string
+  approvedAtISO?: string
+  createdAtISO?: string
+  submittedAtISO?: string
 }
 
 type EquipmentItem = {
@@ -52,7 +72,11 @@ export function PlayerProfilePage() {
   const [mounted, setMounted] = React.useState(false)
   const [scanStatus, setScanStatus] = React.useState<'idle' | 'scanning' | 'success' | 'error'>('idle')
   const [isEditing, setIsEditing] = React.useState(false)
-  const [editName, setEditName] = React.useState('')
+  const [editFirstName, setEditFirstName] = React.useState('')
+  const [editMiddleInitial, setEditMiddleInitial] = React.useState('')
+  const [editLastName, setEditLastName] = React.useState('')
+  const [editNickname, setEditNickname] = React.useState('')
+  const [approvedWaiver, setApprovedWaiver] = React.useState<ProfileWaiver | null>(null)
   const [editEmail, setEditEmail] = React.useState('')
   const [editBirthDate, setEditBirthDate] = React.useState('')
   const [equipmentList, setEquipmentList] = React.useState<EquipmentItem[]>([])
@@ -95,9 +119,39 @@ export function PlayerProfilePage() {
     }
   }, [playerId, user?.id])
 
+  // The player's current approved waiver: it locks the legal name, and a minor's waiver holds
+  // the parent/guardian details shown on the profile.
+  React.useEffect(() => {
+    const lookupId = playerId || user?.id
+    if (!lookupId) return
+    let alive = true
+    const query = encodeURIComponent(JSON.stringify({ userId: String(lookupId), archived: { $ne: true } }))
+    apiGet<{ ok: boolean; data: ProfileWaiver[] }>(`/api/waivers?q=${query}&limit=50`)
+      .then((res) => {
+        if (!alive) return
+        const approved = (Array.isArray(res?.data) ? res.data : [])
+          .filter((waiver) => String(waiver.status || '').toLowerCase() === 'approved')
+          .sort((a, b) => String(b.approvedAtISO || b.submittedAtISO || '').localeCompare(String(a.approvedAtISO || a.submittedAtISO || '')))[0]
+        setApprovedWaiver(approved || null)
+      })
+      .catch(() => {
+        if (alive) setApprovedWaiver(null)
+      })
+    return () => {
+      alive = false
+    }
+  }, [playerId, user?.id])
+
   React.useEffect(() => {
     if (player) {
-      setEditName(player.name || '')
+      // Older accounts only have a full name: split it as a starting point.
+      const parts = player.firstName || player.lastName
+        ? { firstName: player.firstName || '', middleInitial: player.middleInitial || '', lastName: player.lastName || '' }
+        : splitFullName(player.name || '')
+      setEditFirstName(parts.firstName)
+      setEditMiddleInitial(parts.middleInitial)
+      setEditLastName(parts.lastName)
+      setEditNickname(player.nickname || '')
       setEditEmail(player.email || '')
       setEditBirthDate(player.birthDate || '')
     }
@@ -325,10 +379,11 @@ export function PlayerProfilePage() {
     event.preventDefault()
 
     const lookupId = playerId || user?.id
-    const nextName = editName.trim()
+    const nameParts = { firstName: editFirstName.trim(), middleInitial: editMiddleInitial.trim(), lastName: editLastName.trim() }
+    const nextName = composeFullName(nameParts)
     const nextEmail = editEmail.trim().toLowerCase()
-    if (!lookupId || !nextName || !nextEmail) {
-      setError('Name and email are required.')
+    if (!lookupId || !nameParts.firstName || !nameParts.lastName || !nextEmail) {
+      setError('First name, last name and email are required.')
       return
     }
     if (editBirthDate && !isValidBirthDate(editBirthDate)) {
@@ -341,14 +396,23 @@ export function PlayerProfilePage() {
       setError(null)
 
       const res = await apiPut<{ ok: boolean; data: PlayerProfileDoc }>(`/api/user_accounts/${encodeURIComponent(lookupId)}`, {
-        name: nextName,
+        // The legal name is locked once a waiver is approved under it.
+        ...(nameLocked ? {} : nameParts),
+        nickname: editNickname.trim(),
         email: nextEmail,
         ...(editBirthDate ? { birthDate: editBirthDate } : {}),
       })
       const updated = res?.data
-      const merged = { ...(player || {}), ...updated, name: nextName, email: nextEmail, ...(editBirthDate ? { birthDate: editBirthDate } : {}) }
+      const merged = {
+        ...(player || {}),
+        ...updated,
+        ...(nameLocked ? {} : { ...nameParts, name: nextName }),
+        nickname: editNickname.trim(),
+        email: nextEmail,
+        ...(editBirthDate ? { birthDate: editBirthDate } : {}),
+      }
       setPlayer(merged)
-      updateUser({ name: nextName, email: nextEmail })
+      updateUser({ name: merged.name || nextName, email: nextEmail })
 
       if (player?.email && nextEmail !== player.email.toLowerCase()) {
         try {
@@ -387,6 +451,9 @@ export function PlayerProfilePage() {
   }
 
   const displayName = player?.name || user?.name || (playerId ? `Player ${playerId}` : 'Unnamed player')
+  const nameLocked = Boolean(approvedWaiver)
+  const isMinorPlayer = Boolean(approvedWaiver && (approvedWaiver.isMinor || Number(approvedWaiver.age) < 18))
+    || (ageFromBirthDate(player?.birthDate) ?? 99) < 18
   const displayEmail = player?.email || user?.email || '—'
   const displayRole = player?.role || user?.role || 'user'
   const ownedEquipment = React.useMemo(() => {
@@ -490,13 +557,51 @@ export function PlayerProfilePage() {
                 </div>
               </div>
 
+              <div>
+                <div className="grid gap-3 sm:grid-cols-[1fr_5rem_1fr]">
+                  <Input
+                    label="First name"
+                    value={editFirstName}
+                    onChange={(event) => setEditFirstName(event.target.value)}
+                    placeholder="Juan"
+                    autoComplete="given-name"
+                    disabled={nameLocked}
+                    readOnly={nameLocked}
+                  />
+                  <Input
+                    label="M.I."
+                    value={editMiddleInitial}
+                    maxLength={2}
+                    onChange={(event) => setEditMiddleInitial(event.target.value.replace(/[^A-Za-zÀ-ÿÑñ.]/g, '').slice(0, 2))}
+                    placeholder="D"
+                    autoComplete="additional-name"
+                    disabled={nameLocked}
+                    readOnly={nameLocked}
+                  />
+                  <Input
+                    label="Last name"
+                    value={editLastName}
+                    onChange={(event) => setEditLastName(event.target.value)}
+                    placeholder="Dela Cruz"
+                    autoComplete="family-name"
+                    disabled={nameLocked}
+                    readOnly={nameLocked}
+                  />
+                </div>
+                <div className="mt-2 text-xs text-muted">
+                  {nameLocked
+                    ? 'Your name is locked because your waiver was approved under it. Ask staff if it needs correcting.'
+                    : `Use your name exactly as it appears on your ID. Your waiver is filled in as "${composeFullName({ firstName: editFirstName, middleInitial: editMiddleInitial, lastName: editLastName }) || 'First M. Last'}".`}
+                </div>
+              </div>
+
               <Input
-                label="Full name"
-                value={editName}
-                onChange={(event) => setEditName(event.target.value)}
-                placeholder="Full name"
-                disabled={player?.emailVerified === true}
-                readOnly={player?.emailVerified === true}
+                label="Nickname (optional)"
+                value={editNickname}
+                maxLength={30}
+                onChange={(event) => setEditNickname(event.target.value)}
+                placeholder="What teammates call you on the field"
+                hint="Shown on your profile next to your name. Waivers and receipts always use your legal name."
               />
 
               <Input
@@ -554,7 +659,10 @@ export function PlayerProfilePage() {
               )}
             </div>
             <div>
-              <div className="text-lg font-bold">{displayName}</div>
+              <div className="text-lg font-bold">
+                {displayName}
+                {player?.nickname ? <span className="ml-2 text-sm font-semibold text-accent">“{player.nickname}”</span> : null}
+              </div>
               <div className="mt-1 flex flex-wrap items-center gap-2">
                 <span className={`rounded-full border px-3 py-1 text-[11px] font-semibold ${player?.identityVerificationStatus === 'verified' ? 'border-success/30 bg-success/20 text-success' : player?.identityVerificationStatus === 'pending_review' ? 'border-accent/30 bg-accent/20 text-accent' : 'border-danger/30 bg-danger/20 text-danger'}`}>
                   {player?.identityVerificationStatus === 'verified' ? 'Verified' : player?.identityVerificationStatus === 'pending_review' ? 'Verification pending' : 'Verification required'}
@@ -585,6 +693,37 @@ export function PlayerProfilePage() {
               )}
             </div>
           </div>
+
+          {displayRole === 'user' && isMinorPlayer ? (
+            <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
+              <div className="text-xs uppercase tracking-widest text-muted">Parent / guardian</div>
+              {approvedWaiver && (approvedWaiver.guardianName || approvedWaiver.guardianEmail) ? (
+                <>
+                  <div className="mt-2 grid gap-2 text-sm sm:grid-cols-3">
+                    <div>
+                      <div className="text-xs text-muted">Name</div>
+                      <div className="font-semibold">{approvedWaiver.guardianName || '—'}</div>
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-xs text-muted">Email</div>
+                      <div className="truncate font-semibold">{approvedWaiver.guardianEmail || '—'}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-muted">Contact number</div>
+                      <div className="font-semibold">{approvedWaiver.guardianPhone ? formatPhPhone(approvedWaiver.guardianPhone) : '—'}</div>
+                    </div>
+                  </div>
+                  <div className="mt-2 text-xs text-muted">
+                    From your approved waiver. This guardian is emailed to approve each reservation you are part of, including when a captain adds you to their team.
+                  </div>
+                </>
+              ) : (
+                <div className="mt-2 text-sm text-muted">
+                  Your parent or guardian's details appear here once your waiver is approved. They are entered when you sign the waiver.
+                </div>
+              )}
+            </div>
+          ) : null}
 
           {(playerId || user?.id) && displayRole === 'user' ? (
             <div className="mt-4">

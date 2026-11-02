@@ -5,7 +5,8 @@ import { ActionGroup, Button } from '../../components/ui/Button'
 import { FilterTabs } from '../../components/ui/FilterTabs'
 import { Card } from '../../components/ui/Card'
 import { Input } from '../../components/ui/Input'
-import { apiGet, apiPost, apiPut, apiDelete } from '../../utils/apiClient'
+import { apiGet, apiGetAll, apiPost, apiPut, apiDelete } from '../../utils/apiClient'
+import { Pagination, usePagination } from '../../components/ui/Pagination'
 import { ModelSummaryStrip } from '../../components/inventory/ModelSummaryStrip'
 import { modelOf, summarizeModels } from '../../utils/inventoryModels'
 import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
@@ -76,8 +77,7 @@ export function AdminEquipmentPage() {
   const refresh = React.useCallback(async () => {
     setLoading(true)
     try {
-      const equipmentRes = await apiGet<{ ok: boolean; data: any[] }>('/api/equipments?limit=200')
-      const equipmentDocs = Array.isArray(equipmentRes?.data) ? equipmentRes.data : []
+      const equipmentDocs = await apiGetAll<any>('equipments')
 
       const equipmentItems = equipmentDocs.map((d: any) => ({
         id: d.id ?? (d._id ? String(d._id) : undefined),
@@ -110,13 +110,21 @@ export function AdminEquipmentPage() {
 
   React.useEffect(() => { refresh() }, [refresh])
 
-  const filtered = inventory.filter((item) => {
-    if (item.source === 'player' && item.approvalStatus === 'rejected') return false
-    const matchesCategory = activeCategory === 'all' ? true : item.category === activeCategory
-    const matchesStatus = status === 'all' ? true : item.status === status
-    const matchesSource = sourceFilter === 'all' ? true : item.source === sourceFilter
-    return matchesCategory && matchesStatus && matchesSource
-  })
+  const [search, setSearch] = React.useState('')
+  // Filters run over the whole inventory first, then the result is paged 10 at a time, so a
+  // match is never hidden on a page that isn't showing.
+  const filtered = React.useMemo(() => {
+    const term = search.trim().toLowerCase()
+    return inventory.filter((item) => {
+      if (item.source === 'player' && item.approvalStatus === 'rejected') return false
+      const matchesCategory = activeCategory === 'all' ? true : item.category === activeCategory
+      const matchesStatus = status === 'all' ? true : item.status === status
+      const matchesSource = sourceFilter === 'all' ? true : item.source === sourceFilter
+      const matchesSearch = !term || [item.id, item.name, item.model, item.description].some((value) => String(value || '').toLowerCase().includes(term))
+      return matchesCategory && matchesStatus && matchesSource && matchesSearch
+    })
+  }, [inventory, activeCategory, status, sourceFilter, search])
+  const { page, setPage, pageCount, pageItems, total } = usePagination(filtered, undefined, `${activeCategory}|${status}|${sourceFilter}|${search}`)
 
   const rentalPieces = inventory.filter((item) => item.source !== 'player')
   const totalInStock = rentalPieces.length
@@ -357,6 +365,15 @@ export function AdminEquipmentPage() {
 
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
             <div>
+              <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-muted">Search</div>
+              <input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="ID, name, or model"
+                className="w-full min-w-[200px] rounded-full border border-white/10 bg-background px-4 py-2 text-sm text-text outline-none focus:ring-2 focus:ring-accent/40"
+              />
+            </div>
+            <div>
               <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-muted">Category</div>
               <select
                 value={activeCategory}
@@ -423,12 +440,12 @@ export function AdminEquipmentPage() {
         <ModelSummaryStrip models={models} unit="piece" />
 
         <div className="mt-4 overflow-hidden rounded-2xl border border-white/5">
-          <div className="grid grid-cols-12 bg-white/5 px-3 py-2 text-xs uppercase tracking-widest text-muted">
+          <div className="grid grid-cols-12 gap-3 bg-white/5 px-3 py-2 text-xs uppercase tracking-widest text-muted">
             <div className="col-span-2">ID</div>
             <div className="col-span-3">Equipment</div>
             <div className="col-span-1 text-right">Piece</div>
             <div className="col-span-1 text-right">Price</div>
-            <div className="col-span-2 text-right">Status</div>
+            <div className="col-span-2 pl-4">Status</div>
             <div className="col-span-3 text-right">Actions</div>
           </div>
 
@@ -438,8 +455,8 @@ export function AdminEquipmentPage() {
             ) : filtered.length === 0 ? (
               <div className="p-6 text-sm text-muted">No equipment matches this filter.</div>
             ) : (
-              filtered.map((item) => (
-                <div key={item.id} className={"grid grid-cols-12 items-center px-3 py-3 " + (selectedItemId === item.id ? 'bg-white/6 ring-2 ring-white/10' : '')}>
+              pageItems.map((item) => (
+                <div key={item.id} className={"grid grid-cols-12 items-center gap-3 px-3 py-3 " + (selectedItemId === item.id ? 'bg-white/6 ring-2 ring-white/10' : '')}>
                   <div className="col-span-2 text-sm font-semibold">{item.id}</div>
                   <div className="col-span-3 min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
@@ -462,7 +479,7 @@ export function AdminEquipmentPage() {
                   </div>
                   <div className="col-span-1 text-right text-sm font-semibold">{item.source === 'player' || !item.unitNumber ? '—' : `#${item.unitNumber}`}</div>
                   <div className="col-span-1 text-right text-sm text-accent">₱{item.price}</div>
-                  <div className="col-span-2 flex justify-end">
+                  <div className="col-span-2 pl-4">
                     <StatusBadge status={item.status} />
                   </div>
                   <div className="col-span-3">
@@ -490,6 +507,7 @@ export function AdminEquipmentPage() {
             )}
           </div>
         </div>
+        <Pagination page={page} pageCount={pageCount} total={total} onPageChange={setPage} />
 
         <div className="mt-4 grid gap-4 md:grid-cols-[1.2fr_0.8fr]">
           <Card className="p-4 bg-white/5/60">

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { Card } from '../../components/ui/Card'
 import { FilterTabs, titleCaseLabel } from '../../components/ui/FilterTabs'
+import { Paged } from '../../components/ui/Pagination'
 import { apiGet } from '../../utils/apiClient'
 import { equipmentAlerts } from '../../utils/inventoryModels'
 
@@ -255,7 +256,7 @@ export function AdminAuditLogsPage() {
             ) : visible.length === 0 ? (
               <div className="p-6 text-sm text-muted">No audit logs found for selected filters.</div>
             ) : (
-              visible.map((log, index) => (
+              <Paged items={visible}>{(pageItems) => pageItems.map((log, index) => (
                 // Records without an id share a fallback like "EQ-UNKNOWN", so include the position.
                 <div key={`${log.id}-${log.action}-${index}`} className="grid grid-cols-12 items-center px-3 py-3">
                   <div className="col-span-2 text-sm font-semibold">{log.id}</div>
@@ -271,7 +272,7 @@ export function AdminAuditLogsPage() {
                     <div className="text-sm text-muted">{log.meta}</div>
                   </div>
                 </div>
-              ))
+              ))}</Paged>
             )}
           </div>
         </div>

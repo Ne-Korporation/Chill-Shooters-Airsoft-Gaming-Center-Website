@@ -6,6 +6,7 @@ import { SUSPENDED_ACCOUNT_ERROR, createAuthToken, forgetSuspension, isSuspended
 import { nextShortId } from '../utils/shortIds.js'
 import { canonicalEmail, normalizeEmail, sameEmailFilter } from '../utils/emails.js'
 import { verifyFirebaseIdToken } from '../utils/firebaseTokens.js'
+import { cleanMiddleInitial, cleanNamePart, composeFullName, splitFullName } from '../utils/names.js'
 
 const router = express.Router()
 
@@ -67,6 +68,9 @@ async function createGoogleAccount(userAccounts, normalizedEmail, name) {
   const newDoc = {
     id: await nextShortId(db, 'user_accounts', 'P'),
     name: name || normalizedEmail.split('@')[0],
+    // Split from the Google account name; the player can correct the parts in their profile
+    // (until their waiver is approved), since a Google name isn't always their legal name.
+    ...splitFullName(name || ''),
     email: normalizedEmail,
     emailCanonical: canonicalEmail(normalizedEmail),
     password: null,
@@ -173,6 +177,7 @@ router.post('/admin/add-player', requireAuth, requireRole('admin', 'marshal', 'r
     const newDoc = {
       id: nextId,
       name: name.trim(),
+      ...splitFullName(name),
       email: normalizedEmail,
       emailCanonical: canonicalEmail(normalizedEmail),
       password: hashedPassword,
@@ -436,11 +441,20 @@ router.put('/admin/players/:id/status', requireAuth, requireRole('admin'), async
 // --- Self-Registration ---
 router.post('/register', async (req, res) => {
   const body = req.body || {}
-  const { name, email, password } = body
+  const { email, password } = body
 
-  if (!name || typeof name !== 'string' || !name.trim()) {
-    return res.status(400).json({ ok: false, error: 'name is required' })
+  // The form sends first name / middle initial / last name; an older client may still send `name`.
+  const nameParts = body.firstName !== undefined || body.lastName !== undefined
+    ? {
+      firstName: cleanNamePart(body.firstName),
+      middleInitial: cleanMiddleInitial(body.middleInitial),
+      lastName: cleanNamePart(body.lastName),
+    }
+    : splitFullName(typeof body.name === 'string' ? body.name : '')
+  if (!nameParts.firstName || !nameParts.lastName) {
+    return res.status(400).json({ ok: false, error: 'Enter your first and last name.' })
   }
+  const name = composeFullName(nameParts)
 
   if (!email || typeof email !== 'string' || !email.trim()) {
     return res.status(400).json({ ok: false, error: 'email is required' })
@@ -475,7 +489,8 @@ router.post('/register', async (req, res) => {
 
     const newDoc = {
       id: nextId,
-      name: name.trim(),
+      name,
+      ...nameParts,
       email: normalizedEmail,
       emailCanonical: canonicalEmail(normalizedEmail),
       password: hashedPassword,

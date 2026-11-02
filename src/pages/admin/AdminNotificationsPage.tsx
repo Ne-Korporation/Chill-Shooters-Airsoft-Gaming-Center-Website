@@ -7,6 +7,7 @@ import { useAuth } from '../../context/AuthContext'
 import { useNotifications } from '../../context/NotificationContext'
 import { resolveNotificationRoute } from '../../utils/notificationRoutes'
 import toast from 'react-hot-toast'
+import { Paged } from '../../components/ui/Pagination'
 
 type NotifChannel = 'system' | 'email'
 
@@ -290,7 +291,7 @@ export function AdminNotificationsPage() {
             <div className="mt-2 text-sm text-muted">{isAdmin ? 'Filter by account type to review sent notifications.' : 'Your notifications from the system.'}</div>
 
             <div className="mt-4 space-y-2">
-              {visibleNotifications.map((draft) => (
+              <Paged items={visibleNotifications}>{(pageItems) => pageItems.map((draft) => (
                 <div
                   key={draft.id}
                   role="button"
@@ -336,7 +337,7 @@ export function AdminNotificationsPage() {
                     ) : null}
                   </div>
                 </div>
-              ))}
+              ))}</Paged>
               {visibleNotifications.length === 0 && (
                 <div className="p-6 text-sm text-muted">No notifications found.</div>
               )}

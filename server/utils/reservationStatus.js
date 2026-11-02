@@ -1,5 +1,8 @@
 import { releaseBookingInventory } from './inventoryHolds.js'
 import { getPaymentProgress } from './paymentRules.js'
+import { getActorName } from './actors.js'
+
+const CANCELLABLE_PAYMENT_STATUSES = ['pending', 'submitted', 'review', 'needs review']
 
 export async function updateReservationStatusAtomically({
   db,
@@ -10,6 +13,7 @@ export async function updateReservationStatusAtomically({
   actor,
   reason = '',
 }) {
+  const actorName = actor?.role === 'system' ? '' : await getActorName(db, actor).catch(() => '')
   const session = startSession()
   let updatedReservation
   try {
@@ -52,6 +56,7 @@ export async function updateReservationStatusAtomically({
         status: nextStatus,
         changedBy: String(actor.id),
         changedByRole: actor.role,
+        ...(actorName ? { changedByName: actorName } : {}),
         changedAtISO,
         ...(reason ? { reason: String(reason).slice(0, 200) } : {}),
       }
@@ -61,6 +66,8 @@ export async function updateReservationStatusAtomically({
           $set: {
             reservationStatus: nextStatus,
             updatedAtISO: changedAtISO,
+            // Who made the latest decision, shown on the reservation lists.
+            lastStatusChange: { status: nextStatus, byId: String(actor.id), byRole: actor.role, byName: actorName, atISO: changedAtISO },
             ...(nextStatus === 'cancelled' && reason ? { cancellationReason: String(reason).slice(0, 200) } : {}),
           },
           $push: { statusHistory: statusEvent },
@@ -69,6 +76,29 @@ export async function updateReservationStatusAtomically({
       )
       if (nextStatus === 'cancelled') {
         await releaseBookingInventory(db, reservationId, session)
+        // Proofs nobody verified yet no longer need review, and stop counting as money pending.
+        // Verified payments are kept as they are for the financial record.
+        const reservationIds = [current.id, current._id].filter(Boolean).map(String)
+        await db.collection('payments').updateMany(
+          {
+            reservationId: { $in: reservationIds },
+            paymentStatus: { $in: CANCELLABLE_PAYMENT_STATUSES },
+          },
+          {
+            $set: { paymentStatus: 'cancelled', updatedAtISO: changedAtISO },
+            $push: {
+              auditTrail: {
+                status: 'cancelled',
+                changedBy: String(actor.id),
+                changedByRole: actor.role,
+                changedByName: actorName,
+                reason: 'Reservation cancelled',
+                changedAtISO,
+              },
+            },
+          },
+          { session },
+        )
       }
       updatedReservation = {
         ...current,

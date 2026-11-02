@@ -4,6 +4,8 @@ import { randomUUID } from 'crypto'
 import { getDb, startDbSession, toObjectId } from '../db/mongo.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
 import { ALLOWED_COLLECTIONS } from './collections.js'
+import { getActorName } from '../utils/actors.js'
+import { NICKNAME_MAX, cleanMiddleInitial, cleanNamePart, composeFullName } from '../utils/names.js'
 import { calculateBookingPrice } from '../utils/bookingPricing.js'
 import { getBookingInventoryRequirements, getHeldQuantities, holdBookingInventory, stockQuantity } from '../utils/inventoryHolds.js'
 import { canonicalEmail, normalizeEmail, sameEmailFilter } from '../utils/emails.js'
@@ -172,14 +174,14 @@ router.get('/team-directory/lookup', requireAuth, requireRole('user'), async (re
       return res.status(404).json({
         ok: false,
         error: byEmail
-          ? 'No registered player uses that email. They can join as a walk-in instead.'
-          : 'No registered player matches that name. Try their email, or they can join as a walk-in.',
+          ? 'No registered player uses that email. Ask them to create an account first.'
+          : 'No registered player matches that name. Try their email, or ask them to create an account first.',
       })
     }
 
     const ids = players.slice(0, 5).map((player) => String(player.id || player._id))
     const approved = new Set((await db.collection('waivers').find(
-      { status: { $regex: '^approved$', $options: 'i' }, userId: { $in: ids } },
+      { status: { $regex: '^approved$', $options: 'i' }, archived: { $ne: true }, userId: { $in: ids } },
       { projection: { userId: 1 } },
     ).toArray()).map((waiver) => String(waiver.userId)))
     const weaponOwnerIds = await getApprovedWeaponOwnerIds(db, ids)
@@ -705,6 +707,15 @@ router.post('/reservations/:id/reschedule', requireAuth, requireRole('user', 'ad
     if (isWeekdayDateISO(newDate) && sessionType !== 'private') {
       return res.status(400).json({ ok: false, error: 'Weekday reservations must be private sessions.' })
     }
+    // Weekday and weekend games are priced and staffed differently, so a booking moves within its kind.
+    if (req.user.role === 'user' && originalDate && isWeekdayDateISO(originalDate) !== isWeekdayDateISO(newDate)) {
+      return res.status(400).json({
+        ok: false,
+        error: isWeekdayDateISO(originalDate)
+          ? 'This reservation was booked on a weekday, so it can only move to another weekday (Monday to Friday).'
+          : 'This reservation was booked on a weekend, so it can only move to another Saturday or Sunday.',
+      })
+    }
 
     const knownFieldIds = new Set((LOCATION_FIELD_DEFS[locationId] || []).map((field) => field.id))
     const fieldIds = Array.isArray(body.fieldIds)
@@ -891,7 +902,7 @@ function personalizeNotification(doc, user) {
 
 // Staff only review a waiver; what the participant (and guardian) entered is never edited.
 // idType is accepted only for older waivers that were submitted before players chose it.
-const WAIVER_REVIEW_FIELDS = new Set(['status', 'reviewerNote', 'idType', 'idChecked', 'guardianIdChecked'])
+const WAIVER_REVIEW_FIELDS = new Set(['status', 'reviewerNote', 'idType', 'idChecked', 'guardianIdChecked', 'archived'])
 // Philippine IDs a reviewer may accept when approving a waiver.
 export const ACCEPTED_ID_TYPES = [
   'PhilSys National ID',
@@ -925,6 +936,22 @@ function prepareWaiverUpdate(existing, payload, req) {
   if (changes.guardianIdChecked !== undefined) changes.guardianIdChecked = changes.guardianIdChecked === true
 
   const nowISO = new Date().toISOString()
+  // Archiving replaces deleting: the record is kept for the history but no longer counts as the
+  // player's waiver, so they answer a new one. A pending waiver needs a decision first.
+  if (changes.archived !== undefined) {
+    changes.archived = changes.archived === true
+    if (changes.archived && !existing.archived) {
+      const status = String(changes.status ?? existing.status ?? 'pending').toLowerCase()
+      if (['pending', 'review', 'submitted'].includes(status)) {
+        return { status: 409, error: 'Approve or deny this waiver before archiving it.' }
+      }
+      changes.archivedAtISO = nowISO
+      changes.archivedBy = { id: String(req.user.id), email: req.user.email || '', role, name: req.actorName || '' }
+    }
+    if (!changes.archived && existing.archived) {
+      changes.unarchivedAtISO = nowISO
+    }
+  }
   const nextStatus = String(changes.status ?? existing.status ?? '').toLowerCase()
   if (changes.status !== undefined) {
     if (!['approved', 'denied', 'pending'].includes(nextStatus)) return { error: 'Unknown waiver status.' }
@@ -933,7 +960,7 @@ function prepareWaiverUpdate(existing, payload, req) {
     }
     changes.status = nextStatus
     changes.reviewedAtISO = nowISO
-    changes.reviewedBy = { id: String(req.user.id), email: req.user.email || '', role }
+    changes.reviewedBy = { id: String(req.user.id), email: req.user.email || '', role, name: req.actorName || '' }
   }
   if (nextStatus === 'approved' && String(existing.status || '').toLowerCase() !== 'approved') {
     const idType = existing.idType || changes.idType
@@ -1088,6 +1115,19 @@ router.get('/:collection', requireAuth, async (req, res) => {
       return res.status(400).json({ ok: false, error: 'invalid q JSON' })
     }
   }
+  // ?sort={"createdAtISO":-1} orders the results before paging; only plain field names with 1/-1.
+  let sort = null
+  if (req.query.sort) {
+    try {
+      const parsed = JSON.parse(String(req.query.sort))
+      sort = Object.fromEntries(Object.entries(parsed || {})
+        .filter(([field, dir]) => /^[A-Za-z0-9_.]+$/.test(field) && (dir === 1 || dir === -1)))
+    } catch {
+      return res.status(400).json({ ok: false, error: 'invalid sort JSON' })
+    }
+  }
+  // ?withTotal=1 also returns how many documents match, for "page x / y" lists.
+  const withTotal = req.query.withTotal === '1' || req.query.withTotal === 'true'
 
   try {
     if (collection === 'waivers') await expireOldWaivers(await getDb())
@@ -1134,11 +1174,9 @@ router.get('/:collection', requireAuth, async (req, res) => {
       filter = mergeFilters(filter, { dismissedBy: { $ne: String(req.user.id) } })
     }
 
-    let query = db
-      .collection(collection)
-      .find(filter)
-      .skip(skip)
-      .limit(limit)
+    let query = db.collection(collection).find(filter)
+    if (sort && Object.keys(sort).length) query = query.sort(sort)
+    query = query.skip(skip).limit(limit)
 
     if (collection === 'user_accounts') {
       const projection = { password: 0, otpCode: 0, otpExpiresAt: 0 }
@@ -1147,11 +1185,12 @@ router.get('/:collection', requireAuth, async (req, res) => {
       query = query.project(projection)
     }
     const docs = await query.toArray()
+    const total = withTotal ? await db.collection(collection).countDocuments(filter) : undefined
 
     if (collection === 'notifications') {
-      return res.json({ ok: true, data: docs.map((doc) => personalizeNotification(doc, req.user)) })
+      return res.json({ ok: true, data: docs.map((doc) => personalizeNotification(doc, req.user)), total })
     }
-    return res.json({ ok: true, data: docs })
+    return res.json({ ok: true, data: docs, total })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
   }
@@ -1199,7 +1238,7 @@ router.get('/:collection/:id', requireAuth, async (req, res) => {
 
 // Rebuilds the team from verified accounts (never trusting client names or sizes), works out
 // who shares a split payment, and counts own weapons only for players with an approved one on file.
-async function resolveTeamAndOwnWeapons(db, doc) {
+async function resolveTeamAndOwnWeapons(db, doc, { requireFullTeam = false } = {}) {
   const captainId = String(doc.userId)
   const requestedIds = Array.from(new Set(
     (Array.isArray(doc.selectedTeammateIds) ? doc.selectedTeammateIds : []).map(String).filter((id) => id && id !== captainId),
@@ -1208,6 +1247,14 @@ async function resolveTeamAndOwnWeapons(db, doc) {
     const tooMany = new Error('You selected more teammates than the group size allows.')
     tooMany.statusCode = 400
     throw tooMany
+  }
+  // Online bookings only take registered players: every spot besides the captain is a teammate
+  // account. (Walk-ins are recorded by staff at the counter, through /walk-ins.)
+  if (requireFullTeam && requestedIds.length < Math.max(0, doc.numberOfPlayers - 1)) {
+    const missing = Math.max(0, doc.numberOfPlayers - 1) - requestedIds.length
+    const tooFew = new Error(`Add ${missing} more registered teammate${missing === 1 ? '' : 's'}. Every player needs an account.`)
+    tooFew.statusCode = 400
+    throw tooFew
   }
   const objectIds = requestedIds.map((id) => toObjectId(id)).filter(Boolean)
   const accounts = requestedIds.length
@@ -1376,6 +1423,7 @@ router.post('/:collection', requireAuth, async (req, res) => {
       await expireOldWaivers(db, { force: true })
       const existingWaiver = await db.collection(collection).findOne({
         userId: String(payload.userId),
+        archived: { $ne: true },
         status: { $regex: `^(${ACTIVE_WAIVER_STATUSES.join('|')})$`, $options: 'i' },
       })
       if (existingWaiver) {
@@ -1546,7 +1594,7 @@ router.post('/:collection', requireAuth, async (req, res) => {
       doc.paymentState = 'awaiting'
       doc.paymentDueAtISO = new Date(Date.now() + PAYMENT_WINDOW_HOURS * 3600_000).toISOString()
       try {
-        Object.assign(doc, await resolveTeamAndOwnWeapons(db, doc))
+        Object.assign(doc, await resolveTeamAndOwnWeapons(db, doc, { requireFullTeam: req.user.role === 'user' }))
       } catch (err) {
         return res.status(err?.statusCode || 400).json({ ok: false, error: err.message || 'Invalid team selection' })
       }
@@ -1686,6 +1734,15 @@ router.post('/:collection', requireAuth, async (req, res) => {
       if (err?.statusCode) return res.status(err.statusCode).json({ ok: false, error: err.message })
       throw err
     }
+    // A resubmitted waiver replaces the denied one: the old record is archived and linked to the new
+    // pending one, so staff see a single waiver per player that is back to "pending".
+    if (collection === 'waivers' && doc.userId) {
+      const nowISO = new Date().toISOString()
+      await db.collection('waivers').updateMany(
+        { userId: String(doc.userId), id: { $ne: doc.id }, status: { $regex: '^denied$', $options: 'i' }, archived: { $ne: true } },
+        { $set: { archived: true, archivedAtISO: nowISO, archivedReason: 'resubmitted', supersededBy: doc.id } },
+      )
+    }
     if (req.user.role === 'user') await notifyStaffOfPlayerSubmission(db, collection, doc, req.user)
     if (collection === 'waivers' && doc.isMinor && doc.guardianEmail) void emailGuardianWaiverSubmitted(db, doc)
     // The profile reads the birthday from the account, so fill it in from the first waiver.
@@ -1791,7 +1848,7 @@ router.put('/:collection/:id', requireAuth, async (req, res) => {
     const usesUnsupportedOperator = Object.keys(payload).some((field) => field.startsWith('$') && field !== '$set')
     const hasMixedUpdateShape = Object.prototype.hasOwnProperty.call(payload, '$set') &&
       Object.keys(payload).some((field) => field !== '$set')
-    const allowedProfileFields = new Set(['name', 'email', 'profileImageUrl', 'birthDate'])
+    const allowedProfileFields = new Set(['name', 'firstName', 'middleInitial', 'lastName', 'nickname', 'email', 'profileImageUrl', 'birthDate'])
     if (
       usesUnsupportedOperator ||
       hasMixedUpdateShape ||
@@ -1849,6 +1906,35 @@ router.put('/:collection/:id', requireAuth, async (req, res) => {
 
     if (collection === 'user_accounts') {
       const changes = payload.$set || payload
+      // Name parts: the full name is always rebuilt from them as "First M. Last".
+      const nameFields = ['firstName', 'middleInitial', 'lastName']
+      if (nameFields.some((field) => Object.prototype.hasOwnProperty.call(changes, field))) {
+        const parts = {
+          firstName: cleanNamePart(changes.firstName ?? existing.firstName),
+          middleInitial: cleanMiddleInitial(changes.middleInitial ?? existing.middleInitial),
+          lastName: cleanNamePart(changes.lastName ?? existing.lastName),
+        }
+        if (!parts.firstName || !parts.lastName) return res.status(400).json({ ok: false, error: 'Enter your first and last name.' })
+        const nextName = composeFullName(parts)
+        // Once a waiver is approved, the legal name must keep matching it; staff can still correct it.
+        if (updateRole === 'user' && nextName !== String(existing.name || '')) {
+          const approvedWaiver = await db.collection('waivers').findOne({
+            userId: String(existing.id || existing._id),
+            archived: { $ne: true },
+            status: { $regex: '^approved$', $options: 'i' },
+          }, { projection: { id: 1 } })
+          if (approvedWaiver) {
+            return res.status(409).json({ ok: false, error: 'Your name is locked because your waiver was approved under it. Ask staff if it needs correcting.' })
+          }
+        }
+        Object.assign(changes, parts, { name: nextName })
+      } else if (updateRole === 'user' && Object.prototype.hasOwnProperty.call(changes, 'name')) {
+        // Players change their name through the parts above.
+        delete changes.name
+      }
+      if (Object.prototype.hasOwnProperty.call(changes, 'nickname')) {
+        changes.nickname = cleanNamePart(changes.nickname, NICKNAME_MAX)
+      }
       if (Object.prototype.hasOwnProperty.call(changes, 'email')) {
         const email = normalizeEmail(changes.email)
         if (!email) return res.status(400).json({ ok: false, error: 'email cannot be empty' })
@@ -1886,6 +1972,16 @@ router.put('/:collection/:id', requireAuth, async (req, res) => {
     }
 
     if (collection === 'waivers') {
+      const changes = payload.$set || payload
+      if (changes.archived === false && existing.archived && existing.userId) {
+        const current = await db.collection('waivers').findOne({
+          userId: String(existing.userId),
+          archived: { $ne: true },
+          status: { $regex: `^(${ACTIVE_WAIVER_STATUSES.join('|')})$`, $options: 'i' },
+        })
+        if (current) return res.status(409).json({ ok: false, error: `This player already has a current waiver (${current.id}). Archive it first.` })
+      }
+      req.actorName = await getActorName(db, req.user).catch(() => '')
       const prepared = prepareWaiverUpdate(existing, payload, req)
       if (prepared.error) return res.status(prepared.status || 400).json({ ok: false, error: prepared.error })
       for (const key of Object.keys(payload)) delete payload[key]
