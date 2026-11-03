@@ -16,14 +16,14 @@ type VerifyResult = {
   amount?: number
 }
 
-// PayMongo sends a paid payment's confirmation a moment after the player is redirected back,
+// Xendit can mark an invoice paid a moment after the player is redirected back,
 // so an unpaid answer is retried a few times before telling the player.
 const RETRIES = 6
 const RETRY_MS = 2500
 
 const peso = (value?: number) => `₱${Number(value || 0).toLocaleString('en-PH', { maximumFractionDigits: 2 })}`
 
-// Where PayMongo sends the player back after checkout (paid or cancelled).
+// Where Xendit sends the player back after paying (or failing to pay).
 export function PaymentCompletePage() {
   const navigate = useNavigate()
   const [params] = useSearchParams()
@@ -40,7 +40,7 @@ export function PaymentCompletePage() {
     let stop = false
     const check = async (attempt: number) => {
       try {
-        const res = await apiPost<{ ok: boolean; data: VerifyResult }>('/api/paymongo/verify', { ref })
+        const res = await apiPost<{ ok: boolean; data: VerifyResult }>('/api/xendit/verify', { ref })
         if (stop) return
         if (res.data.status === 'unpaid' && !cancelled && attempt < RETRIES) {
           window.setTimeout(() => void check(attempt + 1), RETRY_MS)
@@ -66,7 +66,7 @@ export function PaymentCompletePage() {
         {error ? (
           <div className="flex items-start gap-3 text-danger"><FiAlertTriangle className="mt-1 shrink-0" /> <div>{error}</div></div>
         ) : !result ? (
-          <div className="flex items-center gap-3 text-muted"><FiLoader className="animate-spin" /> Checking your payment with PayMongo…</div>
+          <div className="flex items-center gap-3 text-muted"><FiLoader className="animate-spin" /> Checking your payment with Xendit…</div>
         ) : confirmed ? (
           <>
             <div className="flex items-center gap-2 text-lg font-bold text-success"><FiCheckCircle /> Payment successful</div>

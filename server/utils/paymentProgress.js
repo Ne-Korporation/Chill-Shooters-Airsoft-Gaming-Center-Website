@@ -42,7 +42,7 @@ function reservationLabel(reservation) {
 }
 
 const GATEWAY_PAID = ['paid', 'succeeded']
-const isGatewayPayment = (payment) => Boolean(payment.paymongoCheckoutId || payment.stripePaymentIntentId)
+const isGatewayPayment = (payment) => Boolean(payment.xenditInvoiceId || payment.paymongoCheckoutId || payment.stripePaymentIntentId)
 
 // Confirms a pending booking with no staff step when every share of the online amount was paid
 // through the payment gateway (which already verified the money). Bookings with a minor still

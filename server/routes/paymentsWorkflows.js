@@ -22,7 +22,7 @@ const GCASH_QR_KEY = 'gcash_qr'
 
 // Online card payments run on Stripe in TEST MODE for the capstone demo only: Stripe does not
 // onboard Philippine merchants, so a production deployment would swap this for a local gateway
-// such as PayMongo (which also covers GCash and Maya). Live keys are refused so no real card
+// such as Xendit (which also covers GCash and Maya). Live keys are refused so no real card
 // can be charged. Card is online-only; the counter has no card terminal.
 const stripeSecretKey = process.env.STRIPE_SECRET_KEY
 let stripe = null

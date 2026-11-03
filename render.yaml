@@ -37,8 +37,8 @@ services:
       # The frontend also needs VITE_STRIPE_PUBLISHABLE_KEY=pk_test_… on Vercel.
       - key: STRIPE_SECRET_KEY
         sync: false
-      # Online payment through PayMongo (test mode only); see .env.example.
-      - key: PAYMONGO_SECRET_KEY
+      # Online payment through Xendit (test mode only, xnd_development_…); see .env.example.
+      - key: XENDIT_SECRET_KEY
         sync: false
-      - key: PAYMONGO_WEBHOOK_SECRET
+      - key: XENDIT_CALLBACK_TOKEN
         sync: false

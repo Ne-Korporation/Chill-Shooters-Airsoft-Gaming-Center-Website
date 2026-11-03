@@ -25,7 +25,7 @@ const { default: operationsRouter } = await import('./routes/operations.js')
 const { default: teamBookingsRouter } = await import('./routes/teamBookings.js')
 const { default: fieldOpsRouter } = await import('./routes/fieldOps.js')
 const { default: guardianApprovalsRouter } = await import('./routes/guardianApprovals.js')
-const { default: paymongoRouter } = await import('./routes/paymongo.js')
+const { default: xenditRouter } = await import('./routes/xendit.js')
 const { default: recommendationsRouter } = await import('./routes/recommendations.js')
 const { default: weatherRouter } = await import('./routes/weather.js')
 const { expireOverdueReservations } = await import('./utils/paymentProgress.js')
@@ -35,8 +35,7 @@ const { parseAddress } = await import('./services/mailService.js')
 
 const app = express()
 app.use(cors())
-// The raw body is kept for checking PayMongo's webhook signature, which is computed over the exact bytes sent.
-app.use(express.json({ limit: '10mb', verify: (req, _res, buf) => { if (req.url.startsWith('/api/paymongo/webhook')) req.rawBody = buf.toString('utf8') } }))
+app.use(express.json({ limit: '10mb' }))
 
 const PORT = Number(process.env.PORT) || 3001
 
@@ -176,7 +175,7 @@ app.use('/api', teamBookingsRouter)
 app.use('/api', fieldOpsRouter)
 // Before crudRouter: the guardian link is public and must not hit its auth-required /:collection/:id.
 app.use('/api', guardianApprovalsRouter)
-app.use('/api', paymongoRouter)
+app.use('/api', xenditRouter)
 app.use('/api', recommendationsRouter)
 app.use('/api', weatherRouter)
 app.use('/api/auth', authRouter)

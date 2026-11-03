@@ -114,10 +114,13 @@ export function RegisterPage() {
   }
 
   // Finishes a Google sign-up that fell back to a full-page redirect.
+  // Only the mount still on screen finishes it, so the account is created once.
   useEffect(() => {
+    let active = true
     completeGoogleRedirect()
-      .then((profile) => (profile?.email ? finishGoogleRegister(profile, false) : undefined))
-      .catch((err: any) => toast.error(err?.message || 'Google registration failed.'))
+      .then((profile) => (active && profile?.email ? finishGoogleRegister(profile, false) : undefined))
+      .catch((err: any) => { if (active) toast.error(err?.message || 'Google registration failed.') })
+    return () => { active = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 

@@ -6,7 +6,7 @@ import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { apiBase, apiGet, apiPost, getApiAuthHeaders } from '../../utils/apiClient'
-import { isPaymongoEnabled, startPaymongoCheckout } from '../../utils/paymongo'
+import { isXenditEnabled, startXenditCheckout } from '../../utils/xendit'
 
 export const SPLIT_PAYMENTS_CHANGED_EVENT = 'split-payments-changed'
 
@@ -56,40 +56,21 @@ function ShareForm({ item, gcashQrUrl, bankDetails, onPaid }: { item: SplitPayme
   const [refNo, setRefNo] = useState('')
   const [fileName, setFileName] = useState('')
   const [submitting, setSubmitting] = useState(false)
-  // With PayMongo set up, each teammate pays their share online and it's verified automatically.
-  const [paymongo, setPaymongo] = useState(false)
+  // With Xendit set up, a teammate can pay their share online and it's verified automatically.
+  // GCash or bank transfer with a proof stays available below in case Xendit is down.
+  const [xendit, setXendit] = useState(false)
   useEffect(() => {
-    void isPaymongoEnabled().then(setPaymongo)
+    void isXenditEnabled().then(setXendit)
   }, [])
 
   const payOnline = async () => {
     setSubmitting(true)
     try {
-      await startPaymongoCheckout(item.reservation.id)
+      await startXenditCheckout(item.reservation.id)
     } catch (e: any) {
-      toast.error(e?.message || 'Could not open the payment page')
+      toast.error(e?.message || 'Could not open the payment page. You can still pay by GCash or bank transfer below.')
       setSubmitting(false)
     }
-  }
-
-  if (paymongo) {
-    return (
-      <div className="mt-4 space-y-3 rounded-2xl border border-accent/25 bg-accent/5 p-4">
-        <div className="flex items-end justify-between gap-3">
-          <div>
-            <div className="text-xs uppercase tracking-widest text-muted">Your share due</div>
-            <div className="mt-1 text-2xl font-bold text-gold">{formatPHP(item.myShareDue)}</div>
-          </div>
-          {item.reservation.paymentDueAtISO ? (
-            <div className="flex items-center gap-1 text-xs text-muted"><FiClock /> Pay before {formatDue(item.reservation.paymentDueAtISO)}</div>
-          ) : null}
-        </div>
-        <div className="text-xs text-muted">Pay with GCash, QR Ph, Maya, or a card on PayMongo (test mode). Your share is verified automatically, and the booking is confirmed once every share is in.</div>
-        <Button variant="primary" disabled={submitting} onClick={payOnline}>
-          {submitting ? 'Opening PayMongo…' : 'Pay my share online'}
-        </Button>
-      </div>
-    )
   }
 
   const submit = async () => {
@@ -135,6 +116,17 @@ function ShareForm({ item, gcashQrUrl, bankDetails, onPaid }: { item: SplitPayme
           </div>
         ) : null}
       </div>
+
+      {xendit ? (
+        <div className="space-y-2 rounded-2xl border border-white/10 bg-black/20 p-4">
+          <div className="text-sm font-bold">Pay online</div>
+          <div className="text-xs text-muted">Pay with GCash, Maya, or a card on Xendit (test mode). Your share is verified automatically, and the booking is confirmed once every share is in.</div>
+          <Button variant="primary" disabled={submitting} onClick={payOnline}>
+            {submitting ? 'Opening Xendit…' : 'Pay my share online'}
+          </Button>
+          <div className="text-[11px] text-muted">Or pay by GCash or bank transfer and upload your proof below.</div>
+        </div>
+      ) : null}
 
       <div>
         <div className="text-xs uppercase tracking-widest text-muted">Payment method</div>

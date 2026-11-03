@@ -97,10 +97,13 @@ export function LoginPage() {
   }
 
   // Finishes a Google sign-in that fell back to a full-page redirect.
+  // Only the mount still on screen finishes it.
   useEffect(() => {
+    let active = true
     completeGoogleRedirect()
-      .then((profile) => (profile ? finishGoogleSignIn(profile, false) : undefined))
-      .catch((err: any) => toast.error(err?.message || 'Google sign-in failed.'))
+      .then((profile) => (active && profile ? finishGoogleSignIn(profile, false) : undefined))
+      .catch((err: any) => { if (active) toast.error(err?.message || 'Google sign-in failed.') })
+    return () => { active = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 

@@ -8,7 +8,7 @@ import { apiGet, apiPost } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
 import { isVerifiedPayment, printReceipt, type ReceiptPayment } from '../../utils/receiptPrint'
 import { clearBookingDraft, draftTimeLeft, markBookingDraftLeft, readBookingDraft, type BookingDraft } from '../../utils/bookingDraft'
-import { isPaymongoEnabled, startPaymongoCheckout } from '../../utils/paymongo'
+import { isXenditEnabled, startXenditCheckout } from '../../utils/xendit'
 import { useSlotHours } from '../../utils/slotHours'
 import { RescheduleSlotPicker, isWeekdayISO } from '../../components/reservations/RescheduleSlotPicker'
 import { ReservationDetailsDialog, type ReservationDetails } from '../../components/reservations/ReservationDetailsDialog'
@@ -128,16 +128,16 @@ export function MyReservationsPage() {
     void load()
   }, [load])
 
-  // Unpaid reservations can be paid online from here (e.g. after cancelling at PayMongo).
+  // Unpaid reservations can be paid online from here (e.g. after leaving Xendit's payment page).
   const [canPayOnline, setCanPayOnline] = useState(false)
   const [payingId, setPayingId] = useState<string | null>(null)
   useEffect(() => {
-    void isPaymongoEnabled().then(setCanPayOnline)
+    void isXenditEnabled().then(setCanPayOnline)
   }, [])
   const payOnline = async (reservationId: string) => {
     setPayingId(reservationId)
     try {
-      await startPaymongoCheckout(reservationId)
+      await startXenditCheckout(reservationId)
     } catch (err: any) {
       toast.error(err?.message || 'Could not open the payment page')
       setPayingId(null)
@@ -318,7 +318,7 @@ export function MyReservationsPage() {
                 {canPayOnline && status === 'pending' && reservation.paymentState !== 'finalized' &&
                   !reservationPayments.some((payment: any) => String(payment.userId) === String(user?.id) && !['failed', 'rejected'].includes(String(payment.paymentStatus || '').toLowerCase())) ? (
                   <Button variant="primary" disabled={payingId === id} onClick={() => payOnline(id)}>
-                    {payingId === id ? 'Opening PayMongo…' : 'Pay now'}
+                    {payingId === id ? 'Opening Xendit…' : 'Pay now'}
                   </Button>
                 ) : null}
                 {hasVerifiedPayment ? (
