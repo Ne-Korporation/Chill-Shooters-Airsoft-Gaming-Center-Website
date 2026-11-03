@@ -115,11 +115,11 @@ router.get('/admin/payment-complete-reservations', requireAuth, requireRole('adm
     const data = []
     for (const reservation of reservations) {
       const payments = (await getReservationPayments(db, reservation))
-        .filter((payment) => !['failed', 'rejected'].includes(String(payment.paymentStatus || payment.status || '').toLowerCase()))
+        .filter((payment) => !['failed', 'rejected', 'cancelled'].includes(String(payment.paymentStatus || payment.status || '').toLowerCase()))
       const memberIds = [String(reservation.userId), ...(reservation.teamMembers || []).map((member) => String(member.id))]
       const accounts = await namesById(db, memberIds)
       const waivers = await db.collection('waivers').find(
-        { userId: { $in: memberIds } },
+        { userId: { $in: memberIds }, archived: { $ne: true } },
         { projection: { id: 1, userId: 1, fullName: 1, status: 1, createdAtISO: 1, submittedAtISO: 1 } },
       ).toArray()
 

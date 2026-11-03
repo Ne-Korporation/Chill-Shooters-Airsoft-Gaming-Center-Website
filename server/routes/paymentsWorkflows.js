@@ -12,6 +12,7 @@ import { emailPaymentEvent } from '../services/notificationEmails.js'
 import { getReservationPayments, syncReservationPaymentState } from '../utils/paymentProgress.js'
 import { normalizePhPhone } from '../utils/phone.js'
 import { nextShortId } from '../utils/shortIds.js'
+import { getActorName } from '../utils/actors.js'
 
 const router = express.Router()
 // Must match VERIFIED_PAYMENT_STATUSES in src/utils/receiptPrint.ts
@@ -308,6 +309,7 @@ router.put('/payments/:id/verify', requireAuth, requireRole('admin', 'registrar'
         nextStatus,
         actorId: req.user.id,
         actorRole: req.user.role,
+        actorName: await getActorName(db, req.user).catch(() => ''),
         reason,
         changedAtISO,
       })

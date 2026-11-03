@@ -58,6 +58,19 @@ export async function apiGet<T>(path: string) {
   return json as T
 }
 
+// Reads every document of a collection, 200 at a time, so lists are filtered over all records
+// rather than only the first page the API returns. `query` is extra query-string, e.g. "q=...".
+export async function apiGetAll<T>(collection: string, query = ''): Promise<T[]> {
+  const PAGE = 200
+  const all: T[] = []
+  for (let skip = 0; ; skip += PAGE) {
+    const res = await apiGet<{ ok: boolean; data: T[] }>(`/api/${collection}?limit=${PAGE}&skip=${skip}${query ? `&${query}` : ''}`)
+    const page = Array.isArray(res?.data) ? res.data : []
+    all.push(...page)
+    if (page.length < PAGE) return all
+  }
+}
+
 export async function apiPost<T>(path: string, body: unknown) {
   const res = await fetch(`${apiBase}${path}`, {
     method: 'POST',

@@ -19,12 +19,13 @@ import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { IdUpload } from './IdUpload'
 import { SignaturePad } from './SignaturePad'
-import { apiGet, apiPost } from '../../utils/apiClient'
+import { apiGet, apiPost, apiPut } from '../../utils/apiClient'
 import { formatPhPhone, isValidPhPhone, PH_PHONE_PLACEHOLDER, toStoredPhPhone } from '../../utils/phone'
 import { signedWaiverText, useCurrentWaiverText, type WaiverText } from '../../utils/waiverText'
 import { printWaiverDocument } from '../../utils/waiverPrint'
 import { useAuth } from '../../context/AuthContext'
 import { ageFromBirthDate, isValidBirthDate, maxBirthDate } from '../../utils/age'
+import { composeFullName, splitFullName, type NameParts } from '../../utils/names'
 
 type WaiverState = {
   fullName: string
@@ -66,6 +67,7 @@ type SubmittedWaiver = {
   validUntilISO?: string
   submittedAtISO?: string
   createdAtISO?: string
+  archived?: boolean
 }
 
 // ---------------------------------------------------------------------
@@ -168,6 +170,10 @@ export function WaiverPage({
   })
 
   const [submitting, setSubmitting] = useState(false)
+  // The participant's name is entered in parts and signed as "First M. Last", the order staff
+  // compare against the ID. It starts from the name on the player's profile.
+  const [nameParts, setNameParts] = useState<NameParts>({ firstName: '', middleInitial: '', lastName: '' })
+  const composedName = composeFullName(nameParts)
   // Field errors stay hidden until the first submit attempt so the form starts calm.
   const [showErrors, setShowErrors] = useState(false)
   const [submitted, setSubmitted] = useState(false)
@@ -248,9 +254,10 @@ export function WaiverPage({
           }
         }
 
+        // Archived waivers (replaced by a resubmission, or archived by staff) are history only.
         const existingWaiver = candidates
           .filter(matchesCurrentUser)
-          .filter(Boolean)
+          .filter((waiver) => !waiver.archived)
           .sort((a, b) => {
             const aDate = String(a.submittedAtISO || a.createdAtISO || '')
             const bDate = String(b.submittedAtISO || b.createdAtISO || '')
@@ -261,6 +268,7 @@ export function WaiverPage({
           if (existingWaiver && ['denied', 'expired'].includes(String(existingWaiver.status || '').trim().toLowerCase())) {
             // Denied or expired (older than 12 months): reopen the form so the player answers it again.
             // Name/age are prefilled; terms, consent and signature must be redone.
+            setNameParts(splitFullName(existingWaiver.fullName || ''))
             setState({
               fullName: existingWaiver.fullName || '',
               birthDate: existingWaiver.birthDate || '',
@@ -349,7 +357,8 @@ export function WaiverPage({
 
   const errors = useMemo(() => {
     const e: Record<string, string> = {}
-    if (!state.fullName.trim()) e.fullName = 'Full name is required.'
+    if (!nameParts.firstName.trim()) e.firstName = 'First name is required.'
+    if (!nameParts.lastName.trim()) e.lastName = 'Last name is required.'
     if (!state.birthDate) e.birthDate = 'Birthday is required.'
     else if (!isValidBirthDate(state.birthDate)) e.birthDate = 'Enter a valid birthday.'
     if (!idType) e.idType = 'Choose which ID you are attaching.'
@@ -373,7 +382,26 @@ export function WaiverPage({
     if (!hasSignature) e.signature = 'Signature is required.'
 
     return e
-  }, [hasSignature, isMinor, state, guardianPhone, guardianEmail, guardianIdImage, guardianIdType, guardianSignatureImage, idType, idImage, user?.email])
+  }, [hasSignature, isMinor, state, nameParts, guardianPhone, guardianEmail, guardianIdImage, guardianIdType, guardianSignatureImage, idType, idImage, user?.email])
+
+  // Prefill the name parts from the player's profile when the form starts empty.
+  useEffect(() => {
+    if (!user?.id || submitted || nameParts.firstName || nameParts.lastName) return
+    let alive = true
+    apiGet<{ ok: boolean; data: { name?: string; firstName?: string; middleInitial?: string; lastName?: string } }>(`/api/user_accounts/${encodeURIComponent(user.id)}`)
+      .then((res) => {
+        const account = res?.data
+        if (!alive || !account) return
+        const parts = account.firstName || account.lastName
+          ? { firstName: account.firstName || '', middleInitial: account.middleInitial || '', lastName: account.lastName || '' }
+          : splitFullName(account.name || user?.name || '')
+        setNameParts((current) => (current.firstName || current.lastName ? current : parts))
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [user?.id, user?.name, submitted, nameParts.firstName, nameParts.lastName])
 
   // Prefill the birthday from the player's profile when the form starts empty.
   useEffect(() => {
@@ -683,7 +711,7 @@ export function WaiverPage({
         id: `WAIV-${Date.now()}`,
         userId: user?.id || '',
         reservationId: localStorage.getItem('active_reservation_id') || '',
-        fullName: state.fullName.trim(),
+        fullName: composedName,
         email: user?.email || '',
         birthDate: state.birthDate,
         age,
@@ -719,6 +747,15 @@ export function WaiverPage({
         // ignore
       }
 
+      // Keep the profile's name in step with the name on the waiver staff will verify.
+      if (user?.id) {
+        void apiPut(`/api/user_accounts/${encodeURIComponent(user.id)}`, {
+          firstName: nameParts.firstName.trim(),
+          middleInitial: nameParts.middleInitial.trim(),
+          lastName: nameParts.lastName.trim(),
+        }).catch(() => {})
+      }
+
       toast.success('Waiver submitted')
       onSubmitted?.()
     } catch (err: any) {
@@ -743,9 +780,10 @@ export function WaiverPage({
     const localWaiverId = waiverIdKey ? localStorage.getItem(waiverIdKey) : null
     const reservationId = localStorage.getItem('active_reservation_id') || null
 
-    const tryFetchByQuery = async (query: Record<string, string>) => {
+    const tryFetchByQuery = async (query: Record<string, unknown>) => {
+      // Newest current waiver first: after a resubmission the denied one must not be picked.
       const response = await apiGet<{ ok: boolean; data: SubmittedWaiver[] }>(
-        `/api/waivers?q=${encodeURIComponent(JSON.stringify(query))}&limit=1`,
+        `/api/waivers?q=${encodeURIComponent(JSON.stringify({ ...query, archived: { $ne: true } }))}&sort=${encodeURIComponent(JSON.stringify({ createdAtISO: -1 }))}&limit=1`,
       )
       return response.data?.[0] || null
     }
@@ -1026,14 +1064,45 @@ export function WaiverPage({
             </div>
 
             <div className="mt-5 grid gap-4 md:grid-cols-2">
-              <Input
-                label="Full Name"
-                placeholder="e.g., Ramil Santos"
-                value={state.fullName}
-                disabled={submitted || submitting}
-                onChange={(e) => setState((s) => ({ ...s, fullName: e.target.value }))}
-                error={shownErrors.fullName}
-              />
+              {submitted ? (
+                <Input label="Full Name" value={submittedWaiver?.fullName || state.fullName} readOnly disabled />
+              ) : (
+                <div className="md:col-span-2">
+                  <div className="grid gap-3 sm:grid-cols-[1fr_5.5rem_1fr]">
+                    <Input
+                      label="First Name"
+                      placeholder="e.g., Ramil"
+                      value={nameParts.firstName}
+                      autoComplete="given-name"
+                      disabled={submitting}
+                      onChange={(e) => setNameParts((parts) => ({ ...parts, firstName: e.target.value }))}
+                      error={shownErrors.firstName}
+                    />
+                    <Input
+                      label="M.I."
+                      placeholder="e.g., D"
+                      value={nameParts.middleInitial}
+                      maxLength={2}
+                      autoComplete="additional-name"
+                      disabled={submitting}
+                      onChange={(e) => setNameParts((parts) => ({ ...parts, middleInitial: e.target.value.replace(/[^A-Za-zÀ-ÿÑñ.]/g, '').slice(0, 2) }))}
+                    />
+                    <Input
+                      label="Last Name"
+                      placeholder="e.g., Santos"
+                      value={nameParts.lastName}
+                      autoComplete="family-name"
+                      disabled={submitting}
+                      onChange={(e) => setNameParts((parts) => ({ ...parts, lastName: e.target.value }))}
+                      error={shownErrors.lastName}
+                    />
+                  </div>
+                  <div className="mt-2 text-xs text-muted">
+                    Filled in from your profile. Use your name exactly as it is on your ID. It will be signed as{' '}
+                    <span className="font-semibold text-text">{composedName || 'First M. Last'}</span>.
+                  </div>
+                </div>
+              )}
 
               <Input
                 label="Email"
@@ -1318,7 +1387,7 @@ export function WaiverPage({
           <Card className="p-5 md:p-5">
             {(() => {
               const steps = [
-                { label: "Your name", ok: !!state.fullName.trim() },
+                { label: "Your name", ok: Boolean(nameParts.firstName.trim() && nameParts.lastName.trim()) || submitted },
                 { label: "Your birthday", ok: !errors.birthDate },
                 { label: "Your ID", ok: !!idType && !!idImage },
                 ...(isMinor

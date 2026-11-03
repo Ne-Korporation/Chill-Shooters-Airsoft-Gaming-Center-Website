@@ -1,5 +1,4 @@
 import React from 'react'
-import { FiCheck } from 'react-icons/fi'
 
 export type PickerPiece = { id: string; label: string; free: boolean }
 export type PickerGroup = { model: string; category: string; price: number; pieces: PickerPiece[] }
@@ -56,17 +55,17 @@ export function PiecePicker({
                     aria-pressed={active}
                     title={!piece.free ? `${piece.id} is reserved or out of service for this slot` : piece.id}
                     onClick={() => onToggle(piece.id)}
+                    // A picked chip turns solid green; no icon is added, so the chip keeps its size.
                     className={[
-                      'inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-xs font-semibold transition',
+                      'inline-flex items-center rounded-lg border px-2.5 py-1 text-xs font-semibold transition',
                       active
-                        ? 'border-accent/50 bg-accent/15 text-accent'
+                        ? 'border-success bg-success text-white shadow-sm'
                         : piece.free
-                          ? 'border-white/10 bg-black/20 text-text hover:border-accent/30'
+                          ? 'border-white/10 bg-black/20 text-text hover:border-success/40'
                           : 'border-white/5 bg-black/10 text-muted line-through',
                       disabled ? 'cursor-not-allowed opacity-50' : '',
                     ].join(' ')}
                   >
-                    {active ? <FiCheck className="h-3 w-3" /> : null}
                     {piece.label}
                   </button>
                 )

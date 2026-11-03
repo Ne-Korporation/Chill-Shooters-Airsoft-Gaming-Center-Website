@@ -126,7 +126,7 @@ export function DashboardHomePage() {
           || matchesUserRecord(payment?.accountId, user.id),
         )
 
-        const myWaivers = waivers.filter((waiver) =>
+        const myWaivers = waivers.filter((waiver) => !waiver?.archived).filter((waiver) =>
           matchesUserRecord(waiver?.userId, user.id)
           || matchesUserRecord(waiver?.playerId, user.id)
           || matchesUserRecord(waiver?.accountId, user.id),

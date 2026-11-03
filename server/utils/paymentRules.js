@@ -1,5 +1,5 @@
 function isActivePayment(payment) {
-  return !['failed', 'rejected'].includes(String(payment.paymentStatus || payment.status || '').toLowerCase())
+  return !['failed', 'rejected', 'cancelled'].includes(String(payment.paymentStatus || payment.status || '').toLowerCase())
 }
 
 // Captain first, then the registered teammates who share a split payment.
@@ -104,7 +104,7 @@ export function stripeIntentMatchesReservation(intent, reservation, reservationI
     intent.metadata?.userId === String(reservation.userId || '')
 }
 
-export function buildPaymentStatusUpdate({ payment, nextStatus, actorId, actorRole, reason, changedAtISO }) {
+export function buildPaymentStatusUpdate({ payment, nextStatus, actorId, actorRole, actorName = '', reason, changedAtISO }) {
   const currentStatus = String(payment.paymentStatus || payment.status || 'pending').toLowerCase()
   // A gateway payment held for review (wrong amount, cancelled booking) is the one staff can decide.
   // paymongoCheckoutId: payments recorded before Xendit replaced PayMongo.
@@ -120,12 +120,18 @@ export function buildPaymentStatusUpdate({ payment, nextStatus, actorId, actorRo
     verified.statusCode = 409
     throw verified
   }
+  if (currentStatus === 'cancelled' && nextStatus !== currentStatus) {
+    const cancelled = new Error('This payment belongs to a cancelled reservation and can no longer be reviewed.')
+    cancelled.statusCode = 409
+    throw cancelled
+  }
 
   const auditEvent = {
     previousStatus: currentStatus,
     status: nextStatus,
     changedBy: String(actorId),
     changedByRole: actorRole,
+    ...(actorName ? { changedByName: actorName } : {}),
     ...(reason ? { reason: String(reason).trim().slice(0, 500) } : {}),
     changedAtISO,
   }
@@ -135,6 +141,7 @@ export function buildPaymentStatusUpdate({ payment, nextStatus, actorId, actorRo
       updatedAtISO: changedAtISO,
       verifiedBy: String(actorId),
       verifiedByRole: actorRole,
+      verifiedByName: actorName,
       verifiedAtISO: changedAtISO,
     },
     $push: { auditTrail: auditEvent },

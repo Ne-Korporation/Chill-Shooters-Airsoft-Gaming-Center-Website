@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { FiCalendar, FiLock, FiPrinter, FiRefreshCw } from 'react-icons/fi'
+import { FiCalendar, FiEye, FiLock, FiPrinter, FiRefreshCw } from 'react-icons/fi'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { apiGet, apiPost } from '../../utils/apiClient'
@@ -10,6 +10,11 @@ import { isVerifiedPayment, printReceipt, type ReceiptPayment } from '../../util
 import { clearBookingDraft, draftTimeLeft, markBookingDraftLeft, readBookingDraft, type BookingDraft } from '../../utils/bookingDraft'
 import { isXenditEnabled, startXenditCheckout } from '../../utils/xendit'
 import { formatSlotRange, useSlotHours } from '../../utils/slotHours'
+import { isPaymongoEnabled, startPaymongoCheckout } from '../../utils/paymongo'
+import { useSlotHours } from '../../utils/slotHours'
+import { RescheduleSlotPicker, isWeekdayISO } from '../../components/reservations/RescheduleSlotPicker'
+import { ReservationDetailsDialog, type ReservationDetails } from '../../components/reservations/ReservationDetailsDialog'
+import { Pagination, usePagination } from '../../components/ui/Pagination'
 
 type RescheduleEvent = {
   fromDate?: string
@@ -20,7 +25,7 @@ type RescheduleEvent = {
   atISO?: string
 }
 
-type ReservationDoc = {
+type ReservationDoc = ReservationDetails & {
   id?: string
   _id?: string
   reservationDate?: string
@@ -51,7 +56,6 @@ const RESCHEDULABLE_STATUSES = ['pending', 'needs review', 'confirmed']
 // No-cancellation policy: players cannot cancel, but may transfer to another date
 // (reschedule) up to RESCHEDULE_CUTOFF_DAYS before the game, with the deposit carried over.
 const OPEN_STATUSES = ['pending', 'needs review', 'confirmed']
-const SLOTS = ['morning', 'afternoon', 'evening'] as const
 
 function manilaTodayISO() {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(new Date())
@@ -65,11 +69,6 @@ function addDaysISO(iso: string, days: number) {
 
 function daysBetweenISO(fromISO: string, toISO: string) {
   return Math.round((Date.parse(`${toISO}T00:00:00Z`) - Date.parse(`${fromISO}T00:00:00Z`)) / 86400000)
-}
-
-function isWeekdayISO(iso: string) {
-  const day = new Date(`${iso}T12:00:00Z`).getUTCDay()
-  return day >= 1 && day <= 5
 }
 
 function reservationIdOf(reservation: ReservationDoc) {
@@ -86,6 +85,10 @@ function slotOf(reservation: ReservationDoc) {
 
 function statusOf(reservation: ReservationDoc) {
   return String(reservation.reservationStatus || 'pending').toLowerCase()
+}
+
+function formatShortDate(iso: string) {
+  return iso ? new Date(`${iso}T12:00:00Z`).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }) : ''
 }
 
 function formatPHP(value?: number) {
@@ -105,6 +108,7 @@ export function MyReservationsPage() {
   const [newSlot, setNewSlot] = useState<string>('morning')
   const [reason, setReason] = useState('')
   const [saving, setSaving] = useState(false)
+  const [detailsId, setDetailsId] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -174,16 +178,26 @@ export function MyReservationsPage() {
     [reservations],
   )
 
+  const { page, setPage, pageCount, pageItems, total } = usePagination(sorted, 10)
+
   const startEditing = (reservation: ReservationDoc) => {
     setEditingId(reservationIdOf(reservation))
-    setNewDate(addDaysISO(today, 1))
+    // The player picks from the calendar, which only offers open dates of the same kind.
+    setNewDate('')
     setNewSlot(slotOf(reservation) || 'morning')
     setReason('')
   }
 
   const submitReschedule = async (reservation: ReservationDoc) => {
     if (!newDate || newDate <= today) {
-      toast.error('Choose a date after today.')
+      toast.error('Pick a new date from the calendar.')
+      return
+    }
+    const originalDate = dateOf(reservation)
+    if (originalDate && isWeekdayISO(originalDate) !== isWeekdayISO(newDate)) {
+      toast.error(isWeekdayISO(originalDate)
+        ? 'This reservation was booked on a weekday, so it can only move to another weekday.'
+        : 'This reservation was booked on a weekend, so it can only move to another Saturday or Sunday.')
       return
     }
     if (isWeekdayISO(newDate) && String(reservation.sessionType || '').toLowerCase() !== 'private') {
@@ -247,7 +261,7 @@ export function MyReservationsPage() {
         <Card className="p-4 text-sm text-muted">You have no reservations yet.</Card>
       ) : null}
 
-      {sorted.map((reservation) => {
+      {pageItems.map((reservation) => {
         const id = reservationIdOf(reservation)
         const date = dateOf(reservation)
         const status = statusOf(reservation)
@@ -256,11 +270,14 @@ export function MyReservationsPage() {
         // Staff sent it back: the player can always pick a new date, whatever the cutoff.
         const sentBack = Boolean(reservation.sentBack) && status === 'needs review'
         const canReschedule = statusAllows && (sentBack || daysLeft >= RESCHEDULE_CUTOFF_DAYS)
+        const cutoffDate = date ? addDaysISO(date, -RESCHEDULE_CUTOFF_DAYS) : ''
         const blockedReason = !statusAllows
           ? `A ${status} reservation can't be rescheduled.`
-          : daysLeft < RESCHEDULE_CUTOFF_DAYS
-            ? `Rescheduling closes ${RESCHEDULE_CUTOFF_DAYS} days before the game.`
-            : ''
+          : daysLeft < 0
+            ? 'This game date has passed.'
+            : daysLeft < RESCHEDULE_CUTOFF_DAYS
+              ? `Rescheduling closed on ${formatShortDate(cutoffDate)}: changes must be made at least ${RESCHEDULE_CUTOFF_DAYS} days before the game (${formatShortDate(date)}).`
+              : ''
         const editing = editingId === id
         const reservationPayments = payments.filter((payment) => [reservation.id, reservation._id].map(String).includes(String(payment.reservationId)))
         const hasVerifiedPayment = reservationPayments.some(isVerifiedPayment)
@@ -311,12 +328,15 @@ export function MyReservationsPage() {
                     <FiPrinter /> Print receipt
                   </Button>
                 ) : null}
+                <Button variant="ghost" onClick={() => setDetailsId(id)}>
+                  <FiEye /> View details
+                </Button>
                 {!editing ? (
-                  <Button variant={sentBack ? 'primary' : 'ghost'} disabled={!canReschedule} onClick={() => startEditing(reservation)}>
+                  <Button variant={sentBack ? 'primary' : 'ghost'} disabled={!canReschedule} onClick={() => startEditing(reservation)} title={blockedReason || undefined}>
                     <FiRefreshCw /> {sentBack ? 'Choose a new date' : 'Reschedule'}
                   </Button>
                 ) : null}
-                {!canReschedule && blockedReason ? <div className="text-xs text-muted">{blockedReason}</div> : null}
+                {!canReschedule && blockedReason ? <div className="max-w-xs text-xs text-warning md:text-right">{blockedReason}</div> : null}
                 {isOpen ? (
                   <div className="flex max-w-xs items-start gap-1 text-xs text-muted md:text-right">
                     <FiLock className="mt-0.5 shrink-0" /> No cancellations — you can transfer to another date up to {RESCHEDULE_CUTOFF_DAYS} days before your game, and your deposit carries over.
@@ -327,26 +347,27 @@ export function MyReservationsPage() {
 
             {editing ? (
               <div className="mt-4 grid gap-3 rounded-2xl border border-white/10 bg-white/5 p-4 md:grid-cols-3">
-                <label className="block text-xs font-semibold text-muted">
-                  New date
-                  <input
-                    type="date"
-                    min={addDaysISO(today, 1)}
-                    value={newDate}
-                    onChange={(event) => setNewDate(event.target.value)}
-                    className="mt-1 w-full rounded-xl border border-white/10 bg-background px-3 py-2 text-sm text-text"
+                <div className="md:col-span-3">
+                  <div className="mb-2 text-xs font-semibold text-muted">Choose a new date and time slot</div>
+                  <RescheduleSlotPicker
+                    target={{
+                      locationId: String(reservation.locationId || reservation.locationName || ''),
+                      sessionType: String(reservation.sessionType || 'public').toLowerCase(),
+                      players: Number(reservation.numberOfPlayers || 0),
+                      fieldIds: Array.isArray(reservation.fieldIds) ? reservation.fieldIds.map(String) : [],
+                      originalDate: date,
+                      originalSlot: slotOf(reservation),
+                    }}
+                    todayISO={today}
+                    slotHours={slotHours}
+                    date={newDate}
+                    slot={newSlot}
+                    onChange={(next) => {
+                      setNewDate(next.date)
+                      setNewSlot(next.slot)
+                    }}
                   />
-                </label>
-                <label className="block text-xs font-semibold text-muted">
-                  Time slot
-                  <select
-                    value={newSlot}
-                    onChange={(event) => setNewSlot(event.target.value)}
-                    className="mt-1 w-full rounded-xl border border-white/10 bg-background px-3 py-2 text-sm capitalize text-text [&>option]:bg-background"
-                  >
-                    {SLOTS.map((slot) => <option key={slot} value={slot}>{slot} ({formatSlotRange(slotHours, slot)})</option>)}
-                  </select>
-                </label>
+                </div>
                 <label className="block text-xs font-semibold text-muted md:col-span-3">
                   {sentBack ? 'Note for staff (optional)' : 'Reason'}
                   <textarea
@@ -359,7 +380,7 @@ export function MyReservationsPage() {
                 </label>
                 <div className="flex gap-2 md:col-span-3">
                   <Button variant="ghost" onClick={() => setEditingId(null)} disabled={saving}>Cancel</Button>
-                  <Button variant="primary" onClick={() => submitReschedule(reservation)} disabled={saving}>
+                  <Button variant="primary" onClick={() => submitReschedule(reservation)} disabled={saving || !newDate}>
                     {saving ? 'Saving…' : 'Confirm new schedule'}
                   </Button>
                 </div>
@@ -379,6 +400,22 @@ export function MyReservationsPage() {
           </Card>
         )
       })}
+      <Pagination page={page} pageCount={pageCount} total={total} onPageChange={setPage} />
+
+      {detailsId ? (() => {
+        const reservation = reservations.find((item) => reservationIdOf(item) === detailsId)
+        if (!reservation) return null
+        const reservationPayments = payments.filter((payment) => [reservation.id, reservation._id].map(String).includes(String(payment.reservationId)))
+        return (
+          <ReservationDetailsDialog
+            reservation={reservation}
+            payments={reservationPayments as any}
+            captainName={user?.name || 'You'}
+            slotHours={slotHours}
+            onClose={() => setDetailsId(null)}
+          />
+        )
+      })() : null}
     </div>
   )
 }

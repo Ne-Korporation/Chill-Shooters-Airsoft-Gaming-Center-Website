@@ -58,6 +58,9 @@ export function PaymentCompletePanel() {
   }, [load])
 
   const approve = async (id: string) => {
+    const item = items.find((entry) => entry.reservation.id === id)
+    const unverified = item?.payments.filter((payment) => !['paid', 'confirmed', 'verified', 'approved'].includes(String(payment.paymentStatus).toLowerCase())) ?? []
+    if (unverified.length && !window.confirm(`Approve this reservation and verify its ${unverified.length} unverified payment proof${unverified.length === 1 ? '' : 's'}? Check the proofs first.`)) return
     setApprovingId(id)
     try {
       await apiPut(`/api/reservations/${encodeURIComponent(id)}/status`, { reservationStatus: 'confirmed' })
@@ -113,7 +116,9 @@ export function PaymentCompletePanel() {
                     ))}
                   </ul>
                   {unverified.length > 0 ? (
-                    <div className="mt-1 text-[11px] text-warning">{unverified.length} proof{unverified.length === 1 ? '' : 's'} not yet verified in Payments.</div>
+                    <div className="mt-1 text-[11px] text-warning">
+                      {unverified.length} proof{unverified.length === 1 ? '' : 's'} not yet verified. Approving marks {unverified.length === 1 ? 'it' : 'them'} as verified in Payments under your name.
+                    </div>
                   ) : null}
                 </div>
                 <div>

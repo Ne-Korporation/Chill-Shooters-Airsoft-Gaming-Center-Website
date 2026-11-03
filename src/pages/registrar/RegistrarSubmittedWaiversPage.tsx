@@ -4,13 +4,15 @@ import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { FiCheck, FiShield, FiClock, FiAlertTriangle } from 'react-icons/fi'
-import { apiGet, apiPut } from '../../utils/apiClient'
+import { apiGetAll, apiPut } from '../../utils/apiClient'
+import { Pagination, usePagination } from '../../components/ui/Pagination'
 import { WaiverApprovalDialog, type WaiverIdCheck } from '../../components/waivers/WaiverApprovalDialog'
 
 type WaiverStatus = 'pending' | 'accepted' | 'flagged' | 'expired'
 
 type WaiverRow = {
   id: string
+  reviewedBy: string
   submittedAtISO: string
   reservationId: string
   participantSummary: string
@@ -51,8 +53,12 @@ export function RegistrarSubmittedWaiversPage() {
   const refresh = async () => {
     setLoading(true)
     try {
-      const res = await apiGet<{ ok: boolean; data: any[] }>('/api/waivers?limit=200')
-      const mapped = (Array.isArray(res?.data) ? res.data : []).map((item) => ({
+      // Archived waivers (replaced by a resubmission, or archived by an admin) leave the queue.
+      const docs = (await apiGetAll<any>('waivers')).filter((item) => !item.archived)
+      const mapped = docs.map((item) => ({
+        reviewedBy: item.reviewedBy?.role
+          ? `${item.reviewedBy.role.charAt(0).toUpperCase()}${item.reviewedBy.role.slice(1)} ${item.reviewedBy.name || item.reviewedBy.email || ''}`.trim()
+          : '',
         id: String(item.id || item._id || ''),
         submittedAtISO: item.submittedAtISO || item.createdAtISO || '',
         reservationId: String(item.reservationId || ''),
@@ -67,7 +73,7 @@ export function RegistrarSubmittedWaiversPage() {
         guardianIdType: item.guardianIdType || '',
         guardianIdImage: item.guardianIdImage || '',
       }))
-      setRows(mapped)
+      setRows(mapped.sort((a, b) => b.submittedAtISO.localeCompare(a.submittedAtISO)))
     } catch (e: any) {
       toast.error(String(e?.message || e))
       setRows([])
@@ -92,6 +98,7 @@ export function RegistrarSubmittedWaiversPage() {
       )
     })
   }, [query, rows])
+  const { page, setPage, pageCount, pageItems, total } = usePagination(filtered, undefined, query)
 
   const pendingCount = useMemo(() => rows.filter((r) => r.status === 'pending').length, [rows])
   const flaggedCount = useMemo(() => rows.filter((r) => r.status === 'flagged').length, [rows])
@@ -188,7 +195,7 @@ export function RegistrarSubmittedWaiversPage() {
                 </tr>
               ) : null}
 
-              {!loading && filtered.map((r) => (
+              {!loading && pageItems.map((r) => (
                 <tr key={r.id} className="border-t border-white/5">
                   <td className="py-3 pr-3">
                     <div className="font-bold">{r.id}</div>
@@ -205,6 +212,7 @@ export function RegistrarSubmittedWaiversPage() {
                   <td className="py-3 pr-3">
                     <div className="font-bold">{r.participantSummary}</div>
                     {r.reviewerNote ? <div className="mt-1 text-xs text-muted">{r.reviewerNote}</div> : null}
+                    {r.reviewedBy && r.status !== 'pending' ? <div className="mt-1 text-[11px] text-muted">Reviewed by {r.reviewedBy}</div> : null}
                   </td>
                   <td className="py-3 pr-3">
                     <span
@@ -249,6 +257,7 @@ export function RegistrarSubmittedWaiversPage() {
             </tbody>
           </table>
         </div>
+        <Pagination page={page} pageCount={pageCount} total={total} onPageChange={setPage} />
       </Card>
     </div>
   )

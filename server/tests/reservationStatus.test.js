@@ -40,6 +40,13 @@ function createFakeDatabase(initialReservation, payments = []) {
             state.operations.push({ name: 'readPayments', session: options.session })
             return { toArray: async () => payments }
           },
+          updateMany: async (filter, update, options) => {
+            state.operations.push({ name: 'cancelPayments', session: options.session })
+            const statuses = filter.paymentStatus.$in
+            payments
+              .filter((payment) => statuses.includes(payment.paymentStatus))
+              .forEach((payment) => Object.assign(payment, update.$set))
+          },
         }
       }
       if (name === 'inventory_holds') {
@@ -59,6 +66,26 @@ function createFakeDatabase(initialReservation, payments = []) {
   })
   return { db, startSession, state }
 }
+
+test('cancellation marks unverified payments cancelled and keeps verified ones', async () => {
+  const payments = [
+    { id: 'PAY-1', reservationId: 'R-2', amount: 100, paymentStatus: 'review' },
+    { id: 'PAY-2', reservationId: 'R-2', amount: 50, paymentStatus: 'paid' },
+  ]
+  const fake = createFakeDatabase({ id: 'R-2', reservationStatus: 'pending', depositAmount: 500 }, payments)
+  await updateReservationStatusAtomically({
+    db: fake.db,
+    startSession: fake.startSession,
+    reservationFilter: { id: 'R-2' },
+    reservationId: 'R-2',
+    nextStatus: 'cancelled',
+    actor: { id: 'admin-1', role: 'admin' },
+  })
+
+  assert.equal(payments[0].paymentStatus, 'cancelled')
+  assert.equal(payments[1].paymentStatus, 'paid')
+  assert.ok(fake.state.operations.filter((operation) => operation.name === 'cancelPayments').every((operation) => operation.session === fake.state.operations[0].session))
+})
 
 test('cancellation atomically audits status and releases inventory using the same transaction', async () => {
   const fake = createFakeDatabase({ id: 'R-1', reservationStatus: 'pending' })

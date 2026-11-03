@@ -13,9 +13,12 @@ import { apiPost } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
 import { completeGoogleRedirect, signInWithGoogle, type GoogleProfile } from '../../utils/firebase'
 import { ExistingAccountDialog } from '../../components/auth/ExistingAccountDialog'
+import { cleanMiddleInitial, composeFullName } from '../../utils/names'
 
 type FormValues = {
-  name: string
+  firstName: string
+  middleInitial: string
+  lastName: string
   email: string
   password: string
 }
@@ -32,7 +35,7 @@ export function RegisterPage() {
     handleSubmit,
     watch,
     formState: { errors, isSubmitting },
-  } = useForm<FormValues>({ defaultValues: { name: '', email: '', password: '' } })
+  } = useForm<FormValues>({ defaultValues: { firstName: '', middleInitial: '', lastName: '', email: '', password: '' } })
 
   const password = watch('password')
 
@@ -56,8 +59,14 @@ export function RegisterPage() {
       return
     }
 
+    const nameParts = {
+      firstName: values.firstName.trim(),
+      middleInitial: cleanMiddleInitial(values.middleInitial),
+      lastName: values.lastName.trim(),
+    }
     const payload = {
-      name: values.name.trim(),
+      ...nameParts,
+      name: composeFullName(nameParts),
       email: values.email.trim().toLowerCase(),
       password: values.password,
     }
@@ -179,12 +188,37 @@ export function RegisterPage() {
                 <h2 className="text-xl font-bold">Register</h2>
               </div>
 
-              <Input
-                label="Full name"
-                placeholder="e.g., John Marlowe"
-                error={errors.name?.message}
-                {...register('name', { required: 'Name is required' })}
-              />
+              <div>
+                <div className="grid gap-3 sm:grid-cols-[1fr_5rem_1fr]">
+                  <Input
+                    label="First name"
+                    placeholder="e.g., John"
+                    autoComplete="given-name"
+                    error={errors.firstName?.message}
+                    {...register('firstName', { validate: (v) => Boolean(v.trim()) || 'First name is required' })}
+                  />
+                  <Input
+                    label="M.I."
+                    placeholder="e.g., D"
+                    maxLength={2}
+                    autoComplete="additional-name"
+                    {...register('middleInitial')}
+                  />
+                  <Input
+                    label="Last name"
+                    placeholder="e.g., Marlowe"
+                    autoComplete="family-name"
+                    error={errors.lastName?.message}
+                    {...register('lastName', { validate: (v) => Boolean(v.trim()) || 'Last name is required' })}
+                  />
+                </div>
+                <p className="mt-2 text-xs text-muted">
+                  Use your name exactly as it is on your ID. Your waiver will be filled in as{' '}
+                  <span className="font-semibold text-text">
+                    {composeFullName({ firstName: watch('firstName'), middleInitial: watch('middleInitial'), lastName: watch('lastName') }) || 'First M. Last'}
+                  </span>.
+                </p>
+              </div>
               <Input
                 label="Email"
                 placeholder="operator@email.com"

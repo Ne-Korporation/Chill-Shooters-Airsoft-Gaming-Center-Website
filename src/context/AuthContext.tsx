@@ -2,7 +2,17 @@ import React, { createContext, useContext, useEffect, useMemo, useState } from '
 import toast from 'react-hot-toast'
 
 import { apiPost } from '../utils/apiClient'
-import { clearStoredSession, getTokenExpiry, readStoredSessionRaw, writeStoredSession } from '../utils/authStorage'
+import {
+  AUTH_STORAGE_KEY,
+  LAST_ACTIVITY_KEY,
+  clearLastActivity,
+  clearStoredSession,
+  getTokenExpiry,
+  readLastActivity,
+  readStoredSessionRaw,
+  writeLastActivity,
+  writeStoredSession,
+} from '../utils/authStorage'
 
 type Role = 'user' | 'admin' | 'marshal' | 'registrar'
 
@@ -41,9 +51,17 @@ type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | null>(null)
 
-// Sessions without "Remember me" are logged out after this much inactivity.
+// Every session is logged out after this much inactivity. "Remember me" sessions get a longer
+// window (they still survive a browser restart), but are not kept open forever when left alone.
 const IDLE_TIMEOUT_MS = Math.max(1, Number(import.meta.env.VITE_SESSION_IDLE_MINUTES) || 30) * 60 * 1000
+const REMEMBERED_IDLE_TIMEOUT_MS = Math.max(1, Number(import.meta.env.VITE_REMEMBERED_SESSION_IDLE_HOURS) || 24) * 60 * 60 * 1000
+// A warning with a "Stay signed in" button appears this long before the logout.
+const IDLE_WARNING_MS = 60 * 1000
 const ACTIVITY_EVENTS = ['mousedown', 'keydown', 'scroll', 'touchstart', 'mousemove'] as const
+
+function idleLimitFor(session: AuthSession | null) {
+  return session?.remember ? REMEMBERED_IDLE_TIMEOUT_MS : IDLE_TIMEOUT_MS
+}
 
 function loadSession(): AuthSession | null {
   try {
@@ -52,8 +70,11 @@ function loadSession(): AuthSession | null {
     const parsed = JSON.parse(raw)
     if (!parsed?.user || !parsed?.token) return null
     const exp = getTokenExpiry(parsed.token)
-    if (exp && exp < Date.now()) {
+    // Expired token, or the app sat unused for longer than the idle limit since it was last open.
+    const lastActivity = readLastActivity()
+    if ((exp && exp < Date.now()) || (lastActivity && Date.now() - lastActivity > idleLimitFor(parsed))) {
       clearStoredSession()
+      clearLastActivity()
       return null
     }
     return parsed as AuthSession
@@ -68,14 +89,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const user = session?.user ?? null
   const token = session?.token ?? ''
 
+  const [idleWarning, setIdleWarning] = useState(false)
+  const idleWarningRef = React.useRef(false)
+  idleWarningRef.current = idleWarning
+
   const startSession = React.useCallback((next: AuthSession) => {
+    writeLastActivity()
     setSession(next)
     writeStoredSession(next, !!next.remember)
   }, [])
 
   const logout = React.useCallback(() => {
     setSession(null)
+    setIdleWarning(false)
     clearStoredSession()
+    clearLastActivity()
   }, [])
 
   const updateUser = React.useCallback((updates: Partial<AuthUser>) => {
@@ -100,28 +128,65 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => window.clearTimeout(timer)
   }, [token, logout])
 
-  // Auto-logout after inactivity for sessions that were not remembered.
+  // Auto-logout after inactivity. Activity is stamped in localStorage (shared by all tabs), and the
+  // clock is checked every few seconds and whenever the tab comes back into view, so the logout
+  // still happens after the computer slept or the tab sat in the background.
   useEffect(() => {
-    if (!token || session?.remember) return
-    let timer = 0
-    let lastReset = 0
-    const reset = () => {
+    if (!token) return
+    const limit = idleLimitFor(session)
+    let lastStamp = 0
+    if (!readLastActivity()) writeLastActivity()
+
+    const markActive = () => {
       const now = Date.now()
-      if (now - lastReset < 1000) return
-      lastReset = now
-      window.clearTimeout(timer)
-      timer = window.setTimeout(() => {
+      if (now - lastStamp < 5000) return
+      lastStamp = now
+      writeLastActivity(now)
+    }
+    const check = () => {
+      const idleFor = Date.now() - (readLastActivity() || Date.now())
+      if (idleFor >= limit) {
         logout()
-        toast.error('You were logged out due to inactivity.')
-      }, IDLE_TIMEOUT_MS)
+        toast.error('You were logged out because the app was left unused.')
+        return
+      }
+      setIdleWarning(idleFor >= limit - IDLE_WARNING_MS)
     }
-    reset()
-    ACTIVITY_EVENTS.forEach((event) => window.addEventListener(event, reset, { passive: true }))
+
+    check()
+    const interval = window.setInterval(check, 5000)
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') check()
+    }
+    // While the warning is up, only the "Stay signed in" button counts as activity.
+    const onActivity = () => {
+      if (!idleWarningRef.current) markActive()
+    }
+    ACTIVITY_EVENTS.forEach((event) => window.addEventListener(event, onActivity, { passive: true }))
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', check)
+    // Another tab logged out or was active: follow it.
+    const onStorage = (event: StorageEvent) => {
+      const loggedOutElsewhere = (event.key === AUTH_STORAGE_KEY && !readStoredSessionRaw()) || (event.key === LAST_ACTIVITY_KEY && event.newValue === null)
+      if (loggedOutElsewhere) logout()
+      else check()
+    }
+    window.addEventListener('storage', onStorage)
     return () => {
-      window.clearTimeout(timer)
-      ACTIVITY_EVENTS.forEach((event) => window.removeEventListener(event, reset))
+      window.clearInterval(interval)
+      ACTIVITY_EVENTS.forEach((event) => window.removeEventListener(event, onActivity))
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', check)
+      window.removeEventListener('storage', onStorage)
     }
+    // session?.remember is the only part of the session the limit depends on
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, session?.remember, logout])
+
+  const staySignedIn = React.useCallback(() => {
+    writeLastActivity()
+    setIdleWarning(false)
+  }, [])
 
   const value = useMemo<AuthContextValue>(
     () => ({
@@ -164,7 +229,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [token, updateUser, user, startSession, logout],
   )
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
+  return (
+    <AuthContext.Provider value={value}>
+      {children}
+      {idleWarning && user ? (
+        <div className="fixed inset-0 z-[100001] flex items-center justify-center bg-black/60 p-4" role="alertdialog" aria-modal="true" aria-labelledby="idle-warning-title">
+          <div className="w-full max-w-sm rounded-3xl border border-white/10 bg-background p-5 text-text shadow-soft">
+            <div id="idle-warning-title" className="text-lg font-bold">Still there?</div>
+            <p className="mt-2 text-sm text-muted">You haven't used the app for a while. For your security you'll be logged out in about a minute.</p>
+            <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-end">
+              <button type="button" onClick={logout} className="surface hover-row h-10 rounded-xl px-4 text-sm font-semibold">Log out now</button>
+              <button type="button" onClick={staySignedIn} autoFocus className="h-10 rounded-xl bg-primary px-4 text-sm font-semibold text-white">Stay signed in</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </AuthContext.Provider>
+  )
 }
 
 export function useAuth() {

@@ -60,7 +60,7 @@ export async function requestGuardianApprovals(db, reservation, appUrl) {
     await indexReady
 
     const waivers = await db.collection('waivers').find(
-      { userId: { $in: ids }, status: { $regex: '^approved$', $options: 'i' } },
+      { userId: { $in: ids }, status: { $regex: '^approved$', $options: 'i' }, archived: { $ne: true } },
     ).toArray()
     const latestWaiver = (userId) => waivers
       .filter((waiver) => String(waiver.userId) === userId)

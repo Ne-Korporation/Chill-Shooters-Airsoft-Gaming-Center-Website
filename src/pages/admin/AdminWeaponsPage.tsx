@@ -4,7 +4,8 @@ import toast from 'react-hot-toast'
 import { ActionGroup, Button } from '../../components/ui/Button'
 import { FilterTabs } from '../../components/ui/FilterTabs'
 import { Card } from '../../components/ui/Card'
-import { apiGet, apiPost, apiPut, apiDelete } from '../../utils/apiClient'
+import { apiGet, apiGetAll, apiPost, apiPut, apiDelete } from '../../utils/apiClient'
+import { Pagination, usePagination } from '../../components/ui/Pagination'
 import { ModelSummaryStrip } from '../../components/inventory/ModelSummaryStrip'
 import { modelOf, summarizeModels } from '../../utils/inventoryModels'
 import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
@@ -50,7 +51,10 @@ const categoryOptions: { key: WeaponCategory; label: string; subtitle: string }[
 
 const categoryLabel = (key: string) => categoryOptions.find((option) => option.key === key)?.label || key
 
-const StatusBadge = ({ status, onToggle }: { status: WeaponStatus; onToggle?: () => void }) => {
+// A label only: a piece becomes "rented" when it is checked out at Rentals, and "needs check"
+// through Flag. Clicking it used to flip available/rented, which bypassed the rental records.
+const STATUS_LABELS: Record<WeaponStatus, string> = { available: 'Available', rented: 'Rented', 'needs-check': 'Needs check' }
+const StatusBadge = ({ status }: { status: WeaponStatus }) => {
   const cls =
     status === 'available'
       ? 'bg-success/20 text-success border-success/30'
@@ -59,16 +63,9 @@ const StatusBadge = ({ status, onToggle }: { status: WeaponStatus; onToggle?: ()
         : 'bg-danger/20 text-danger border-danger/30'
 
   return (
-    <button
-      type="button"
-      onClick={(event) => {
-        event.stopPropagation()
-        onToggle?.()
-      }}
-      className={`inline-flex items-center rounded-full border px-3 py-1 text-[11px] font-semibold transition ${cls} ${onToggle ? 'cursor-pointer hover:opacity-80' : ''}`}
-    >
-      {status.toUpperCase()}
-    </button>
+    <span className={`inline-flex items-center whitespace-nowrap rounded-full border px-3 py-1 text-[11px] font-semibold ${cls}`}>
+      {STATUS_LABELS[status] || status}
+    </span>
   )
 }
 
@@ -114,8 +111,7 @@ export function AdminWeaponsPage() {
   const refresh = React.useCallback(async () => {
     setLoading(true)
     try {
-      const res = await apiGet<{ ok: boolean; data: any[] }>('/api/weapons?limit=200')
-      const docs = Array.isArray(res?.data) ? res.data : []
+      const docs = await apiGetAll<any>('weapons')
       const normalized = docs.map((d: any) => ({
         id: d.id ?? (d._id ? String(d._id) : undefined),
         _id: d._id,
@@ -155,13 +151,21 @@ export function AdminWeaponsPage() {
       .catch(() => setOwnerNames({}))
   }, [sourceFilter, ownerNames])
 
-  const filtered = weapons.filter((weapon) => {
-    if (weapon.source === 'player' && weapon.approvalStatus === 'rejected') return false
-    const matchCategory = category === 'all' ? true : weapon.category === category
-    const matchStatus = status === 'all' ? true : weapon.status === status
-    const matchSource = weapon.source === sourceFilter
-    return matchCategory && matchStatus && matchSource
-  })
+  const [search, setSearch] = React.useState('')
+  // Filters run over every weapon first, then the result is paged 10 at a time.
+  const filtered = React.useMemo(() => {
+    const term = search.trim().toLowerCase()
+    return weapons.filter((weapon) => {
+      if (weapon.source === 'player' && weapon.approvalStatus === 'rejected') return false
+      const matchCategory = category === 'all' ? true : weapon.category === category
+      const matchStatus = status === 'all' ? true : weapon.status === status
+      const matchSource = weapon.source === sourceFilter
+      const matchSearch = !term || [weapon.id, weapon.name, weapon.model, weapon.description, ownerNames[String(weapon.submittedBy)]]
+        .some((value) => String(value || '').toLowerCase().includes(term))
+      return matchCategory && matchStatus && matchSource && matchSearch
+    })
+  }, [weapons, category, status, sourceFilter, search, ownerNames])
+  const { page, setPage, pageCount, pageItems, total } = usePagination(filtered, undefined, `${category}|${status}|${sourceFilter}|${search}`)
 
   const activeCategoryMeta = category === 'all' ? null : categoryOptions.find((item) => item.key === category)
   const maintenanceQueue = weapons.filter((weapon) => weapon.status === 'needs-check')
@@ -285,21 +289,6 @@ export function AdminWeaponsPage() {
     const weapon = weapons.find((w) => w.id === id)
     if (!weapon) return
     const newStatus = weapon.status === 'needs-check' ? 'available' : 'needs-check'
-    try {
-      await apiPut<any>(`/api/weapons/${encodeURIComponent(id)}`, {
-        status: newStatus,
-        updatedAtISO: new Date().toISOString(),
-      })
-      await refresh()
-    } catch (e: any) {
-      toast.error(String(e?.message || e))
-    }
-  }
-
-  const handleStatusToggle = async (id: string) => {
-    const weapon = weapons.find((w) => w.id === id)
-    if (!weapon) return
-    const newStatus = weapon.status === 'available' ? 'rented' : weapon.status === 'rented' ? 'available' : weapon.status
     try {
       await apiPut<any>(`/api/weapons/${encodeURIComponent(id)}`, {
         status: newStatus,
@@ -440,6 +429,15 @@ export function AdminWeaponsPage() {
 
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
             <div>
+              <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-muted">Search</div>
+              <input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="ID, name, model, owner"
+                className="w-full min-w-[200px] rounded-full border border-white/10 bg-background px-4 py-2 text-sm text-text outline-none focus:ring-2 focus:ring-accent/40"
+              />
+            </div>
+            <div>
               <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-muted">Category</div>
               <select
                 value={category}
@@ -507,13 +505,13 @@ export function AdminWeaponsPage() {
 
         <div className="mt-4 overflow-x-auto rounded-2xl border border-white/5">
           <div className="min-w-[920px]">
-            <div className="grid grid-cols-12 bg-white/5 px-3 py-2 text-xs uppercase tracking-widest text-muted">
+            <div className="grid grid-cols-12 gap-3 bg-white/5 px-3 py-2 text-xs uppercase tracking-widest text-muted">
               <div className="col-span-2">ID</div>
               <div className="col-span-3">Weapon</div>
               <div className="col-span-1 text-right">Piece</div>
               <div className="col-span-1 text-right">Price</div>
-              <div className="col-span-1 text-right">Status</div>
-              <div className="col-span-4 text-right">Actions</div>
+              <div className="col-span-2 pl-4">Status</div>
+              <div className="col-span-3 text-right">Actions</div>
             </div>
 
             <div className="divide-y divide-white/5">
@@ -522,8 +520,8 @@ export function AdminWeaponsPage() {
             ) : filtered.length === 0 ? (
               <div className="p-6 text-sm text-muted">No weapons match this filter.</div>
             ) : (
-              filtered.map((weapon) => (
-                <div key={weapon.id} className={"grid grid-cols-12 items-center px-3 py-3 " + (selectedWeaponId === weapon.id ? 'bg-white/6 ring-2 ring-white/10' : '')}>
+              pageItems.map((weapon) => (
+                <div key={weapon.id} className={"grid grid-cols-12 items-center gap-3 px-3 py-3 " + (selectedWeaponId === weapon.id ? 'bg-white/6 ring-2 ring-white/10' : '')}>
                   <div className="col-span-2 text-sm font-semibold">{weapon.id}</div>
                   <div className="col-span-3">
                     <div className="flex flex-wrap items-center gap-2">
@@ -542,11 +540,11 @@ export function AdminWeaponsPage() {
                     ) : null}
                   </div>
                   <div className="col-span-1 text-right text-sm font-semibold">{weapon.source === 'player' || !weapon.unitNumber ? '—' : `#${weapon.unitNumber}`}</div>
-                  <div className="col-span-1 text-right text-sm text-muted">₱{weapon.price}</div>
-                  <div className="col-span-1 text-right">
-                    <StatusBadge status={weapon.status} onToggle={() => handleStatusToggle(weapon.id)} />
+                  <div className="col-span-1 text-right text-sm font-semibold text-muted">₱{weapon.price.toLocaleString()}</div>
+                  <div className="col-span-2 pl-4">
+                    <StatusBadge status={weapon.status} />
                   </div>
-                  <div className="col-span-4">
+                  <div className="col-span-3">
                     <ActionGroup>
                       <Button size="xs" variant="ghost" onClick={(e) => { e.stopPropagation(); handleSelect(weapon) }}>
                         <FiEdit2 /> Edit
@@ -575,6 +573,7 @@ export function AdminWeaponsPage() {
             </div>
           </div>
         </div>
+        <Pagination page={page} pageCount={pageCount} total={total} onPageChange={setPage} />
 
         {sourceFilter === 'business' ? (
         <div className="mt-4 grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">

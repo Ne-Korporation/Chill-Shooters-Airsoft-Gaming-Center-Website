@@ -4,7 +4,8 @@ import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { FiPackage, FiFilter, FiCheck, FiInfo, FiX } from 'react-icons/fi'
-import { apiGet } from '../../utils/apiClient'
+import { apiGetAll } from '../../utils/apiClient'
+import { Pagination, usePagination } from '../../components/ui/Pagination'
 
 type AvailStatus = 'in_use' | 'ready_for_queue' | 'inspection_required'
 
@@ -41,7 +42,7 @@ export function RegistrarAvailedPackagesPage() {
   const refresh = async () => {
     setLoading(true)
     try {
-      const res = await apiGet<{ ok: boolean; data: any[] }>('/api/reservations?limit=200')
+      const res = { data: await apiGetAll<any>('reservations') }
       const data = Array.isArray(res?.data) ? res.data : []
       const mapped = data
         .filter((item) => String(item.reservationStatus || '').toLowerCase() === 'confirmed' || String(item.reservationStatus || '').toLowerCase() === 'pending')
@@ -83,6 +84,8 @@ export function RegistrarAvailedPackagesPage() {
   const markReady = (id: string) => {
     setRows((prev) => prev.map((r) => (r.id === id ? { ...r, status: 'ready_for_queue' } : r)))
   }
+
+  const { page, setPage, pageCount, pageItems, total } = usePagination(filtered, undefined, query)
 
   return (
     <div className="space-y-4">
@@ -150,7 +153,7 @@ export function RegistrarAvailedPackagesPage() {
                   </tr>
                 ) : null}
 
-                {!loading && filtered.map((r) => (
+                {!loading && pageItems.map((r) => (
                   <tr key={r.id} className="border-t border-white/5">
                     <td className="py-3 pr-3">
                       <div className="font-bold">{r.id}</div>
@@ -199,6 +202,7 @@ export function RegistrarAvailedPackagesPage() {
               </tbody>
             </table>
           </div>
+          <Pagination page={page} pageCount={pageCount} total={total} onPageChange={setPage} />
         </Card>
 
         <Card className="p-4">

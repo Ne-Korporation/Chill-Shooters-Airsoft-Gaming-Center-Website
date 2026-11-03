@@ -5,16 +5,19 @@ import { FilterTabs, titleCaseLabel } from '../../components/ui/FilterTabs'
 import { Card } from '../../components/ui/Card'
 import { Input } from '../../components/ui/Input'
 import toast from 'react-hot-toast'
-import { apiBase, apiDelete, apiGet, apiPut, getApiAuthHeaders } from '../../utils/apiClient'
+import { apiBase, apiDelete, apiGet, apiGetAll, apiPut, getApiAuthHeaders } from '../../utils/apiClient'
+import { Pagination, usePagination } from '../../components/ui/Pagination'
 import { useAuth } from '../../context/AuthContext'
 import { formatPhPhone, isValidPhPhone, PH_PHONE_PLACEHOLDER, toStoredPhPhone } from '../../utils/phone'
 import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
 import { BookingPaymentReview } from '../../components/payments/BookingPaymentReview'
 
 
-type PaymentStatus = 'paid' | 'pending' | 'failed' | 'review' | 'confirmed'
+type PaymentStatus = 'paid' | 'pending' | 'failed' | 'review' | 'confirmed' | 'cancelled'
 
 type PaymentItem = {
+  reservationId: string
+  reviewedBy: string
   id: string
   player: string
   amount: number
@@ -29,7 +32,7 @@ type PaymentItem = {
   reviewReason: string
 }
 
-const KNOWN_STATUSES: PaymentStatus[] = ['paid', 'pending', 'failed', 'review', 'confirmed']
+const KNOWN_STATUSES: PaymentStatus[] = ['paid', 'pending', 'failed', 'review', 'confirmed', 'cancelled']
 
 function normalizePaymentStatus(value: unknown): PaymentStatus {
   const lower = String(value || 'pending').toLowerCase()
@@ -59,6 +62,8 @@ const statusBadge = (status: PaymentStatus) => {
       return 'bg-danger/20 text-danger border-danger/30'
     case 'review':
       return 'bg-white/5 text-text border-white/5'
+    case 'cancelled':
+      return 'bg-white/5 text-muted border-white/10 line-through'
   }
 }
 
@@ -89,22 +94,39 @@ export function AdminPaymentsPage() {
   const load = async () => {
     setLoading(true)
     try {
-      const res = await apiGet<{ ok: boolean; data: any[] }>('/api/payments?limit=200')
-      const docs = Array.isArray(res?.data) ? res.data : []
+      const [docs, reservations, accounts] = await Promise.all([
+        apiGetAll<any>('payments'),
+        apiGetAll<any>('reservations'),
+        apiGetAll<any>('user_accounts'),
+      ])
+      // Older records were never updated when their booking was cancelled: treat any unverified
+      // payment on a cancelled booking as cancelled so it leaves "Needs review" and "Pending amount".
+      const cancelledReservations = new Set(reservations
+        .filter((r: any) => String(r.reservationStatus || '').toLowerCase() === 'cancelled')
+        .flatMap((r: any) => [r.id, r._id].filter(Boolean).map(String)))
+      const nameById = new Map(accounts.map((a: any) => [String(a.id || a._id || ''), String(a.name || a.email || '')]))
       setPayments(
-        docs.map((d: any) => ({
+        docs.map((d: any) => {
+          const status = normalizePaymentStatus(d.paymentStatus ?? d.status)
+          const reservationId = String(d.reservationId || '')
+          return {
           id: d.id ?? (d._id ? String(d._id) : ''),
-          player: d.userId ? String(d.userId) : d.player ?? '—',
+          reservationId,
+          player: (d.userId && nameById.get(String(d.userId))) || (d.userId ? String(d.userId) : d.player ?? '—'),
           amount: Number(d.amount ?? d.totalPHP ?? 0),
           method: d.paymentMethod ?? d.method ?? '—',
-          status: normalizePaymentStatus(d.paymentStatus ?? d.status),
+          status: ['pending', 'review'].includes(status) && cancelledReservations.has(reservationId) ? 'cancelled' as const : status,
+          reviewedBy: d.verifiedByRole && !['system', 'user'].includes(d.verifiedByRole)
+            ? `${titleCaseLabel(String(d.verifiedByRole))}${d.verifiedByName ? ` ${d.verifiedByName}` : ''}`
+            : '',
           date: d.createdAtISO ?? d.createdAt ?? d.submittedAtISO ?? '—',
           note: d.transactionReference ?? d.refNo ?? d.note ?? '',
           receiptUrl: d.gcashImageUrl ?? d.proofUrl ?? d.receiptUrl ?? '',
           stripe: Boolean(d.stripePaymentIntentId),
           gatewayName: d.xenditInvoiceId ? 'Xendit' : d.paymongoCheckoutId ? 'PayMongo' : '',
           reviewReason: d.reviewReason ?? '',
-        }))
+          }
+        }).sort((a, b) => String(b.date).localeCompare(String(a.date)))
       )
     } catch (e: any) {
       toast.error(String(e?.message || e))
@@ -226,7 +248,11 @@ export function AdminPaymentsPage() {
 
 
 
-  const filtered = payments.filter((payment) => (active === 'all' ? true : payment.status === active))
+  const filtered = useMemo(
+    () => payments.filter((payment) => (active === 'all' ? true : payment.status === active)),
+    [payments, active],
+  )
+  const { page, setPage, pageCount, pageItems, total } = usePagination(filtered, undefined, active)
   const reviewCount = payments.filter((payment) => payment.status === 'review').length
   const pendingValue = payments.filter((payment) => payment.status === 'pending').reduce((sum, p) => sum + p.amount, 0)
   const todayLabel = new Date().toDateString()
@@ -241,11 +267,12 @@ export function AdminPaymentsPage() {
     setUpdatingId(id)
     try {
       await apiPut(`/api/payments/${encodeURIComponent(id)}/verify`, { paymentStatus: nextStatus, reason })
+      const by = [titleCaseLabel(String(user?.role || 'staff')), user?.name].filter(Boolean).join(' ')
       sendRoleNotifications(addNotification, {
-        roles: ['admin', 'registrar', 'marshal'],
+        roles: ['admin', 'registrar'],
         type: 'payment_verified',
-        title: 'Payment Status Updated',
-        message: `Payment ${id} was marked ${nextStatus}.`,
+        title: `Payment ${nextStatus === 'paid' ? 'approved' : nextStatus === 'failed' ? 'sent back' : 'updated'} by ${by}`,
+        message: `${by} marked payment ${id} as ${nextStatus === 'failed' ? 'sent back' : nextStatus}${reason ? `: ${reason}` : '.'}`,
         linkedResourceId: id,
       })
       await load()
@@ -460,7 +487,7 @@ export function AdminPaymentsPage() {
             ariaLabel="Filter payments by status"
             value={active}
             onChange={setActive}
-            options={(['all', 'pending', 'review', 'paid', 'confirmed', 'failed'] as const).map((status) => ({
+            options={(['all', 'pending', 'review', 'paid', 'confirmed', 'failed', 'cancelled'] as const).map((status) => ({
               value: status,
               label: status === 'all' ? 'All' : status === 'failed' ? 'Sent back' : titleCaseLabel(status),
               count: status === 'all' ? payments.length : payments.filter((p) => p.status === status).length,
@@ -481,7 +508,7 @@ export function AdminPaymentsPage() {
             {filtered.length === 0 ? (
               <div className="p-6 text-sm text-muted">No payments match the selected filter.</div>
             ) : (
-              filtered.map((payment) => (
+              pageItems.map((payment) => (
                 <div key={payment.id} className="flex flex-col gap-3 px-3 py-3 lg:grid lg:grid-cols-12 lg:items-center">
                   <div className="lg:col-span-3">
                     <div className="text-sm font-semibold">{payment.id}</div>
@@ -513,8 +540,13 @@ export function AdminPaymentsPage() {
                       )}
                       {payment.status === 'paid' || payment.status === 'confirmed' ? (
                         <span className="inline-flex h-8 items-center px-1 text-xs font-semibold text-success">{payment.gatewayName ? `Verified by ${payment.gatewayName}` : 'Verified'}</span>
+                        <span className="inline-flex h-8 items-center px-1 text-xs font-semibold text-success">
+                          {payment.paymongo ? 'Verified by PayMongo' : payment.reviewedBy ? `Verified by ${payment.reviewedBy}` : 'Verified'}
+                        </span>
                       ) : payment.status === 'failed' ? (
-                        <span className="inline-flex h-8 items-center px-1 text-xs text-muted">Sent back</span>
+                        <span className="inline-flex h-8 items-center px-1 text-xs text-muted">Sent back{payment.reviewedBy ? ` by ${payment.reviewedBy}` : ''}</span>
+                      ) : payment.status === 'cancelled' ? (
+                        <span className="inline-flex h-8 items-center px-1 text-xs text-muted">Reservation cancelled</span>
                       ) : payment.stripe ? (
                         <span className="inline-flex h-8 items-center px-1 text-xs text-muted">Verified by Stripe</span>
                       ) : (
@@ -539,6 +571,7 @@ export function AdminPaymentsPage() {
             )}
           </div>
         </div>
+        <Pagination page={page} pageCount={pageCount} total={total} onPageChange={setPage} />
       </Card>
     </div>
   )

@@ -5,7 +5,9 @@ import toast from 'react-hot-toast'
 import { Card } from '../ui/Card'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
-import { apiGet } from '../../utils/apiClient'
+import { FilterTabs } from '../ui/FilterTabs'
+import { DEFAULT_PAGE_SIZE, Pagination, usePagination } from '../ui/Pagination'
+import { apiGetAll } from '../../utils/apiClient'
 
 type ReservationDoc = {
   _id?: any
@@ -25,6 +27,23 @@ type ReservationDoc = {
   walkIn?: boolean
   walkInName?: string
   teamMembers?: Array<{ id?: string; name?: string; email?: string }>
+  lastStatusChange?: StatusChange
+  statusHistory?: Array<{ status?: string; changedByRole?: string; changedByName?: string; changedAtISO?: string }>
+}
+
+type StatusChange = { status?: string; byRole?: string; byName?: string; atISO?: string }
+
+// "Approved by Registrar Ana Cruz · Nov 2, 3:14 PM" from the latest staff decision on file.
+export function statusChangeLabel(reservation: Pick<ReservationDoc, 'lastStatusChange' | 'statusHistory'>) {
+  const last = reservation.lastStatusChange
+    || [...(reservation.statusHistory || [])].reverse().map((event) => ({
+      status: event.status, byRole: event.changedByRole, byName: event.changedByName, atISO: event.changedAtISO,
+    }))[0]
+  if (!last?.status || !last.byRole || last.byRole === 'system' || last.byRole === 'user') return ''
+  const verb = { confirmed: 'Approved', pending: 'Marked pending', 'needs review': 'Marked for review', cancelled: 'Cancelled' }[last.status] || 'Updated'
+  const role = last.byRole.charAt(0).toUpperCase() + last.byRole.slice(1)
+  const when = last.atISO ? new Date(last.atISO).toLocaleString('en-PH', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : ''
+  return `${verb} by ${[role, last.byName].filter(Boolean).join(' ')}${when ? ` · ${when}` : ''}`
 }
 
 type AccountDoc = { _id?: any; id?: string; name?: string; email?: string }
@@ -59,6 +78,9 @@ export function ReservationsByDate() {
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
   const [showPast, setShowPast] = useState(false)
+  // Upcoming dates read soonest first; past dates read most recent first. Either can be flipped.
+  const [order, setOrder] = useState<'auto' | 'newest' | 'oldest'>('auto')
+  const newestFirst = order === 'auto' ? showPast : order === 'newest'
   const [showCancelled, setShowCancelled] = useState(false)
   const [openDate, setOpenDate] = useState<string | null>(null)
   const today = manilaTodayISO()
@@ -66,12 +88,12 @@ export function ReservationsByDate() {
   const load = async () => {
     setLoading(true)
     try {
-      const [reservationRes, accountRes] = await Promise.all([
-        apiGet<{ ok: boolean; data: ReservationDoc[] }>('/api/reservations?limit=200'),
-        apiGet<{ ok: boolean; data: AccountDoc[] }>('/api/user_accounts?limit=200'),
+      const [reservationDocs, accountDocs] = await Promise.all([
+        apiGetAll<ReservationDoc>('reservations'),
+        apiGetAll<AccountDoc>('user_accounts'),
       ])
-      setReservations(Array.isArray(reservationRes?.data) ? reservationRes.data : [])
-      setAccounts(Array.isArray(accountRes?.data) ? accountRes.data : [])
+      setReservations(reservationDocs)
+      setAccounts(accountDocs)
     } catch (e: any) {
       toast.error(String(e?.message || e))
     } finally {
@@ -106,7 +128,8 @@ export function ReservationsByDate() {
       if (!date) continue
       const status = String(reservation.reservationStatus || 'pending').toLowerCase()
       if (!showCancelled && status === 'cancelled') continue
-      if (!showPast && date < today) continue
+      // "Past dates" shows only dates before today; otherwise only today and later.
+      if (showPast ? date >= today : date < today) continue
       if (needle) {
         const haystack = [
           reservation.id, reservation.teamName, reservation.locationName, reservation.packageName,
@@ -117,7 +140,7 @@ export function ReservationsByDate() {
       byDate.set(date, [...(byDate.get(date) || []), reservation])
     }
     return [...byDate.entries()]
-      .sort(([a], [b]) => (showPast ? b.localeCompare(a) : a.localeCompare(b)))
+      .sort(([a], [b]) => (newestFirst ? b.localeCompare(a) : a.localeCompare(b)))
       .map(([date, items]) => ({
         date,
         bookings: items.sort((a, b) =>
@@ -126,7 +149,9 @@ export function ReservationsByDate() {
       }))
     // playersOf only depends on accountById
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reservations, accountById, query, showPast, showCancelled, today])
+  }, [reservations, accountById, query, showPast, showCancelled, today, newestFirst])
+
+  const { page, setPage, pageCount, pageItems, total } = usePagination(days, DEFAULT_PAGE_SIZE, `${query}|${showPast}|${showCancelled}|${newestFirst}`)
 
   return (
     <div className="space-y-4">
@@ -141,11 +166,22 @@ export function ReservationsByDate() {
       </div>
 
       <Card className="p-4">
-        <div className="grid gap-3 md:grid-cols-[1fr_auto_auto] md:items-end">
+        <div className="grid gap-3 md:grid-cols-[1fr_auto_auto_auto] md:items-end">
           <Input label="Search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Player name, email, team name, or reservation ID" />
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" className="h-4 w-4" checked={showPast} onChange={(e) => setShowPast(e.target.checked)} /> Past dates
-          </label>
+          <FilterTabs
+            ariaLabel="Which dates to show"
+            size="sm"
+            value={showPast ? 'past' : 'upcoming'}
+            onChange={(value) => setShowPast(value === 'past')}
+            options={[{ value: 'upcoming', label: 'Upcoming' }, { value: 'past', label: 'Past dates' }]}
+          />
+          <FilterTabs
+            ariaLabel="Date order"
+            size="sm"
+            value={newestFirst ? 'newest' : 'oldest'}
+            onChange={(value) => setOrder(value)}
+            options={[{ value: 'newest', label: 'Latest first' }, { value: 'oldest', label: 'Earliest first' }]}
+          />
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" className="h-4 w-4" checked={showCancelled} onChange={(e) => setShowCancelled(e.target.checked)} /> Cancelled
           </label>
@@ -154,10 +190,10 @@ export function ReservationsByDate() {
 
       {loading ? <Card className="p-4 text-sm text-muted">Loading reservations…</Card> : null}
       {!loading && days.length === 0 ? (
-        <Card className="p-4 text-sm text-muted">{query ? 'No bookings match your search.' : 'No upcoming dates have bookings.'}</Card>
+        <Card className="p-4 text-sm text-muted">{query ? 'No bookings match your search.' : showPast ? 'No past dates have bookings.' : 'No upcoming dates have bookings.'}</Card>
       ) : null}
 
-      {days.map(({ date, bookings }) => {
+      {pageItems.map(({ date, bookings }) => {
         const isOpen = openDate === date || Boolean(query.trim())
         const totalPlayers = bookings.reduce((sum, booking) => sum + Number(booking.numberOfPlayers || 0), 0)
         return (
@@ -196,7 +232,10 @@ export function ReservationsByDate() {
                             {booking.id} • <span className="capitalize">{booking.sessionType || 'public'}</span> • {booking.numberOfPlayers || 0} players • {booking.packageName || 'Custom selection'}
                           </div>
                         </div>
-                        <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase ${statusTone(status)}`}>{status}</span>
+                        <div className="text-right">
+                          <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase ${statusTone(status)}`}>{status}</span>
+                          {statusChangeLabel(booking) ? <div className="mt-1 text-[11px] text-muted">{statusChangeLabel(booking)}</div> : null}
+                        </div>
                       </div>
                       <div className="mt-3 flex items-center gap-2 text-xs uppercase tracking-widest text-muted"><FiUsers /> Players</div>
                       <ul className="mt-2 grid gap-1 sm:grid-cols-2">
@@ -218,6 +257,7 @@ export function ReservationsByDate() {
           </Card>
         )
       })}
+      <Pagination page={page} pageCount={pageCount} total={total} onPageChange={setPage} />
     </div>
   )
 }
