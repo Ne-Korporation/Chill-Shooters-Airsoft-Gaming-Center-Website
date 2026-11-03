@@ -9,7 +9,7 @@ import { Modal } from '../../components/ui/Modal'
 import { apiGet, apiGetAll, apiPost, apiPut, apiDelete } from '../../utils/apiClient'
 import { Pagination, usePagination } from '../../components/ui/Pagination'
 import { ModelSummaryStrip } from '../../components/inventory/ModelSummaryStrip'
-import { BulkActionBar, forEachPiece, type BulkChange } from '../../components/inventory/BulkActionBar'
+import { BulkUpdateModal, InventoryToolbar, SelectBox, forEachPiece, type BulkChange } from '../../components/inventory/BulkActionBar'
 import { modelOf, summarizeModels } from '../../utils/inventoryModels'
 import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
 
@@ -231,7 +231,15 @@ export function AdminEquipmentPage() {
   // Bulk selection: tick rows (or every row matching the filters) and change them together.
   const [selectedIds, setSelectedIds] = React.useState<string[]>([])
   const [bulkBusy, setBulkBusy] = React.useState(false)
+  // Tick boxes appear only after "Select items"; "Update" opens the bulk changes pop-up.
+  const [selecting, setSelecting] = React.useState(false)
+  const [bulkOpen, setBulkOpen] = React.useState(false)
   React.useEffect(() => setSelectedIds([]), [activeCategory, status, sourceFilter, search])
+  const stopSelecting = () => {
+    setSelecting(false)
+    setSelectedIds([])
+    setBulkOpen(false)
+  }
   const allFilteredSelected = filtered.length > 0 && filtered.every((item) => selectedIds.includes(item.id))
   const toggleSelected = (id: string) =>
     setSelectedIds((current) => (current.includes(id) ? current.filter((x) => x !== id) : [...current, id]))
@@ -244,7 +252,7 @@ export function AdminEquipmentPage() {
     setBulkBusy(false)
     if (failed) toast.error(`${failed} of ${selectedIds.length} items could not be updated.`)
     else toast.success(`Updated ${selectedIds.length} item${selectedIds.length === 1 ? '' : 's'}.`)
-    setSelectedIds([])
+    stopSelecting()
     await refresh()
   }
 
@@ -255,7 +263,7 @@ export function AdminEquipmentPage() {
     setBulkBusy(false)
     if (failed) toast.error(`${failed} of ${selectedIds.length} items could not be removed.`)
     else toast.success(`Removed ${selectedIds.length} item${selectedIds.length === 1 ? '' : 's'}.`)
-    setSelectedIds([])
+    stopSelecting()
     await refresh()
   }
 
@@ -373,10 +381,6 @@ export function AdminEquipmentPage() {
           <h1 className="text-3xl font-bold">Gear</h1>
           <p className="mt-1 text-sm text-muted">Track inventory by category, condition, and ownership source.</p>
         </div>
-
-        <Button onClick={openAddForm}>
-          <FiPlus /> Add gear
-        </Button>
       </div>
 
       <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
@@ -394,15 +398,28 @@ export function AdminEquipmentPage() {
         </Card>
       </div>
 
-      <FilterTabs
-        ariaLabel="Show rental gear or players' gear"
-        value={sourceFilter}
-        onChange={setSourceFilter}
-        options={[
-          { value: 'business', label: 'Rental gear' },
-          { value: 'player', label: "Players' gear", ...(pendingPlayerItemsCount > 0 ? { count: pendingPlayerItemsCount } : {}) },
-        ]}
-      />
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <FilterTabs
+          ariaLabel="Show rental gear or players' gear"
+          value={sourceFilter}
+          onChange={setSourceFilter}
+          options={[
+            { value: 'business', label: 'Rental gear' },
+            { value: 'player', label: "Players' gear", ...(pendingPlayerItemsCount > 0 ? { count: pendingPlayerItemsCount } : {}) },
+          ]}
+        />
+        <InventoryToolbar
+          selecting={selecting}
+          selectedCount={selectedIds.length}
+          allSelected={allFilteredSelected}
+          addLabel="Add gear"
+          onStartSelecting={() => setSelecting(true)}
+          onToggleAll={toggleAll}
+          onCancel={stopSelecting}
+          onUpdate={() => setBulkOpen(true)}
+          onAdd={openAddForm}
+        />
+      </div>
 
       <Card className="p-4">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -487,22 +504,22 @@ export function AdminEquipmentPage() {
 
         {sourceFilter === 'business' ? <ModelSummaryStrip models={models} unit="piece" /> : null}
 
-        <BulkActionBar
-          count={selectedIds.length}
-          statuses={[{ value: 'available', label: 'Available' }, { value: 'rented', label: 'Rented' }, { value: 'maintenance', label: 'Maintenance' }]}
-          categories={(Object.keys(categoryMeta) as EquipmentCategory[]).map((value) => ({ value, label: value.charAt(0).toUpperCase() + value.slice(1) }))}
-          busy={bulkBusy}
-          onApply={applyBulk}
-          onRemove={removeBulk}
-          onClear={() => setSelectedIds([])}
-        />
+        {bulkOpen ? (
+          <BulkUpdateModal
+            count={selectedIds.length}
+            noun={selectedIds.length === 1 ? 'item' : 'items'}
+            statuses={[{ value: 'available', label: 'Available' }, { value: 'rented', label: 'Rented' }, { value: 'maintenance', label: 'Maintenance' }]}
+            categories={(Object.keys(categoryMeta) as EquipmentCategory[]).map((value) => ({ value, label: value.charAt(0).toUpperCase() + value.slice(1) }))}
+            busy={bulkBusy}
+            onApply={applyBulk}
+            onRemove={removeBulk}
+            onClose={() => setBulkOpen(false)}
+          />
+        ) : null}
 
         <div className="mt-4 overflow-hidden rounded-2xl border border-white/5">
           <div className="grid grid-cols-12 gap-3 bg-white/5 px-3 py-2 text-xs uppercase tracking-widest text-muted">
-            <label className="col-span-2 flex items-center gap-2">
-              <input type="checkbox" checked={allFilteredSelected} onChange={toggleAll} className="h-4 w-4 accent-[var(--color-accent)]" aria-label="Select all gear matching the filters" />
-              ID
-            </label>
+            <div className="col-span-2">ID</div>
             <div className="col-span-3">Gear</div>
             <div className="col-span-1 text-right">Piece</div>
             <div className="col-span-1 text-right">Price</div>
@@ -518,10 +535,10 @@ export function AdminEquipmentPage() {
             ) : (
               pageItems.map((item) => (
                 <div key={item.id} className={"grid grid-cols-12 items-center gap-3 px-3 py-3 " + (selectedItemId === item.id ? 'bg-white/6 ring-2 ring-white/10' : '')}>
-                  <label className="col-span-2 flex items-center gap-2 text-sm font-semibold">
-                    <input type="checkbox" checked={selectedIds.includes(item.id)} onChange={() => toggleSelected(item.id)} className="h-4 w-4 accent-[var(--color-accent)]" aria-label={`Select ${item.id}`} />
+                  <div className="col-span-2 flex items-center gap-2 text-sm font-semibold">
+                    {selecting ? <SelectBox checked={selectedIds.includes(item.id)} onChange={() => toggleSelected(item.id)} label={`Select ${item.id}`} /> : null}
                     {item.id}
-                  </label>
+                  </div>
                   <div className="col-span-3 min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <div className="text-sm font-semibold">{item.name}</div>

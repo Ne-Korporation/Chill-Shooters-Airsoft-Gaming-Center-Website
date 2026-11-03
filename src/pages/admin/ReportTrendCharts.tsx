@@ -56,6 +56,49 @@ function tickLabel(key: string) {
 
 const peso = (value: number) => `₱${Math.round(value).toLocaleString('en-PH')}`
 
+// A canvas keeps its on-screen size when printed, so it overflows its half of the page. Before
+// printing, each chart is drawn once at a fixed size in light ink and printed as an image.
+const PRINT_SIZE = { width: 560, height: 200 }
+
+function printSnapshot(chart: ChartJS<'line'>) {
+  const options = chart.options as any
+  const dataset = chart.data.datasets[0] as any
+  const saved = {
+    dpr: options.devicePixelRatio,
+    line: dataset.borderColor,
+    pointBackground: dataset.pointBackgroundColor,
+    pointBorder: dataset.pointBorderColor,
+    xTicks: options.scales.x.ticks.color,
+    xBorder: options.scales.x.border.color,
+    yTicks: options.scales.y.ticks.color,
+    yGrid: options.scales.y.grid.color,
+  }
+  const ink = INK.light
+  dataset.borderColor = ink.line
+  dataset.pointBackgroundColor = ink.line
+  dataset.pointBorderColor = ink.surface
+  options.scales.x.ticks.color = ink.text
+  options.scales.x.border.color = ink.grid
+  options.scales.y.ticks.color = ink.text
+  options.scales.y.grid.color = ink.grid
+  options.devicePixelRatio = 2
+  chart.resize(PRINT_SIZE.width, PRINT_SIZE.height)
+  chart.update('none')
+  const image = chart.toBase64Image('image/png', 1)
+
+  dataset.borderColor = saved.line
+  dataset.pointBackgroundColor = saved.pointBackground
+  dataset.pointBorderColor = saved.pointBorder
+  options.scales.x.ticks.color = saved.xTicks
+  options.scales.x.border.color = saved.xBorder
+  options.scales.y.ticks.color = saved.yTicks
+  options.scales.y.grid.color = saved.yGrid
+  options.devicePixelRatio = saved.dpr
+  chart.resize()
+  chart.update('none')
+  return image
+}
+
 function TrendChart({
   title,
   total,
@@ -64,6 +107,7 @@ function TrendChart({
   format,
   ink,
   chartRef,
+  printImage,
 }: {
   title: string
   total: string
@@ -72,6 +116,7 @@ function TrendChart({
   format: (value: number) => string
   ink: typeof INK.dark
   chartRef: React.MutableRefObject<ChartJS<'line'> | null>
+  printImage?: string
 }) {
   const options: ChartOptions<'line'> = {
     responsive: true,
@@ -105,7 +150,8 @@ function TrendChart({
       data: values,
       borderColor: ink.line,
       borderWidth: 2,
-      tension: 0.25,
+      // Smooth, but never curving above or below the real values between points.
+      cubicInterpolationMode: 'monotone' as const,
       pointRadius: values.length <= 31 ? 3 : 0,
       pointHoverRadius: 5,
       pointBackgroundColor: ink.line,
@@ -119,9 +165,10 @@ function TrendChart({
         <span className="text-xs font-semibold">{title}</span>
         <span className="text-xs text-muted">{total}</span>
       </figcaption>
-      <div className="mt-1 h-40">
+      <div className={`mt-1 h-40 ${printImage ? 'print:hidden' : ''}`}>
         <Line ref={chartRef} options={options} data={data} aria-label={`${title} over the report period`} role="img" />
       </div>
+      {printImage ? <img src={printImage} alt={`${title} over the report period`} className="mt-1 hidden w-full print:block" /> : null}
     </figure>
   )
 }
@@ -130,22 +177,18 @@ function TrendChart({
 // the same dates (two charts rather than one with two y-axes, since ₱ and counts don't share a scale).
 export function ReportTrendCharts({ rows, start, end, byMonth }: { rows: Row[]; start: string; end: string; byMonth: boolean }) {
   const { theme } = useTheme()
-  const [printing, setPrinting] = useState(false)
+  const [printImages, setPrintImages] = useState<{ revenue?: string; reservations?: string }>({})
   const revenueRef = useRef<ChartJS<'line'> | null>(null)
   const reservationsRef = useRef<ChartJS<'line'> | null>(null)
 
-  // Print with light ink and re-measure the canvases for the page width.
+  // Swap the canvases for print-sized images while the print dialog is open.
   useEffect(() => {
     const before = () => {
-      flushSync(() => setPrinting(true))
-      revenueRef.current?.resize()
-      reservationsRef.current?.resize()
+      const revenue = revenueRef.current ? printSnapshot(revenueRef.current) : undefined
+      const reservations = reservationsRef.current ? printSnapshot(reservationsRef.current) : undefined
+      flushSync(() => setPrintImages({ revenue, reservations }))
     }
-    const after = () => {
-      setPrinting(false)
-      revenueRef.current?.resize()
-      reservationsRef.current?.resize()
-    }
+    const after = () => setPrintImages({})
     window.addEventListener('beforeprint', before)
     window.addEventListener('afterprint', after)
     return () => {
@@ -156,7 +199,7 @@ export function ReportTrendCharts({ rows, start, end, byMonth }: { rows: Row[]; 
 
   const timeline = useMemo(() => fillTimeline(rows, start, end, byMonth), [rows, start, end, byMonth])
   const labels = timeline.map((row) => tickLabel(row.key))
-  const ink = printing || theme === 'light' ? INK.light : INK.dark
+  const ink = theme === 'light' ? INK.light : INK.dark
 
   return (
     <div className="report-charts grid gap-2 md:grid-cols-2">
@@ -168,6 +211,7 @@ export function ReportTrendCharts({ rows, start, end, byMonth }: { rows: Row[]; 
         format={peso}
         ink={ink}
         chartRef={revenueRef}
+        printImage={printImages.revenue}
       />
       <TrendChart
         title="Reservations"
@@ -177,6 +221,7 @@ export function ReportTrendCharts({ rows, start, end, byMonth }: { rows: Row[]; 
         format={(value) => value.toLocaleString('en-PH')}
         ink={ink}
         chartRef={reservationsRef}
+        printImage={printImages.reservations}
       />
     </div>
   )

@@ -9,7 +9,7 @@ import { apiBase, apiGet, apiPost, apiPut, getApiAuthHeaders } from '../../utils
 import { PlayerStatsCard } from '../../components/players/PlayerStatsCard'
 import { PartnershipDiscountCard } from './PartnershipDiscountCard'
 import { useAuth } from '../../context/AuthContext'
-import { ageFromBirthDate, isValidBirthDate, maxBirthDate } from '../../utils/age'
+import { ageFromBirthDate, isValidBirthDate, maxAdultBirthDate } from '../../utils/age'
 import { composeFullName, splitFullName } from '../../utils/names'
 import { formatPhPhone } from '../../utils/phone'
 
@@ -34,6 +34,10 @@ type PlayerProfileDoc = {
   partnershipEligibilityStatus?: string
   partnershipReviewReason?: string
   birthDate?: string
+  // A minor's profile under a parent's account (no login of its own).
+  isChildProfile?: boolean
+  guardianId?: string
+  guardianName?: string
 }
 
 type ProfileWaiver = {
@@ -63,6 +67,16 @@ export function PlayerProfilePage() {
   const { user, updateUser } = useAuth()
   const [player, setPlayer] = React.useState<PlayerProfileDoc | null>(null)
   const [loading, setLoading] = React.useState(true)
+  // The minors on a parent's account, for switching to their profiles.
+  const [myChildren, setMyChildren] = React.useState<Array<{ id: string; name: string }>>([])
+  React.useEffect(() => {
+    if (user?.role !== 'user') return
+    let alive = true
+    apiGet<{ ok: boolean; data: Array<{ id: string; name: string }> }>('/api/children')
+      .then((res) => { if (alive) setMyChildren(Array.isArray(res?.data) ? res.data : []) })
+      .catch(() => {})
+    return () => { alive = false }
+  }, [user?.role, user?.id])
   const [uploading, setUploading] = React.useState(false)
   const [savingProfile, setSavingProfile] = React.useState(false)
   const [profileImageUploading, setProfileImageUploading] = React.useState(false)
@@ -456,6 +470,9 @@ export function PlayerProfilePage() {
     || (ageFromBirthDate(player?.birthDate) ?? 99) < 18
   const displayEmail = player?.email || user?.email || '—'
   const displayRole = player?.role || user?.role || 'user'
+  // A parent looking at one of their children's profiles: same page, the child's own progress.
+  const viewingChild = Boolean(player?.isChildProfile && String(player.guardianId) === String(user?.id))
+  const viewingOwn = !playerId || String(playerId) === String(user?.id)
   const ownedEquipment = React.useMemo(() => {
     const selectedIds = Array.isArray(player?.equipmentIds) && player.equipmentIds.length > 0
       ? player.equipmentIds
@@ -616,7 +633,7 @@ export function PlayerProfilePage() {
                 label="Birthday"
                 type="date"
                 value={editBirthDate}
-                max={maxBirthDate()}
+                max={maxAdultBirthDate()}
                 onChange={(event) => setEditBirthDate(event.target.value)}
                 hint={ageFromBirthDate(editBirthDate) !== null ? `Age: ${ageFromBirthDate(editBirthDate)}` : 'Used to fill in your age on waivers.'}
               />
@@ -636,10 +653,32 @@ export function PlayerProfilePage() {
         </div>
       , document.body) : null}
 
-      <div className="space-y-2">
-        <div className="text-sm font-medium text-accent">Player</div>
-        <h1 className="text-3xl font-bold">Player Profile</h1>
-        <p className="text-muted text-sm">Profile details for ID: {playerId ?? '—'}</p>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div className="space-y-2">
+          <div className="text-sm font-medium text-accent">{viewingChild ? `Minor on your account` : 'Player'}</div>
+          <h1 className="text-3xl font-bold">{viewingChild ? `${player?.name || 'Child'}'s Profile` : 'Player Profile'}</h1>
+          <p className="text-muted text-sm">Profile details for ID: {playerId ?? '—'}</p>
+        </div>
+        {/* Parents switch between their own profile and their children's. */}
+        {viewingChild ? (
+          <Button variant="ghost" onClick={() => navigate(`/app/players/${encodeURIComponent(String(user?.id || ''))}`)}>
+            Back to my profile
+          </Button>
+        ) : viewingOwn && myChildren.length === 1 ? (
+          <Button variant="ghost" onClick={() => navigate(`/app/players/${encodeURIComponent(myChildren[0].id)}`)}>
+            Switch to {myChildren[0].name}
+          </Button>
+        ) : viewingOwn && myChildren.length > 1 ? (
+          <select
+            value=""
+            onChange={(event) => event.target.value && navigate(`/app/players/${encodeURIComponent(event.target.value)}`)}
+            className="rounded-xl border border-white/10 bg-background px-3 py-2 text-sm text-text [&>option]:bg-background"
+            aria-label="Switch to a child's profile"
+          >
+            <option value="">Switch to a child's profile…</option>
+            {myChildren.map((child) => <option key={child.id} value={child.id}>{child.name}</option>)}
+          </select>
+        ) : null}
       </div>
 
       {loading ? (
@@ -714,7 +753,7 @@ export function PlayerProfilePage() {
                     </div>
                   </div>
                   <div className="mt-2 text-xs text-muted">
-                    From your approved waiver. This guardian is emailed to approve each reservation you are part of, including when a captain adds you to their team.
+                    From the approved waiver. This parent or guardian is responsible for the player at every game.
                   </div>
                 </>
               ) : (
@@ -735,16 +774,19 @@ export function PlayerProfilePage() {
             {(!playerId || playerId === user?.id) && user?.role === 'user' ? (
               <Button className="w-full" onClick={() => navigate('/app/my-reservations')}>View Reservation History</Button>
             ) : null}
-            <Button
-              variant="ghost"
-              className="w-full bg-white/5 border border-white/10"
-              onClick={openEditProfile}
-            >
-              Edit Profile
-            </Button>
+            {!viewingChild ? (
+              <Button
+                variant="ghost"
+                className="w-full bg-white/5 border border-white/10"
+                onClick={openEditProfile}
+              >
+                Edit Profile
+              </Button>
+            ) : null}
           </div>
         </Card>
 
+        {!viewingChild ? (
         <Card className="p-4">
           <div className="flex items-center justify-between gap-3">
             <div>
@@ -783,6 +825,7 @@ export function PlayerProfilePage() {
             ) : null}
           </div>
         </Card>
+        ) : null}
 
         {user?.role === 'user' && String(player?.id || '') === String(user.id) ? (
           <PartnershipDiscountCard

@@ -8,7 +8,7 @@ import { Modal } from '../../components/ui/Modal'
 import { apiGet, apiGetAll, apiPost, apiPut, apiDelete } from '../../utils/apiClient'
 import { Pagination, usePagination } from '../../components/ui/Pagination'
 import { ModelSummaryStrip } from '../../components/inventory/ModelSummaryStrip'
-import { BulkActionBar, forEachPiece, type BulkChange } from '../../components/inventory/BulkActionBar'
+import { BulkUpdateModal, InventoryToolbar, SelectBox, forEachPiece, type BulkChange } from '../../components/inventory/BulkActionBar'
 import { modelOf, summarizeModels } from '../../utils/inventoryModels'
 import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
 
@@ -328,7 +328,15 @@ export function AdminWeaponsPage() {
   // Bulk selection: tick rows (or every row matching the filters) and change them together.
   const [selectedIds, setSelectedIds] = React.useState<string[]>([])
   const [bulkBusy, setBulkBusy] = React.useState(false)
+  // Tick boxes appear only after "Select items"; "Update" opens the bulk changes pop-up.
+  const [selecting, setSelecting] = React.useState(false)
+  const [bulkOpen, setBulkOpen] = React.useState(false)
   React.useEffect(() => setSelectedIds([]), [category, status, sourceFilter, search])
+  const stopSelecting = () => {
+    setSelecting(false)
+    setSelectedIds([])
+    setBulkOpen(false)
+  }
   const allFilteredSelected = filtered.length > 0 && filtered.every((weapon) => selectedIds.includes(weapon.id))
   const toggleSelected = (id: string) =>
     setSelectedIds((current) => (current.includes(id) ? current.filter((x) => x !== id) : [...current, id]))
@@ -341,7 +349,7 @@ export function AdminWeaponsPage() {
     setBulkBusy(false)
     if (failed) toast.error(`${failed} of ${selectedIds.length} weapons could not be updated.`)
     else toast.success(`Updated ${selectedIds.length} weapon${selectedIds.length === 1 ? '' : 's'}.`)
-    setSelectedIds([])
+    stopSelecting()
     await refresh()
   }
 
@@ -352,7 +360,7 @@ export function AdminWeaponsPage() {
     setBulkBusy(false)
     if (failed) toast.error(`${failed} of ${selectedIds.length} weapons could not be removed.`)
     else toast.success(`Removed ${selectedIds.length} weapon${selectedIds.length === 1 ? '' : 's'}.`)
-    setSelectedIds([])
+    stopSelecting()
     await refresh()
   }
 
@@ -441,9 +449,6 @@ export function AdminWeaponsPage() {
           <h1 className="text-3xl font-bold">Weapons</h1>
           <p className="mt-1 text-sm text-muted">Manage the weapon catalog, inspect conditions, and keep the maintenance queue current.</p>
         </div>
-        <Button onClick={openAddForm}>
-          <FiPlus /> Add weapon
-        </Button>
       </div>
 
       <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
@@ -461,15 +466,28 @@ export function AdminWeaponsPage() {
         </Card>
       </div>
 
-      <FilterTabs
-        ariaLabel="Show rental weapons or players' weapons"
-        value={sourceFilter}
-        onChange={setSourceFilter}
-        options={[
-          { value: 'business', label: 'Rental weapons' },
-          { value: 'player', label: "Players' weapons", ...(pendingPlayerWeaponsCount > 0 ? { count: pendingPlayerWeaponsCount } : {}) },
-        ]}
-      />
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <FilterTabs
+          ariaLabel="Show rental weapons or players' weapons"
+          value={sourceFilter}
+          onChange={setSourceFilter}
+          options={[
+            { value: 'business', label: 'Rental weapons' },
+            { value: 'player', label: "Players' weapons", ...(pendingPlayerWeaponsCount > 0 ? { count: pendingPlayerWeaponsCount } : {}) },
+          ]}
+        />
+        <InventoryToolbar
+          selecting={selecting}
+          selectedCount={selectedIds.length}
+          allSelected={allFilteredSelected}
+          addLabel="Add weapon"
+          onStartSelecting={() => setSelecting(true)}
+          onToggleAll={toggleAll}
+          onCancel={stopSelecting}
+          onUpdate={() => setBulkOpen(true)}
+          onAdd={openAddForm}
+        />
+      </div>
 
       <Card className="p-4">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -554,23 +572,23 @@ export function AdminWeaponsPage() {
 
         {sourceFilter === 'business' ? <ModelSummaryStrip models={models} unit="piece" /> : null}
 
-        <BulkActionBar
-          count={selectedIds.length}
-          statuses={(Object.keys(STATUS_LABELS) as WeaponStatus[]).map((value) => ({ value, label: STATUS_LABELS[value] }))}
-          categories={categoryOptions.map((option) => ({ value: option.key, label: option.label }))}
-          busy={bulkBusy}
-          onApply={applyBulk}
-          onRemove={removeBulk}
-          onClear={() => setSelectedIds([])}
-        />
+        {bulkOpen ? (
+          <BulkUpdateModal
+            count={selectedIds.length}
+            noun={selectedIds.length === 1 ? 'weapon' : 'weapons'}
+            statuses={(Object.keys(STATUS_LABELS) as WeaponStatus[]).map((value) => ({ value, label: STATUS_LABELS[value] }))}
+            categories={categoryOptions.map((option) => ({ value: option.key, label: option.label }))}
+            busy={bulkBusy}
+            onApply={applyBulk}
+            onRemove={removeBulk}
+            onClose={() => setBulkOpen(false)}
+          />
+        ) : null}
 
         <div className="mt-4 overflow-x-auto rounded-2xl border border-white/5">
           <div className="min-w-[920px]">
             <div className="grid grid-cols-12 gap-3 bg-white/5 px-3 py-2 text-xs uppercase tracking-widest text-muted">
-              <label className="col-span-2 flex items-center gap-2">
-                <input type="checkbox" checked={allFilteredSelected} onChange={toggleAll} className="h-4 w-4 accent-[var(--color-accent)]" aria-label="Select all weapons matching the filters" />
-                ID
-              </label>
+              <div className="col-span-2">ID</div>
               <div className="col-span-3">Weapon</div>
               <div className="col-span-1 text-right">Piece</div>
               <div className="col-span-1 text-right">Price</div>
@@ -586,10 +604,10 @@ export function AdminWeaponsPage() {
             ) : (
               pageItems.map((weapon) => (
                 <div key={weapon.id} className={"grid grid-cols-12 items-center gap-3 px-3 py-3 " + (selectedWeaponId === weapon.id ? 'bg-white/6 ring-2 ring-white/10' : '')}>
-                  <label className="col-span-2 flex items-center gap-2 text-sm font-semibold">
-                    <input type="checkbox" checked={selectedIds.includes(weapon.id)} onChange={() => toggleSelected(weapon.id)} className="h-4 w-4 accent-[var(--color-accent)]" aria-label={`Select ${weapon.id}`} />
+                  <div className="col-span-2 flex items-center gap-2 text-sm font-semibold">
+                    {selecting ? <SelectBox checked={selectedIds.includes(weapon.id)} onChange={() => toggleSelected(weapon.id)} label={`Select ${weapon.id}`} /> : null}
                     {weapon.id}
-                  </label>
+                  </div>
                   <div className="col-span-3">
                     <div className="flex flex-wrap items-center gap-2">
                       <div className="text-sm font-semibold">{weapon.name}</div>

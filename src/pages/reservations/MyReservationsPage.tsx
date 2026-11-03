@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { FiCalendar, FiEye, FiLock, FiPrinter, FiRefreshCw } from 'react-icons/fi'
 import { Card } from '../../components/ui/Card'
@@ -108,6 +108,17 @@ export function MyReservationsPage() {
   const [reason, setReason] = useState('')
   const [saving, setSaving] = useState(false)
   const [detailsId, setDetailsId] = useState<string | null>(null)
+  // "Review my reservation" in the confirmation email links here with ?view=<id>.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const viewId = searchParams.get('view')
+  useEffect(() => {
+    if (!viewId || !reservations.some((item) => reservationIdOf(item) === viewId)) return
+    setDetailsId(viewId)
+    setSearchParams((params) => {
+      params.delete('view')
+      return params
+    }, { replace: true })
+  }, [viewId, reservations, setSearchParams])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -173,7 +184,8 @@ export function MyReservationsPage() {
   }, [draft, user?.id])
 
   const sorted = useMemo(
-    () => reservations.slice().sort((a, b) => dateOf(b).localeCompare(dateOf(a))),
+    // Cancelled bookings are no longer listed (there is no cancellation policy).
+    () => reservations.filter((reservation) => statusOf(reservation) !== 'cancelled').sort((a, b) => dateOf(b).localeCompare(dateOf(a))),
     [reservations],
   )
 

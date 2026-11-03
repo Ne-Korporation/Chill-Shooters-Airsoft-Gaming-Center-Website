@@ -24,7 +24,8 @@ import { formatPhPhone, isValidPhPhone, PH_PHONE_PLACEHOLDER, toStoredPhPhone } 
 import { signedWaiverText, useCurrentWaiverText, type WaiverText } from '../../utils/waiverText'
 import { printWaiverDocument } from '../../utils/waiverPrint'
 import { useAuth } from '../../context/AuthContext'
-import { ageFromBirthDate, isValidBirthDate, maxBirthDate } from '../../utils/age'
+import { MinorsOnAccount } from './MinorsOnAccount'
+import { ageFromBirthDate, isValidBirthDate, maxAdultBirthDate, maxBirthDate } from '../../utils/age'
 import { composeFullName, splitFullName, type NameParts } from '../../utils/names'
 
 type WaiverState = {
@@ -153,12 +154,18 @@ function compressImage(dataUrl: string, maxW = 1000, quality = 0.75): Promise<st
   })
 }
 
+// A minor on a parent's account (routes/children.js). Passing one makes this form the child's
+// waiver: the parent fills it in and signs as the guardian.
+export type ChildProfile = { id: string; name: string; firstName: string; lastName: string; birthDate: string }
+
 export function WaiverPage({
   variant = 'full',
   onSubmitted,
+  child,
 }: {
   variant?: 'full' | 'embedded'
   onSubmitted?: () => void
+  child?: ChildProfile
 }) {
   const [state, setState] = useState<WaiverState>({
     fullName: '',
@@ -201,9 +208,11 @@ export function WaiverPage({
   const [signatureMode, setSignatureMode] = useState<'draw' | 'upload'>('draw')
   const [signatureError, setSignatureError] = useState<string | null>(null)
   const { user } = useAuth()
+  // Whose waiver this is: the signed-in adult, or one of their children.
+  const subjectId = child?.id || user?.id || ''
 
-  const waiverStorageKey = user?.id ? `waiver_submitted:${user.id}` : ''
-  const waiverIdKey = user?.id ? `last_waiver_id:${user.id}` : ''
+  const waiverStorageKey = subjectId ? `waiver_submitted:${subjectId}` : ''
+  const waiverIdKey = subjectId ? `last_waiver_id:${subjectId}` : ''
 
   useEffect(() => {
     if (!user?.id) {
@@ -214,12 +223,12 @@ export function WaiverPage({
     let cancelled = false
     setCheckingSubmission(true)
     const localWaiverId = waiverIdKey ? localStorage.getItem(waiverIdKey) : null
-    const reservationId = localStorage.getItem('active_reservation_id') || null
+    const reservationId = child ? null : localStorage.getItem('active_reservation_id') || null
 
     const matchesCurrentUser = (waiver?: SubmittedWaiver) => {
       if (!waiver) return false
-      if (!user?.id) return false
-      return String(waiver.userId) === String(user.id)
+      if (!subjectId) return false
+      return String(waiver.userId) === String(subjectId)
     }
 
     const loadWaiver = async () => {
@@ -236,9 +245,9 @@ export function WaiverPage({
           }
         }
 
-        if (user?.id) {
+        if (subjectId) {
           const response = await apiGet<{ ok: boolean; data: SubmittedWaiver[] }>(
-            `/api/waivers?q=${encodeURIComponent(JSON.stringify({ userId: user.id }))}&limit=200`,
+            `/api/waivers?q=${encodeURIComponent(JSON.stringify({ userId: subjectId }))}&limit=200`,
           )
           if (Array.isArray(response?.data)) candidates.push(...response.data)
         }
@@ -349,7 +358,19 @@ export function WaiverPage({
     return () => {
       cancelled = true
     }
-  }, [user?.id, waiverIdKey, waiverStorageKey])
+  }, [user?.id, subjectId, child, waiverIdKey, waiverStorageKey])
+
+  // A child's waiver starts from the child's profile, with the parent as the guardian.
+  useEffect(() => {
+    if (!child || submitted || checkingSubmission) return
+    setNameParts((current) => (current.firstName || current.lastName ? current : { firstName: child.firstName, middleInitial: '', lastName: child.lastName }))
+    setState((current) => ({
+      ...current,
+      birthDate: current.birthDate || child.birthDate,
+      guardianName: current.guardianName || user?.name || '',
+    }))
+    setGuardianEmail((current) => current || user?.email || '')
+  }, [child, submitted, checkingSubmission, user?.name, user?.email])
 
   // Age always comes from the birthday, so it can't drift from what the player entered.
   const age = ageFromBirthDate(state.birthDate)
@@ -369,24 +390,27 @@ export function WaiverPage({
       if (!state.guardianConsent) e.guardianConsent = 'Guardian consent is required.'
       if (!guardianPhone.trim()) e.guardianPhone = 'Guardian phone number is required.'
       else if (!isValidPhPhone(guardianPhone)) e.guardianPhone = 'Enter the phone number as 09XX XXX XXXX.'
-      if (!guardianEmail.trim()) e.guardianEmail = 'Guardian email is required so they can approve your bookings.'
+      if (!guardianEmail.trim()) e.guardianEmail = 'Guardian email is required.'
       else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(guardianEmail.trim())) e.guardianEmail = 'Enter a valid email address.'
-      else if (guardianEmail.trim().toLowerCase() === String(user?.email || '').toLowerCase()) e.guardianEmail = "Use your parent or guardian's own email, not yours."
+      else if (!child && guardianEmail.trim().toLowerCase() === String(user?.email || '').toLowerCase()) e.guardianEmail = "Use your parent or guardian's own email, not yours."
       if (!guardianIdType) e.guardianIdType = "Choose which ID the guardian is attaching."
       if (!guardianIdImage) e.guardianIdImage = 'A photo of the guardian\'s ID is required.'
       if (!guardianSignatureImage) e.guardianSignature = 'Guardian signature is required.'
     }
+
+    // Your own waiver is for adults; children are added by their parent instead.
+    if (!child && isMinor) e.birthDate = 'You must be 18 or older. A parent or guardian adds players under 18 on their own account.'
 
     if (!state.termsAccepted) e.termsAccepted = 'You must accept the terms to continue.'
     if (!state.consent) e.consent = 'Consent acknowledgement is required.'
     if (!hasSignature) e.signature = 'Signature is required.'
 
     return e
-  }, [hasSignature, isMinor, state, nameParts, guardianPhone, guardianEmail, guardianIdImage, guardianIdType, guardianSignatureImage, idType, idImage, user?.email])
+  }, [hasSignature, isMinor, state, nameParts, guardianPhone, guardianEmail, guardianIdImage, guardianIdType, guardianSignatureImage, idType, idImage, user?.email, child])
 
   // Prefill the name parts from the player's profile when the form starts empty.
   useEffect(() => {
-    if (!user?.id || submitted || nameParts.firstName || nameParts.lastName) return
+    if (child || !user?.id || submitted || nameParts.firstName || nameParts.lastName) return
     let alive = true
     apiGet<{ ok: boolean; data: { name?: string; firstName?: string; middleInitial?: string; lastName?: string } }>(`/api/user_accounts/${encodeURIComponent(user.id)}`)
       .then((res) => {
@@ -401,11 +425,11 @@ export function WaiverPage({
     return () => {
       alive = false
     }
-  }, [user?.id, user?.name, submitted, nameParts.firstName, nameParts.lastName])
+  }, [child, user?.id, user?.name, submitted, nameParts.firstName, nameParts.lastName])
 
   // Prefill the birthday from the player's profile when the form starts empty.
   useEffect(() => {
-    if (!user?.id || submitted || state.birthDate) return
+    if (child || !user?.id || submitted || state.birthDate) return
     let alive = true
     apiGet<{ ok: boolean; data: { birthDate?: string } }>(`/api/user_accounts/${encodeURIComponent(user.id)}`)
       .then((res) => {
@@ -416,7 +440,7 @@ export function WaiverPage({
     return () => {
       alive = false
     }
-  }, [user?.id, submitted, state.birthDate])
+  }, [child, user?.id, submitted, state.birthDate])
 
   const canSubmit = Object.keys(errors).length === 0 && !submitting
   const shownErrors: Record<string, string> = showErrors ? errors : {}
@@ -709,8 +733,9 @@ export function WaiverPage({
 
       const response = await apiPost<{ ok: boolean; insertedId: string; data: SubmittedWaiver }>('/api/waivers', {
         id: `WAIV-${Date.now()}`,
-        userId: user?.id || '',
-        reservationId: localStorage.getItem('active_reservation_id') || '',
+        userId: subjectId,
+        ...(child ? { forChildId: child.id } : {}),
+        reservationId: child ? '' : localStorage.getItem('active_reservation_id') || '',
         fullName: composedName,
         email: user?.email || '',
         birthDate: state.birthDate,
@@ -748,7 +773,7 @@ export function WaiverPage({
       }
 
       // Keep the profile's name in step with the name on the waiver staff will verify.
-      if (user?.id) {
+      if (user?.id && !child) {
         void apiPut(`/api/user_accounts/${encodeURIComponent(user.id)}`, {
           firstName: nameParts.firstName.trim(),
           middleInitial: nameParts.middleInitial.trim(),
@@ -791,8 +816,8 @@ export function WaiverPage({
     try {
       const matchesCurrentUser = (waiver?: SubmittedWaiver) => {
         if (!waiver) return false
-        if (!user?.id) return false
-        return String(waiver.userId) === String(user.id)
+        if (!subjectId) return false
+        return String(waiver.userId) === String(subjectId)
       }
 
       if (localWaiverId) {
@@ -803,8 +828,8 @@ export function WaiverPage({
         }
       }
 
-      if (user?.id) {
-        const existingWaiver = await tryFetchByQuery({ userId: user.id })
+      if (subjectId) {
+        const existingWaiver = await tryFetchByQuery({ userId: subjectId })
         if (existingWaiver) {
           setSubmittedWaiver(existingWaiver)
           return existingWaiver
@@ -872,7 +897,7 @@ export function WaiverPage({
                 })()
               ) : null}
               </div>
-              <p className="text-muted text-sm">Sign once before your first game. Players under 18 need a guardian to sign too.</p>
+              <p className="text-muted text-sm">Sign once before your first game. This waiver is for players 18 and older; once it's approved, parents can add their children below.</p>
             </div>
             <div className="flex items-center gap-3">
               <Button variant="ghost" disabled={viewWaiverLoading} onClick={handleViewWaiver}>
@@ -1110,15 +1135,16 @@ export function WaiverPage({
                 value={submittedWaiver?.email || user?.email || ''}
                 readOnly
                 disabled
-                hint="Taken from your account."
+                hint={child ? "The guardian's email (your account)." : 'Taken from your account.'}
               />
 
               <Input
                 label="Birthday"
                 type="date"
-                max={maxBirthDate()}
+                max={child ? maxBirthDate() : maxAdultBirthDate()}
                 value={state.birthDate}
-                disabled={submitted || submitting}
+                disabled={submitted || submitting || Boolean(child)}
+                hint={child ? "From the child's profile." : undefined}
                 onChange={(e) => setState((s) => ({ ...s, birthDate: e.target.value }))}
                 error={shownErrors.birthDate}
               />
@@ -1425,7 +1451,7 @@ export function WaiverPage({
                     ))}
                   </ul>
                   <p className="divider mt-4 border-t pt-4 text-xs text-muted">
-                    Next: once your waiver is approved, you can book and pay by GCash or bank transfer.
+                    Next: once your waiver is approved, you can book and pay online with GCash, Maya, your bank, or a card.
                   </p>
                 </>
               )
@@ -1433,6 +1459,9 @@ export function WaiverPage({
           </Card>
         </div>
       </div>
+
+      {/* Parents add their children once their own (adult) waiver is approved. */}
+      {!isEmbedded && !child && String(waiverStatus || '').toLowerCase() === 'approved' ? <MinorsOnAccount /> : null}
     </div>
   )
 }

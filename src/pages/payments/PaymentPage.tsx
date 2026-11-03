@@ -1,36 +1,28 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { apiBase, apiGet, apiPost, getApiAuthHeaders } from '../../utils/apiClient'
-import { formatPhPhone, isValidPhPhone, PH_PHONE_PLACEHOLDER, toStoredPhPhone } from '../../utils/phone'
+import { apiGet, apiPost } from '../../utils/apiClient'
 import toast from 'react-hot-toast'
 import { useAuth } from '../../context/AuthContext'
 
 import { motion } from 'framer-motion'
-import { FiCheck, FiChevronRight, FiFileText, FiInfo, FiLock, FiUpload } from 'react-icons/fi'
+import { FiAlertTriangle, FiCheck, FiChevronRight, FiFileText, FiInfo, FiLock } from 'react-icons/fi'
 
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
-import { Input } from '../../components/ui/Input'
 import { clearPackagePrefill } from '../../utils/packagePrefill'
 import { StripeCardPayment } from '../../components/payments/StripeCardPayment'
 import { cancelBookingDraftLeft, clearBookingDraft, hasBookingDraft, markBookingDraftLeft, readBookingDraft, saveBookingDraft, scheduleBookingDraftLeft } from '../../utils/bookingDraft'
 
-// Online deposits: GCash and bank transfer are proof-of-payment submissions a registrar
-// verifies, or Xendit's payment page when the server has it set up. Remaining balances are
-// settled at the field by GCash, bank transfer, or cash. Card payments through Stripe (test mode)
-// are offered alongside them when the server has Stripe keys.
-type PaymentMethod = 'gcash' | 'bank' | 'xendit' | 'stripe'
+// Players pay online through Xendit's payment page (GCash, Maya, bank, card), which verifies the
+// payment itself, so no staff check is needed and the booking is confirmed automatically. With the
+// downpayment plan the rest is paid in cash at the field. Card payments through Stripe (test mode)
+// are offered alongside when the server has Stripe keys.
+type PaymentMethod = 'xendit' | 'stripe'
 
-const METHOD_LABELS: Record<PaymentMethod, string> = { gcash: 'GCash', bank: 'Bank Transfer', xendit: 'Online (Xendit)', stripe: 'Card (Stripe)' }
+const METHOD_LABELS: Record<PaymentMethod, string> = { xendit: 'Online (Xendit)', stripe: 'Card (Stripe)' }
 
 // Pay everything online, or the downpayment online and the rest in cash at the field.
 type PaymentPlan = 'full' | 'cash_balance'
-
-type BankDetails = {
-  bankName: string
-  accountName: string
-  accountNumber: string
-}
 
 type PaymentMode = 'self' | 'split'
 
@@ -38,17 +30,6 @@ type TeamMember = {
   id: string
   name: string
   email: string
-}
-
-type GcashQrSettings = {
-  imageUrl: string
-  phoneNumber?: string
-  updatedAtISO?: string | null
-}
-
-type UploadState = {
-  fileName: string | null
-  fileSize: number | null
 }
 
 function formatPHP(n: number) {
@@ -87,20 +68,14 @@ class PaymentPageErrorBoundary extends React.Component<{ children: React.ReactNo
 function PaymentPageContent() {
   const navigate = useNavigate()
   const { user } = useAuth()
-  const proofInputRef = useRef<HTMLInputElement | null>(null)
 
-  const [method, setMethod] = useState<PaymentMethod>('gcash')
-  // Xendit (test mode) is offered first when the server has it set up. GCash and bank transfer
-  // stay available next to it, so a Xendit outage never blocks payment.
-  const [xenditEnabled, setXenditEnabled] = useState(false)
+  const [method, setMethod] = useState<PaymentMethod>('xendit')
+  // Whether the server has Xendit set up; null while checking.
+  const [xenditEnabled, setXenditEnabled] = useState<boolean | null>(null)
   useEffect(() => {
     apiGet<{ ok: boolean; data: { enabled: boolean } }>('/api/xendit/config')
-      .then((res) => {
-        if (!res?.data?.enabled) return
-        setXenditEnabled(true)
-        setMethod('xendit')
-      })
-      .catch(() => null)
+      .then((res) => setXenditEnabled(Boolean(res?.data?.enabled)))
+      .catch(() => setXenditEnabled(false))
   }, [])
   // Stripe card payments (test mode), shown next to the other methods when configured.
   const [stripeConfig, setStripeConfig] = useState<{ enabled: boolean; publishableKey: string }>({ enabled: false, publishableKey: '' })
@@ -110,10 +85,6 @@ function PaymentPageContent() {
       .then((res) => setStripeConfig({ enabled: Boolean(res?.enabled), publishableKey: res?.publishableKey || '' }))
       .catch(() => null)
   }, [])
-  const [bankDetails, setBankDetails] = useState<BankDetails | null>(null)
-  const [refNo, setRefNo] = useState('')
-  const [phoneNumber, setPhoneNumber] = useState('')
-  const [upload, setUpload] = useState<UploadState>({ fileName: null, fileSize: null })
   const [submitting, setSubmitting] = useState(false)
   const [success, setSuccess] = useState(false)
   const [breakdown, setBreakdown] = useState({ field: 0, equipment: 0, entranceFee: 0, service: 0, total: 0, itemized: [] as Array<{ label: string; amount: number }> })
@@ -155,9 +126,6 @@ function PaymentPageContent() {
       // ignore malformed pending data; submit() reports it
     }
   }
-  const [gcashQrUrl, setGcashQrUrl] = useState('')
-  const [gcashPhoneNumber, setGcashPhoneNumber] = useState('')
-  const [gcashQrLoading, setGcashQrLoading] = useState(true)
   const [receiptReference, setReceiptReference] = useState('')
   const [amountPaid, setAmountPaid] = useState(0)
   const [balanceDue, setBalanceDue] = useState(0)
@@ -175,7 +143,8 @@ function PaymentPageContent() {
       const total = Number(pendingReservation?.totalAmount || field + equipment + entranceFee + service || 0)
       const nextPaymentMode: PaymentMode = String(pendingReservation?.paymentMode || 'self').toLowerCase() === 'split' ? 'split' : 'self'
       const nextTeamMembers: TeamMember[] = Array.isArray(pendingReservation?.teamMembers)
-        ? pendingReservation.teamMembers.map((member: any) => ({
+        // Children on the team don't pay, so they aren't part of a split.
+        ? pendingReservation.teamMembers.filter((member: any) => !member?.isMinor).map((member: any) => ({
             id: String(member?.id || ''),
             name: String(member?.name || 'Unnamed player'),
             email: String(member?.email || ''),
@@ -262,51 +231,11 @@ function PaymentPageContent() {
     return () => window.clearInterval(timer)
   }, [success, draftExpired])
 
-  useEffect(() => {
-    let cancelled = false
-
-    const loadQr = async () => {
-      try {
-        setGcashQrLoading(true)
-        const res = await apiGet<{ ok: boolean; data: GcashQrSettings }>('/api/payments/gcash-qr')
-        if (!cancelled) {
-          setGcashQrUrl(res?.data?.imageUrl || '')
-          setGcashPhoneNumber(res?.data?.phoneNumber || '')
-        }
-      } catch {
-        if (!cancelled) setGcashQrUrl('')
-      } finally {
-        if (!cancelled) setGcashQrLoading(false)
-      }
-    }
-
-    loadQr()
-    apiGet<{ ok: boolean; data: BankDetails }>('/api/payments/bank-details')
-      .then((res) => { if (!cancelled) setBankDetails(res?.data ?? null) })
-      .catch(() => { if (!cancelled) setBankDetails(null) })
-
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
   const canSubmit = useMemo(() => {
     if (submitting) return false
-    if (method === 'xendit') return true
-    if (method === 'stripe') return !stripeSession && paymentMode !== 'split'
-    return Boolean(refNo.trim()) && Boolean(upload.fileName) && (!phoneNumber || isValidPhPhone(phoneNumber))
-  }, [method, phoneNumber, refNo, submitting, upload.fileName, stripeSession, paymentMode])
-
-  const onPickFile = (f: File | null) => {
-    if (!f) return
-    if (!f.type.startsWith('image/')) {
-      setUpload({ fileName: '', fileSize: 0 })
-      if (proofInputRef.current) proofInputRef.current.value = ''
-      toast.error('Only image files are allowed as proof of payment.')
-      return
-    }
-    setUpload({ fileName: f.name, fileSize: f.size })
-  }
+    if (method === 'xendit') return xenditEnabled === true
+    return !stripeSession && paymentMode !== 'split'
+  }, [method, submitting, stripeSession, paymentMode, xenditEnabled])
 
   const submit = async () => {
     setSubmitting(true)
@@ -326,15 +255,8 @@ function PaymentPageContent() {
       // The choices made on this page are what the reservation is created with.
       pendingReservation = { ...pendingReservation, paymentMode, paymentPlan, teamSize }
 
-      if (method === 'stripe' && paymentMode === 'split') throw new Error('Split payments are paid by GCash; card payment covers the whole amount.')
-      if (method !== 'xendit' && method !== 'stripe') {
-        // Every check runs before the reservation is created, so a mistake never leaves a booking behind.
-        if (!upload.fileName) throw new Error('Proof image is required')
-        if (!refNo.trim()) throw new Error('Reference number is required')
-        if (phoneNumber && !isValidPhPhone(phoneNumber)) throw new Error('Enter your GCash number as 09XX XXX XXXX, or leave it blank.')
-        const file = proofInputRef.current?.files?.[0]
-        if (!file || !file.type.startsWith('image/')) throw new Error('Only image files are allowed as proof of payment.')
-      }
+      if (method === 'stripe' && paymentMode === 'split') throw new Error('Split payments are paid online through Xendit; card payment covers the whole amount.')
+      if (method === 'xendit' && xenditEnabled !== true) throw new Error('Online payment is not available right now. Please try again later.')
 
       let reservationId = localStorage.getItem('pending_reservation_id') || ''
       let serverReservation: any
@@ -387,45 +309,9 @@ function PaymentPageContent() {
         window.location.assign(checkout.data.checkoutUrl)
         return
       }
-      if (method === 'stripe') {
-        // The reservation now holds the slot; the card form below completes the payment.
-        const intent = await apiPost<{ ok: boolean; clientSecret: string; paymentIntentId: string; amount: number }>('/api/create-payment-intent', { reservationId: String(reservationId) })
-        setStripeSession({ clientSecret: intent.clientSecret, paymentIntentId: intent.paymentIntentId, reservationId: String(reservationId), amount: Number(intent.amount) })
-        return
-      }
-      {
-        const file = proofInputRef.current?.files?.[0]
-        if (!file) throw new Error('Proof image is required')
-        const formData = new FormData()
-        formData.append('file', file)
-        const uploadRes = await fetch(`${apiBase}/api/upload-image`, { method: 'POST', headers: getApiAuthHeaders(), body: formData })
-        const uploadJson = await uploadRes.json().catch(() => null)
-        if (!uploadRes.ok) throw new Error(uploadJson?.error || uploadJson?.message || 'Upload failed')
-        const proofImageUrl = uploadJson?.url
-        if (!proofImageUrl) throw new Error('The proof upload returned no URL. Please try again.')
-
-        const payment = await apiPost<{ ok: boolean; data?: { id?: string } }>('/api/payments', {
-          reservationId: String(reservationId),
-          amount,
-          paymentMethod: METHOD_LABELS[method],
-          paymentStatus: 'pending',
-          gcashImageUrl: proofImageUrl,
-          paymentMode: serverMode,
-          transactionReference: refNo.trim(),
-          ...(phoneNumber ? { senderNumber: toStoredPhPhone(phoneNumber) } : {}),
-          createdAt: new Date().toISOString(),
-        })
-        setReceiptReference(payment.data?.id || refNo.trim())
-      }
-      setAmountPaid(amount)
-
-      localStorage.removeItem('pending_reservation')
-      localStorage.removeItem('pending_reservation_id')
-      clearPackagePrefill()
-      clearBookingDraft(user.id)
-
-      setSuccess(true)
-      toast.success('Payment submitted for staff review.')
+      // Card: the reservation now holds the slot; the card form below completes the payment.
+      const intent = await apiPost<{ ok: boolean; clientSecret: string; paymentIntentId: string; amount: number }>('/api/create-payment-intent', { reservationId: String(reservationId) })
+      setStripeSession({ clientSecret: intent.clientSecret, paymentIntentId: intent.paymentIntentId, reservationId: String(reservationId), amount: Number(intent.amount) })
     } catch (e: any) {
       toast.error(String(e?.message || e))
     } finally {
@@ -439,9 +325,7 @@ function PaymentPageContent() {
         <div className="text-sm font-medium text-accent">Payment</div>
         <h1 className="text-3xl font-bold">Reservation Payment</h1>
         <p className="text-muted text-sm">
-          {xenditEnabled
-            ? 'The server recalculates the reservation total and downpayment. Pay online through Xendit and your reservation is confirmed automatically, or pay by GCash or bank transfer and upload your proof. If you chose the downpayment, the rest is paid in cash at the field.'
-            : 'The server recalculates the reservation total and deposit. Pay online by GCash or bank transfer and upload your proof for registrar verification. If you chose the downpayment, the rest is paid in cash at the field.'}
+          Pay online through Xendit with GCash, Maya, your bank, or a card. The payment is checked automatically and your reservation is confirmed as soon as it goes through. If you chose the downpayment, the rest is paid in cash at the field.
         </p>
       </div>
 
@@ -508,11 +392,7 @@ function PaymentPageContent() {
 
           <div className="mt-4 grid gap-2 sm:grid-cols-2">
             {([
-              ...(xenditEnabled ? [
-                { key: 'xendit', title: 'Pay online', hint: 'GCash, Maya or card · confirmed automatically · Xendit test mode' },
-              ] : []),
-              { key: 'gcash', title: 'GCash', hint: 'Scan the QR → pay → upload proof' },
-              { key: 'bank', title: 'Bank Transfer', hint: 'Transfer to our account → upload proof' },
+              { key: 'xendit', title: 'Pay online', hint: 'GCash, Maya, bank or card · confirmed automatically · Xendit test mode' },
               ...(stripeConfig.enabled ? [{ key: 'stripe', title: 'Credit / debit card', hint: 'Visa, Mastercard · Stripe test mode' }] : []),
             ] as Array<{ key: PaymentMethod; title: string; hint: string }>).map((option) => (
               <button
@@ -533,6 +413,13 @@ function PaymentPageContent() {
             ))}
           </div>
 
+          {xenditEnabled === false && method === 'xendit' ? (
+            <div className="mt-4 flex items-start gap-2 rounded-2xl border border-danger/30 bg-danger/10 p-3 text-sm text-danger">
+              <FiAlertTriangle className="mt-0.5 shrink-0" />
+              Online payment is not available right now, so the reservation can't be paid yet. Please try again later or contact the staff.
+            </div>
+          ) : null}
+
           <div className="mt-6 rounded-2xl border border-white/10 bg-black/15 p-4">
             <div className="flex items-center gap-2 text-sm font-bold">
               <FiInfo className="text-gold" />
@@ -542,21 +429,14 @@ function PaymentPageContent() {
               <ul className="mt-2 space-y-1 text-xs text-muted list-disc pl-5">
                 <li>Enter your card in Stripe's secure form. Card details go straight to Stripe and are never stored by Chill Shooters.</li>
                 <li>Your reservation is confirmed automatically once the server verifies the payment with Stripe.</li>
-                <li>Card payment covers the whole online amount; split payments use GCash.</li>
+                <li>Card payment covers the whole online amount; split payments are paid through Xendit.</li>
                 <li>Test mode: no real money is charged.</li>
-              </ul>
-            ) : method === 'xendit' ? (
-              <ul className="mt-2 space-y-1 text-xs text-muted list-disc pl-5">
-                <li>You'll be taken to Xendit's secure payment page to pay with GCash, Maya, a card, or another listed option.</li>
-                <li>Your reservation is confirmed automatically as soon as Xendit confirms the payment. No proof to upload.</li>
-                <li>Test mode: no real money is charged. Use Xendit's test payment options.</li>
-                <li>If the payment page doesn't open, choose GCash or Bank Transfer instead.</li>
               </ul>
             ) : (
               <ul className="mt-2 space-y-1 text-xs text-muted list-disc pl-5">
-                <li>{method === 'gcash' ? 'The GCash reference number is required.' : 'The bank transaction or confirmation number is required.'}</li>
-                <li>Upload a screenshot or photo of the receipt before submitting.</li>
-                <li>A registrar verifies the payment before your reservation is confirmed.</li>
+                <li>You'll be taken to Xendit's secure payment page to pay with GCash, Maya, your bank, or a card.</li>
+                <li>Your reservation is confirmed automatically as soon as Xendit confirms the payment. No proof to upload and no staff review.</li>
+                <li>Test mode: no real money is charged. Use Xendit's test payment options.</li>
               </ul>
             )}
           </div>
@@ -609,98 +489,8 @@ function PaymentPageContent() {
                     Press Continue to card payment to save your reservation and open the secure card form.
                   </div>
                 )
-              ) : method === 'xendit' ? null : method === 'gcash' ? (
-                <>
-                  {gcashPhoneNumber ? (
-                    <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                      <div className="text-xs uppercase tracking-widest text-muted">Send payment to</div>
-                      <div className="mt-1 text-lg font-bold tracking-wide">{formatPhPhone(gcashPhoneNumber)}</div>
-                    </div>
-                  ) : null}
-
-                  {/* The player's own GCash number, kept separate from the shop's so typing never mixes the two. */}
-                  <Input
-                    label="Your GCash number (optional)"
-                    value={phoneNumber}
-                    onChange={(e) => setPhoneNumber(formatPhPhone(e.target.value))}
-                    inputMode="tel"
-                    placeholder={PH_PHONE_PLACEHOLDER}
-                    hint="The number you paid from, so staff can match your payment."
-                    error={phoneNumber && !isValidPhPhone(phoneNumber) ? 'Enter a mobile number as 09XX XXX XXXX.' : undefined}
-                  />
-
-                  <div className="rounded-2xl border border-dashed border-accent/30 bg-accent/5 p-4">
-                    <div className="text-xs uppercase tracking-widest text-muted">GCash QR</div>
-                    <div className="mx-auto mt-3 flex min-h-32 items-center justify-center rounded-2xl border border-dashed border-accent/30 bg-white/5 p-3 text-[10px] text-muted">
-                        {gcashQrLoading ? (
-                          <span>Loading QR…</span>
-                        ) : gcashQrUrl ? (
-                          <img src={gcashQrUrl} alt="GCash QR" className="max-h-56 w-full rounded-xl object-contain" />
-                        ) : (
-                          <span>Admin has not uploaded a QR yet.</span>
-                        )}
-                      </div>
-                  </div>
-                </>
-              ) : (
-                <div className="rounded-2xl border border-dashed border-accent/30 bg-accent/5 p-4">
-                  <div className="text-xs uppercase tracking-widest text-muted">Transfer to</div>
-                  {bankDetails?.accountNumber ? (
-                    <dl className="mt-3 grid gap-2 text-sm">
-                      <div className="flex justify-between gap-3"><dt className="text-muted">Bank</dt><dd className="font-semibold">{bankDetails.bankName}</dd></div>
-                      <div className="flex justify-between gap-3"><dt className="text-muted">Account name</dt><dd className="font-semibold">{bankDetails.accountName}</dd></div>
-                      <div className="flex justify-between gap-3"><dt className="text-muted">Account number</dt><dd className="font-mono font-semibold">{bankDetails.accountNumber}</dd></div>
-                    </dl>
-                  ) : (
-                    <div className="mt-3 text-xs text-muted">The admin has not added bank account details yet. Please use GCash or contact staff.</div>
-                  )}
-                </div>
-              )}
-
-              {method !== 'xendit' && method !== 'stripe' ? (
-                <Input
-                  label={method === 'gcash' ? 'GCash Reference Number' : 'Bank Reference / Confirmation Number'}
-                  value={refNo}
-                  onChange={(e) => setRefNo(e.target.value)}
-                  placeholder={method === 'gcash' ? 'e.g., 1023 456 789012' : 'e.g., FT2610281234'}
-                />
               ) : null}
             </div>
-
-            {method !== 'xendit' && method !== 'stripe' ? (
-            <div className="mt-6">
-              <div className="text-xs uppercase tracking-widest text-muted">Upload proof</div>
-              <div className="mt-2">
-                <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                  <div className="flex items-center gap-3">
-                    <div className="grid h-10 w-10 place-items-center rounded-2xl bg-accent/10 ring-1 ring-accent/25">
-                      <FiUpload className="text-gold" />
-                    </div>
-                    <div className="min-w-0">
-                      <div className="text-sm font-bold">Attach payment screenshot / receipt</div>
-                      <div className="mt-1 text-xs text-muted truncate">{upload.fileName ? upload.fileName : 'No file selected'}</div>
-                    </div>
-                  </div>
-
-                  <input
-                    ref={proofInputRef}
-                    id="payment-proof-upload"
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    onChange={(e) => onPickFile(e.target.files?.[0] ?? null)}
-                  />
-
-                  <div className="mt-4 flex items-center justify-between gap-3">
-                    <Button type="button" variant="ghost" disabled={submitting} onClick={() => proofInputRef.current?.click()}>
-                      Choose file
-                    </Button>
-                    <div className="text-[11px] text-muted">Accepted: image files only</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-            ) : null}
 
             <div className="rounded-2xl border border-white/10 bg-black/20 p-4 shadow-[0_0_0_1px_rgba(255,255,255,0.03)]">
               <div className="text-xs uppercase tracking-widest text-muted">Receipt Preview</div>
@@ -711,14 +501,8 @@ function PaymentPageContent() {
                 </div>
                 <div className="mt-2 flex items-center justify-between gap-3">
                   <div className="text-xs text-muted">Reference</div>
-                  <div className="text-xs font-bold">{method === 'xendit' ? 'Issued by Xendit' : method === 'stripe' ? 'Issued by Stripe' : refNo || '—'}</div>
+                  <div className="text-xs font-bold">{method === 'xendit' ? 'Issued by Xendit' : 'Issued by Stripe'}</div>
                 </div>
-                {method === 'gcash' ? (
-                  <div className="mt-2 flex items-center justify-between gap-3">
-                    <div className="text-xs text-muted">Phone</div>
-                    <div className="text-xs font-bold">{phoneNumber || '—'}</div>
-                  </div>
-                ) : null}
                 <div className="mt-3 h-px bg-white/10" />
                 {(breakdown.itemized.length > 0 ? breakdown.itemized : [
                   { label: 'Field reservation', amount: breakdown.field },
@@ -745,7 +529,7 @@ function PaymentPageContent() {
 
           <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:items-center">
             <Button variant="primary" disabled={!canSubmit} onClick={submit}>
-              {submitting ? (method === 'xendit' ? 'Opening Xendit…' : 'Submitting…') : success ? 'Submitted' : method === 'xendit' ? 'Continue to payment' : method === 'stripe' ? 'Continue to card payment' : 'Submit Payment'}
+              {submitting ? (method === 'xendit' ? 'Opening Xendit…' : 'Submitting…') : success ? 'Paid' : method === 'xendit' ? 'Continue to payment' : 'Continue to card payment'}
               <FiChevronRight />
             </Button>
           </div>
@@ -758,12 +542,10 @@ function PaymentPageContent() {
               className="mt-4 rounded-2xl border border-success/25 bg-success/10 p-4"
             >
               <div className="flex items-center gap-2 text-sm font-bold text-success">
-                <FiCheck /> {method === 'stripe' ? 'Payment Received' : 'Payment Submitted'}
+                <FiCheck /> Payment Received
               </div>
               <div className="mt-2 text-xs text-muted">
-                {method === 'stripe'
-                  ? 'Your card payment was verified with Stripe and your reservation is confirmed.'
-                  : `Your ${METHOD_LABELS[method]} proof has been submitted. The registrar/admin will review and verify it.`}
+                Your card payment was verified with Stripe and your reservation is confirmed.
                 {paymentMode === 'split'
                   ? ' Your teammates have been notified of their shares. Track who has paid under Split Payment in the menu — the slot stays reserved for 24 hours while the team pays.'
                   : ''}
@@ -773,7 +555,7 @@ function PaymentPageContent() {
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-xs text-muted">Receipt</span>
                   <span className="text-xs font-bold">
-                    {receiptReference || `ABP-RCPT-${refNo ? refNo.replace(/\W/g, '').slice(-6) : '000000'}`}
+                    {receiptReference || '—'}
                   </span>
                 </div>
                 <div className="mt-2 flex items-center justify-between gap-3">

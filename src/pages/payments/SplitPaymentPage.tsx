@@ -1,11 +1,10 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
-import { FiCheck, FiClock, FiUpload, FiUsers } from 'react-icons/fi'
+import { FiCheck, FiClock, FiUsers } from 'react-icons/fi'
 
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
-import { Input } from '../../components/ui/Input'
-import { apiBase, apiGet, apiPost, getApiAuthHeaders } from '../../utils/apiClient'
+import { apiGet } from '../../utils/apiClient'
 import { isXenditEnabled, startXenditCheckout } from '../../utils/xendit'
 
 export const SPLIT_PAYMENTS_CHANGED_EVENT = 'split-payments-changed'
@@ -48,19 +47,14 @@ function formatDue(iso?: string) {
   return new Date(iso).toLocaleString('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short' })
 }
 
-type BankDetails = { bankName: string; accountName: string; accountNumber: string }
-
-function ShareForm({ item, gcashQrUrl, bankDetails, onPaid }: { item: SplitPaymentItem; gcashQrUrl: string; bankDetails: BankDetails | null; onPaid: () => void }) {
-  const fileRef = useRef<HTMLInputElement | null>(null)
-  const [method, setMethod] = useState<'gcash' | 'bank'>('gcash')
-  const [refNo, setRefNo] = useState('')
-  const [fileName, setFileName] = useState('')
+// A teammate pays their share online through Xendit; it's verified automatically and the booking
+// is confirmed once every share is in.
+function ShareForm({ item }: { item: SplitPaymentItem }) {
   const [submitting, setSubmitting] = useState(false)
-  // With Xendit set up, a teammate can pay their share online and it's verified automatically.
-  // GCash or bank transfer with a proof stays available below in case Xendit is down.
-  const [xendit, setXendit] = useState(false)
+  // null while checking whether the server has Xendit set up.
+  const [xendit, setXendit] = useState<boolean | null>(null)
   useEffect(() => {
-    void isXenditEnabled().then(setXendit)
+    void isXenditEnabled().then(setXendit).catch(() => setXendit(false))
   }, [])
 
   const payOnline = async () => {
@@ -68,37 +62,7 @@ function ShareForm({ item, gcashQrUrl, bankDetails, onPaid }: { item: SplitPayme
     try {
       await startXenditCheckout(item.reservation.id)
     } catch (e: any) {
-      toast.error(e?.message || 'Could not open the payment page. You can still pay by GCash or bank transfer below.')
-      setSubmitting(false)
-    }
-  }
-
-  const submit = async () => {
-    const file = fileRef.current?.files?.[0]
-    if (!refNo.trim()) return toast.error(method === 'gcash' ? 'Enter your GCash reference number.' : 'Enter your bank reference number.')
-    if (!file || !file.type.startsWith('image/')) return toast.error('Attach an image of your payment proof.')
-
-    setSubmitting(true)
-    try {
-      const formData = new FormData()
-      formData.append('file', file)
-      const uploadRes = await fetch(`${apiBase}/api/upload-image`, { method: 'POST', headers: getApiAuthHeaders(), body: formData })
-      const uploadJson = await uploadRes.json().catch(() => null)
-      if (!uploadRes.ok || !uploadJson?.url) throw new Error(uploadJson?.error || 'Proof upload failed')
-
-      await apiPost('/api/payments', {
-        reservationId: item.reservation.id,
-        amount: item.myShareDue,
-        paymentMethod: method === 'gcash' ? 'GCash' : 'Bank Transfer',
-        gcashImageUrl: uploadJson.url,
-        paymentMode: 'split',
-        transactionReference: refNo.trim(),
-      })
-      toast.success('Your share was submitted for review.')
-      onPaid()
-    } catch (e: any) {
-      toast.error(e?.message || 'Could not submit your payment')
-    } finally {
+      toast.error(e?.message || 'Could not open the payment page. Please try again.')
       setSubmitting(false)
     }
   }
@@ -117,90 +81,16 @@ function ShareForm({ item, gcashQrUrl, bankDetails, onPaid }: { item: SplitPayme
         ) : null}
       </div>
 
-      {xendit ? (
-        <div className="space-y-2 rounded-2xl border border-white/10 bg-black/20 p-4">
-          <div className="text-sm font-bold">Pay online</div>
-          <div className="text-xs text-muted">Pay with GCash, Maya, or a card on Xendit (test mode). Your share is verified automatically, and the booking is confirmed once every share is in.</div>
-          <Button variant="primary" disabled={submitting} onClick={payOnline}>
-            {submitting ? 'Opening Xendit…' : 'Pay my share online'}
-          </Button>
-          <div className="text-[11px] text-muted">Or pay by GCash or bank transfer and upload your proof below.</div>
-        </div>
-      ) : null}
-
-      <div>
-        <div className="text-xs uppercase tracking-widest text-muted">Payment method</div>
-        <div className="mt-2 grid gap-2 sm:grid-cols-2">
-          {([
-            { key: 'gcash', title: 'GCash', hint: 'Scan the QR, pay, then upload your proof' },
-            { key: 'bank', title: 'Bank Transfer', hint: 'Transfer to our account, then upload your proof' },
-          ] as const).map((option) => (
-            <button
-              key={option.key}
-              type="button"
-              onClick={() => setMethod(option.key)}
-              className={[
-                'rounded-2xl border px-4 py-3 text-left transition',
-                method === option.key ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
-              ].join(' ')}
-            >
-              <div className="text-sm font-bold">{option.title}</div>
-              <div className="mt-1 text-xs text-muted">{option.hint}</div>
-            </button>
-          ))}
-        </div>
+      <div className="space-y-2 rounded-2xl border border-white/10 bg-black/20 p-4">
+        <div className="text-sm font-bold">Pay online</div>
+        <div className="text-xs text-muted">Pay with GCash, Maya, your bank, or a card on Xendit (test mode). Your share is verified automatically, and the booking is confirmed once every share is in.</div>
+        {xendit === false ? (
+          <div className="text-xs text-danger">Online payment is not available right now. Please try again later or contact the staff.</div>
+        ) : null}
+        <Button variant="primary" disabled={submitting || xendit !== true} onClick={payOnline}>
+          {submitting ? 'Opening Xendit…' : `Pay my share (${formatPHP(item.myShareDue)})`}
+        </Button>
       </div>
-
-      {method === 'gcash' ? (
-        <div className="flex min-h-32 items-center justify-center rounded-2xl border border-dashed border-accent/30 bg-white/5 p-3 text-xs text-muted">
-          {gcashQrUrl ? <img src={gcashQrUrl} alt="GCash QR code" className="max-h-56 w-full rounded-xl object-contain" /> : 'Admin has not uploaded a GCash QR yet.'}
-        </div>
-      ) : (
-        <div className="rounded-2xl border border-dashed border-accent/30 bg-white/5 p-4 text-sm">
-          {bankDetails?.accountNumber ? (
-            <dl className="grid gap-2">
-              <div className="flex justify-between gap-3"><dt className="text-muted">Bank</dt><dd className="font-semibold">{bankDetails.bankName}</dd></div>
-              <div className="flex justify-between gap-3"><dt className="text-muted">Account name</dt><dd className="font-semibold">{bankDetails.accountName}</dd></div>
-              <div className="flex justify-between gap-3"><dt className="text-muted">Account number</dt><dd className="font-mono font-semibold">{bankDetails.accountNumber}</dd></div>
-            </dl>
-          ) : (
-            <div className="text-xs text-muted">The admin has not added bank account details yet. Please use GCash or contact staff.</div>
-          )}
-        </div>
-      )}
-
-      <Input
-        label={method === 'gcash' ? 'GCash reference number' : 'Bank reference / confirmation number'}
-        value={refNo}
-        onChange={(e) => setRefNo(e.target.value)}
-        placeholder={method === 'gcash' ? 'e.g., 1234 567 890123' : 'e.g., FT2610281234'}
-      />
-
-      <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-        <div className="flex items-center gap-3">
-          <div className="grid h-10 w-10 place-items-center rounded-2xl bg-accent/10 ring-1 ring-accent/25">
-            <FiUpload className="text-gold" />
-          </div>
-          <div className="min-w-0">
-            <div className="text-sm font-bold">Proof of payment</div>
-            <div className="mt-1 truncate text-xs text-muted">{fileName || 'No file selected'}</div>
-          </div>
-        </div>
-        <input
-          ref={fileRef}
-          type="file"
-          accept="image/*"
-          className="hidden"
-          onChange={(e) => setFileName(e.target.files?.[0]?.name || '')}
-        />
-        <div className="mt-3">
-          <Button type="button" variant="ghost" disabled={submitting} onClick={() => fileRef.current?.click()}>Choose image</Button>
-        </div>
-      </div>
-
-      <Button variant="primary" disabled={submitting} onClick={submit}>
-        {submitting ? 'Submitting…' : `Submit ${formatPHP(item.myShareDue)}`}
-      </Button>
     </div>
   )
 }
@@ -229,7 +119,7 @@ function CaptainTracker({ item }: { item: SplitPaymentItem }) {
             {paid.length === 0 ? <li className="text-xs text-muted">No one yet</li> : paid.map((member) => (
               <li key={member.id} className="flex items-center justify-between gap-2">
                 <span className="flex items-center gap-1.5"><FiCheck className="text-success" />{member.name}{member.isCaptain ? ' (you)' : ''}</span>
-                <span className="text-xs text-muted">{formatPHP(member.amount)}{member.paymentStatus === 'pending' ? ' · in review' : ''}</span>
+                <span className="text-xs text-muted">{formatPHP(member.amount)}{member.paymentStatus === 'pending' || member.paymentStatus === 'review' ? ' · in review' : ''}</span>
               </li>
             ))}
           </ul>
@@ -246,7 +136,7 @@ function CaptainTracker({ item }: { item: SplitPaymentItem }) {
         </div>
       </div>
       <div className="mt-3 text-xs text-muted">
-        Once the full amount is in, the reservation and everyone's proofs and waivers go to the admin for final approval.
+        Once every share is paid, the reservation is confirmed automatically.
       </div>
     </div>
   )
@@ -255,8 +145,6 @@ function CaptainTracker({ item }: { item: SplitPaymentItem }) {
 export function SplitPaymentPage() {
   const [items, setItems] = useState<SplitPaymentItem[]>([])
   const [loading, setLoading] = useState(true)
-  const [gcashQrUrl, setGcashQrUrl] = useState('')
-  const [bankDetails, setBankDetails] = useState<BankDetails | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -271,18 +159,7 @@ export function SplitPaymentPage() {
 
   useEffect(() => {
     void load()
-    apiGet<{ ok: boolean; data: { imageUrl?: string } }>('/api/payments/gcash-qr')
-      .then((res) => setGcashQrUrl(res?.data?.imageUrl || ''))
-      .catch(() => setGcashQrUrl(''))
-    apiGet<{ ok: boolean; data: BankDetails }>('/api/payments/bank-details')
-      .then((res) => setBankDetails(res?.data ?? null))
-      .catch(() => setBankDetails(null))
   }, [load])
-
-  const afterPaid = () => {
-    window.dispatchEvent(new Event(SPLIT_PAYMENTS_CHANGED_EVENT))
-    void load()
-  }
 
   return (
     <div className="space-y-4">
@@ -317,7 +194,7 @@ export function SplitPaymentPage() {
           </div>
 
           {!item.iHavePaid && item.myShareDue > 0 ? (
-            <ShareForm item={item} gcashQrUrl={gcashQrUrl} bankDetails={bankDetails} onPaid={afterPaid} />
+            <ShareForm item={item} />
           ) : item.iHavePaid ? (
             <div className="mt-4 flex items-center gap-2 rounded-2xl border border-success/25 bg-success/10 px-4 py-3 text-sm text-success">
               <FiCheck /> Your share is submitted.
