@@ -1,3 +1,5 @@
+import { modelOf } from '../../utils/inventoryModels'
+
 export const LOCATIONS = [
   { id: 'salawag', name: 'Delta Stronghold (Salawag)' },
   { id: 'langkaan', name: 'Delta Stronghold (Langkaan)' },
@@ -25,12 +27,35 @@ export function formatDateTime(iso?: string) {
   return Number.isNaN(date.getTime()) ? iso : date.toLocaleString()
 }
 
-export type InventoryOption = { id: string; name: string; category: string; collection: 'weapons' | 'equipments' }
+export type InventoryOption = {
+  id: string
+  name: string
+  category: string
+  collection: 'weapons' | 'equipments'
+  // One record per physical piece: "M4 Rifle #3" is piece 3 of the "M4 Rifle" model.
+  model: string
+  unitNumber: number
+  status: string
+}
 
 export function toInventoryOptions(docs: any[], collection: 'weapons' | 'equipments'): InventoryOption[] {
   return docs
     // Player-owned gear is not center inventory.
     .filter((doc) => doc.source !== 'player')
-    .map((doc) => ({ id: String(doc.id || doc._id || ''), name: String(doc.name || 'Unnamed'), category: String(doc.category || ''), collection }))
+    .map((doc) => ({
+      id: String(doc.id || doc._id || ''),
+      name: String(doc.name || 'Unnamed'),
+      category: String(doc.category || (collection === 'weapons' ? 'rifles' : 'gear')).toLowerCase(),
+      collection,
+      model: modelOf(doc),
+      unitNumber: Number(doc.unitNumber) || 0,
+      status: String(doc.status || 'available').toLowerCase(),
+    }))
     .filter((item) => item.id)
+}
+
+// "consumables" -> "Consumables"
+export function categoryLabel(category: string) {
+  const text = String(category || 'other').replace(/[-_]+/g, ' ')
+  return text.charAt(0).toUpperCase() + text.slice(1)
 }

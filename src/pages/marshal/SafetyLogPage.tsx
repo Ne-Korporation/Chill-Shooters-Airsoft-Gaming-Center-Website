@@ -6,6 +6,7 @@ import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { apiGet, apiPost, apiPut } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
+import { Paged } from '../../components/ui/Pagination'
 
 type Actor = { actorEmail?: string; actorRole?: string }
 
@@ -297,7 +298,7 @@ export function SafetyLogPage() {
             <div className="mt-3 divide-y divide-white/5">
               {loading ? <div className="py-3 text-sm text-muted">Loading…</div> : null}
               {!loading && fpsLogs.length === 0 ? <div className="py-3 text-sm text-muted">No readings yet.</div> : null}
-              {fpsLogs.map((log) => (
+              <Paged items={fpsLogs}>{(pageItems) => pageItems.map((log) => (
                 <div key={log.id} className="flex items-start justify-between gap-3 py-3">
                   <div className="min-w-0">
                     <div className="truncate text-sm font-semibold">{log.weaponName}</div>
@@ -314,7 +315,7 @@ export function SafetyLogPage() {
                     </span>
                   </div>
                 </div>
-              ))}
+              ))}</Paged>
             </div>
           </Card>
         </div>
@@ -418,7 +419,7 @@ export function SafetyLogPage() {
             <div className="mt-3 divide-y divide-white/5">
               {loading ? <div className="py-3 text-sm text-muted">Loading…</div> : null}
               {!loading && reports.length === 0 ? <div className="py-3 text-sm text-muted">No damage reports.</div> : null}
-              {reports.map((report) => (
+              <Paged items={reports}>{(pageItems) => pageItems.map((report) => (
                 <div key={report.id} className="py-3">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
@@ -495,7 +496,7 @@ export function SafetyLogPage() {
                     )
                   ) : null}
                 </div>
-              ))}
+              ))}</Paged>
             </div>
           </Card>
         </div>

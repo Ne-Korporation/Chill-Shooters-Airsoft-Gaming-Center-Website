@@ -5,7 +5,8 @@ import { toast } from 'react-hot-toast'
 
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
-import { apiGet } from '../../utils/apiClient'
+import { apiGetAll } from '../../utils/apiClient'
+import { Pagination, usePagination } from '../../components/ui/Pagination'
 
 type GameplayStatus = 'Scheduled' | 'Ongoing' | 'Completed' | 'Cancelled' | 'Archived'
 
@@ -58,8 +59,8 @@ export function RegistrarArchivedGamesPage() {
   const refresh = async () => {
     setLoading(true)
     try {
-      const res = await apiGet<{ ok: boolean; data: GameplayDoc[] }>('/api/gameplay?limit=200')
-      setItems(Array.isArray(res?.data) ? res.data : [])
+      const docs = await apiGetAll<GameplayDoc>('gameplay', 'sort=' + encodeURIComponent(JSON.stringify({ Schedule: -1 })))
+      setItems(docs)
     } catch (e: any) {
       toast.error(String(e?.message || e))
       setItems([])
@@ -109,6 +110,8 @@ export function RegistrarArchivedGamesPage() {
       return haystack.includes(q)
     })
   }, [archivedItems, query])
+
+  const { page, setPage, pageCount, pageItems, total } = usePagination(filtered, undefined, query)
 
   return (
     <div className="space-y-4">
@@ -185,7 +188,7 @@ export function RegistrarArchivedGamesPage() {
                   </td>
                 </tr>
               ) : (
-                filtered.map((doc) => {
+                pageItems.map((doc) => {
                   return (
                     <tr key={rowId(doc)} className="border-t border-white/5">
                       <td className="py-3 pr-3">
@@ -219,6 +222,7 @@ export function RegistrarArchivedGamesPage() {
             </tbody>
           </table>
         </div>
+        <Pagination page={page} pageCount={pageCount} total={total} onPageChange={setPage} />
       </Card>
     </div>
   )

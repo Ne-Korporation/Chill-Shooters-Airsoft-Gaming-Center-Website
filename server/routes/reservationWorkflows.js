@@ -6,7 +6,9 @@ import { updateReservationStatusAtomically } from '../utils/reservationStatus.js
 import { ensureGameplayForReservation } from '../utils/reservationGameplay.js'
 import { emailReservationEvent } from '../services/notificationEmails.js'
 import { assertGuardianApprovalsComplete } from './guardianApprovals.js'
-import { notifyUser } from '../utils/paymentProgress.js'
+import { notifyRole, notifyUser, syncReservationPaymentState } from '../utils/paymentProgress.js'
+import { buildPaymentStatusUpdate } from '../utils/paymentRules.js'
+import { actorLabel, getActorName } from '../utils/actors.js'
 
 const router = express.Router()
 
@@ -39,6 +41,34 @@ function parseStatus(body) {
   if (lower === 'confirmed' || lower === 'approved') return 'confirmed'
   if (lower === 'cancelled' || lower === 'canceled') return 'cancelled'
   return null
+}
+
+// Marks a confirmed booking's unverified manual proofs (GCash/bank) as paid, recording who did it.
+// Gateway payments are verified by the gateway itself and are left alone.
+async function verifyOutstandingPayments(db, reservation, actor) {
+  const reservationIds = [reservation?.id, reservation?._id].filter(Boolean).map(String)
+  const outstanding = await db.collection('payments').find({
+    reservationId: { $in: reservationIds },
+    paymentStatus: { $in: ['pending', 'submitted', 'review', 'needs review'] },
+    stripePaymentIntentId: { $exists: false },
+    paymongoCheckoutId: { $exists: false },
+  }).toArray()
+  if (!outstanding.length) return
+  const actorName = await getActorName(db, actor).catch(() => '')
+  const changedAtISO = new Date().toISOString()
+  for (const payment of outstanding) {
+    const update = buildPaymentStatusUpdate({
+      payment,
+      nextStatus: 'paid',
+      actorId: actor.id,
+      actorRole: actor.role,
+      actorName,
+      reason: 'Verified when the reservation was confirmed',
+      changedAtISO,
+    })
+    await db.collection('payments').updateOne({ _id: payment._id }, update)
+  }
+  await syncReservationPaymentState(db, reservation)
 }
 
 async function updateReservationStatus(req, res) {
@@ -102,6 +132,10 @@ async function updateReservationStatus(req, res) {
       delete updatedReservation.sentBack
     }
 
+    // Confirming a booking accepts the proofs staff just reviewed. Without this, a booking approved
+    // from the dashboard stayed confirmed while its payments still sat in "Needs review".
+    if (nextStatus === 'confirmed') await verifyOutstandingPayments(db, updatedReservation, req.user)
+
     const payment = await db.collection('payments').findOne({
       reservationId: reservationKey(updatedReservation),
     })
@@ -117,6 +151,31 @@ async function updateReservationStatus(req, res) {
     }
 
     void emailReservationEvent(db, updatedReservation, nextStatus, String(updatedReservation?.statusHistory?.length || ''))
+
+    // Admins and registrars can both decide bookings, so tell both who made this decision.
+    if (String(reservation.reservationStatus || '').toLowerCase() !== nextStatus) {
+      const by = actorLabel(req.user, await getActorName(db, req.user).catch(() => ''))
+      const verb = { confirmed: 'approved', pending: 'marked pending', 'needs review': 'marked for review', cancelled: 'cancelled' }[nextStatus]
+      const message = `${by} ${verb} reservation ${reservationKey(updatedReservation)} for ${updatedReservation.reservationDate} (${updatedReservation.reservationTime}).${sendBackNote ? ` Note: ${sendBackNote}` : ''}`
+      for (const role of ['admin', 'registrar']) {
+        await notifyRole(db, {
+          role,
+          type: 'reservation_status_update',
+          title: `Reservation ${verb} by ${by}`,
+          message,
+          linkedResourceId: reservationKey(updatedReservation),
+        })
+      }
+      if (!sendBackNote && nextStatus === 'confirmed') {
+        await notifyUser(db, {
+          userId: updatedReservation.userId,
+          type: 'reservation_confirmed',
+          title: 'Reservation confirmed',
+          message: `Your reservation for ${updatedReservation.reservationDate} (${updatedReservation.reservationTime}) was approved by ${by}.`,
+          linkedResourceId: reservationKey(updatedReservation),
+        })
+      }
+    }
 
     return res.json({
       ok: true,

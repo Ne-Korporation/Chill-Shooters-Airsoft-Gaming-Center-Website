@@ -1,17 +1,20 @@
 import React from 'react'
 import { createPortal } from 'react-dom'
-import { FiEye, FiPrinter, FiRefreshCw, FiShield, FiTrash2, FiX } from 'react-icons/fi'
+import { FiArchive, FiEye, FiPrinter, FiRefreshCw, FiRotateCcw, FiShield, FiX } from 'react-icons/fi'
 import { WaiverApprovalDialog, type WaiverIdCheck } from '../../components/waivers/WaiverApprovalDialog'
 import toast from 'react-hot-toast'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
-import { apiDelete, apiGet, apiPut } from '../../utils/apiClient'
+import { FilterTabs, titleCaseLabel } from '../../components/ui/FilterTabs'
+import { Pagination, usePagination } from '../../components/ui/Pagination'
+import { apiGetAll, apiPut } from '../../utils/apiClient'
 import { signedWaiverText, type WaiverText } from '../../utils/waiverText'
 import { WaiverTextEditor } from '../../components/waivers/WaiverTextEditor'
 import { printWaiverDocument } from '../../utils/waiverPrint'
 import { formatPhPhone } from '../../utils/phone'
 import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
+import { useAuth } from '../../context/AuthContext'
 
 type WaiverRecord = {
   id?: string
@@ -42,7 +45,24 @@ type WaiverRecord = {
   waiverText?: WaiverText | null
   validUntilISO?: string
   submittedAtISO?: string
+  createdAtISO?: string
+  archived?: boolean
+  archivedAtISO?: string
+  archivedReason?: string
+  supersededBy?: string
+  archivedBy?: { role?: string; name?: string; email?: string }
+  reviewedBy?: { role?: string; name?: string; email?: string }
+  reviewedAtISO?: string
   editHistory?: Array<{ atISO: string; by?: { email?: string }; fields: Record<string, { from: unknown; to: unknown }> }>
+}
+
+const WAIVER_STATUS_FILTERS = ['all', 'pending', 'approved', 'denied', 'expired', 'archived'] as const
+type WaiverStatusFilter = typeof WAIVER_STATUS_FILTERS[number]
+
+// "Registrar Ana Cruz" from the reviewer saved on the waiver.
+function staffLabel(by?: { role?: string; name?: string; email?: string }) {
+  if (!by) return ''
+  return [by.role ? titleCaseLabel(by.role) : '', by.name || by.email || ''].filter(Boolean).join(' ')
 }
 
 function formatDate(value?: string) {
@@ -67,8 +87,7 @@ export function AdminWaiversPage() {
     if (silent) setRefreshing(true)
     else setLoading(true)
     try {
-      const response = await apiGet<{ ok: boolean; data: WaiverRecord[] }>('/api/waivers?limit=200')
-      setWaivers(Array.isArray(response?.data) ? response.data : [])
+      setWaivers(await apiGetAll<WaiverRecord>('waivers'))
       setLoadError(null)
     } catch (e: any) {
       setLoadError(String(e?.message || 'Could not load waivers.'))
@@ -89,6 +108,8 @@ export function AdminWaiversPage() {
   }, [refresh])
 
   const { addNotification } = useNotifications()
+  const { user } = useAuth()
+  const reviewer = [titleCaseLabel(String(user?.role || 'staff')), user?.name].filter(Boolean).join(' ')
 
   const [approvalOpen, setApprovalOpen] = React.useState(false)
 
@@ -119,10 +140,8 @@ export function AdminWaiversPage() {
           sendRoleNotifications(addNotification, {
             roles: ['admin', 'registrar', 'marshal'],
             type: status === 'approved' ? 'waiver_approved' : 'waiver_denied',
-            title: status === 'approved' ? 'Waiver Approved' : 'Waiver Denied',
-            message: status === 'approved'
-              ? `Waiver ${waiverId} was approved.`
-              : `Waiver ${waiverId} was denied.`,
+            title: status === 'approved' ? `Waiver approved by ${reviewer}` : `Waiver denied by ${reviewer}`,
+            message: `${reviewer} ${status} waiver ${waiverId} for ${selectedWaiver.fullName || 'a player'}.`,
             linkedResourceId: waiverId,
           })
 
@@ -149,36 +168,40 @@ export function AdminWaiversPage() {
     } finally {
       setSavingStatus(false)
     }
-  }, [selectedWaiver, addNotification])
+  }, [selectedWaiver, addNotification, reviewer])
 
   const approveWaiver = React.useCallback(() => setApprovalOpen(true), [])
   const denyWaiver = React.useCallback(() => updateWaiverStatus('denied'), [updateWaiverStatus])
   const portalTarget = typeof window === 'undefined' ? null : document.body
 
-  // Deleting the record removes the player's copy too (the player page reads the same record).
-  const deleteWaiver = React.useCallback(async () => {
+  // Waivers are archived, never deleted: the signed record stays on file. An archived waiver no
+  // longer counts as the player's waiver, so they answer a new one; it can be restored later.
+  const setArchived = React.useCallback(async (archived: boolean) => {
     if (!selectedWaiver) return
     const waiverId = selectedWaiver.id || selectedWaiver._id
     if (!waiverId) return
-    if (!window.confirm(`Delete waiver ${waiverId}?\n\nThe player's copy will be deleted too. This cannot be undone.`)) return
+    const prompt = archived
+      ? `Archive waiver ${waiverId}?\n\nThe record is kept, but it no longer counts as the player's waiver. If it was their current waiver they will need to submit a new one.`
+      : `Restore waiver ${waiverId} from the archive?`
+    if (!window.confirm(prompt)) return
 
     setSavingStatus(true)
     try {
-      await apiDelete(`/api/waivers/${encodeURIComponent(String(waiverId))}`)
-      setWaivers((current) => current.filter((waiver) => (waiver.id || waiver._id) !== waiverId))
-
-      if (selectedWaiver.userId) {
+      const response = await apiPut<{ ok: boolean; data: WaiverRecord }>(`/api/waivers/${encodeURIComponent(String(waiverId))}`, { archived })
+      if (response?.data) {
+        setWaivers((current) => current.map((waiver) => ((waiver.id || waiver._id) === waiverId ? response.data : waiver)))
+      }
+      if (archived && selectedWaiver.userId && ['approved'].includes(String(selectedWaiver.status || '').toLowerCase())) {
         addNotification({
           userId: selectedWaiver.userId,
-          type: 'waiver_deleted',
-          title: 'Waiver Removed',
-          message: 'Your waiver was removed by an admin. Please submit a new waiver.',
+          type: 'waiver_archived',
+          title: 'Please submit a new waiver',
+          message: 'Your waiver was archived by staff. Please open the Waiver page and submit a new one before your next game.',
           linkedResourceId: waiverId,
         })
       }
-
       setSelectedWaiver(null)
-      toast.success('Waiver deleted')
+      toast.success(archived ? 'Waiver archived' : 'Waiver restored')
     } catch (e: any) {
       toast.error(String(e?.message || e))
     } finally {
@@ -186,12 +209,54 @@ export function AdminWaiversPage() {
     }
   }, [selectedWaiver, addNotification])
 
-  const filtered = waivers.filter((waiver) => {
+  const [statusFilter, setStatusFilter] = React.useState<WaiverStatusFilter>('all')
+  const [fromDate, setFromDate] = React.useState('')
+  const [toDate, setToDate] = React.useState('')
+  const [sortOrder, setSortOrder] = React.useState<'newest' | 'oldest' | 'name'>('newest')
+
+  const statusOf = (waiver: WaiverRecord) => String(waiver.status || 'pending').toLowerCase()
+  const submittedDay = (waiver: WaiverRecord) => {
+    const iso = waiver.submittedAtISO || waiver.createdAtISO || ''
+    const date = new Date(iso)
+    return Number.isNaN(date.getTime()) ? '' : new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(date)
+  }
+
+  const counts = React.useMemo(() => {
+    const next: Record<WaiverStatusFilter, number> = { all: 0, pending: 0, approved: 0, denied: 0, expired: 0, archived: 0 }
+    for (const waiver of waivers) {
+      if (waiver.archived) {
+        next.archived += 1
+        continue
+      }
+      next.all += 1
+      const status = statusOf(waiver)
+      if (status in next) next[status as WaiverStatusFilter] += 1
+    }
+    return next
+  }, [waivers])
+
+  const filtered = React.useMemo(() => {
     const term = query.trim().toLowerCase()
-    if (!term) return true
-    return [waiver.id, waiver.userId, waiver.reservationId, waiver.fullName, waiver.status]
-      .some((value) => String(value || '').toLowerCase().includes(term))
-  })
+    return waivers
+      .filter((waiver) => (statusFilter === 'archived' ? Boolean(waiver.archived) : !waiver.archived))
+      .filter((waiver) => (statusFilter === 'all' || statusFilter === 'archived' ? true : statusOf(waiver) === statusFilter))
+      .filter((waiver) => {
+        if (!fromDate && !toDate) return true
+        const day = submittedDay(waiver)
+        if (!day) return false
+        return (!fromDate || day >= fromDate) && (!toDate || day <= toDate)
+      })
+      .filter((waiver) => !term || [waiver.id, waiver.userId, waiver.reservationId, waiver.fullName, waiver.email]
+        .some((value) => String(value || '').toLowerCase().includes(term)))
+      .sort((a, b) => {
+        if (sortOrder === 'name') return String(a.fullName || '').localeCompare(String(b.fullName || ''))
+        const aDate = String(a.submittedAtISO || a.createdAtISO || '')
+        const bDate = String(b.submittedAtISO || b.createdAtISO || '')
+        return sortOrder === 'newest' ? bDate.localeCompare(aDate) : aDate.localeCompare(bDate)
+      })
+  }, [waivers, query, statusFilter, fromDate, toDate, sortOrder])
+
+  const { page, setPage, pageCount, pageItems, total } = usePagination(filtered, undefined, `${query}|${statusFilter}|${fromDate}|${toDate}|${sortOrder}`)
 
   return (
     <div className="space-y-4">
@@ -207,27 +272,51 @@ export function AdminWaiversPage() {
         <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
           <div>
             <div className="text-xs uppercase tracking-widest text-muted">Waiver table</div>
-            <div className="mt-1 text-sm text-muted">{waivers.length} waiver records stored in MongoDB</div>
+            <div className="mt-1 text-sm text-muted">{counts.all} current waivers • {counts.archived} archived</div>
             {loadError ? <div className="mt-1 text-xs font-semibold text-danger">Could not refresh: {loadError}</div> : null}
           </div>
-          <div className="flex items-end gap-3">
-            <div className="md:w-96"><Input label="Search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Name, player ID, reservation, or status" /></div>
-            <Button variant="ghost" onClick={() => refresh(true)} disabled={refreshing || loading} aria-label="Refresh waivers">
-              <FiRefreshCw className={refreshing ? 'animate-spin' : ''} /> Refresh
-            </Button>
-          </div>
+          <Button variant="ghost" onClick={() => refresh(true)} disabled={refreshing || loading} aria-label="Refresh waivers">
+            <FiRefreshCw className={refreshing ? 'animate-spin' : ''} /> Refresh
+          </Button>
         </div>
+
+        <FilterTabs
+          className="mt-4"
+          ariaLabel="Filter waivers by status"
+          value={statusFilter}
+          onChange={setStatusFilter}
+          options={WAIVER_STATUS_FILTERS.map((status) => ({ value: status, label: titleCaseLabel(status === 'all' ? 'All current' : status), count: counts[status] }))}
+        />
+        <div className="mt-3 grid gap-3 md:grid-cols-[2fr_1fr_1fr_1fr] md:items-end">
+          <Input label="Player name" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Name, email, player ID, or waiver ID" />
+          <Input label="Submitted from" type="date" value={fromDate} max={toDate || undefined} onChange={(event) => setFromDate(event.target.value)} />
+          <Input label="Submitted to" type="date" value={toDate} min={fromDate || undefined} onChange={(event) => setToDate(event.target.value)} />
+          <label className="block text-sm">
+            <span className="mb-1 block text-xs font-medium text-muted">Sort by</span>
+            <select value={sortOrder} onChange={(event) => setSortOrder(event.target.value as typeof sortOrder)} className="select-field h-12 w-full">
+              <option value="newest">Newest submission</option>
+              <option value="oldest">Oldest submission</option>
+              <option value="name">Player name (A–Z)</option>
+            </select>
+          </label>
+        </div>
+        {fromDate || toDate || query ? (
+          <button type="button" className="mt-2 text-xs font-semibold text-accent hover:underline" onClick={() => { setQuery(''); setFromDate(''); setToDate('') }}>
+            Clear filters
+          </button>
+        ) : null}
 
         <div className="mt-5 overflow-x-auto">
           <table className="min-w-full text-sm">
             <thead><tr className="border-b border-white/10 text-left text-xs uppercase tracking-widest text-muted"><th className="py-3 pr-4">Waiver</th><th className="py-3 pr-4">Player</th><th className="py-3 pr-4">Submitted</th><th className="py-3 pr-4">Status</th><th className="py-3 text-right">Action</th></tr></thead>
             <tbody>
               {loading ? <tr><td colSpan={5} className="py-8 text-center text-muted">Loading waivers...</td></tr> : null}
-              {!loading && filtered.map((waiver) => <tr key={waiver.id || waiver._id} className="border-b border-white/5"><td className="py-3 pr-4"><div className="font-semibold">{waiver.id || waiver._id}</div><div className="text-xs text-muted">Reservation: {waiver.reservationId || '-'}</div></td><td className="py-3 pr-4"><div className="font-semibold">{waiver.fullName || '-'}</div><div className="text-xs text-muted">{waiver.userId || 'Guest submission'}</div></td><td className="py-3 pr-4 text-muted">{formatDate(waiver.submittedAtISO)}</td><td className="py-3 pr-4"><span className={`${waiver.status === 'approved' ? 'rounded-full border border-success/30 bg-success/10 text-success' : waiver.status === 'denied' ? 'rounded-full border border-rose-200 bg-rose-100 text-rose-900 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-200' : 'rounded-full border border-accent/30 bg-accent/10 text-accent'} px-2 py-1 text-[11px] font-semibold uppercase`}>{waiver.status || 'pending'}</span></td><td className="py-3 text-right"><Button size="xs" variant="ghost" onClick={() => setSelectedWaiver(waiver)}><FiEye /> View</Button></td></tr>)}
+              {!loading && pageItems.map((waiver) => <tr key={waiver.id || waiver._id} className="border-b border-white/5"><td className="py-3 pr-4"><div className="font-semibold">{waiver.id || waiver._id}</div><div className="text-xs text-muted">Reservation: {waiver.reservationId || '-'}</div></td><td className="py-3 pr-4"><div className="font-semibold">{waiver.fullName || '-'}</div><div className="text-xs text-muted">{waiver.userId || 'Guest submission'}</div></td><td className="py-3 pr-4 text-muted">{formatDate(waiver.submittedAtISO)}</td><td className="py-3 pr-4"><span className={`${waiver.status === 'approved' ? 'rounded-full border border-success/30 bg-success/10 text-success' : waiver.status === 'denied' ? 'rounded-full border border-rose-200 bg-rose-100 text-rose-900 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-200' : 'rounded-full border border-accent/30 bg-accent/10 text-accent'} px-2 py-1 text-[11px] font-semibold uppercase`}>{waiver.status || 'pending'}</span></td><td className="py-3 text-right"><Button size="xs" variant="ghost" onClick={() => setSelectedWaiver(waiver)}><FiEye /> View</Button></td></tr>)}
               {!loading && filtered.length === 0 ? <tr><td colSpan={5} className="py-8 text-center text-muted">No waivers found.</td></tr> : null}
             </tbody>
           </table>
         </div>
+        <Pagination page={page} pageCount={pageCount} total={total} onPageChange={setPage} />
       </Card>
 
       {selectedWaiver && portalTarget ? createPortal(
@@ -258,7 +347,18 @@ export function AdminWaiversPage() {
               </div>
               <div>
                 <div className="text-[11px] uppercase tracking-widest text-slate-500">Status</div>
-                <p className="mt-1 font-medium">{selectedWaiver.status || 'pending'}</p>
+                <p className="mt-1 font-medium">{selectedWaiver.status || 'pending'}{selectedWaiver.archived ? ' (archived)' : ''}</p>
+                {selectedWaiver.reviewedBy ? (
+                  <p className="mt-1 text-xs text-slate-500">Reviewed by {staffLabel(selectedWaiver.reviewedBy)}{selectedWaiver.reviewedAtISO ? ` · ${formatDate(selectedWaiver.reviewedAtISO)}` : ''}</p>
+                ) : null}
+                {selectedWaiver.archived ? (
+                  <p className="mt-1 text-xs text-slate-500">
+                    {selectedWaiver.archivedReason === 'resubmitted'
+                      ? `Replaced by the player's resubmitted waiver ${selectedWaiver.supersededBy || ''}`
+                      : `Archived by ${staffLabel(selectedWaiver.archivedBy) || 'staff'}`}
+                    {selectedWaiver.archivedAtISO ? ` · ${formatDate(selectedWaiver.archivedAtISO)}` : ''}
+                  </p>
+                ) : null}
               </div>
             </div>
 
@@ -383,11 +483,12 @@ export function AdminWaiversPage() {
                 <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center">
                   <button
                     type="button"
-                    onClick={deleteWaiver}
-                    disabled={savingStatus}
-                    className="inline-flex h-10 items-center justify-center gap-2 whitespace-nowrap rounded-xl px-4 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 text-rose-700 hover:bg-rose-50 sm:mr-4"
+                    onClick={() => void setArchived(!selectedWaiver.archived)}
+                    disabled={savingStatus || (!selectedWaiver.archived && ['pending', 'review', 'submitted', ''].includes(String(selectedWaiver.status || '').toLowerCase()))}
+                    title={!selectedWaiver.archived && ['pending', 'review', 'submitted', ''].includes(String(selectedWaiver.status || '').toLowerCase()) ? 'Approve or deny this waiver before archiving it.' : undefined}
+                    className="inline-flex h-10 items-center justify-center gap-2 whitespace-nowrap rounded-xl px-4 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800 sm:mr-4"
                   >
-                    <FiTrash2 /> Delete
+                    {selectedWaiver.archived ? <><FiRotateCcw /> Restore</> : <><FiArchive /> Archive</>}
                   </button>
                   <button
                     type="button"

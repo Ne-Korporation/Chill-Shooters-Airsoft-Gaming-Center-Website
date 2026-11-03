@@ -745,19 +745,11 @@ export function PackageRecommendationPage() {
                 {quoteError} Showing estimates only.
               </div>
             ) : null}
-            {outOfStock.length > 0 ? (
-              <div className="mt-2 rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-muted">
-                {outOfStock.map((item) => (
-                  <div key={item.pkg.id}>"{item.pkg.name}" fits your budget but not enough gear is free: {item.quote?.unavailableReason}</div>
-                ))}
-              </div>
-            ) : null}
-
             {loading ? (
               <div className="mt-4 text-sm text-muted">Loading packages...</div>
             ) : packages.length === 0 ? (
               <div className="mt-4 text-sm text-muted">No packages available. Ask admin to create rental packages.</div>
-            ) : scored.length === 0 ? (
+            ) : scored.length === 0 && outOfStock.length === 0 ? (
               <div className="mt-4 rounded-2xl border border-dashed border-white/10 bg-black/20 p-4 text-sm text-muted">
                 <div className="font-semibold text-text">No package matches your budget and group.</div>
                 <div className="mt-1 text-xs">
@@ -771,6 +763,8 @@ export function PackageRecommendationPage() {
                 </div>
               </div>
             ) : (
+              <>
+              {scored.length > 0 ? (
               <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                 {scored.map((item, index) => {
                   const active = selectedPackageId === item.pkg.id
@@ -892,6 +886,39 @@ export function PackageRecommendationPage() {
                   )
                 })}
               </div>
+              ) : null}
+
+              {/* Packages that fit but are short on gear: listed small, and can't be picked. */}
+              {outOfStock.length > 0 ? (
+                <div className="mt-4">
+                  <div className="text-[10px] font-bold uppercase tracking-widest text-muted">Not enough gear available right now</div>
+                  <div className="mt-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                    {outOfStock.map((item) => (
+                      <div
+                        key={item.pkg.id}
+                        aria-disabled="true"
+                        title={item.quote?.unavailableReason || 'Not enough rental gear is free for this package right now.'}
+                        className="flex items-center justify-between gap-3 rounded-xl border border-white/5 bg-black/10 px-3 py-2"
+                      >
+                        <div className="min-w-0 opacity-70">
+                          <div className="truncate text-sm font-semibold">{item.pkg.name}</div>
+                          <div className="text-[11px] text-muted">
+                            ₱{item.pricing.total.toLocaleString()} · <span className="text-danger">Unavailable</span>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setDetailsPackageId(item.pkg.id)}
+                          className="flex-none rounded-lg border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-semibold text-accent hover:bg-white/10"
+                        >
+                          View details
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              </>
             )}
 
             <div className="mt-4 rounded-2xl border border-white/10 bg-black/15 p-4">
@@ -1046,7 +1073,9 @@ export function PackageRecommendationPage() {
               <div className="mt-4 text-sm text-muted">
                 {packages.length === 0
                   ? 'No packages available. Ask admin to create rental packages.'
-                  : 'No package matches your current budget and group yet.'}
+                  : outOfStock.length > 0
+                    ? 'Packages match your budget and group, but not enough rental gear is free for them right now.'
+                    : 'No package matches your current budget and group yet.'}
               </div>
             )}
           </Card>
@@ -1078,6 +1107,13 @@ export function PackageRecommendationPage() {
                       {' • '}
                       {detailsItem.pkg.weaponCount} weapon{detailsItem.pkg.weaponCount === 1 ? '' : 's'}
                     </div>
+                    {!detailsItem.inStock ? (
+                      <div className="mt-3 rounded-xl border border-danger/20 bg-danger/5 p-3 text-xs text-danger">
+                        <div className="font-semibold">Can't be picked right now</div>
+                        <div className="mt-1">{detailsItem.quote?.unavailableReason || 'Not enough rental gear is free for this package.'}</div>
+                        <div className="mt-1 text-muted">Try fewer players, bring your own weapons, or pick a date and slot with more gear free.</div>
+                      </div>
+                    ) : null}
                   </div>
                   <button
                     type="button"
@@ -1179,13 +1215,15 @@ export function PackageRecommendationPage() {
                   <Button variant="ghost" onClick={() => setDetailsPackageId(null)}>Close</Button>
                   <Button
                     variant="primary"
+                    disabled={!detailsItem.inStock || !detailsItem.affordable}
+                    title={!detailsItem.inStock ? 'Not enough rental gear is free for this package right now.' : !detailsItem.affordable ? 'This package is over your budget.' : undefined}
                     onClick={() => {
                       setSelectedPackageId(detailsItem.pkg.id)
                       setDetailsPackageId(null)
                     }}
                   >
-                    Choose this package
-                    <FiChevronRight />
+                    {detailsItem.inStock ? 'Choose this package' : 'Unavailable'}
+                    {detailsItem.inStock ? <FiChevronRight /> : null}
                   </Button>
                 </div>
               </div>

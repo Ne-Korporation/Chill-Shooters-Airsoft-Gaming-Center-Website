@@ -4,7 +4,8 @@ import toast from 'react-hot-toast'
 import { ActionGroup, Button } from '../../components/ui/Button'
 import { FilterTabs } from '../../components/ui/FilterTabs'
 import { Card } from '../../components/ui/Card'
-import { apiGet, apiPost, apiPut } from '../../utils/apiClient'
+import { apiGet, apiGetAll, apiPost, apiPut } from '../../utils/apiClient'
+import { Paged } from '../../components/ui/Pagination'
 import { PlayerStatsCard } from '../../components/players/PlayerStatsCard'
 
 export function PlayerManagementPage() {
@@ -42,11 +43,10 @@ export function PlayerManagementPage() {
     setLoading(true)
     setError(null)
     try {
-      const [res, levelsRes] = await Promise.all([
-        apiGet<{ ok: boolean; data: any[] }>('/api/user_accounts?limit=200'),
+      const [docs, levelsRes] = await Promise.all([
+        apiGetAll<any>('user_accounts'),
         apiGet<{ ok: boolean; data: Record<string, { experienceLevel: string; gamesPlayed: number }> }>('/api/players/levels').catch(() => null),
       ])
-      const docs = Array.isArray(res?.data) ? res.data : []
       const levels = levelsRes?.data || {}
       const normalizedPlayers = docs
         .filter((doc: any) => String(doc.role || 'user').toLowerCase() === 'user')
@@ -239,18 +239,22 @@ export function PlayerManagementPage() {
     </Button>
   )
 
+  // Filters search every account before paging, 10 per page.
+  const filteredPlayers = players.filter((pl) => {
+    const term = playerSearch.toLowerCase()
+    const ms = [pl.name, pl.email, pl.id].some((value) => String(value || '').toLowerCase().includes(term))
+    const lm = playerLevelFilter === 'all' || pl.level === playerLevelFilter
+    const vm = playerVerificationFilter === 'all' || pl.verificationStatus === playerVerificationFilter
+    const am = playerAccountFilter === 'all' || pl.accountStatus === playerAccountFilter
+    return ms && lm && vm && am
+  })
+
   const playerList = loading ? (
     <div className="rounded-2xl border border-white/5 bg-white/5 px-4 py-3 text-sm text-muted">Loading accounts...</div>
   ) : error ? (
     <div className="rounded-2xl border border-danger/20 bg-danger/10 px-4 py-3 text-sm text-danger">{error}</div>
   ) : (
-    players.filter((pl) => {
-      const ms = String(pl.name || '').toLowerCase().includes(playerSearch.toLowerCase())
-      const lm = playerLevelFilter === 'all' || pl.level === playerLevelFilter
-      const vm = playerVerificationFilter === 'all' || pl.verificationStatus === playerVerificationFilter
-      const am = playerAccountFilter === 'all' || pl.accountStatus === playerAccountFilter
-      return ms && lm && vm && am
-    }).map((pl, idx) => (
+    <Paged items={filteredPlayers} resetKey={`${playerSearch}|${playerLevelFilter}|${playerVerificationFilter}|${playerAccountFilter}`}>{(pageItems) => pageItems.map((pl, idx) => (
       <div key={pl.id || `player-${idx}`} className="flex flex-col gap-3 rounded-2xl border border-white/5 bg-white/5 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="text-sm font-semibold">{pl.name}</div>
@@ -288,7 +292,7 @@ export function PlayerManagementPage() {
           {accountButton(pl)}
         </ActionGroup>
       </div>
-    ))
+    ))}</Paged>
   )
 
   const staffList = loading ? (
@@ -296,11 +300,15 @@ export function PlayerManagementPage() {
   ) : error ? (
     <div className="rounded-2xl border border-danger/20 bg-danger/10 px-4 py-3 text-sm text-danger">{error}</div>
   ) : (
-    staffUsers.filter((u) => {
-      const ms = String(u.role || '').toLowerCase().includes(staffSearch.toLowerCase()) || String(u.email || '').toLowerCase().includes(staffSearch.toLowerCase())
-      const mf = staffFilter === 'all' || u.role === staffFilter
-      return ms && mf
-    }).map((u, idx) => (
+    <Paged
+      items={staffUsers.filter((u) => {
+        const term = staffSearch.toLowerCase()
+        const ms = [u.role, u.email, u.name].some((value) => String(value || '').toLowerCase().includes(term))
+        const mf = staffFilter === 'all' || u.role === staffFilter
+        return ms && mf
+      })}
+      resetKey={`${staffSearch}|${staffFilter}`}
+    >{(pageItems) => pageItems.map((u, idx) => (
       <div key={u.id || `staff-${idx}`} className="flex items-center justify-between gap-3 rounded-2xl border border-white/5 bg-white/5 px-4 py-3">
         <div>
           <div className="text-sm font-semibold">{u.role} &mdash; {u.name}</div>
@@ -313,7 +321,7 @@ export function PlayerManagementPage() {
           </div>
         </div>
       </div>
-    ))
+    ))}</Paged>
   )
 
   const pendingPartnershipRequests = players.filter((p) => p.partnershipEligibilityStatus === 'pending')

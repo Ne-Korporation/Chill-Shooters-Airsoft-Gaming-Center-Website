@@ -99,3 +99,41 @@ select optgroup{
   color: rgb(var(--text));
 }
 select option:disabled{ color: rgb(var(--muted)); }
+
+/* ------------------------------------------------------------------
+   Dropdown overhaul: every single-choice select gets the same custom
+   chevron, comfortable right padding so long labels never run under
+   the arrow, a pointer cursor and a gold focus ring. Page-level
+   Tailwind classes still set the size, colour and radius.
+------------------------------------------------------------------- */
+select:not([multiple]){
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right .85rem center;
+  background-size: 1rem;
+  padding-right: 2.5rem !important;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+select:not([multiple]):hover:not(:disabled){ border-color: rgba(197, 163, 90, .45); }
+select:not([multiple]):focus{
+  outline: none;
+  border-color: rgba(197, 163, 90, .6);
+  box-shadow: 0 0 0 3px rgba(197, 163, 90, .2);
+}
+select:disabled{ cursor: not-allowed; opacity: .6; }
+
+/* The standard field look for selects that don't style themselves. */
+.select-field{
+  border-radius: .75rem;
+  border: 1px solid rgba(var(--border), .25);
+  background-color: rgba(var(--card), 1);
+  color: rgb(var(--text));
+  padding: 0 1rem;
+  font-size: .875rem;
+}
+:root:not([data-theme='dark']) .select-field{ border-color: rgb(var(--border)); }

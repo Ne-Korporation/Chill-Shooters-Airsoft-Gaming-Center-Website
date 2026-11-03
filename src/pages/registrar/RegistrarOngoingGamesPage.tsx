@@ -6,6 +6,7 @@ import { toast } from 'react-hot-toast'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { apiGet, apiPut } from '../../utils/apiClient'
+import { DEFAULT_PAGE_SIZE, Pagination } from '../../components/ui/Pagination'
 import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
 
 type GameplayStatus = 'Scheduled' | 'Ongoing' | 'Completed' | 'Cancelled' | 'Archived'
@@ -67,6 +68,71 @@ function StatusBadge({ status }: { status: GameplayStatus }) {
   )
 }
 
+const GAME_MODES = [
+  "Marshal's choice",
+  'Team Deathmatch',
+  'Capture the Flag',
+  'Search & Destroy (bomb defusal)',
+  'Domination / King of the Hill',
+  'VIP Escort',
+  'Attack & Defend',
+]
+
+type StatusFilter = 'active' | 'Scheduled' | 'Ongoing' | 'Completed' | 'Cancelled'
+type DateFilter = 'any' | 'today' | 'tomorrow' | 'week' | 'upcoming' | 'past' | 'on' | 'range'
+type GameFilters = {
+  status: StatusFilter
+  date: DateFilter
+  onDate: string
+  fromDate: string
+  toDate: string
+  slot: string
+  mode: string
+  search: string
+  sort: 'soonest' | 'latest' | 'newest'
+}
+
+const DEFAULT_FILTERS: GameFilters = { status: 'active', date: 'any', onDate: '', fromDate: '', toDate: '', slot: '', mode: '', search: '', sort: 'soonest' }
+
+const addDays = (iso: string, days: number) => {
+  const date = new Date(`${iso}T00:00:00Z`)
+  date.setUTCDate(date.getUTCDate() + days)
+  return date.toISOString().slice(0, 10)
+}
+const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+// Turns the filter bar into a MongoDB query so the server filters and pages the whole gameplay
+// collection; a match on any page is found, not just among the rows on screen.
+// Schedule is stored as "YYYY-MM-DD • slot", so dates compare as text.
+function buildGameQuery(filters: GameFilters) {
+  const today = manilaToday()
+  const and: Record<string, unknown>[] = []
+  and.push(filters.status === 'active'
+    ? { Status: { $not: { $regex: 'arch', $options: 'i' } } }
+    : { Status: { $regex: `^${filters.status}`, $options: 'i' } })
+
+  const dayRange = (from: string, toExclusive: string) => and.push({ Schedule: { $gte: from, $lt: toExclusive } })
+  if (filters.date === 'today') dayRange(today, addDays(today, 1))
+  if (filters.date === 'tomorrow') dayRange(addDays(today, 1), addDays(today, 2))
+  if (filters.date === 'week') dayRange(today, addDays(today, 7))
+  if (filters.date === 'upcoming') and.push({ Schedule: { $gte: today } })
+  if (filters.date === 'past') and.push({ Schedule: { $lt: today } })
+  if (filters.date === 'on' && filters.onDate) dayRange(filters.onDate, addDays(filters.onDate, 1))
+  if (filters.date === 'range' && (filters.fromDate || filters.toDate)) {
+    and.push({ Schedule: { ...(filters.fromDate ? { $gte: filters.fromDate } : {}), ...(filters.toDate ? { $lt: addDays(filters.toDate, 1) } : {}) } })
+  }
+  if (filters.slot) and.push({ Schedule: { $regex: `${filters.slot}$`, $options: 'i' } })
+  if (filters.mode) and.push({ Mode: filters.mode })
+
+  const term = filters.search.trim()
+  if (term) {
+    const pattern = { $regex: escapeRegex(term), $options: 'i' }
+    and.push({ $or: ['id', 'reservationId', 'Game', 'Schedule', 'Mode', 'Group', 'Package', 'Notes', 'LayoutRequest'].map((field) => ({ [field]: pattern })) })
+  }
+  const sort = filters.sort === 'newest' ? { createdAtISO: -1 } : { Schedule: filters.sort === 'soonest' ? 1 : -1 }
+  return { q: { $and: and }, sort }
+}
+
 function rowId(doc: GameplayDoc) {
   // Priority: gameplay's own `id` (GP-XXXXX) → MongoDB `_id` → reservationId
   // The `id` field is the most reliable for API lookups since crud.js first
@@ -90,32 +156,59 @@ export function RegistrarOngoingGamesPage() {
   const navigate = useNavigate()
   const [items, setItems] = useState<GameplayDoc[]>([])
   const [loading, setLoading] = useState(true)
-  const [query, setQuery] = useState('')
+  const [filters, setFilters] = useState<GameFilters>(DEFAULT_FILTERS)
+  const [page, setPage] = useState(1)
+  const [total, setTotal] = useState(0)
+  const [counts, setCounts] = useState({ Scheduled: 0, Ongoing: 0, Completed: 0, Cancelled: 0, Archived: 0 })
   const { addNotification } = useNotifications()
+  const setFilter = <K extends keyof GameFilters>(key: K, value: GameFilters[K]) => {
+    setFilters((current) => ({ ...current, [key]: value }))
+    setPage(1)
+  }
+  const filtersActive = JSON.stringify({ ...filters, sort: DEFAULT_FILTERS.sort }) !== JSON.stringify(DEFAULT_FILTERS)
 
-  const refresh = async () => {
-    setLoading(true)
+  // Latest filters/page for the background refresh.
+  const latest = React.useRef({ filters, page })
+  latest.current = { filters, page }
+
+  const refresh = React.useCallback(async (silent = false) => {
+    if (!silent) setLoading(true)
+    const { filters: current, page: currentPage } = latest.current
+    const { q, sort } = buildGameQuery(current)
+    const params = `q=${encodeURIComponent(JSON.stringify(q))}&sort=${encodeURIComponent(JSON.stringify(sort))}&limit=${DEFAULT_PAGE_SIZE}&skip=${(currentPage - 1) * DEFAULT_PAGE_SIZE}&withTotal=1`
     try {
-      const res = await apiGet<{ ok: boolean; data: GameplayDoc[] }>('/api/gameplay?limit=200')
+      const [res, ...statusTotals] = await Promise.all([
+        apiGet<{ ok: boolean; data: GameplayDoc[]; total?: number }>(`/api/gameplay?${params}`),
+        ...(['Scheduled', 'Ongoing', 'Completed', 'Cancelled', 'Archived'] as const).map((status) =>
+          apiGet<{ ok: boolean; total?: number }>(`/api/gameplay?q=${encodeURIComponent(JSON.stringify({ Status: { $regex: `^${status.slice(0, 4)}`, $options: 'i' } }))}&limit=1&withTotal=1`)
+            .then((r) => Number(r?.total || 0)).catch(() => 0)),
+      ])
       setItems(Array.isArray(res?.data) ? res.data : [])
+      setTotal(Number(res?.total || 0))
+      setCounts({ Scheduled: statusTotals[0], Ongoing: statusTotals[1], Completed: statusTotals[2], Cancelled: statusTotals[3], Archived: statusTotals[4] })
     } catch (e: any) {
-      toast.error(String(e?.message || e))
-      setItems([])
+      if (!silent) toast.error(String(e?.message || e))
+      if (!silent) setItems([])
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
+
+  // Search waits for a pause in typing; every other filter applies at once.
+  useEffect(() => {
+    const timer = window.setTimeout(() => void refresh(), filters.search ? 300 : 0)
+    return () => window.clearTimeout(timer)
+  }, [filters, page, refresh])
 
   useEffect(() => {
-    refresh()
 
     const handleFocus = () => {
-      void refresh()
+      void refresh(true)
     }
 
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
-        void refresh()
+        void refresh(true)
       }
     }
 
@@ -123,7 +216,7 @@ export function RegistrarOngoingGamesPage() {
     document.addEventListener('visibilitychange', handleVisibilityChange)
 
     const intervalId = window.setInterval(() => {
-      void refresh()
+      void refresh(true)
     }, 10000)
 
     return () => {
@@ -131,27 +224,10 @@ export function RegistrarOngoingGamesPage() {
       document.removeEventListener('visibilitychange', handleVisibilityChange)
       window.clearInterval(intervalId)
     }
-  }, [])
+  }, [refresh])
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    const activeItems = items.filter((doc) => normalizeStatus(doc.Status) !== 'Archived')
-    if (!q) return activeItems
-    return activeItems.filter((doc) => {
-      const haystack = [doc.id, doc._id, doc.Game, doc.Schedule, doc.Mode, doc.Group, doc.Package, doc.Status, doc.reservationId]
-        .map((value) => String(value || '').toLowerCase())
-        .join(' ')
-      return haystack.includes(q)
-    })
-  }, [items, query])
-
-  const counts = useMemo(() => {
-    const summary = { Scheduled: 0, Ongoing: 0, Completed: 0, Cancelled: 0, Archived: 0 }
-    for (const doc of items) {
-      summary[normalizeStatus(doc.Status)]++
-    }
-    return summary
-  }, [items])
+  const filtered = items
+  const pageCount = Math.max(1, Math.ceil(total / DEFAULT_PAGE_SIZE))
 
   const updateStatus = async (doc: GameplayDoc, nextStatus: GameplayStatus) => {
     const id = rowId(doc)
@@ -265,15 +341,15 @@ export function RegistrarOngoingGamesPage() {
             <div className="relative">
               <FiSearch className="absolute left-3 top-3 h-4 w-4 text-muted" />
               <input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search game, schedule, mode, group, package"
+                value={filters.search}
+                onChange={(e) => setFilter('search', e.target.value)}
+                placeholder="Search ID, reservation, game, mode, group, package, notes"
                 className="w-full rounded-2xl border border-white/10 bg-white/5 px-10 py-3 text-sm outline-none focus:border-accent/40"
               />
-              {query.trim() ? (
+              {filters.search.trim() ? (
                 <button
                   type="button"
-                  onClick={() => setQuery('')}
+                  onClick={() => setFilter('search', '')}
                   className="absolute right-3 top-3 rounded-xl p-2 text-muted hover:bg-white/5 hover:text-text"
                   aria-label="Clear search"
                 >
@@ -282,6 +358,82 @@ export function RegistrarOngoingGamesPage() {
               ) : null}
             </div>
           </div>
+        </div>
+
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          <label className="block text-xs font-semibold text-muted">
+            Status
+            <select value={filters.status} onChange={(e) => setFilter('status', e.target.value as StatusFilter)} className="select-field mt-1 h-10 w-full">
+              <option value="active">All (not archived)</option>
+              <option value="Scheduled">Scheduled</option>
+              <option value="Ongoing">Ongoing</option>
+              <option value="Completed">Completed</option>
+              <option value="Cancelled">Cancelled</option>
+            </select>
+          </label>
+          <label className="block text-xs font-semibold text-muted">
+            Game date
+            <select value={filters.date} onChange={(e) => setFilter('date', e.target.value as DateFilter)} className="select-field mt-1 h-10 w-full">
+              <option value="any">Any date</option>
+              <option value="today">Today</option>
+              <option value="tomorrow">Tomorrow</option>
+              <option value="week">Next 7 days</option>
+              <option value="upcoming">Today and later</option>
+              <option value="past">Before today</option>
+              <option value="on">On a date…</option>
+              <option value="range">Between dates…</option>
+            </select>
+          </label>
+          {filters.date === 'on' ? (
+            <label className="block text-xs font-semibold text-muted">
+              On
+              <input type="date" value={filters.onDate} onChange={(e) => setFilter('onDate', e.target.value)} className="select-field mt-1 h-10 w-full" />
+            </label>
+          ) : null}
+          {filters.date === 'range' ? (
+            <>
+              <label className="block text-xs font-semibold text-muted">
+                From
+                <input type="date" value={filters.fromDate} max={filters.toDate || undefined} onChange={(e) => setFilter('fromDate', e.target.value)} className="select-field mt-1 h-10 w-full" />
+              </label>
+              <label className="block text-xs font-semibold text-muted">
+                To
+                <input type="date" value={filters.toDate} min={filters.fromDate || undefined} onChange={(e) => setFilter('toDate', e.target.value)} className="select-field mt-1 h-10 w-full" />
+              </label>
+            </>
+          ) : null}
+          <label className="block text-xs font-semibold text-muted">
+            Time slot
+            <select value={filters.slot} onChange={(e) => setFilter('slot', e.target.value)} className="select-field mt-1 h-10 w-full">
+              <option value="">Any slot</option>
+              <option value="morning">Morning</option>
+              <option value="afternoon">Afternoon</option>
+              <option value="evening">Evening</option>
+            </select>
+          </label>
+          <label className="block text-xs font-semibold text-muted">
+            Game mode
+            <select value={filters.mode} onChange={(e) => setFilter('mode', e.target.value)} className="select-field mt-1 h-10 w-full">
+              <option value="">Any mode</option>
+              {GAME_MODES.map((mode) => <option key={mode} value={mode}>{mode}</option>)}
+            </select>
+          </label>
+          <label className="block text-xs font-semibold text-muted">
+            Sort by
+            <select value={filters.sort} onChange={(e) => setFilter('sort', e.target.value as GameFilters['sort'])} className="select-field mt-1 h-10 w-full">
+              <option value="soonest">Game date (earliest first)</option>
+              <option value="latest">Game date (latest first)</option>
+              <option value="newest">Recently added</option>
+            </select>
+          </label>
+        </div>
+        <div className="mt-2 flex items-center justify-between text-xs text-muted">
+          <span>{loading ? 'Loading…' : `${total} game${total === 1 ? '' : 's'} match`}</span>
+          {filtersActive ? (
+            <button type="button" className="font-semibold text-accent hover:underline" onClick={() => { setFilters({ ...DEFAULT_FILTERS, sort: filters.sort }); setPage(1) }}>
+              Clear filters
+            </button>
+          ) : null}
         </div>
 
         <div className="mt-5 overflow-x-auto">
@@ -308,7 +460,7 @@ export function RegistrarOngoingGamesPage() {
               ) : filtered.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="py-6 text-sm text-muted">
-                    No gameplay records.
+                    {filtersActive ? 'No games match these filters.' : 'No gameplay records.'}
                   </td>
                 </tr>
               ) : (
@@ -386,6 +538,7 @@ export function RegistrarOngoingGamesPage() {
             </tbody>
           </table>
         </div>
+        <Pagination page={page} pageCount={pageCount} total={total} onPageChange={setPage} />
 
         <div className="mt-5 rounded-2xl border border-white/10 bg-black/15 p-4">
           <div className="flex items-start gap-3">

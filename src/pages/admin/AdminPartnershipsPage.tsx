@@ -3,6 +3,7 @@ import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { apiDelete, apiGet, apiPost, apiPut } from '../../utils/apiClient'
 import { PartnerLoansCard } from './PartnerLoansCard'
+import { Paged } from '../../components/ui/Pagination'
 
 type Partnership = {
   _id?: string
@@ -252,7 +253,7 @@ export function AdminPartnershipsPage() {
             <div className="rounded-xl border border-white/5 bg-white/5 px-3 py-6 text-sm text-muted">No partnerships recorded yet.</div>
           ) : (
             <div className="space-y-3">
-              {items.map((item) => (
+              <Paged items={items}>{(pageItems) => pageItems.map((item) => (
                 <div key={item.id ?? item._id ?? `${item.name}-${item.contactEmail}`} className="rounded-2xl border border-white/10 bg-white/5 p-3">
                   <div className="flex items-start justify-between gap-3">
                     <div>
@@ -276,7 +277,7 @@ export function AdminPartnershipsPage() {
                     <Button type="button" variant="danger" size="sm" onClick={() => handleDelete(item)}>Delete</Button>
                   </div>
                 </div>
-              ))}
+              ))}</Paged>
             </div>
           )}
         </Card>

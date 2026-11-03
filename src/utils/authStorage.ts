@@ -53,6 +53,35 @@ export function clearStoredSession() {
   }
 }
 
+// When the signed-in person last used the app, shared by every open tab so activity in one tab
+// keeps the others signed in, and checked against the clock so a sleeping laptop can't skip it.
+export const LAST_ACTIVITY_KEY = 'aim-book-play.lastActivity'
+
+export function readLastActivity() {
+  try {
+    const value = Number(localStorage.getItem(LAST_ACTIVITY_KEY))
+    return Number.isFinite(value) && value > 0 ? value : 0
+  } catch {
+    return 0
+  }
+}
+
+export function writeLastActivity(at = Date.now()) {
+  try {
+    localStorage.setItem(LAST_ACTIVITY_KEY, String(at))
+  } catch {
+    // ignore
+  }
+}
+
+export function clearLastActivity() {
+  try {
+    localStorage.removeItem(LAST_ACTIVITY_KEY)
+  } catch {
+    // ignore
+  }
+}
+
 // Reads the exp claim from our HMAC token (base64url JSON payload before the dot).
 export function getTokenExpiry(token: string) {
   try {

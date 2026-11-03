@@ -6,11 +6,12 @@ import toast from 'react-hot-toast'
 import { Card } from '../ui/Card'
 import { Button } from '../ui/Button'
 import { FilterTabs, titleCaseLabel } from '../ui/FilterTabs'
-import { apiDelete, apiGet, apiPut } from '../../utils/apiClient'
+import { apiDelete, apiGetAll, apiPut } from '../../utils/apiClient'
 import { formatPhPhone } from '../../utils/phone'
 import { GuardianApprovalBadge, type GuardianApprovalSummary } from '../reservations/GuardianApprovalBadge'
 import { useAuth } from '../../context/AuthContext'
-import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
+import { Pagination, usePagination } from '../ui/Pagination'
+import { statusChangeLabel } from '../reservations/ReservationsByDate'
 
 type ReviewStatus = 'pending' | 'needs review' | 'confirmed'
 
@@ -41,6 +42,8 @@ type ReservationDoc = {
   updatedAtISO?: string
   guardianApproval?: GuardianApprovalSummary | null
   sentBack?: { note: string; atISO: string } | null
+  lastStatusChange?: { status?: string; byRole?: string; byName?: string; atISO?: string }
+  statusHistory?: Array<{ status?: string; changedByRole?: string; changedByName?: string; changedAtISO?: string }>
 }
 
 type PaymentDoc = {
@@ -56,6 +59,8 @@ type PaymentDoc = {
   amount?: number
   refNo?: string
   createdAtISO?: string
+  verifiedByRole?: string
+  verifiedByName?: string
 }
 
 type UserAccountDoc = { _id?: any; id?: string; name?: string; email?: string }
@@ -113,7 +118,6 @@ function printWindow(title: string, body: string) {
 export function BookingPaymentReview() {
   const { user } = useAuth()
   const isAdmin = user?.role === 'admin'
-  const { addNotification } = useNotifications()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [active, setActive] = useState<ReviewStatus>('pending')
@@ -128,14 +132,14 @@ export function BookingPaymentReview() {
     setLoading(true)
     setError(null)
     try {
-      const [reservationRes, paymentRes, usersRes] = await Promise.all([
-        apiGet<{ ok: boolean; data: ReservationDoc[] }>('/api/reservations?limit=200'),
-        apiGet<{ ok: boolean; data: PaymentDoc[] }>('/api/payments?limit=200'),
-        apiGet<{ ok: boolean; data: UserAccountDoc[] }>('/api/user_accounts?limit=200'),
+      const [reservationDocs, paymentDocs, userDocs] = await Promise.all([
+        apiGetAll<ReservationDoc>('reservations'),
+        apiGetAll<PaymentDoc>('payments'),
+        apiGetAll<UserAccountDoc>('user_accounts'),
       ])
-      setReservations(Array.isArray(reservationRes?.data) ? reservationRes.data : [])
-      setPayments(Array.isArray(paymentRes?.data) ? paymentRes.data : [])
-      setUsers(Array.isArray(usersRes?.data) ? usersRes.data : [])
+      setReservations(reservationDocs)
+      setPayments(paymentDocs)
+      setUsers(userDocs)
     } catch (e: any) {
       const message = String(e?.message || e)
       setError(message)
@@ -174,7 +178,13 @@ export function BookingPaymentReview() {
     return next
   }, [rows])
 
-  const visible = rows.filter((row) => normalizeStatus(row.reservationStatus) === active)
+  const visible = useMemo(
+    () => rows
+      .filter((row) => normalizeStatus(row.reservationStatus) === active)
+      .sort((a, b) => String(b.updatedAtISO || b.createdAtISO || '').localeCompare(String(a.updatedAtISO || a.createdAtISO || ''))),
+    [rows, active],
+  )
+  const { page, setPage, pageCount, pageItems, total } = usePagination(visible, undefined, active)
   const selected = selectedId ? rows.find((row) => getId(row) === selectedId) ?? null : null
   const proofs = selected?.payments.filter((payment) => payment.gcashImageUrl) ?? []
 
@@ -193,22 +203,7 @@ export function BookingPaymentReview() {
         reservationStatus: nextStatus,
         ...(note ? { sendBack: true, note } : {}),
       })
-      sendRoleNotifications(addNotification, {
-        roles: ['admin', 'registrar', 'marshal'],
-        type: 'reservation_status_update',
-        title: 'Reservation Update Received',
-        message: note ? `Reservation ${reservationId} was sent back to the player.` : `Reservation ${reservationId} was moved to ${nextStatus}.`,
-        linkedResourceId: reservationId,
-      })
-      if (nextStatus === 'confirmed' && selected.userId) {
-        addNotification({
-          userId: selected.userId,
-          type: 'reservation_confirmed',
-          title: 'Reservation Confirmed',
-          message: `Your reservation ${reservationId} has been confirmed. Payment has been verified.`,
-          linkedResourceId: reservationId,
-        })
-      }
+      // The server notifies staff and the player, naming which account made the decision.
       toast.success(note ? 'Reservation sent back to the player' : `Reservation marked as ${nextStatus}`)
       setActive(nextStatus)
       close()
@@ -306,7 +301,7 @@ export function BookingPaymentReview() {
             <div className="p-6 text-sm text-muted">Loading bookings…</div>
           ) : visible.length === 0 ? (
             <div className="p-6 text-sm text-muted">No bookings with this status.</div>
-          ) : visible.map((row) => {
+          ) : pageItems.map((row) => {
             const id = getId(row)
             return (
               <div key={id ?? row.createdAtISO} className="flex flex-col gap-2 px-3 py-3 sm:grid sm:grid-cols-12 sm:items-center">
@@ -314,6 +309,7 @@ export function BookingPaymentReview() {
                 <div className="text-sm text-muted sm:col-span-3">
                   {customerOf(row)}
                   {row.sentBack ? <div className="text-xs text-danger">Sent back: waiting for the player</div> : null}
+                  {statusChangeLabel(row) ? <div className="text-[11px] text-muted/80">{statusChangeLabel(row)}</div> : null}
                 </div>
                 <div className="text-sm text-muted sm:col-span-3">
                   <div>{[row.reservationDate, row.reservationTime].filter(Boolean).join(' • ') || '—'}</div>
@@ -334,6 +330,7 @@ export function BookingPaymentReview() {
           })}
         </div>
       </div>
+      <Pagination page={page} pageCount={pageCount} total={total} onPageChange={setPage} />
 
       <div className="mt-3 flex justify-end">
         <Button variant="ghost" size="sm" onClick={() => void refresh()} disabled={loading}>
@@ -371,6 +368,7 @@ export function BookingPaymentReview() {
                           <div className="mt-1 text-xs text-muted">
                             Paid by {nameById.get(String(payment.userId || '')) || payment.userId || '—'} • Ref {payment.transactionReference || payment.refNo || '—'}
                             {payment.senderNumber ? ` • From ${formatPhPhone(payment.senderNumber)}` : ''}
+                            {payment.verifiedByRole && payment.verifiedByRole !== 'system' ? ` • Reviewed by ${titleCaseLabel(payment.verifiedByRole)}${payment.verifiedByName ? ` ${payment.verifiedByName}` : ''}` : ''}
                           </div>
                           {payment.gcashImageUrl ? (
                             <div className="mt-2">
@@ -412,6 +410,7 @@ export function BookingPaymentReview() {
                 <div>
                   <div className="text-xs uppercase tracking-widest text-muted">Status</div>
                   <div className="mt-2"><StatusPill status={String(normalizeStatus(selected.reservationStatus))} /></div>
+                  {statusChangeLabel(selected) ? <div className="mt-1 text-xs text-muted">{statusChangeLabel(selected)}</div> : null}
                   <GuardianApprovalBadge
                     reservationId={String(selected.id || selected._id || '')}
                     summary={selected.guardianApproval}
