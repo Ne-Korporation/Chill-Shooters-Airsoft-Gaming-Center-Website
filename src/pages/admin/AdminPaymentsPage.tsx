@@ -539,9 +539,8 @@ export function AdminPaymentsPage() {
                         <span className="inline-flex h-8 items-center px-1 text-xs text-muted">No receipt</span>
                       )}
                       {payment.status === 'paid' || payment.status === 'confirmed' ? (
-                        <span className="inline-flex h-8 items-center px-1 text-xs font-semibold text-success">{payment.gatewayName ? `Verified by ${payment.gatewayName}` : 'Verified'}</span>
                         <span className="inline-flex h-8 items-center px-1 text-xs font-semibold text-success">
-                          {payment.paymongo ? 'Verified by PayMongo' : payment.reviewedBy ? `Verified by ${payment.reviewedBy}` : 'Verified'}
+                          {payment.gatewayName ? `Verified by ${payment.gatewayName}` : payment.reviewedBy ? `Verified by ${payment.reviewedBy}` : 'Verified'}
                         </span>
                       ) : payment.status === 'failed' ? (
                         <span className="inline-flex h-8 items-center px-1 text-xs text-muted">Sent back{payment.reviewedBy ? ` by ${payment.reviewedBy}` : ''}</span>
