@@ -252,7 +252,21 @@ export function RegistrarOngoingGamesPage() {
           apiGet<{ ok: boolean; total?: number }>(`/api/gameplay?q=${encodeURIComponent(JSON.stringify({ Status: { $regex: `^${status.slice(0, 4)}`, $options: 'i' } }))}&limit=1&withTotal=1`)
             .then((r) => Number(r?.total || 0)).catch(() => 0)),
       ])
-      setItems(Array.isArray(res?.data) ? res.data : [])
+      const docs = Array.isArray(res?.data) ? res.data : []
+      // Games recorded before locations were stored on them: read the location from the booking
+      // (the server also fills these in when it starts).
+      const missing = [...new Set(docs.filter((doc) => !doc.LocationId && doc.reservationId).map((doc) => String(doc.reservationId)))]
+      if (missing.length) {
+        const bookings = await apiGet<{ ok: boolean; data: Array<{ id?: string; locationId?: string; locationName?: string }> }>(
+          `/api/reservations?q=${encodeURIComponent(JSON.stringify({ id: { $in: missing } }))}&limit=${missing.length}`,
+        ).catch(() => null)
+        const byId = new Map((bookings?.data || []).map((booking) => [String(booking.id), booking]))
+        for (const doc of docs) {
+          const booking = !doc.LocationId ? byId.get(String(doc.reservationId)) : undefined
+          if (booking) Object.assign(doc, { LocationId: booking.locationId, Location: booking.locationName })
+        }
+      }
+      setItems(docs)
       setTotal(Number(res?.total || 0))
       setCounts({ Scheduled: statusTotals[0], Ongoing: statusTotals[1], Completed: statusTotals[2], Cancelled: statusTotals[3], Archived: statusTotals[4] })
     } catch (e: any) {

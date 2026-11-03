@@ -128,7 +128,13 @@ type TeamMember = {
   status: string
   waiverSubmitted: boolean
   hasApprovedWeapon: boolean
+  // A minor from the booker's or a teammate's account (see "A minor will join this game").
+  isMinor?: boolean
+  guardianId?: string
 }
+
+// A child on the booker's or a teammate's account who could join this booking.
+type TeamChild = { id: string; name: string; age: number | null; guardianId: string; guardianName: string; canPlay: boolean }
 
 type PaymentMode = 'self' | 'split'
 // full: pay everything online now. cash_balance: the 50% downpayment online now, the rest in cash at the field.
@@ -309,6 +315,27 @@ export function ReservationCalendarPage() {
   // Teammates are found one at a time by email rather than from a list of every player.
   const [selectedTeammates, setSelectedTeammates] = useState<TeamMember[]>(() => draftState.selectedTeammates ?? [])
   const selectedTeammateIds = useMemo(() => selectedTeammates.map((member) => member.id), [selectedTeammates])
+
+  // Children of the booker and of the adult teammates: they can join as players. A child whose
+  // parent leaves the team leaves with them.
+  const [teamChildren, setTeamChildren] = useState<TeamChild[]>([])
+  const adultTeammateIds = useMemo(() => selectedTeammates.filter((member) => !member.isMinor).map((member) => member.id).join(','), [selectedTeammates])
+  useEffect(() => {
+    if (!user?.id) return
+    let alive = true
+    apiGet<{ ok: boolean; data: TeamChild[] }>(`/api/children/of-team?ids=${encodeURIComponent(adultTeammateIds)}`)
+      .then((res) => {
+        if (!alive) return
+        setTeamChildren(Array.isArray(res?.data) ? res.data : [])
+        const adults = new Set([String(user.id), ...adultTeammateIds.split(',').filter(Boolean)])
+        setSelectedTeammates((current) => {
+          const kept = current.filter((member) => !member.isMinor || adults.has(String(member.guardianId)))
+          return kept.length === current.length ? current : kept
+        })
+      })
+      .catch(() => {})
+    return () => { alive = false }
+  }, [user?.id, adultTeammateIds])
   const [teamEmail, setTeamEmail] = useState('')
   const [teamLookup, setTeamLookup] = useState<{ status: 'idle' | 'searching' | 'found' | 'error'; members?: TeamMember[]; error?: string }>({ status: 'idle' })
   const [paymentMode, setPaymentMode] = useState<PaymentMode>(() => draftState.paymentMode ?? 'self')
@@ -568,6 +595,32 @@ export function ReservationCalendarPage() {
     setTeamEmail('')
     setTeamLookup({ status: 'idle' })
     toast.success(`${member.name} added to your team.`)
+  }
+
+  // "A minor will join this game": the child fills one of the player spots, so they pay the
+  // entrance fee like everyone else.
+  const addMinor = (childId: string) => {
+    const kid = teamChildren.find((child) => child.id === childId)
+    if (!kid || selectedTeammateIds.includes(kid.id)) return
+    if (!kid.canPlay) {
+      toast.error(`${kid.name} needs a confirmed guardian and an approved waiver first.`)
+      return
+    }
+    if (selectedTeammates.length >= Math.max(0, players - 1)) {
+      toast.error('Every player spot is filled. Go back and raise the number of players to add a minor (each player pays the entrance fee).')
+      return
+    }
+    setSelectedTeammates((current) => [...current, {
+      id: kid.id,
+      name: kid.name,
+      email: '',
+      status: 'Active',
+      waiverSubmitted: true,
+      hasApprovedWeapon: false,
+      isMinor: true,
+      guardianId: kid.guardianId,
+    }])
+    toast.success(`${kid.name} added to your team.`)
   }
 
   // Fetch waiver submissions so only players who completed the waiver can be added
@@ -1446,6 +1499,7 @@ export function ReservationCalendarPage() {
           id: member.id,
           name: member.name,
           email: member.email,
+          ...(member.isMinor ? { isMinor: true } : {}),
         })),
         selectedTeammateIds,
         paymentMode,
@@ -2828,6 +2882,29 @@ export function ReservationCalendarPage() {
                     <FiSearch /> {teamLookup.status === 'searching' ? 'Finding…' : 'Find'}
                   </Button>
                 </form>
+
+                {teamChildren.length > 0 ? (
+                  <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
+                    <div className="text-sm font-semibold">A minor will join this game</div>
+                    <div className="mt-1 text-xs text-muted">
+                      Children on your account or your teammates' accounts. Each one takes a player spot and pays the entrance fee.
+                    </div>
+                    <select
+                      value=""
+                      onChange={(event) => { if (event.target.value) addMinor(event.target.value) }}
+                      disabled={!hasCurrentUserWaiver}
+                      className="mt-2 w-full rounded-xl border border-white/10 bg-background px-3 py-2 text-sm text-text [&>option]:bg-background"
+                      aria-label="Add a minor to the team"
+                    >
+                      <option value="">Choose a child to add…</option>
+                      {teamChildren.filter((child) => !selectedTeammateIds.includes(child.id)).map((child) => (
+                        <option key={child.id} value={child.id} disabled={!child.canPlay}>
+                          {child.name} (age {child.age ?? '—'}, {child.guardianId === user?.id ? 'your child' : `${child.guardianName || 'a teammate'}'s child`}){child.canPlay ? '' : ' · waiver not approved yet'}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : null}
 
                 {teamLookup.status === 'error' && (
                   <div className="rounded-2xl border border-danger/30 bg-danger/10 p-3 text-sm text-danger">{teamLookup.error}</div>

@@ -82,7 +82,6 @@ export function ReservationsByDate() {
   // Upcoming dates read soonest first; past dates read most recent first. Either can be flipped.
   const [order, setOrder] = useState<'auto' | 'newest' | 'oldest'>('auto')
   const newestFirst = order === 'auto' ? showPast : order === 'newest'
-  const [showCancelled, setShowCancelled] = useState(false)
   const [openDate, setOpenDate] = useState<string | null>(null)
   const today = manilaTodayISO()
 
@@ -128,7 +127,7 @@ export function ReservationsByDate() {
       const date = String(reservation.reservationDate || reservation.dateISO || '')
       if (!date) continue
       const status = String(reservation.reservationStatus || 'pending').toLowerCase()
-      if (!showCancelled && status === 'cancelled') continue
+      if (status === 'cancelled') continue
       // "Past dates" shows only dates before today; otherwise only today and later.
       if (showPast ? date >= today : date < today) continue
       if (needle) {
@@ -150,9 +149,9 @@ export function ReservationsByDate() {
       }))
     // playersOf only depends on accountById
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reservations, accountById, query, showPast, showCancelled, today, newestFirst])
+  }, [reservations, accountById, query, showPast, today, newestFirst])
 
-  const { page, setPage, pageCount, pageItems, total } = usePagination(days, DEFAULT_PAGE_SIZE, `${query}|${showPast}|${showCancelled}|${newestFirst}`)
+  const { page, setPage, pageCount, pageItems, total } = usePagination(days, DEFAULT_PAGE_SIZE, `${query}|${showPast}|${newestFirst}`)
 
   return (
     <div className="space-y-4">
@@ -183,9 +182,6 @@ export function ReservationsByDate() {
             onChange={(value) => setOrder(value)}
             options={[{ value: 'newest', label: 'Latest first' }, { value: 'oldest', label: 'Earliest first' }]}
           />
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" className="h-4 w-4" checked={showCancelled} onChange={(e) => setShowCancelled(e.target.checked)} /> Cancelled
-          </label>
         </div>
       </Card>
 

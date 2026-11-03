@@ -41,22 +41,23 @@ function reservationLabel(reservation) {
   return `${reservation.reservationDate || ''} (${reservation.reservationTime || ''})`
 }
 
-const GATEWAY_PAID = ['paid', 'succeeded']
+const VERIFIED_STATUSES = ['paid', 'succeeded', 'confirmed', 'verified', 'approved']
 const isGatewayPayment = (payment) => Boolean(payment.xenditInvoiceId || payment.paymongoCheckoutId || payment.stripePaymentIntentId)
 
-// Confirms a pending booking with no staff step when every share of the online amount was paid
-// through the payment gateway (which already verified the money). Bookings with a minor still
-// wait for every guardian's approval. Manual GCash or bank proofs keep going to staff instead.
-// Returns 'confirmed', 'waiting_guardian', or null when the booking isn't eligible.
-export async function autoConfirmIfGatewayPaid(db, reservationId, startSession) {
+// Confirms a pending booking with no separate booking review once the online amount (full price
+// or the 50% downpayment) is in and every payment is verified: by Xendit itself, or by staff on
+// Verification & receipts for older proof uploads. Bookings with a minor still wait for every
+// guardian's approval. Returns 'confirmed', 'waiting_guardian', or null when not eligible.
+export async function autoConfirmIfVerified(db, reservationId, startSession) {
   const reservation = await db.collection('reservations').findOne({ id: String(reservationId) })
   if (!reservation || String(reservation.reservationStatus || 'pending').toLowerCase() !== 'pending') return null
   const payments = (await getReservationPayments(db, reservation))
     .filter((payment) => !['failed', 'rejected'].includes(String(payment.paymentStatus || payment.status || '').toLowerCase()))
   const progress = getPaymentProgress(reservation, payments)
-  const allGatewayPaid = payments.length > 0 && payments.every((payment) =>
-    isGatewayPayment(payment) && GATEWAY_PAID.includes(String(payment.paymentStatus || payment.status || '').toLowerCase()))
-  if (progress.state !== 'finalized' || !allGatewayPaid) return null
+  const allVerified = payments.length > 0 && payments.every((payment) =>
+    VERIFIED_STATUSES.includes(String(payment.paymentStatus || payment.status || '').toLowerCase()))
+  if (progress.state !== 'finalized' || !allVerified) return null
+  const paidOnline = payments.every(isGatewayPayment)
 
   const guardiansWaiting = await db.collection('guardian_approvals').countDocuments({
     reservationId: String(reservation.id),
@@ -76,7 +77,7 @@ export async function autoConfirmIfGatewayPaid(db, reservationId, startSession) 
     reservationId: String(reservation.id),
     nextStatus: 'confirmed',
     actor: { id: 'system', role: 'system' },
-    reason: 'Paid online and verified by the payment gateway',
+    reason: paidOnline ? 'Paid online and verified by the payment gateway' : 'Payments verified by staff',
   })
   await ensureGameplayForReservation(db, confirmed)
   await db.collection('reservations').updateOne({ id: String(reservation.id) }, { $set: { autoConfirmedAtISO: new Date().toISOString() } })
@@ -93,15 +94,17 @@ export async function autoConfirmIfGatewayPaid(db, reservationId, startSession) 
     role: 'admin',
     type: 'reservation_confirmed',
     title: 'Reservation confirmed automatically',
-    message: `Reservation ${reservation.id} for ${reservationLabel(reservation)} was paid online and confirmed without manual review.`,
+    message: paidOnline
+      ? `Reservation ${reservation.id} for ${reservationLabel(reservation)} was paid online and confirmed without manual review.`
+      : `Reservation ${reservation.id} for ${reservationLabel(reservation)} was confirmed once its payments were verified.`,
     linkedResourceId: reservation.id,
   })
   return 'confirmed'
 }
 
-// Recomputes the stored payment state after a payment is submitted or reviewed. The first time
-// every share is in, a booking paid entirely through the gateway is confirmed automatically;
-// otherwise it is forwarded to admins for final approval.
+// Recomputes the stored payment state after a payment is submitted or reviewed. Once every share
+// is in and verified, the booking is confirmed automatically; while a payment still needs a staff
+// check, admins are told to verify it on Verification & receipts.
 export async function syncReservationPaymentState(db, reservation) {
   if (!reservation) return null
   const payments = await getReservationPayments(db, reservation)
@@ -131,7 +134,7 @@ export async function syncReservationPaymentState(db, reservation) {
   // Only bookings still awaiting approval go to the admin queue (not walk-ins or balances paid later).
   const awaitingApproval = ['pending', 'needs review'].includes(String(reservation.reservationStatus || '').toLowerCase())
   if (progress.state === 'finalized' && awaitingApproval) {
-    const automatic = await autoConfirmIfGatewayPaid(db, reservation.id)
+    const automatic = await autoConfirmIfVerified(db, reservation.id)
     if (automatic === 'confirmed') return { ...progress, autoConfirmed: true }
     if (automatic === 'waiting_guardian') {
       await notifyUser(db, {
@@ -151,8 +154,8 @@ export async function syncReservationPaymentState(db, reservation) {
       await notifyRole(db, {
         role: 'admin',
         type: 'reservation_payment_finalized',
-        title: 'Reservation fully paid — ready for approval',
-        message: `All payments for ${reservationLabel(reservation)} are in. Review the proofs and waivers to approve it.`,
+        title: 'Reservation fully paid: payment needs verifying',
+        message: `All payments for ${reservationLabel(reservation)} are in. Verify them on Payments (Verification & receipts); the booking is confirmed as soon as they are.`,
         linkedResourceId: reservation.id,
       })
       const split = String(reservation.paymentMode || 'self').toLowerCase() === 'split'

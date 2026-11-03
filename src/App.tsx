@@ -39,6 +39,7 @@ import { SafetyLogPage } from './pages/marshal/SafetyLogPage'
 import { TeamGroupingPage } from './pages/operations/TeamGroupingPage'
 import { FieldCheckInPage } from './pages/operations/FieldCheckInPage'
 import { GuardianApprovalPage } from './pages/guardian/GuardianApprovalPage'
+import { GuardianConfirmPage } from './pages/guardian/GuardianConfirmPage'
 import { CounterPage } from './pages/operations/CounterPage'
 import { RentalsPage } from './pages/operations/RentalsPage'
 import { RepairsPage } from './pages/operations/RepairsPage'
@@ -135,6 +136,7 @@ export default function App() {
       <Route path="/otp" element={<OtpVerificationPage />} />
       <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route path="/guardian-approval/:token" element={<GuardianApprovalPage />} />
+      <Route path="/guardian-confirm/:token" element={<GuardianConfirmPage />} />
 
       <Route
         path="/app"

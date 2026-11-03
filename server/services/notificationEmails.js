@@ -109,17 +109,76 @@ const RESERVATION_MESSAGES = {
 }
 
 // event: received | confirmed | needs review | cancelled | rescheduled
-export function emailReservationEvent(db, reservation, event, keySuffix = '') {
+export async function emailReservationEvent(db, reservation, event, keySuffix = '') {
   const message = RESERVATION_MESSAGES[event]
-  if (!message || !reservation) return Promise.resolve({ skipped: 'unknown event' })
+  if (!message || !reservation) return { skipped: 'unknown event' }
   const id = String(reservation.id || reservation._id)
+  const lines = event === 'confirmed'
+    ? await confirmedReservationLines(db, reservation).catch((err) => {
+      console.error('Confirmation details failed', id, err?.message || err)
+      return [message.line(reservation)]
+    })
+    : [message.line(reservation)]
   return sendLogged(db, {
     key: `reservation:${id}:${event}${keySuffix ? `:${keySuffix}` : ''}`,
     userId: reservation.userId,
     subject: message.subject,
     title: message.title,
-    lines: [message.line(reservation), `Reservation ID: ${escapeHtml(id)}`],
+    lines: [...lines, `Reservation ID: ${escapeHtml(id)}`],
   })
+}
+
+function appUrl() {
+  return String(process.env.PUBLIC_APP_URL || 'http://localhost:5173').trim().replace(/\/+$/, '')
+}
+
+function detailRow(label, value) {
+  return `<tr><td style="padding:4px 12px 4px 0;color:#6b7280;vertical-align:top;">${escapeHtml(label)}</td><td style="padding:4px 0;font-weight:bold;">${value}</td></tr>`
+}
+
+// The confirmation email, laid out like the guardian email: a short note, the booking details,
+// and a button that opens the reservation in My Reservations.
+async function confirmedReservationLines(db, reservation) {
+  const id = String(reservation.id || reservation._id)
+  const memberIds = [reservation.userId, ...(reservation.teamMembers || []).map((member) => member.id)].map(String).filter(Boolean)
+  const accounts = await db.collection('user_accounts')
+    .find({ id: { $in: memberIds } }, { projection: { id: 1, name: 1 } })
+    .toArray()
+  const nameOf = (memberId, fallback) => accounts.find((account) => String(account.id) === memberId)?.name || fallback || 'Player'
+  const captain = nameOf(String(reservation.userId), '')
+  const team = [
+    `${escapeHtml(captain)} (captain)`,
+    ...(reservation.teamMembers || []).map((member) => escapeHtml(nameOf(String(member.id), member.name))),
+  ]
+  const guests = Math.max(0, Number(reservation.numberOfPlayers || 0) - team.length)
+  if (guests) team.push(`${guests} more player${guests === 1 ? '' : 's'}`)
+
+  // Rental pieces held for the booking, and the players' own items they said they'd bring.
+  const holds = await db.collection('inventory_holds').find({ reservationId: id }, { projection: { collection: 1, quantity: 1 } }).toArray()
+  const rented = (collection) => holds.filter((hold) => hold.collection === collection).reduce((sum, hold) => sum + (Number(hold.quantity) || 0), 0)
+  const ownWeapons = new Set([...(reservation.selectedOwnWeaponIds || []), ...(reservation.ownWeaponBringerIds || [])].map(String)).size
+  const ownGear = (reservation.selectedOwnEquipmentIds || []).length
+
+  const total = Number(reservation.totalAmount || 0)
+  const balance = Math.max(0, total - Number(reservation.depositAmount || 0))
+  const link = `${appUrl()}/app/my-reservations?view=${encodeURIComponent(id)}`
+  const details = [
+    detailRow('Price', `${formatPHP(total)}${balance > 0 ? ` (${formatPHP(balance)} to pay in cash at the field)` : ' (fully paid)'}`),
+    ...(reservation.teamName ? [detailRow('Team name', escapeHtml(reservation.teamName))] : []),
+    detailRow('Team', team.join('<br>')),
+    detailRow('Date', escapeHtml(reservation.reservationDate || reservation.dateISO || '')),
+    detailRow('Time slot', escapeHtml(String(reservation.reservationTime || reservation.slot || '').replace(/^./, (c) => c.toUpperCase()))),
+    detailRow('Location', escapeHtml(reservation.locationName || reservation.locationId || '')),
+    detailRow('Package', escapeHtml(reservation.packageName || 'Custom selection')),
+    detailRow('Rented', `${rented('weapons')} weapon${rented('weapons') === 1 ? '' : 's'}, ${rented('equipments')} gear`),
+    detailRow('Bringing their own', `${ownWeapons} weapon${ownWeapons === 1 ? '' : 's'}, ${ownGear} gear`),
+  ]
+  return [
+    RESERVATION_MESSAGES.confirmed.line(reservation),
+    `<table style="border-collapse:collapse;font-size:14px;">${details.join('')}</table>`,
+    button(link, 'Review my reservation'),
+    `If the button doesn't work, open this link: ${escapeHtml(link)}`,
+  ]
 }
 
 export function emailPaymentEvent(db, payment, status, reason = '') {
@@ -223,6 +282,24 @@ export function emailGameReminder(db, reservation, userId) {
 
 function button(href, label) {
   return `<a href="${escapeHtml(href)}" style="display:inline-block;background:#b45309;color:#ffffff;padding:12px 20px;border-radius:10px;font-weight:bold;text-decoration:none;">${escapeHtml(label)}</a>`
+}
+
+// Sent to a parent when they add a child profile: one confirmation that they are the child's
+// parent or guardian. The child's waiver can be submitted once they confirm.
+export function emailGuardianConfirmation(db, { parentId, childId, childName, link, sentOn }) {
+  return sendLogged(db, {
+    key: `guardian-confirm:${childId}:${sentOn}`,
+    userId: parentId,
+    subject: `Confirm you are ${childName}'s guardian at Chill Shooters`,
+    title: 'Confirm you are the guardian',
+    lines: [
+      `You added ${escapeHtml(childName)} as a minor on your Chill Shooters account.`,
+      'Players under 18 play under a parent or legal guardian. Please confirm that you are their parent or guardian, then go back to the waiver page to finish their waiver.',
+      button(link, `Yes, I am ${childName}'s guardian`),
+      `If the button doesn't work, open this link: ${escapeHtml(link)}`,
+      "If you didn't add this child, you can ignore this email.",
+    ],
+  })
 }
 
 // Sent to a minor's guardian for every booking the minor is part of.

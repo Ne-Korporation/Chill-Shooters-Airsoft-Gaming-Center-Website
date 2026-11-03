@@ -14,11 +14,13 @@ import { useAuth } from '../../context/AuthContext'
 import { completeGoogleRedirect, signInWithGoogle, type GoogleProfile } from '../../utils/firebase'
 import { ExistingAccountDialog } from '../../components/auth/ExistingAccountDialog'
 import { cleanMiddleInitial, composeFullName } from '../../utils/names'
+import { ageFromBirthDate, maxAdultBirthDate } from '../../utils/age'
 
 type FormValues = {
   firstName: string
   middleInitial: string
   lastName: string
+  birthDate: string
   email: string
   password: string
 }
@@ -35,7 +37,7 @@ export function RegisterPage() {
     handleSubmit,
     watch,
     formState: { errors, isSubmitting },
-  } = useForm<FormValues>({ defaultValues: { firstName: '', middleInitial: '', lastName: '', email: '', password: '' } })
+  } = useForm<FormValues>({ defaultValues: { firstName: '', middleInitial: '', lastName: '', birthDate: '', email: '', password: '' } })
 
   const password = watch('password')
 
@@ -67,6 +69,7 @@ export function RegisterPage() {
     const payload = {
       ...nameParts,
       name: composeFullName(nameParts),
+      birthDate: values.birthDate,
       email: values.email.trim().toLowerCase(),
       password: values.password,
     }
@@ -219,6 +222,21 @@ export function RegisterPage() {
                   </span>.
                 </p>
               </div>
+              <Input
+                label="Birthday"
+                type="date"
+                max={maxAdultBirthDate()}
+                hint="You must be 18 or older. Players under 18 are added by a parent or guardian on the parent's account."
+                error={errors.birthDate?.message}
+                {...register('birthDate', {
+                  required: 'Birthday is required',
+                  validate: (v) => {
+                    const age = ageFromBirthDate(v)
+                    if (age === null) return 'Enter a valid birthday'
+                    return age >= 18 || 'You must be 18 or older. A parent or guardian can add you as a minor.'
+                  },
+                })}
+              />
               <Input
                 label="Email"
                 placeholder="operator@email.com"

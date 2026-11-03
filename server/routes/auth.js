@@ -7,6 +7,7 @@ import { nextShortId } from '../utils/shortIds.js'
 import { canonicalEmail, normalizeEmail, sameEmailFilter } from '../utils/emails.js'
 import { verifyFirebaseIdToken } from '../utils/firebaseTokens.js'
 import { cleanMiddleInitial, cleanNamePart, composeFullName, splitFullName } from '../utils/names.js'
+import { ageFromBirthDate } from '../utils/age.js'
 
 const router = express.Router()
 
@@ -456,6 +457,16 @@ router.post('/register', async (req, res) => {
   }
   const name = composeFullName(nameParts)
 
+  // Only adults have accounts; a parent adds their children as minors on their own account.
+  const birthDate = String(body.birthDate || '').trim()
+  const age = ageFromBirthDate(birthDate)
+  if (age === null || age > 120) {
+    return res.status(400).json({ ok: false, error: 'Enter your birthday.' })
+  }
+  if (age < 18) {
+    return res.status(400).json({ ok: false, error: 'You must be 18 or older to create an account. A parent or guardian can add you as a minor on their account.' })
+  }
+
   if (!email || typeof email !== 'string' || !email.trim()) {
     return res.status(400).json({ ok: false, error: 'email is required' })
   }
@@ -495,6 +506,8 @@ router.post('/register', async (req, res) => {
       emailCanonical: canonicalEmail(normalizedEmail),
       password: hashedPassword,
       role: 'user',
+      birthDate,
+      age,
       experience: 0,
       emailVerified: false,
       identityVerificationStatus: 'not_submitted',

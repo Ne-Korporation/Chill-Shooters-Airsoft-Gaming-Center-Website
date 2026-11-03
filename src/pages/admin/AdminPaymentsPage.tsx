@@ -3,14 +3,11 @@ import { FiCheck, FiCornerUpLeft, FiFileText, FiFlag } from 'react-icons/fi'
 import { ActionGroup, Button } from '../../components/ui/Button'
 import { FilterTabs, titleCaseLabel } from '../../components/ui/FilterTabs'
 import { Card } from '../../components/ui/Card'
-import { Input } from '../../components/ui/Input'
 import toast from 'react-hot-toast'
-import { apiBase, apiDelete, apiGet, apiGetAll, apiPut, getApiAuthHeaders } from '../../utils/apiClient'
+import { apiGetAll, apiPut } from '../../utils/apiClient'
 import { Pagination, usePagination } from '../../components/ui/Pagination'
 import { useAuth } from '../../context/AuthContext'
-import { formatPhPhone, isValidPhPhone, PH_PHONE_PLACEHOLDER, toStoredPhPhone } from '../../utils/phone'
 import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
-import { BookingPaymentReview } from '../../components/payments/BookingPaymentReview'
 
 
 type PaymentStatus = 'paid' | 'pending' | 'failed' | 'review' | 'confirmed' | 'cancelled'
@@ -41,15 +38,6 @@ function normalizePaymentStatus(value: unknown): PaymentStatus {
   return (KNOWN_STATUSES as string[]).includes(lower) ? (lower as PaymentStatus) : 'pending'
 }
 
-type BankDetails = { bankName: string; accountName: string; accountNumber: string }
-
-type GcashQrSettings = {
-  imageUrl: string
-  phoneNumber?: string
-  updatedAtISO?: string | null
-  updatedBy?: string | null
-}
-
 const statusBadge = (status: PaymentStatus) => {
   switch (status) {
     case 'paid':
@@ -77,18 +65,9 @@ const StatusPill = ({ status }: { status: PaymentStatus }) => {
 
 export function AdminPaymentsPage() {
   const { user } = useAuth()
-  // Registrars verify payments here too; the GCash QR and bank account settings are admin-only.
-  const isAdmin = user?.role === 'admin'
   const [active, setActive] = React.useState<PaymentStatus | 'all'>('all')
   const [payments, setPayments] = React.useState<PaymentItem[]>([])
   const [loading, setLoading] = useState(true)
-  const [qrSettings, setQrSettings] = useState<GcashQrSettings>({ imageUrl: '' })
-  const [qrPreview, setQrPreview] = useState('')
-  const [phoneNumber, setPhoneNumber] = useState('')
-  const [qrSaving, setQrSaving] = useState(false)
-  const [qrLoading, setQrLoading] = useState(true)
-  const [qrFile, setQrFile] = useState<File | null>(null)
-  const [qrModalOpen, setQrModalOpen] = useState(false)
   const { addNotification } = useNotifications()
 
   const load = async () => {
@@ -141,113 +120,6 @@ export function AdminPaymentsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  useEffect(() => {
-    let cancelled = false
-
-    const loadQr = async () => {
-      try {
-        setQrLoading(true)
-        const res = await apiGet<{ ok: boolean; data: GcashQrSettings }>('/api/payments/gcash-qr')
-        if (!cancelled) {
-          setQrSettings(res?.data || { imageUrl: '' })
-          setQrPreview(res?.data?.imageUrl || '')
-          setPhoneNumber(formatPhPhone(res?.data?.phoneNumber || ''))
-        }
-      } catch (e: any) {
-        if (!cancelled) {
-          toast.error(String(e?.message || e))
-        }
-      } finally {
-        if (!cancelled) setQrLoading(false)
-      }
-    }
-
-    loadQr()
-    apiGet<{ ok: boolean; data: BankDetails }>('/api/payments/bank-details')
-      .then((res) => { if (!cancelled && res?.data) setBankForm(res.data) })
-      .catch(() => {})
-
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
-  const [bankForm, setBankForm] = useState<BankDetails>({ bankName: '', accountName: '', accountNumber: '' })
-  const [bankSaving, setBankSaving] = useState(false)
-
-  const saveBankDetails = async () => {
-    setBankSaving(true)
-    try {
-      const saved = await apiPut<{ ok: boolean; data: BankDetails }>('/api/payments/bank-details', bankForm)
-      setBankForm(saved.data)
-      toast.success('Bank transfer details saved')
-    } catch (e: any) {
-      toast.error(String(e?.message || e))
-    } finally {
-      setBankSaving(false)
-    }
-  }
-
-  const saveQrImage = async () => {
-    if (!qrFile) {
-      toast.error('Please choose a QR image.')
-      return
-    }
-    if (!isValidPhPhone(phoneNumber)) {
-      toast.error('Enter the GCash number as 09XX XXX XXXX.')
-      return
-    }
-    if (!qrFile.type.startsWith('image/')) {
-      toast.error('Please upload an image file for the GCash QR.')
-      return
-    }
-
-    setQrSaving(true)
-    try {
-      const formData = new FormData()
-      formData.append('file', qrFile)
-
-      const uploadRes = await fetch(`${apiBase}/api/upload-image`, {
-        method: 'POST',
-        headers: getApiAuthHeaders(),
-        body: formData,
-      })
-      const uploadJson = await uploadRes.json().catch(() => null)
-      if (!uploadRes.ok) {
-        throw new Error(uploadJson?.error || uploadJson?.message || 'QR upload failed')
-      }
-
-      const imageUrl = String(uploadJson?.url || '').trim()
-      if (!imageUrl) throw new Error('Upload returned no image URL')
-
-      const saved = await apiPut<{ ok: boolean; data: GcashQrSettings }>('/api/payments/gcash-qr', { imageUrl, phoneNumber: toStoredPhPhone(phoneNumber) })
-      setQrSettings(saved?.data || { imageUrl })
-      setQrPreview(imageUrl)
-      setQrFile(null)
-      setQrModalOpen(false)
-      toast.success('GCash QR updated')
-    } catch (e: any) {
-      toast.error(String(e?.message || e))
-    } finally {
-      setQrSaving(false)
-    }
-  }
-
-  const openQrModal = () => {
-    setQrModalOpen(true)
-  }
-
-  const closeQrModal = () => {
-    if (qrSaving) return
-    setQrModalOpen(false)
-  }
-
-  const qrUploadReady = Boolean(qrFile && isValidPhPhone(phoneNumber))
-
-
-
-
-
   const filtered = useMemo(
     () => payments.filter((payment) => (active === 'all' ? true : payment.status === active)),
     [payments, active],
@@ -285,7 +157,7 @@ export function AdminPaymentsPage() {
   }
 
   const sendBack = (payment: PaymentItem) => {
-    const reason = window.prompt('Why is this payment being sent back? The player sees this reason and can submit a corrected payment.')
+    const reason = window.prompt('Why is this payment being sent back? The player sees this reason and can pay again online.')
     if (reason === null) return
     if (!reason.trim()) {
       toast.error('Enter a reason so the player knows what to fix.')
@@ -300,11 +172,9 @@ export function AdminPaymentsPage() {
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h1 className="text-3xl font-bold">Payments</h1>
-          <p className="mt-1 text-sm text-muted">Review each booking's payment and decide it, then verify the individual receipts below.</p>
+          <p className="mt-1 text-sm text-muted">Payments made through Xendit are checked automatically and their bookings confirmed. Use this page for anything Xendit flagged, older proof uploads, and receipts.</p>
         </div>
       </div>
-
-      <BookingPaymentReview />
 
       <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
         <Card className="rounded-xl px-3 py-2 md:px-3 md:py-2">
@@ -320,162 +190,6 @@ export function AdminPaymentsPage() {
           <div className="mt-0.5 text-base font-bold text-success">{completedToday}</div>
         </Card>
       </div>
-
-      {isAdmin && (
-      <Card className="p-4">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-          <div className="max-w-2xl">
-            <div className="text-xs uppercase tracking-widest text-muted">GCash QR</div>
-            <div className="mt-2 text-sm text-muted">
-              Upload the GCash QR that players should scan on the payment page. The latest image is stored centrally and shown to all players.
-            </div>
-            <div className="mt-3 text-xs text-muted">
-              {qrSettings.updatedAtISO ? `Last updated ${qrSettings.updatedAtISO}` : 'No QR uploaded yet.'}
-            </div>
-          </div>
-
-          <Button variant="primary" onClick={openQrModal}>
-            Upload GCash QR
-          </Button>
-        </div>
-
-        <div className="mt-4 grid gap-3 md:grid-cols-2">
-          <div>
-            <div className="text-xs uppercase tracking-widest text-muted">GCash phone number</div>
-            <input
-              value={phoneNumber}
-              onChange={(e) => setPhoneNumber(formatPhPhone(e.target.value))}
-              placeholder={PH_PHONE_PLACEHOLDER}
-              className="mt-2 w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-white placeholder:text-white/40 focus:outline-none"
-              inputMode="tel"
-              autoComplete="tel"
-            />
-          </div>
-          <div className="rounded-2xl border border-white/10 bg-black/20 p-4 text-sm text-muted">
-            GCash phone number is required to make sure both the number and QR image are uploaded.
-          </div>
-        </div>
-
-        <div className="mt-4 grid gap-4 lg:grid-cols-[240px_1fr]">
-          <div className="flex items-center justify-center rounded-2xl border border-white/10 bg-black/20 p-4">
-            {qrLoading ? (
-              <div className="text-sm text-muted">Loading QR…</div>
-            ) : qrPreview ? (
-              <img src={qrPreview} alt="GCash QR preview" className="max-h-56 w-full rounded-xl object-contain" />
-            ) : (
-              <div className="text-center text-sm text-muted">No QR image configured.</div>
-            )}
-          </div>
-
-          <div className="rounded-2xl border border-white/10 bg-black/20 p-4 text-sm text-muted">
-            <div className="font-semibold text-white">How it works</div>
-            <div className="mt-2 space-y-2">
-              <div>1. Upload the GCash QR image here.</div>
-              <div>2. The payment page will fetch and display the latest QR automatically.</div>
-              <div>3. Players can scan it when submitting GCash proof.</div>
-            </div>
-          </div>
-        </div>
-      </Card>
-      )}
-
-      {isAdmin && qrModalOpen && (
-        <div className="fixed inset-0 z-[99999] grid place-items-center bg-black/70 px-4 py-6 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="gcash-qr-upload-title">
-          <div className="w-full max-w-2xl rounded-[1.5rem] border border-white/10 bg-[#111214] p-4 shadow-2xl">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <div id="gcash-qr-upload-title" className="text-lg font-bold text-white">Upload GCash QR</div>
-                <div className="mt-1 text-sm text-muted">Add the GCash phone number and QR image before saving.</div>
-              </div>
-              <Button variant="ghost" size="sm" onClick={closeQrModal}>
-                Close
-              </Button>
-            </div>
-
-            <div className="mt-4 grid gap-4 md:grid-cols-2">
-              <div>
-                <div className="text-xs uppercase tracking-widest text-muted">GCash phone number</div>
-                <input
-                  value={phoneNumber}
-                  onChange={(e) => setPhoneNumber(formatPhPhone(e.target.value))}
-                  placeholder={PH_PHONE_PLACEHOLDER}
-                  inputMode="tel"
-                  autoComplete="tel"
-                  className="mt-2 w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-white placeholder:text-white/40 focus:outline-none"
-                />
-                <div className="mt-2 text-xs text-warning">GCash phone number is required.</div>
-              </div>
-
-              <div>
-                <div className="text-xs uppercase tracking-widest text-muted">GCash QR</div>
-                <label className="mt-2 flex min-h-28 cursor-pointer items-center justify-center rounded-2xl border border-dashed border-white/15 bg-white/5 px-4 py-4 text-sm text-muted transition hover:bg-white/8">
-                  <input
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    disabled={qrSaving}
-                    onChange={(e) => {
-                      const file = e.target.files?.[0] ?? null
-                      setQrFile(file)
-                      if (file) setQrPreview(URL.createObjectURL(file))
-                      e.currentTarget.value = ''
-                    }}
-                  />
-                  Upload GCash QR
-                </label>
-              </div>
-            </div>
-
-            <div className="mt-4 grid gap-4 lg:grid-cols-[240px_1fr]">
-              <div className="flex items-center justify-center rounded-2xl border border-white/10 bg-black/20 p-4">
-                {qrPreview ? (
-                  <img src={qrPreview} alt="GCash QR preview" className="max-h-56 w-full rounded-xl object-contain" />
-                ) : (
-                  <div className="text-center text-sm text-muted">QR preview will appear here after upload.</div>
-                )}
-              </div>
-
-              <div className="rounded-2xl border border-white/10 bg-black/20 p-4 text-sm text-muted">
-                <div className="font-semibold text-white">Upload warning</div>
-                <div className="mt-2">GCash phone number is required before saving the QR setup.</div>
-                <div className="mt-2">The save button will appear only after both the phone number and QR image are provided.</div>
-              </div>
-            </div>
-
-            {qrUploadReady ? (
-              <div className="mt-4 flex justify-end gap-2">
-                <Button variant="ghost" disabled={qrSaving} onClick={closeQrModal}>
-                  Cancel
-                </Button>
-                <Button variant="primary" disabled={qrSaving} onClick={() => void saveQrImage()}>
-                  {qrSaving ? 'Saving…' : 'Save GCash QR'}
-                </Button>
-              </div>
-            ) : null}
-          </div>
-        </div>
-      )}
-
-      {isAdmin && (
-      <Card className="p-4">
-        <div className="text-xs uppercase tracking-widest text-muted">Bank transfer account</div>
-        <div className="mt-2 text-sm text-muted">Shown to players who choose Bank Transfer on the payment page.</div>
-        <div className="mt-4 grid gap-3 md:grid-cols-3">
-          <Input label="Bank" value={bankForm.bankName} onChange={(e) => setBankForm((f) => ({ ...f, bankName: e.target.value }))} placeholder="e.g., BDO" />
-          <Input label="Account name" value={bankForm.accountName} onChange={(e) => setBankForm((f) => ({ ...f, accountName: e.target.value }))} placeholder="Chill Shooters Airsoft" />
-          <Input label="Account number" value={bankForm.accountNumber} onChange={(e) => setBankForm((f) => ({ ...f, accountNumber: e.target.value }))} placeholder="0000 0000 0000" />
-        </div>
-        <div className="mt-3 flex justify-end">
-          <Button
-            variant="primary"
-            disabled={bankSaving || !bankForm.bankName.trim() || !bankForm.accountName.trim() || !bankForm.accountNumber.trim()}
-            onClick={() => void saveBankDetails()}
-          >
-            {bankSaving ? 'Saving…' : 'Save bank details'}
-          </Button>
-        </div>
-      </Card>
-      )}
 
       <Card className="p-4">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">

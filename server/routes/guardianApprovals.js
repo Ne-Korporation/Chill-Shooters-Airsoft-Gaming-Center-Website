@@ -2,7 +2,7 @@ import express from 'express'
 import { randomBytes, randomUUID } from 'crypto'
 import { getDb } from '../db/mongo.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
-import { autoConfirmIfGatewayPaid, notifyRole, notifyUser } from '../utils/paymentProgress.js'
+import { autoConfirmIfVerified, notifyRole, notifyUser } from '../utils/paymentProgress.js'
 import { emailGuardianApprovalRequest, emailGuardianDecision } from '../services/notificationEmails.js'
 
 // Players under 18 need their guardian to approve every booking they are part of. Each booking
@@ -209,7 +209,7 @@ async function recordDecision(db, approval, { status, note, decidedBy }) {
   }
   if (reservation) void emailGuardianDecision(db, updated, reservation)
   // The last guardian approving a booking that was already paid online confirms it.
-  if (summary.status === 'approved') await autoConfirmIfGatewayPaid(db, approval.reservationId)
+  if (summary.status === 'approved') await autoConfirmIfVerified(db, approval.reservationId)
   return summary
 }
 

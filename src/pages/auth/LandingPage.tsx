@@ -72,7 +72,7 @@ const bookingSlots: { id: TimeSlot; label: string }[] = [
 const howItWorks = [
   { icon: FiCalendar, title: 'Pick your slot', desc: 'Choose a field, date, and time that fits your group.' },
   { icon: FiShield, title: 'Sign the waiver', desc: 'A quick online form. Players under 18 need a guardian.' },
-  { icon: FiCreditCard, title: 'Pay online', desc: 'Settle by GCash or bank transfer and upload your receipt.' },
+  { icon: FiCreditCard, title: 'Pay online', desc: 'Pay with GCash, Maya, your bank, or a card. Confirmed automatically.' },
   { icon: FiTarget, title: 'Show up and play', desc: 'Our marshals brief your squad and get you in the game.' },
 ]
 

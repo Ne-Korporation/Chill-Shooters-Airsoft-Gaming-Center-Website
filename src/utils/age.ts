@@ -24,6 +24,12 @@ export function ageFromBirthDate(value?: string | null): number | null {
   return age >= 0 ? age : null
 }
 
+// Latest birth date of someone who is already 18, for adult-only date inputs.
+export function maxAdultBirthDate() {
+  const { year, month, day } = manilaTodayParts()
+  return `${year - 18}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+}
+
 // Latest selectable birth date (today) for date inputs.
 export function maxBirthDate() {
   const { year, month, day } = manilaTodayParts()

@@ -140,7 +140,6 @@ function useHasPackages(enabled: boolean) {
   return hasPackages
 }
 
-const OPEN_GROUPS_KEY = 'adminMenuOpenGroups'
 
 function SidebarLink({ item, onNavigate, nested = false }: { item: Item; onNavigate?: () => void; nested?: boolean }) {
   const Icon = item.icon
@@ -201,20 +200,12 @@ export function AppSidebar({
     : role === 'registrar' ? withProfile(registrarItems)
     : playerItems
 
-  // Admin groups: the one holding the current page is always open; others remember their state.
-  const [openGroups, setOpenGroups] = useState<string[]>(() => {
-    try {
-      return JSON.parse(localStorage.getItem(OPEN_GROUPS_KEY) || '[]')
-    } catch {
-      return []
-    }
-  })
+  // Admin groups: the one holding the current page is open. Others can be opened to look around,
+  // and close again as soon as the admin moves to another page.
+  const [openGroups, setOpenGroups] = useState<string[]>([])
+  useEffect(() => setOpenGroups([]), [pathname])
   const toggleGroup = (section: string) => {
-    setOpenGroups((current) => {
-      const next = current.includes(section) ? current.filter((s) => s !== section) : [...current, section]
-      localStorage.setItem(OPEN_GROUPS_KEY, JSON.stringify(next))
-      return next
-    })
+    setOpenGroups((current) => (current.includes(section) ? current.filter((s) => s !== section) : [...current, section]))
   }
 
   if (role !== 'admin') {

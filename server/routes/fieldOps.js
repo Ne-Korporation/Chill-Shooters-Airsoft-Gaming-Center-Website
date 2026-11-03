@@ -149,11 +149,13 @@ router.get('/players/levels', requireAuth, requireRole(...STAFF), async (req, re
 // GET /api/players/:id/stats — the player's own profile numbers, or any player's for staff.
 router.get('/players/:id/stats', requireAuth, async (req, res) => {
   const id = String(req.params.id || '')
-  if (req.user.role === 'user' && String(req.user.id) !== id) {
-    return res.status(404).json({ ok: false, error: 'not found' })
-  }
   try {
     const db = await getDb()
+    // Players see their own progress, and parents their children's.
+    if (req.user.role === 'user' && String(req.user.id) !== id) {
+      const child = await db.collection('user_accounts').findOne({ id, guardianId: String(req.user.id), isChildProfile: true }, { projection: { _id: 1 } })
+      if (!child) return res.status(404).json({ ok: false, error: 'not found' })
+    }
     const profile = (await getPlayerProfiles(db, [id])).get(id)
     if (!profile) return res.status(404).json({ ok: false, error: 'Player not found' })
 

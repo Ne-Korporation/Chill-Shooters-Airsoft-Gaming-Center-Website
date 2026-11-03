@@ -16,7 +16,8 @@ import { ACTIVE_WAIVER_STATUSES, expireOldWaivers, validUntilFrom } from '../uti
 import { manilaDateISO } from '../utils/reminders.js'
 import { normalizePhPhone } from '../utils/phone.js'
 import { cleanEquipmentQuantities } from '../utils/packageQuantities.js'
-import { appUrlFrom, requestGuardianApprovals } from './guardianApprovals.js'
+import { appUrlFrom } from './guardianApprovals.js'
+import { findOwnChild, hasApprovedWaiver } from './children.js'
 import { evaluateFpsReading, weaponFpsClass } from './operations.js'
 import { emailGearReviewEvent, emailGuardianWaiverSubmitted, emailReservationEvent, emailSplitShareRequest } from '../services/notificationEmails.js'
 import {
@@ -154,7 +155,7 @@ router.get('/team-directory/lookup', requireAuth, requireRole('user'), async (re
 
   try {
     const db = await getDb()
-    const isPlayer = { role: { $in: ['user', null] } }
+    const isPlayer = { role: { $in: ['user', null] }, isChildProfile: { $ne: true } }
     const candidates = await db.collection('user_accounts').find(
       byEmail
         ? { $and: [sameEmailFilter(email), isPlayer] }
@@ -1210,7 +1211,8 @@ router.get('/:collection/:id', requireAuth, async (req, res) => {
     const db = await getDb()
     const doc = await findDocumentById(db, collection, id)
     if (!doc) return res.status(404).json({ ok: false, error: 'not found' })
-    if (req.user.role === 'user' && collection === 'user_accounts' && String(doc.id || doc._id) !== String(req.user.id)) {
+    if (req.user.role === 'user' && collection === 'user_accounts' && String(doc.id || doc._id) !== String(req.user.id)
+      && !(doc.isChildProfile && String(doc.guardianId) === String(req.user.id))) {
       return res.status(404).json({ ok: false, error: 'not found' })
     }
     // An account is owned by its own id (checked above), not by a userId/playerId field.
@@ -1260,7 +1262,7 @@ async function resolveTeamAndOwnWeapons(db, doc, { requireFullTeam = false } = {
   const accounts = requestedIds.length
     ? await db.collection('user_accounts').find(
       { role: 'user', $or: [{ id: { $in: requestedIds } }, ...(objectIds.length ? [{ _id: { $in: objectIds } }] : [])] },
-      { projection: { id: 1, name: 1, email: 1 } },
+      { projection: { id: 1, name: 1, email: 1, isChildProfile: 1, guardianId: 1 } },
     ).toArray()
     : []
   if (accounts.length !== requestedIds.length) {
@@ -1268,9 +1270,24 @@ async function resolveTeamAndOwnWeapons(db, doc, { requireFullTeam = false } = {
     unknown.statusCode = 400
     throw unknown
   }
-  const teamMembers = accounts.map((account) => ({ id: String(account.id || account._id), name: account.name || '', email: account.email || '' }))
+  const adultIds = new Set([captainId, ...accounts.filter((account) => !account.isChildProfile).map((account) => String(account.id || account._id))])
+  const strayChild = accounts.find((account) => account.isChildProfile && !adultIds.has(String(account.guardianId)))
+  if (strayChild) {
+    const noGuardian = new Error(`${strayChild.name || 'A minor'} can only join a game with their parent or guardian on the team.`)
+    noGuardian.statusCode = 400
+    throw noGuardian
+  }
+  const childIds = new Set(accounts.filter((account) => account.isChildProfile).map((account) => String(account.id || account._id)))
+  const teamMembers = accounts.map((account) => ({
+    id: String(account.id || account._id),
+    name: account.name || '',
+    email: account.email || '',
+    ...(account.isChildProfile ? { isMinor: true, guardianId: String(account.guardianId) } : {}),
+  }))
   const split = String(doc.paymentMode || 'self').toLowerCase() === 'split'
-  if (split && teamMembers.length === 0) {
+  // Children don't pay: a split is shared among the adults only.
+  const payers = teamMembers.filter((member) => !childIds.has(member.id))
+  if (split && payers.length === 0) {
     const noTeam = new Error('Add at least one registered teammate to split the payment.')
     noTeam.statusCode = 400
     throw noTeam
@@ -1287,8 +1304,8 @@ async function resolveTeamAndOwnWeapons(db, doc, { requireFullTeam = false } = {
     teamMembers,
     selectedTeammateIds: teamMembers.map((member) => member.id),
     paymentMode: split ? 'split' : 'self',
-    teamSize: split ? teamMembers.length + 1 : 1,
-    splitPayerIds: split ? teamMembers.map((member) => member.id) : [],
+    teamSize: split ? payers.length + 1 : 1,
+    splitPayerIds: split ? payers.map((member) => member.id) : [],
     ownWeaponBringerIds: bringerIds,
     ownWeaponBringers,
     ownWeaponTarget: Math.max(0, Math.round(Number(doc.ownWeaponTarget) || 0)),
@@ -1329,6 +1346,11 @@ router.post('/:collection', requireAuth, async (req, res) => {
 
   if (collection === 'payments' && req.user.role !== 'user') {
     return res.status(403).json({ ok: false, error: 'Staff payments must use an audited payment workflow.' })
+  }
+  // Players pay online through Xendit, which records and verifies the payment itself; uploading a
+  // GCash or bank screenshot for staff to check is no longer offered.
+  if (collection === 'payments') {
+    return res.status(403).json({ ok: false, error: 'Please pay online through Xendit. Screenshot payments are no longer accepted.' })
   }
 
   if (!canCreateCollection(req.user.role, collection)) {
@@ -1418,6 +1440,28 @@ router.post('/:collection', requireAuth, async (req, res) => {
       payload.equipmentQuantities = cleanEquipmentQuantities(payload.equipmentIds, payload.equipmentQuantities)
     }
 
+    // A parent submits the minor waiver for a child profile on their account (routes/children.js),
+    // after confirming by email that they are the guardian and once their own waiver is approved.
+    if (collection === 'waivers' && req.user.role === 'user') {
+      const childId = String(payload.forChildId || '').trim()
+      delete payload.forChildId
+      delete payload.forChild
+      if (childId) {
+        const child = await findOwnChild(db, req.user.id, childId)
+        if (!child) return res.status(404).json({ ok: false, error: 'Child not found on your account.' })
+        if (!child.guardianConfirmedAtISO) {
+          return res.status(409).json({ ok: false, error: "Confirm you are the child's guardian first: open the link we emailed you." })
+        }
+        if (!(await hasApprovedWaiver(db, req.user.id))) {
+          return res.status(409).json({ ok: false, error: 'Your own waiver must be approved first.' })
+        }
+        payload.userId = String(child.id)
+        payload.forChild = true
+        payload.guardianId = String(req.user.id)
+        payload.submittedBy = String(req.user.id)
+      }
+    }
+
     if (collection === 'waivers' && payload.userId) {
       // A denied or expired waiver can be answered again; an active one can't be duplicated.
       await expireOldWaivers(db, { force: true })
@@ -1435,6 +1479,13 @@ router.post('/:collection', requireAuth, async (req, res) => {
         if (age === null || age < 1 || age > 120) return res.status(400).json({ ok: false, error: 'Enter a valid birthday.' })
         payload.age = age
         payload.isMinor = age < 18
+        // Minors can't hold accounts: a player's own waiver is for adults, a child's is for minors.
+        if (req.user.role === 'user' && !payload.forChild && payload.isMinor) {
+          return res.status(400).json({ ok: false, error: 'Players under 18 cannot sign up on their own. A parent adds them as a minor on the parent\'s account.' })
+        }
+        if (payload.forChild && !payload.isMinor) {
+          return res.status(400).json({ ok: false, error: 'This waiver is for players under 18.' })
+        }
       }
       if (req.user.role === 'user') {
         payload.email = req.user.email || payload.email || ''
@@ -1675,7 +1726,6 @@ router.post('/:collection', requireAuth, async (req, res) => {
         })
         void emailReservationEvent(db, doc, 'received')
         void notifySplitPayers(db, doc, appUrlFrom(req))
-        void requestGuardianApprovals(db, doc, appUrlFrom(req))
         return res.status(201).json({ ok: true, insertedId, data: doc })
       } catch (err) {
         if (err?.statusCode) {
@@ -1745,9 +1795,9 @@ router.post('/:collection', requireAuth, async (req, res) => {
       )
     }
     if (req.user.role === 'user') await notifyStaffOfPlayerSubmission(db, collection, doc, req.user)
-    if (collection === 'waivers' && doc.isMinor && doc.guardianEmail) void emailGuardianWaiverSubmitted(db, doc)
+    if (collection === 'waivers' && doc.isMinor && doc.guardianEmail && !doc.forChild) void emailGuardianWaiverSubmitted(db, doc)
     // The profile reads the birthday from the account, so fill it in from the first waiver.
-    if (collection === 'waivers' && req.user.role === 'user' && doc.birthDate && doc.age) {
+    if (collection === 'waivers' && req.user.role === 'user' && doc.birthDate && doc.age && !doc.forChild) {
       await db.collection('user_accounts').updateOne(
         { id: String(req.user.id), $or: [{ birthDate: { $exists: false } }, { birthDate: { $in: ['', null] } }] },
         { $set: { birthDate: doc.birthDate, age: doc.age } },
@@ -1864,6 +1914,10 @@ router.put('/:collection/:id', requireAuth, async (req, res) => {
       const age = ageFromBirthDate(changes.birthDate)
       if (age === null || age < 1 || age > 120) {
         return res.status(400).json({ ok: false, error: 'Enter a valid birthday.' })
+      }
+      // Account holders are adults; minors are profiles under a parent's account.
+      if (updateRole === 'user' && age < 18) {
+        return res.status(400).json({ ok: false, error: 'Account holders must be 18 or older.' })
       }
       changes.age = age
     }
