@@ -174,9 +174,9 @@ export function PartnerLoansCard({ partners }: { partners: Array<{ id: string; n
 
   return (
     <Card className="p-4">
-      <div className="text-xs uppercase tracking-widest text-muted">Partner equipment borrowing</div>
+      <div className="text-xs uppercase tracking-widest text-muted">Partner gear borrowing</div>
       <p className="mt-1 text-sm text-muted">
-        Record equipment borrowed from or lent to partner organizations, its condition each way, and the signed paperwork.
+        Record weapons and gear borrowed from or lent to partner organizations, its condition each way, and the signed paperwork.
         Center pieces lent out can't be booked until they are returned.
       </p>
 

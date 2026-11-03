@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
-import { FiCloudRain } from 'react-icons/fi'
+import { FiCloudRain, FiSun } from 'react-icons/fi'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
+import { Modal } from '../../components/ui/Modal'
 import { apiGet, apiPost } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
 import { formatSlotRange, useSlotHours } from '../../utils/slotHours'
@@ -12,6 +13,7 @@ type SlotForecast = {
   slot: string
   available: boolean
   severe: boolean
+  rainy?: boolean
   reasons: string[]
   summary: string
   rainChancePercent?: number
@@ -45,6 +47,23 @@ function manilaDate(offsetDays = 0) {
 const selectClass = 'w-full rounded-xl border border-white/10 bg-background px-3 py-2 text-sm outline-none focus:border-accent/40 [&>option]:bg-background'
 
 export function AdminWeatherPage() {
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="flex items-center gap-2 text-3xl font-bold"><FiCloudRain /> Weather advisories</h1>
+        <p className="mt-1 text-sm text-muted">
+          The day before each game the system checks the forecast for every booked slot and emails the booked players when rain,
+          thunderstorms, or strong wind are likely. You can also send an advisory yourself.
+        </p>
+      </div>
+      <WeatherPanel />
+    </div>
+  )
+}
+
+// The manual advisory form and advisory history, with the forecast in its own pop-up.
+// Shown on the Weather page and in the weather pop-up next to the notification bell.
+export function WeatherPanel() {
   const { user } = useAuth()
   const slotHours = useSlotHours()
   const [configured, setConfigured] = useState(true)
@@ -56,7 +75,9 @@ export function AdminWeatherPage() {
   const [slot, setSlot] = useState('')
   const [message, setMessage] = useState('')
   const [sending, setSending] = useState(false)
+  const [showForecast, setShowForecast] = useState(false)
   const canSend = user?.role === 'admin' || user?.role === 'registrar'
+  const locationName = LOCATIONS.find((l) => l.id === location)?.name
 
   const loadAdvisories = useCallback(async () => {
     try {
@@ -73,7 +94,9 @@ export function AdminWeatherPage() {
   }, [loadAdvisories])
 
   useEffect(() => {
+    if (!showForecast) return
     let cancelled = false
+    setForecast([])
     setForecastError('')
     apiGet<{ ok: boolean; configured: boolean; data: SlotForecast[] }>(`/api/weather/forecast?location=${location}&date=${date}`)
       .then((res) => {
@@ -87,7 +110,7 @@ export function AdminWeatherPage() {
     return () => {
       cancelled = true
     }
-  }, [location, date])
+  }, [location, date, showForecast])
 
   const send = async (event: React.FormEvent) => {
     event.preventDefault()
@@ -106,41 +129,45 @@ export function AdminWeatherPage() {
 
   const fillFromForecast = (entry: SlotForecast) => {
     setSlot(entry.slot)
-    setMessage(`The forecast for ${LOCATIONS.find((l) => l.id === location)?.name} on ${date} (${entry.slot}) shows ${entry.reasons.join(' and ') || entry.summary}. We play rain or shine unless the marshals stop play for safety. If weather stops you from coming, contact us and staff can move your booking and payment to another date.`)
+    setMessage(`The forecast for ${locationName} on ${date} (${entry.slot}) shows ${entry.reasons.join(' and ') || entry.summary}. We play rain or shine unless the marshals stop play for safety. If weather stops you from coming, contact us and staff can move your booking and payment to another date.`)
+    setShowForecast(false)
   }
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="flex items-center gap-2 text-3xl font-bold"><FiCloudRain /> Weather advisories</h1>
-        <p className="mt-1 text-sm text-muted">
-          The day before each game the system checks the forecast for every booked slot and emails players when it shows thunderstorms,
-          likely heavy rain, or strong wind. You can also send an advisory yourself.
-        </p>
-      </div>
-
       {!configured ? (
         <div className="rounded-2xl border border-gold/30 bg-gold/10 px-4 py-3 text-sm text-gold">
           Automatic forecasts are off: add <code>OPENWEATHER_API_KEY</code> to the server environment. Manual advisories still work.
         </div>
       ) : null}
 
-      <div className="grid gap-6 xl:grid-cols-[1fr,420px]">
-        <Card className="p-4">
-          <div className="mb-3 text-xs uppercase tracking-widest text-muted">Forecast</div>
-          <div className="grid gap-2 sm:grid-cols-2">
-            <select value={location} onChange={(e) => setLocation(e.target.value)} className={selectClass}>
+      <Card className="p-4">
+        <div className="flex flex-wrap items-end gap-2">
+          <label className="min-w-[200px] flex-1 text-xs text-muted">
+            Location
+            <select value={location} onChange={(e) => setLocation(e.target.value)} className={selectClass + ' mt-1'}>
               {LOCATIONS.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
             </select>
-            <Input type="date" value={date} min={manilaDate(0)} max={manilaDate(5)} onChange={(e) => setDate(e.target.value)} />
-          </div>
-          {forecastError ? <div className="mt-3 text-sm text-danger">{forecastError}</div> : null}
-          <div className="mt-4 grid gap-3 md:grid-cols-3">
+          </label>
+          <label className="min-w-[160px] text-xs text-muted">
+            Date
+            <Input type="date" value={date} min={manilaDate(0)} max={manilaDate(5)} onChange={(e) => setDate(e.target.value)} className="mt-1" />
+          </label>
+          <Button type="button" variant="ghost" onClick={() => setShowForecast(true)}>
+            <FiSun /> View forecast
+          </Button>
+        </div>
+      </Card>
+
+      {showForecast ? (
+        <Modal eyebrow="Forecast" title={`${locationName} · ${date}`} onClose={() => setShowForecast(false)} size="xl">
+          {forecastError ? <div className="text-sm text-danger">{forecastError}</div> : null}
+          <div className="grid gap-3 md:grid-cols-3">
             {forecast.map((entry) => (
-              <div key={entry.slot} className={['rounded-2xl border p-3', entry.severe ? 'border-danger/30 bg-danger/10' : 'border-white/10 bg-white/5'].join(' ')}>
+              <div key={entry.slot} className={['rounded-2xl border p-3', entry.severe || entry.rainy ? 'border-danger/30 bg-danger/10' : 'border-white/10 bg-white/5'].join(' ')}>
                 <div className="flex items-center justify-between">
                   <div className="text-sm font-bold capitalize">{entry.slot} <span className="text-xs font-normal normal-case text-muted">{formatSlotRange(slotHours, entry.slot)}</span></div>
-                  {entry.severe ? <span className="text-[10px] font-bold uppercase tracking-widest text-danger">Advisory</span> : null}
+                  {entry.severe || entry.rainy ? <span className="text-[10px] font-bold uppercase tracking-widest text-danger">Advisory</span> : null}
                 </div>
                 <div className="mt-2 text-xs text-muted">{entry.summary}</div>
                 {entry.available ? (
@@ -157,36 +184,36 @@ export function AdminWeatherPage() {
             {configured && !forecastError && forecast.length === 0 ? <div className="text-sm text-muted">Loading…</div> : null}
           </div>
           <p className="mt-3 text-[11px] text-muted">Forecasts cover the next 5 days. Slot hours are set on the Reservations page.</p>
-        </Card>
+        </Modal>
+      ) : null}
 
-        {canSend ? (
-          <Card className="p-4">
-            <div className="mb-3 text-xs uppercase tracking-widest text-muted">Send an advisory</div>
-            <form className="space-y-3" onSubmit={send}>
-              <div className="text-xs text-muted">
-                To everyone booked at {LOCATIONS.find((l) => l.id === location)?.name} on {date}.
-              </div>
-              <select value={slot} onChange={(e) => setSlot(e.target.value)} className={selectClass}>
-                <option value="">All time slots</option>
-                <option value="morning">Morning</option>
-                <option value="afternoon">Afternoon</option>
-                <option value="evening">Evening</option>
-              </select>
-              <textarea
-                value={message}
-                onChange={(e) => setMessage(e.target.value)}
-                rows={6}
-                maxLength={1000}
-                className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm outline-none focus:border-accent/40"
-                placeholder="e.g. Heavy rain is expected tomorrow morning. Games will go ahead; bring a change of clothes."
-              />
-              <Button type="submit" className="w-full" disabled={sending || message.trim().length < 10}>
-                {sending ? 'Sending…' : 'Send email and in-app notice'}
-              </Button>
-            </form>
-          </Card>
-        ) : null}
-      </div>
+      {canSend ? (
+        <Card className="p-4">
+          <div className="mb-3 text-xs uppercase tracking-widest text-muted">Send an advisory</div>
+          <form className="space-y-3" onSubmit={send}>
+            <div className="text-xs text-muted">
+              To everyone booked at {locationName} on {date}.
+            </div>
+            <select value={slot} onChange={(e) => setSlot(e.target.value)} className={selectClass}>
+              <option value="">All time slots</option>
+              <option value="morning">Morning</option>
+              <option value="afternoon">Afternoon</option>
+              <option value="evening">Evening</option>
+            </select>
+            <textarea
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              rows={5}
+              maxLength={1000}
+              className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm outline-none focus:border-accent/40"
+              placeholder="e.g. Heavy rain is expected tomorrow morning. Games will go ahead; bring a change of clothes."
+            />
+            <Button type="submit" className="w-full" disabled={sending || message.trim().length < 10}>
+              {sending ? 'Sending…' : 'Send email and in-app notice'}
+            </Button>
+          </form>
+        </Card>
+      ) : null}
 
       <Card className="p-4">
         <div className="mb-3 text-xs uppercase tracking-widest text-muted">Sent advisories</div>

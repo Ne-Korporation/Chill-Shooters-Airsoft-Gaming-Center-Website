@@ -1,15 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { FiAlertTriangle, FiCheck, FiClock, FiCornerUpLeft, FiEye, FiImage, FiPrinter, FiRefreshCw, FiTrash2, FiX } from 'react-icons/fi'
+import { FiAlertTriangle, FiCheck, FiClock, FiCornerUpLeft, FiEye, FiImage, FiPrinter, FiRefreshCw, FiX } from 'react-icons/fi'
 import toast from 'react-hot-toast'
 
 import { Card } from '../ui/Card'
 import { Button } from '../ui/Button'
 import { FilterTabs, titleCaseLabel } from '../ui/FilterTabs'
-import { apiDelete, apiGetAll, apiPut } from '../../utils/apiClient'
+import { apiGetAll, apiPut } from '../../utils/apiClient'
 import { formatPhPhone } from '../../utils/phone'
 import { GuardianApprovalBadge, type GuardianApprovalSummary } from '../reservations/GuardianApprovalBadge'
-import { useAuth } from '../../context/AuthContext'
 import { Pagination, usePagination } from '../ui/Pagination'
 import { statusChangeLabel } from '../reservations/ReservationsByDate'
 
@@ -116,8 +115,6 @@ function printWindow(title: string, body: string) {
 // with a review window to check the payment proofs and decide the booking. Shared by the admin and
 // registrar Payments pages; only admins can delete.
 export function BookingPaymentReview() {
-  const { user } = useAuth()
-  const isAdmin = user?.role === 'admin'
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [active, setActive] = useState<ReviewStatus>('pending')
@@ -219,21 +216,6 @@ export function BookingPaymentReview() {
     const note = sendBackNote.trim()
     if (!note) return toast.error('Write a short note so the player knows what to fix.')
     void updateStatus('needs review', note)
-  }
-
-  const deleteReservation = async () => {
-    if (!selected) return
-    const reservationId = getId(selected)
-    if (!reservationId) return
-    if (!window.confirm(`Cancel reservation ${reservationId}?\n\nPayment and gameplay history is kept. This cannot be undone.`)) return
-    try {
-      await apiDelete(`/api/reservations/${encodeURIComponent(reservationId)}`)
-      toast.success('Reservation cancelled')
-      close()
-      await refresh()
-    } catch (e: any) {
-      toast.error(String(e?.message || e))
-    }
   }
 
   const printDetails = () => {
@@ -452,16 +434,7 @@ export function BookingPaymentReview() {
                   <Button size="sm" variant="ghost" disabled={proofs.length === 0} onClick={() => proofs[0]?.gcashImageUrl && printProof(proofs[0].gcashImageUrl)}>
                     <FiImage /> Print proof
                   </Button>
-                </div>
-
-                {isAdmin ? (
-                  <div className="border-t border-white/5 pt-4">
-                    <Button size="sm" variant="danger-soft" className="w-full" onClick={deleteReservation}>
-                      <FiTrash2 /> Cancel reservation
-                    </Button>
-                  </div>
-                ) : null}
-              </div>
+                </div>              </div>
             </div>
           </div>
         </div>,

@@ -161,7 +161,7 @@ export function emailDamageCharge(db, reservation, report) {
 export function emailGearReviewEvent(db, item, kind, status) {
   if (!item?.submittedBy || !['approved', 'rejected'].includes(status)) return Promise.resolve({ skipped: 'not notified' })
   const id = String(item.id || item._id)
-  const label = kind === 'weapon' ? 'weapon' : 'equipment'
+  const label = kind === 'weapon' ? 'weapon' : 'gear'
   const approved = status === 'approved'
   return sendLogged(db, {
     key: `gear:${id}:${status}:${item.updatedAtISO || ''}`,

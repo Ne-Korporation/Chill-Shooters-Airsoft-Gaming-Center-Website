@@ -123,7 +123,7 @@ export function ReachNetRevenuePanel({ onAllocated }: { onAllocated: () => void 
     ? [
         [`Collected payments (${data.paymentCount})`, data.collected],
         ['Less damage / loss penalties', -data.penalties, 'Reimburse repairs, not revenue'],
-        ['Less partner equipment share', -data.partnerShare, 'Owed to equipment partners'],
+        ['Less partner gear share', -data.partnerShare, 'Owed to gear partners'],
         ['Less operating expenses', -data.expenses],
       ]
     : []

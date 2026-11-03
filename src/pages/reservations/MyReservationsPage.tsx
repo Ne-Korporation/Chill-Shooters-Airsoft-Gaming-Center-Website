@@ -10,6 +10,7 @@ import { isVerifiedPayment, printReceipt, type ReceiptPayment } from '../../util
 import { clearBookingDraft, draftTimeLeft, markBookingDraftLeft, readBookingDraft, type BookingDraft } from '../../utils/bookingDraft'
 import { isXenditEnabled, startXenditCheckout } from '../../utils/xendit'
 import { useSlotHours } from '../../utils/slotHours'
+import { reservationStatusLabel } from '../../utils/reservationStatus'
 import { RescheduleSlotPicker, isWeekdayISO } from '../../components/reservations/RescheduleSlotPicker'
 import { ReservationDetailsDialog, type ReservationDetails } from '../../components/reservations/ReservationDetailsDialog'
 import { Pagination, usePagination } from '../../components/ui/Pagination'
@@ -237,7 +238,7 @@ export function MyReservationsPage() {
           </p>
         </div>
         <Button variant="primary" onClick={() => navigate('/app/reservations')}>
-          <FiCalendar /> New reservation
+          <FiCalendar /> Book a game
         </Button>
       </div>
 
@@ -263,6 +264,7 @@ export function MyReservationsPage() {
         const id = reservationIdOf(reservation)
         const date = dateOf(reservation)
         const status = statusOf(reservation)
+        const statusLabel = reservationStatusLabel(reservation)
         const daysLeft = date ? daysBetweenISO(today, date) : -1
         const statusAllows = RESCHEDULABLE_STATUSES.includes(status)
         // Staff sent it back: the player can always pick a new date, whatever the cutoff.
@@ -270,7 +272,7 @@ export function MyReservationsPage() {
         const canReschedule = statusAllows && (sentBack || daysLeft >= RESCHEDULE_CUTOFF_DAYS)
         const cutoffDate = date ? addDaysISO(date, -RESCHEDULE_CUTOFF_DAYS) : ''
         const blockedReason = !statusAllows
-          ? `A ${status} reservation can't be rescheduled.`
+          ? `A reservation marked "${statusLabel}" can't be rescheduled.`
           : daysLeft < 0
             ? 'This game date has passed.'
             : daysLeft < RESCHEDULE_CUTOFF_DAYS
@@ -302,7 +304,7 @@ export function MyReservationsPage() {
                   </div>
                 ) : null}
                 {status === 'cancelled' && reservation.cancellationReason === 'payment_window_expired' ? (
-                  <div className="mt-1 text-xs text-warning">Released because payment wasn't completed in time.</div>
+                  <div className="mt-1 text-xs text-warning">The slot was released because payment wasn't completed in time.</div>
                 ) : null}
                 {isOpen && reservation.paymentState !== 'finalized' && reservation.paymentDueAtISO ? (
                   <div className="mt-1 text-xs text-muted">
@@ -313,7 +315,7 @@ export function MyReservationsPage() {
               </div>
               <div className="flex flex-col items-start gap-2 md:items-end">
                 <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold uppercase tracking-widest">
-                  {status}
+                  {statusLabel}
                 </span>
                 {canPayOnline && status === 'pending' && reservation.paymentState !== 'finalized' &&
                   !reservationPayments.some((payment: any) => String(payment.userId) === String(user?.id) && !['failed', 'rejected'].includes(String(payment.paymentStatus || '').toLowerCase())) ? (

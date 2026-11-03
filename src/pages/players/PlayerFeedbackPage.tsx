@@ -22,7 +22,7 @@ type FeedbackRecord = {
 const ratingFields = [
   { key: 'reservationRating', label: 'Reservation convenience' },
   { key: 'cleanlinessRating', label: 'Facility cleanliness' },
-  { key: 'equipmentRating', label: 'Equipment condition' },
+  { key: 'equipmentRating', label: 'Gear condition' },
   { key: 'layoutRating', label: 'Field layout' },
   { key: 'staffRating', label: 'Staff and marshal performance' },
 ] as const

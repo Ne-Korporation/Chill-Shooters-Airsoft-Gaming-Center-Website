@@ -254,7 +254,8 @@ function slotSort(a: TimeSlot, b: TimeSlot) {
 }
 
 const ENTRANCE_FEE_PER_PLAYER = 150
-const MIN_PLAYERS = 2
+// Public (weekend) games take bookings from a single player upward.
+const MIN_PLAYERS = 1
 
 export function ReservationCalendarPage() {
   const slotHours = useSlotHours()
@@ -471,6 +472,7 @@ export function ReservationCalendarPage() {
   const [players, setPlayers] = useState<number>(() => draftState.players ?? defaultPlayers)
   const [playersInput, setPlayersInput] = useState(() => String(draftState.players ?? defaultPlayers))
   const [notes, setNotes] = useState<string>(() => draftState.notes ?? '')
+  const [teamName, setTeamName] = useState<string>(() => draftState.teamName ?? '')
   const [gameModePreference, setGameModePreference] = useState<string>(() => draftState.gameModePreference ?? GAME_MODES[0])
   const [layoutRequest, setLayoutRequest] = useState<string>(() => draftState.layoutRequest ?? '')
   // Optional sketch of the custom field layout the marshals should set up.
@@ -687,7 +689,7 @@ export function ReservationCalendarPage() {
         setEquipment(eqDocs.map((d: any) => ({
           id: d.id ?? (d._id ? String(d._id) : undefined),
           _id: d._id,
-          name: d.name || 'Unnamed equipment',
+          name: d.name || 'Unnamed gear',
           model: modelOf(d),
           unitNumber: Number(d.unitNumber) || 0,
           source: d.source,
@@ -1291,14 +1293,14 @@ export function ReservationCalendarPage() {
       path: '/app/reservations',
       label: draftLabel,
       state: {
-        step, selectedLocation, selectedFieldIds, dateISO, slot, selectedSlots, players, notes, gameModePreference,
+        step, selectedLocation, selectedFieldIds, dateISO, slot, selectedSlots, players, notes, teamName, gameModePreference,
         layoutRequest, layoutBlueprintUrl, selectedPackageId, selectionMode, customWeaponIds, customEquipmentIds,
         ownWeapons, ownEquipment, selectedOwnWeaponIds, selectedOwnEquipmentIds, ownWeaponTarget, teammateOwnWeaponIds,
         pickedUnitIds, selectedTeammates, paymentMode, paymentPlan,
       },
     })
   }, [
-    user?.id, step, draftLabel, selectedLocation, selectedFieldIds, dateISO, slot, selectedSlots, players, notes,
+    user?.id, step, draftLabel, selectedLocation, selectedFieldIds, dateISO, slot, selectedSlots, players, notes, teamName,
     gameModePreference, layoutRequest, layoutBlueprintUrl, selectedPackageId, selectionMode, customWeaponIds,
     customEquipmentIds, ownWeapons, ownEquipment, selectedOwnWeaponIds, selectedOwnEquipmentIds, ownWeaponTarget,
     teammateOwnWeaponIds, pickedUnitIds, selectedTeammates, paymentMode, paymentPlan,
@@ -1338,7 +1340,7 @@ export function ReservationCalendarPage() {
 
   const StepHeader = ({ title, subtitle }: { title: string; subtitle: string }) => (
     <div>
-      <div className="text-sm font-medium text-accent">Reservation</div>
+      <div className="text-sm font-medium text-accent">Book a game</div>
       <h1 className="mt-3 text-3xl font-bold">{title}</h1>
       <p className="mt-1 text-sm text-muted">{subtitle}</p>
     </div>
@@ -1433,6 +1435,7 @@ export function ReservationCalendarPage() {
         serviceFee,
         itemizedBreakdown,
         notes,
+        teamName: teamName.trim(),
         gameModePreference,
         layoutRequest: layoutRequest.trim(),
         ...(layoutBlueprintUrl ? { layoutBlueprintUrl } : {}),
@@ -1495,7 +1498,7 @@ export function ReservationCalendarPage() {
   const getStepTitle = () => {
     switch (step) {
       case 1: return 'Choose Field & Slot'
-      case 2: return 'Select Package & Equipment'
+      case 2: return 'Select Package & Gear'
       case 3: return 'Reservation Summary'
       default: return 'Select Teammates'
     }
@@ -1506,7 +1509,7 @@ export function ReservationCalendarPage() {
     return (
       <div className="space-y-4">
         <StepHeader
-          title="Reservation"
+          title="Book a game"
           subtitle="Your waiver must be approved before you can book."
         />
 
@@ -1545,7 +1548,7 @@ export function ReservationCalendarPage() {
     <div className="space-y-4">
       <StepHeader
         title={getStepTitle()}
-        subtitle="Mobile-first reservation flow with live slot prevention."
+        subtitle="Pick a date, time, and field; slots that are taken can't be chosen."
       />
 
       {packagePrefill?.selectedPackageId && selectionMode === 'package' && selectedPackageId === packagePrefill.selectedPackageId ? (
@@ -2223,7 +2226,7 @@ export function ReservationCalendarPage() {
                 {selectedPackage && (packageWeaponGroups.length > 0 || packageEquipmentGroups.length > 0) && (
                   <Card className="p-4 md:p-6">
                     <div className="flex items-center gap-2 text-sm font-bold">
-                      <FiShield /> <span>Included Weapons &amp; Equipment</span>
+                      <FiShield /> <span>Included Weapons &amp; Gear</span>
                     </div>
                     <p className="mt-1 text-xs text-muted">
                       Each player gets the items below. Optionally pick the exact pieces you want; any you don't pick are assigned automatically from what's free.
@@ -2265,14 +2268,14 @@ export function ReservationCalendarPage() {
 
                 <Card className="p-4 md:p-6">
                   <div className="flex items-center gap-2 text-sm font-bold">
-                    <FiShield /> <span>Pick Equipment to Rent</span>
+                    <FiShield /> <span>Pick Gear to Rent</span>
                   </div>
                   <p className="mt-1 text-xs text-muted">Masks, vests, and other gear — each piece is charged once.</p>
                   <PiecePicker
                     groups={equipmentGroups}
                     selected={customEquipmentIds}
                     onToggle={(id) => setCustomEquipmentIds((prev) => (prev.includes(id) ? prev.filter((unit) => unit !== id) : [...prev, id]))}
-                    emptyText="No rental equipment in inventory."
+                    emptyText="No rental gear in inventory."
                   />
                 </Card>
               </>
@@ -2307,7 +2310,7 @@ export function ReservationCalendarPage() {
                     className="text-gold underline"
                     onClick={() => navigate('/app/players/' + user?.id + '/weapons-and-equipment')}
                   >
-                    My Weapons & Equipment
+                    My Weapons & Gear
                   </button>{" "}
                   to submit gear for admin approval.
                 </div>
@@ -2381,7 +2384,7 @@ export function ReservationCalendarPage() {
                               />
                               <div className="flex-1 min-w-0">
                                 <div className="text-sm font-bold truncate">{e.name}</div>
-                                <div className="text-xs text-muted">{e.category?.toUpperCase?.() || 'Equipment'}</div>
+                                <div className="text-xs text-muted">{e.category?.toUpperCase?.() || 'Gear'}</div>
                               </div>
                               <div className="text-xs font-semibold text-success">FREE</div>
                             </label>
@@ -2409,7 +2412,7 @@ export function ReservationCalendarPage() {
                 ].join(' ')}>
                   <div className="text-sm font-bold">Minimum players</div>
                   <div className="mt-1 text-xs text-muted">
-                    {selectionMode === 'custom' ? `Minimum ${MIN_PLAYERS} players (custom mode)` : `Package requires ${selectedPackage?.minPlayers || '—'} players`}
+                    {selectionMode === 'custom' ? `Minimum ${effectiveMinPlayers} player${effectiveMinPlayers === 1 ? '' : 's'}` : `Package requires ${selectedPackage?.minPlayers || '—'} players`}
                   </div>
                   {players < effectiveMinPlayers ? (
                     <div className="mt-2 text-xs font-semibold text-danger">Increase players to continue.</div>
@@ -2539,7 +2542,7 @@ export function ReservationCalendarPage() {
                   onClick={() => {
                     if (hasInsufficientEquipmentStock) {
                       const shortage = equipmentStockCheck.find((item) => !item.ok)
-                      toast.error(`${shortage?.name || 'Equipment'}: needs ${shortage?.required ?? players}, only ${shortage?.available ?? 0} free this slot.`)
+                      toast.error(`${shortage?.name || 'Gear'}: needs ${shortage?.required ?? players}, only ${shortage?.available ?? 0} free this slot.`)
                       return
                     }
                     setStep(3)
@@ -2609,7 +2612,7 @@ export function ReservationCalendarPage() {
 
                   {reservationSummary.customEquipment.length > 0 && (
                     <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                      <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Rental Equipment</div>
+                      <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Rental Gear</div>
                       <div className="mt-2 space-y-2">
                         {reservationSummary.customEquipment.map((e) => (
                           <div key={e.id} className="flex items-center justify-between text-sm">
@@ -2630,7 +2633,7 @@ export function ReservationCalendarPage() {
 
                   {reservationSummary.ownEquipment && (
                     <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                      <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Own Equipment (Free)</div>
+                      <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Own Gear (Free)</div>
                       <div className="mt-2 text-sm">{reservationSummary.ownEquipment}</div>
                     </div>
                   )}
@@ -2680,7 +2683,7 @@ export function ReservationCalendarPage() {
                     <div className="mt-2 text-sm font-bold">{formatCurrency(selectedPackage?.basePrice)}</div>
                   </div>
                   <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                    <div className="text-xs text-muted">Equipment add-ons (per player)</div>
+                    <div className="text-xs text-muted">Gear add-ons (per player)</div>
                     <div className="mt-2 text-sm font-bold">{formatCurrency(equipmentTotalPerPlayer)}</div>
                   </div>
                   <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
@@ -2696,7 +2699,7 @@ export function ReservationCalendarPage() {
                 <div className="mt-4 grid gap-3 md:grid-cols-2">
                   <div className="rounded-2xl border border-white/10 bg-white/5 p-4 md:col-span-2">
                     <div className="text-xs text-muted">Rental pieces picked</div>
-                    <div className="mt-2 text-sm font-bold">{customSelectedWeapons.length} weapons, {customSelectedEquipment.length} equipment</div>
+                    <div className="mt-2 text-sm font-bold">{customSelectedWeapons.length} weapons, {customSelectedEquipment.length} gear</div>
                     {customSelectedWeapons.length + customSelectedEquipment.length > 0 ? (
                       <div className="mt-1 text-xs text-muted">{[...customSelectedWeapons, ...customSelectedEquipment].map((item) => item.name).join(', ')}</div>
                     ) : null}
@@ -2790,6 +2793,14 @@ export function ReservationCalendarPage() {
               </p>
 
               <div className="mt-4 space-y-4">
+                <Input
+                  label="Team name (optional)"
+                  value={teamName}
+                  onChange={(e) => setTeamName(e.target.value.slice(0, 60))}
+                  placeholder="e.g., Bravo Squad"
+                  maxLength={60}
+                />
+
                 <form
                   className="flex flex-col gap-2 sm:flex-row sm:items-end"
                   onSubmit={(event) => {

@@ -99,14 +99,14 @@ export function MarshalDashboardHomePage() {
 
   const checklist = [
     { title: 'Safety briefing', detail: 'Confirm squad readiness and field assignments before each session.' },
-    { title: 'Equipment check', detail: 'Pull worn or damaged gear before the next booking.' },
+    { title: 'Gear check', detail: 'Pull worn or damaged gear before the next booking.' },
     { title: 'Player roster', detail: 'Match verified players against upcoming games.' },
   ]
 
   return (
     <div className="space-y-6">
       <DashboardHeader
-        eyebrow="Marshal"
+        eyebrow="Dashboard"
         title="Field overview"
         description="Live games, gear readiness, and safety checks for today's sessions."
         actions={
@@ -119,7 +119,7 @@ export function MarshalDashboardHomePage() {
         }
       />
 
-      <div className="grid gap-4 sm:grid-cols-3">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
         <StatTile label="Active games" value={stats.activeGames} icon={FiZap} hint="In progress now" loading={loading} />
         <StatTile label="Reserved games" value={stats.reservedGames} icon={FiClipboard} hint="Approved or paid" loading={loading} />
         <StatTile label="Ready players" value={stats.playersReady} icon={FiUsers} hint="Identity verified" loading={loading} />
@@ -140,7 +140,7 @@ export function MarshalDashboardHomePage() {
             <ActionRow
               to="/app/admin/equipment"
               icon={FiTool}
-              title="Equipment alerts"
+              title="Gear alerts"
               description="Low stock or in maintenance"
               badge={loading ? undefined : stats.equipmentAlerts}
             />

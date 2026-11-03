@@ -143,7 +143,7 @@ export function AdminAuditLogsPage() {
             action: 'EQUIPMENT',
             severity: 'warning',
             actor: 'Inventory',
-            summary: `${item.name || 'Equipment'} is under maintenance.`,
+            summary: `${item.name || 'Gear'} is under maintenance.`,
             meta: formatRelativeTime((item as any).updatedAtISO || (item as any).createdAtISO),
           })
         })
@@ -209,18 +209,18 @@ export function AdminAuditLogsPage() {
         />
       </div>
 
-      <div className="grid gap-4 md:grid-cols-3">
-        <Card className="p-4">
-          <div className="text-xs uppercase tracking-widest text-muted">Audit records</div>
-          <div className="mt-2 text-2xl font-bold text-accent">{loading ? '…' : logs.length}</div>
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
+        <Card className="rounded-xl px-3 py-2 md:px-3 md:py-2">
+          <div className="truncate text-[10px] uppercase tracking-wider text-muted">Audit records</div>
+          <div className="mt-0.5 text-base font-bold text-accent">{loading ? '…' : logs.length}</div>
         </Card>
-        <Card className="p-4">
-          <div className="text-xs uppercase tracking-widest text-muted">Critical events</div>
-          <div className="mt-2 text-2xl font-bold text-danger">{loading ? '…' : criticalEvents}</div>
+        <Card className="rounded-xl px-3 py-2 md:px-3 md:py-2">
+          <div className="truncate text-[10px] uppercase tracking-wider text-muted">Critical events</div>
+          <div className="mt-0.5 text-base font-bold text-danger">{loading ? '…' : criticalEvents}</div>
         </Card>
-        <Card className="p-4">
-          <div className="text-xs uppercase tracking-widest text-muted">Recent activity</div>
-          <div className="mt-2 text-2xl font-bold text-success">{loading ? '…' : 'Today'}</div>
+        <Card className="rounded-xl px-3 py-2 md:px-3 md:py-2">
+          <div className="truncate text-[10px] uppercase tracking-wider text-muted">Recent activity</div>
+          <div className="mt-0.5 text-base font-bold text-success">{loading ? '…' : 'Today'}</div>
         </Card>
       </div>
 

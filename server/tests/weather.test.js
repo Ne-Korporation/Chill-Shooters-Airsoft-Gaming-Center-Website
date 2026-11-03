@@ -30,6 +30,17 @@ test('heavy rain needs both a high chance and enough rain', () => {
   assert.match(likelyHeavy.reasons[0], /heavy rain likely \(90% chance/)
 })
 
+test('likely light rain is rainy but not severe', () => {
+  const light = summarizeSlotForecast([entry('2026-11-01', 8, { pop: 0.8, rain: 0.5, id: 500, description: 'light rain' })], '2026-11-01', 'morning', config)
+  assert.equal(light.severe, false)
+  assert.equal(light.rainy, true)
+  assert.deepEqual(light.reasons, ['rain likely (80% chance)'])
+  const unlikely = summarizeSlotForecast([entry('2026-11-01', 8, { pop: 0.3, rain: 0.2, id: 500 })], '2026-11-01', 'morning', config)
+  assert.equal(unlikely.rainy, false)
+  const dry = summarizeSlotForecast([entry('2026-11-01', 8, { pop: 0.8 })], '2026-11-01', 'morning', config)
+  assert.equal(dry.rainy, false)
+})
+
 test('strong wind is severe', () => {
   const result = summarizeSlotForecast([entry('2026-11-01', 20, { wind: 20 })], '2026-11-01', 'evening', config)
   assert.equal(result.severe, true)

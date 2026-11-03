@@ -157,7 +157,7 @@ export function AdminDashboardPage() {
   return (
     <div className="space-y-6">
       <DashboardHeader
-        eyebrow="Admin"
+        eyebrow="Dashboard"
         title="Overview"
         description="What's happening across reservations, players, and payments."
       />
@@ -168,7 +168,7 @@ export function AdminDashboardPage() {
         </div>
       ) : null}
 
-      <div className="grid gap-4 sm:grid-cols-3">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
         <StatTile label="Reservations" value={dashboard.reservations} icon={FiCalendar} hint="All bookings" loading={loading} />
         <StatTile label="Players" value={dashboard.players} icon={FiUsers} hint="Registered accounts" loading={loading} />
         <StatTile label="Payments" value={dashboard.payments} icon={FiCreditCard} hint="Submitted to date" loading={loading} />
@@ -205,7 +205,7 @@ export function AdminDashboardPage() {
               <ActionRow
                 to="/app/admin/equipment"
                 icon={FiTool}
-                title="Equipment alerts"
+                title="Gear alerts"
                 description={dashboard.equipmentAlerts > 0 ? 'Low stock or in maintenance' : 'All gear available'}
                 badge={loading ? undefined : dashboard.equipmentAlerts}
               />

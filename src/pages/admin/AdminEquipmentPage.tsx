@@ -1,13 +1,15 @@
 import React from 'react'
-import { FiCheck, FiEdit2, FiTrash2, FiX } from 'react-icons/fi'
+import { FiCheck, FiEdit2, FiPlus, FiTrash2, FiX } from 'react-icons/fi'
 import toast from 'react-hot-toast'
 import { ActionGroup, Button } from '../../components/ui/Button'
 import { FilterTabs } from '../../components/ui/FilterTabs'
 import { Card } from '../../components/ui/Card'
 import { Input } from '../../components/ui/Input'
+import { Modal } from '../../components/ui/Modal'
 import { apiGet, apiGetAll, apiPost, apiPut, apiDelete } from '../../utils/apiClient'
 import { Pagination, usePagination } from '../../components/ui/Pagination'
 import { ModelSummaryStrip } from '../../components/inventory/ModelSummaryStrip'
+import { BulkActionBar, forEachPiece, type BulkChange } from '../../components/inventory/BulkActionBar'
 import { modelOf, summarizeModels } from '../../utils/inventoryModels'
 import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
 
@@ -68,9 +70,11 @@ export function AdminEquipmentPage() {
   const [inventory, setInventory] = React.useState<InventoryItem[]>([])
   const [loading, setLoading] = React.useState(true)
   const [saving, setSaving] = React.useState(false)
-  const [sourceFilter, setSourceFilter] = React.useState<'all' | 'business' | 'player'>('all')
+  const [sourceFilter, setSourceFilter] = React.useState<'business' | 'player'>('business')
   const [form, setForm] = React.useState(emptyForm())
   const [selectedItemId, setSelectedItemId] = React.useState<string | null>(null)
+  // The add/edit form opens in a pop-up.
+  const [formOpen, setFormOpen] = React.useState(false)
   const [rejectionTargetId, setRejectionTargetId] = React.useState<string | null>(null)
   const [rejectionReason, setRejectionReason] = React.useState('')
 
@@ -82,7 +86,7 @@ export function AdminEquipmentPage() {
       const equipmentItems = equipmentDocs.map((d: any) => ({
         id: d.id ?? (d._id ? String(d._id) : undefined),
         _id: d._id,
-        name: d.name || 'Unnamed equipment',
+        name: d.name || 'Unnamed gear',
         category: (d.category || 'gear') as EquipmentCategory,
         status: (d.status || 'available') as EquipmentStatus,
         model: modelOf(d),
@@ -119,7 +123,7 @@ export function AdminEquipmentPage() {
       if (item.source === 'player' && item.approvalStatus === 'rejected') return false
       const matchesCategory = activeCategory === 'all' ? true : item.category === activeCategory
       const matchesStatus = status === 'all' ? true : item.status === status
-      const matchesSource = sourceFilter === 'all' ? true : item.source === sourceFilter
+      const matchesSource = item.source === sourceFilter
       const matchesSearch = !term || [item.id, item.name, item.model, item.description].some((value) => String(value || '').toLowerCase().includes(term))
       return matchesCategory && matchesStatus && matchesSource && matchesSearch
     })
@@ -162,6 +166,7 @@ export function AdminEquipmentPage() {
       const ids = res.data.map((piece) => piece.id)
       toast.success(count === 1 ? `Added ${ids[0]}` : `Added ${count} pieces (${ids[0]} – ${ids[ids.length - 1]})`)
       setForm(emptyForm())
+      setFormOpen(false)
       await refresh()
     } catch (e: any) {
       toast.error(String(e?.message || e))
@@ -172,6 +177,7 @@ export function AdminEquipmentPage() {
 
   const handleSelect = (item: InventoryItem) => {
     setSelectedItemId(item.id)
+    setFormOpen(true)
     setForm({
       name: item.name,
       description: item.description || item.note || '',
@@ -206,10 +212,10 @@ export function AdminEquipmentPage() {
 
   const handleRemove = async (id: string) => {
     const name = inventory.find((item) => item.id === id)?.name || id
-    if (!window.confirm(`Remove "${name}" from the equipment list? This cannot be undone.`)) return
+    if (!window.confirm(`Remove "${name}" from the gear list? This cannot be undone.`)) return
     try {
       await apiDelete(`/api/equipments/${encodeURIComponent(id)}`)
-      toast.success('Equipment removed')
+      toast.success('Gear removed')
       if (selectedItemId === id) {
         setSelectedItemId(null)
         setForm(emptyForm())
@@ -222,6 +228,37 @@ export function AdminEquipmentPage() {
 
   const { addNotification } = useNotifications()
 
+  // Bulk selection: tick rows (or every row matching the filters) and change them together.
+  const [selectedIds, setSelectedIds] = React.useState<string[]>([])
+  const [bulkBusy, setBulkBusy] = React.useState(false)
+  React.useEffect(() => setSelectedIds([]), [activeCategory, status, sourceFilter, search])
+  const allFilteredSelected = filtered.length > 0 && filtered.every((item) => selectedIds.includes(item.id))
+  const toggleSelected = (id: string) =>
+    setSelectedIds((current) => (current.includes(id) ? current.filter((x) => x !== id) : [...current, id]))
+  const toggleAll = () => setSelectedIds(allFilteredSelected ? [] : filtered.map((item) => item.id))
+
+  const applyBulk = async (change: BulkChange) => {
+    setBulkBusy(true)
+    const failed = await forEachPiece(selectedIds, (id) =>
+      apiPut(`/api/equipments/${encodeURIComponent(id)}`, { ...change, updatedAtISO: new Date().toISOString() }))
+    setBulkBusy(false)
+    if (failed) toast.error(`${failed} of ${selectedIds.length} items could not be updated.`)
+    else toast.success(`Updated ${selectedIds.length} item${selectedIds.length === 1 ? '' : 's'}.`)
+    setSelectedIds([])
+    await refresh()
+  }
+
+  const removeBulk = async () => {
+    if (!window.confirm(`Remove ${selectedIds.length} item${selectedIds.length === 1 ? '' : 's'} from the gear list? This cannot be undone.`)) return
+    setBulkBusy(true)
+    const failed = await forEachPiece(selectedIds, (id) => apiDelete(`/api/equipments/${encodeURIComponent(id)}`))
+    setBulkBusy(false)
+    if (failed) toast.error(`${failed} of ${selectedIds.length} items could not be removed.`)
+    else toast.success(`Removed ${selectedIds.length} item${selectedIds.length === 1 ? '' : 's'}.`)
+    setSelectedIds([])
+    await refresh()
+  }
+
   const handleApprovePlayerItem = async (id: string) => {
     try {
       await apiPut<any>(`/api/equipments/${encodeURIComponent(id)}`, {
@@ -232,8 +269,8 @@ export function AdminEquipmentPage() {
       sendRoleNotifications(addNotification, {
         roles: ['admin', 'registrar', 'marshal'],
         type: 'equipment_approved',
-        title: 'Equipment Approved',
-        message: `Equipment ${id} was approved and is available for use.`,
+        title: 'Gear Approved',
+        message: `Gear ${id} was approved and is available for use.`,
         linkedResourceId: id,
       })
       toast.success('Player item approved')
@@ -262,8 +299,8 @@ export function AdminEquipmentPage() {
       sendRoleNotifications(addNotification, {
         roles: ['admin', 'registrar', 'marshal'],
         type: 'equipment_rejected',
-        title: 'Equipment Rejected',
-        message: `Equipment ${rejectionTargetId} was rejected.`,
+        title: 'Gear Rejected',
+        message: `Gear ${rejectionTargetId} was rejected.`,
         linkedResourceId: rejectionTargetId,
       })
       toast.success('Player item rejected')
@@ -302,9 +339,10 @@ export function AdminEquipmentPage() {
           partnerId: form.partnerId,
         })
       }
-      toast.success(form.applyToModel && piece ? `Updated ${piece.name} and all ${piece.model} pieces` : 'Equipment updated')
+      toast.success(form.applyToModel && piece ? `Updated ${piece.name} and all ${piece.model} pieces` : 'Gear updated')
       setSelectedItemId(null)
       setForm(emptyForm())
+      setFormOpen(false)
       await refresh()
     } catch (e: any) {
       toast.error(String(e?.message || e))
@@ -318,43 +356,53 @@ export function AdminEquipmentPage() {
     setForm(emptyForm())
   }
 
+  const openAddForm = () => {
+    resetForm()
+    setFormOpen(true)
+  }
+
+  const closeForm = () => {
+    resetForm()
+    setFormOpen(false)
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
-          <h1 className="text-3xl font-bold">Equipment</h1>
+          <h1 className="text-3xl font-bold">Gear</h1>
           <p className="mt-1 text-sm text-muted">Track inventory by category, condition, and ownership source.</p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted">View source</div>
-          <FilterTabs
-            ariaLabel="Filter equipment by source"
-            value={sourceFilter}
-            onChange={setSourceFilter}
-            options={[
-              { value: 'all', label: 'All' },
-              { value: 'business', label: 'Business' },
-              { value: 'player', label: 'Player', ...(pendingPlayerItemsCount > 0 ? { count: pendingPlayerItemsCount } : {}) },
-            ]}
-          />
-        </div>
+        <Button onClick={openAddForm}>
+          <FiPlus /> Add gear
+        </Button>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-3">
-        <Card className="p-4">
-          <div className="text-xs uppercase tracking-widest text-muted">Rental pieces</div>
-          <div className="mt-2 text-2xl font-bold text-accent">{totalInStock}</div>
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
+        <Card className="rounded-xl px-3 py-2 md:px-3 md:py-2">
+          <div className="truncate text-[10px] uppercase tracking-wider text-muted">Rental pieces</div>
+          <div className="mt-0.5 text-base font-bold text-accent">{totalInStock}</div>
         </Card>
-        <Card className="p-4">
-          <div className="text-xs uppercase tracking-widest text-muted">Rented right now</div>
-          <div className="mt-2 text-2xl font-bold text-danger">{rentedCount}</div>
+        <Card className="rounded-xl px-3 py-2 md:px-3 md:py-2">
+          <div className="truncate text-[10px] uppercase tracking-wider text-muted">Rented right now</div>
+          <div className="mt-0.5 text-base font-bold text-danger">{rentedCount}</div>
         </Card>
-        <Card className="p-4">
-          <div className="text-xs uppercase tracking-widest text-muted">Pending player items</div>
-          <div className="mt-2 text-2xl font-bold text-success">{pendingPlayerItemsCount}</div>
+        <Card className="rounded-xl px-3 py-2 md:px-3 md:py-2">
+          <div className="truncate text-[10px] uppercase tracking-wider text-muted">Pending player items</div>
+          <div className="mt-0.5 text-base font-bold text-success">{pendingPlayerItemsCount}</div>
         </Card>
       </div>
+
+      <FilterTabs
+        ariaLabel="Show rental gear or players' gear"
+        value={sourceFilter}
+        onChange={setSourceFilter}
+        options={[
+          { value: 'business', label: 'Rental gear' },
+          { value: 'player', label: "Players' gear", ...(pendingPlayerItemsCount > 0 ? { count: pendingPlayerItemsCount } : {}) },
+        ]}
+      />
 
       <Card className="p-4">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -437,12 +485,25 @@ export function AdminEquipmentPage() {
           </div>
         ) : null}
 
-        <ModelSummaryStrip models={models} unit="piece" />
+        {sourceFilter === 'business' ? <ModelSummaryStrip models={models} unit="piece" /> : null}
+
+        <BulkActionBar
+          count={selectedIds.length}
+          statuses={[{ value: 'available', label: 'Available' }, { value: 'rented', label: 'Rented' }, { value: 'maintenance', label: 'Maintenance' }]}
+          categories={(Object.keys(categoryMeta) as EquipmentCategory[]).map((value) => ({ value, label: value.charAt(0).toUpperCase() + value.slice(1) }))}
+          busy={bulkBusy}
+          onApply={applyBulk}
+          onRemove={removeBulk}
+          onClear={() => setSelectedIds([])}
+        />
 
         <div className="mt-4 overflow-hidden rounded-2xl border border-white/5">
           <div className="grid grid-cols-12 gap-3 bg-white/5 px-3 py-2 text-xs uppercase tracking-widest text-muted">
-            <div className="col-span-2">ID</div>
-            <div className="col-span-3">Equipment</div>
+            <label className="col-span-2 flex items-center gap-2">
+              <input type="checkbox" checked={allFilteredSelected} onChange={toggleAll} className="h-4 w-4 accent-[var(--color-accent)]" aria-label="Select all gear matching the filters" />
+              ID
+            </label>
+            <div className="col-span-3">Gear</div>
             <div className="col-span-1 text-right">Piece</div>
             <div className="col-span-1 text-right">Price</div>
             <div className="col-span-2 pl-4">Status</div>
@@ -453,11 +514,14 @@ export function AdminEquipmentPage() {
             {loading ? (
               <div className="p-6 text-sm text-muted">Loading equipment...</div>
             ) : filtered.length === 0 ? (
-              <div className="p-6 text-sm text-muted">No equipment matches this filter.</div>
+              <div className="p-6 text-sm text-muted">No gear matches this filter.</div>
             ) : (
               pageItems.map((item) => (
                 <div key={item.id} className={"grid grid-cols-12 items-center gap-3 px-3 py-3 " + (selectedItemId === item.id ? 'bg-white/6 ring-2 ring-white/10' : '')}>
-                  <div className="col-span-2 text-sm font-semibold">{item.id}</div>
+                  <label className="col-span-2 flex items-center gap-2 text-sm font-semibold">
+                    <input type="checkbox" checked={selectedIds.includes(item.id)} onChange={() => toggleSelected(item.id)} className="h-4 w-4 accent-[var(--color-accent)]" aria-label={`Select ${item.id}`} />
+                    {item.id}
+                  </label>
                   <div className="col-span-3 min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <div className="text-sm font-semibold">{item.name}</div>
@@ -509,10 +573,9 @@ export function AdminEquipmentPage() {
         </div>
         <Pagination page={page} pageCount={pageCount} total={total} onPageChange={setPage} />
 
-        <div className="mt-4 grid gap-4 md:grid-cols-[1.2fr_0.8fr]">
-          <Card className="p-4 bg-white/5/60">
-            <div className="text-xs uppercase tracking-widest text-muted">{selectedItemId ? `Edit ${selectedItemId}` : 'Add equipment'}</div>
-            <div className="mt-2 text-sm text-muted">
+        {formOpen ? (
+          <Modal eyebrow="Gear" title={selectedItemId ? `Edit ${selectedItemId}` : 'Add gear'} onClose={closeForm}>
+            <div className="text-sm text-muted">
               {selectedItemId ? 'Update this piece, or every piece of the same model.' : 'Every physical item is its own piece with its own ID (e.g. Mask #1, Mask #2).'}
             </div>
 
@@ -630,20 +693,19 @@ export function AdminEquipmentPage() {
 
             <div className="mt-4 flex items-center gap-2">
               {selectedItemId ? (
-                <>
-                  <Button onClick={handleUpdate} disabled={saving}>
-                    {saving ? 'Saving...' : 'Update inventory item'}
-                  </Button>
-                  <Button variant="ghost" onClick={resetForm}>New</Button>
-                </>
+                <Button onClick={handleUpdate} disabled={saving}>
+                  {saving ? 'Saving...' : 'Update inventory item'}
+                </Button>
               ) : (
                 <Button onClick={handleCreate} disabled={saving}>
                   {saving ? 'Saving...' : Number(form.pieces) > 1 ? `Add ${form.pieces} pieces` : 'Add item'}
                 </Button>
               )}
             </div>
-          </Card>
+          </Modal>
+        ) : null}
 
+        <div className="mt-4">
           <Card className="p-4 bg-white/5/60">
             <div className="text-xs uppercase tracking-widest text-muted">Reservation impact</div>
             <div className="mt-2 text-sm text-muted">This category is currently supporting the next three scheduled sessions.</div>
@@ -663,7 +725,7 @@ export function AdminEquipmentPage() {
       {rejectionTargetId ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" role="dialog" aria-modal="true" aria-labelledby="equipment-rejection-title">
           <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-background p-5 shadow-2xl">
-            <div id="equipment-rejection-title" className="text-lg font-bold">Reject player equipment</div>
+            <div id="equipment-rejection-title" className="text-lg font-bold">Reject player gear</div>
             <p className="mt-1 text-sm text-muted">Add a comment explaining why this submission was rejected.</p>
             <textarea
               autoFocus
@@ -675,7 +737,7 @@ export function AdminEquipmentPage() {
             />
             <div className="mt-4 flex justify-end gap-2">
               <Button variant="ghost" onClick={() => setRejectionTargetId(null)}>Cancel</Button>
-              <Button onClick={handleRejectPlayerItem} disabled={!rejectionReason.trim()}>Reject equipment</Button>
+              <Button onClick={handleRejectPlayerItem} disabled={!rejectionReason.trim()}>Reject gear</Button>
             </div>
           </div>
         </div>

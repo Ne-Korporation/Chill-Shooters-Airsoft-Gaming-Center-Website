@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
 import { FiRefreshCw, FiSave, FiShuffle, FiUsers } from 'react-icons/fi'
 
@@ -22,8 +22,12 @@ type RosterPlayer = {
 
 type Team = { name: string; playerKeys: string[] }
 
+// A booked team for the chosen session, from the field check-in list.
+type BookedTeam = { reservationId: string; label?: string; players: Array<{ checkedIn: boolean }> }
+
 type GroupingResponse = {
   roster: RosterPlayer[]
+  booked: number
   suggestion: Team[]
   saved: { teams: Team[]; savedAtISO: string } | null
 }
@@ -34,8 +38,9 @@ const levelClass: Record<string, string> = {
   Beginner: 'border-white/10 bg-white/5 text-muted',
 }
 
-// Marshals load a session's players, get a suggested split balanced on experience and age,
-// adjust it by moving players, and save the final teams.
+// Marshals load the players checked in for a session, get a suggested split balanced on
+// experience level and age, adjust it by moving players, and save the final teams together
+// with the list of who was present.
 export function TeamGroupingPage() {
   const [location, setLocation] = useState<string>(LOCATIONS[0].id)
   const [date, setDate] = useState(manilaTodayISO())
@@ -47,6 +52,18 @@ export function TeamGroupingPage() {
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [suggestion, setSuggestion] = useState<Team[]>([])
+  const [booked, setBooked] = useState(0)
+  const [bookedTeams, setBookedTeams] = useState<BookedTeam[] | null>(null)
+
+  // The teams booked for the chosen slot show as soon as it is picked, before loading the session.
+  useEffect(() => {
+    let cancelled = false
+    setBookedTeams(null)
+    apiGet<{ ok: boolean; data: { teams: BookedTeam[] } }>(`/api/field-checkin?${new URLSearchParams({ location, date, slot })}`)
+      .then((res) => { if (!cancelled) setBookedTeams(res.data.teams) })
+      .catch(() => { if (!cancelled) setBookedTeams([]) })
+    return () => { cancelled = true }
+  }, [location, date, slot])
 
   const load = useCallback(async (useSuggestion = false) => {
     setLoading(true)
@@ -54,11 +71,20 @@ export function TeamGroupingPage() {
       const query = new URLSearchParams({ location, date, slot, teams: String(teamCount) })
       const res = await apiGet<{ ok: boolean; data: GroupingResponse }>(`/api/team-grouping?${query}`)
       setRoster(res.data.roster)
+      setBooked(res.data.booked)
       setSuggestion(res.data.suggestion)
       const useSaved = !useSuggestion && res.data.saved && res.data.saved.teams.length > 0
-      setTeams(useSaved ? res.data.saved!.teams : res.data.suggestion)
+      // Players taken off the check-in list since the teams were saved drop out of their team.
+      const present = new Set(res.data.roster.map((player) => player.key))
+      setTeams(useSaved
+        ? res.data.saved!.teams.map((team) => ({ ...team, playerKeys: team.playerKeys.filter((key) => present.has(key)) }))
+        : res.data.suggestion)
       setSavedAt(useSaved ? res.data.saved!.savedAtISO : null)
-      if (res.data.roster.length === 0) toast('No players are booked for this session yet.')
+      if (res.data.roster.length === 0) {
+        toast(res.data.booked > 0
+          ? `None of the ${res.data.booked} booked players have checked in yet. Check players in on Field Check-in first.`
+          : 'No players are booked for this session yet.')
+      }
     } catch (e: any) {
       toast.error(e?.message || 'Could not load the session')
     } finally {
@@ -103,6 +129,11 @@ export function TeamGroupingPage() {
       experience: players.reduce((sum, p) => sum + p.experience, 0),
       averageAge: ages.length ? Math.round(ages.reduce((a, b) => a + b, 0) / ages.length) : null,
       minors: players.filter((p) => p.ageGroup === 'Under 18').length,
+      levels: ['Experienced', 'Intermediate', 'Beginner']
+        .map((level) => [level, players.filter((p) => p.experienceLevel === level).length] as const)
+        .filter(([, n]) => n > 0)
+        .map(([level, n]) => `${n} ${level.toLowerCase()}`)
+        .join(', '),
     }
   }
 
@@ -111,7 +142,7 @@ export function TeamGroupingPage() {
       <div>
         <h1 className="text-3xl font-bold">Team Grouping</h1>
         <p className="mt-1 text-sm text-muted">
-          Suggested teams balance experience (total games played: Beginner 0–10, Intermediate 11–25, Experienced 26+) and age groups. The marshal makes the final call.
+          Only players checked in for the session are grouped. Suggested teams get an even share of each experience level (total games played: Beginner 0–10, Intermediate 11–25, Experienced 26+), then balance total games and age groups. The marshal makes the final call.
         </p>
       </div>
 
@@ -147,11 +178,39 @@ export function TeamGroupingPage() {
         </div>
       </Card>
 
+      <Card className="p-4">
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-sm font-bold">Teams booked for this slot</div>
+          {bookedTeams && bookedTeams.length > 0 ? (
+            <div className="text-xs text-muted">
+              {bookedTeams.reduce((n, t) => n + t.players.filter((p) => p.checkedIn).length, 0)} of {bookedTeams.reduce((n, t) => n + t.players.length, 0)} players checked in
+            </div>
+          ) : null}
+        </div>
+        {bookedTeams === null ? (
+          <div className="mt-2 text-sm text-muted">Loading…</div>
+        ) : bookedTeams.length === 0 ? (
+          <div className="mt-2 text-sm text-muted">No teams are booked for this location, date, and time slot.</div>
+        ) : (
+          <ul className="mt-3 flex flex-wrap gap-2">
+            {bookedTeams.map((team) => {
+              const arrived = team.players.filter((p) => p.checkedIn).length
+              return (
+                <li key={team.reservationId} className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-sm">
+                  <span className="font-semibold">{team.label || team.reservationId}</span>
+                  <span className={`text-xs ${arrived === team.players.length ? 'text-success' : 'text-muted'}`}>{arrived}/{team.players.length} in</span>
+                </li>
+              )
+            })}
+          </ul>
+        )}
+      </Card>
+
       {roster.length > 0 ? (
         <>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="text-sm text-muted">
-              {roster.length} player{roster.length === 1 ? '' : 's'} · {savedAt ? `Saved ${new Date(savedAt).toLocaleString()}` : 'Not saved yet'}
+              {roster.length} of {booked} booked player{booked === 1 ? '' : 's'} present · {savedAt ? `Saved ${new Date(savedAt).toLocaleString()}` : 'Not saved yet'}
             </div>
             <div className="flex gap-2">
               <Button variant="ghost" onClick={() => { setTeams(suggestion); setSavedAt(null) }}>
@@ -182,6 +241,7 @@ export function TeamGroupingPage() {
                     {stats.averageAge ? ` · avg age ${stats.averageAge}` : ''}
                     {stats.minors ? ` · ${stats.minors} under 18` : ''}
                   </div>
+                  {stats.levels ? <div className="mt-0.5 text-xs text-muted">{stats.levels}</div> : null}
                   <ul className="mt-3 space-y-2">
                     {stats.players.map((player) => (
                       <li key={player.key} className="flex items-center justify-between gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2">
@@ -216,7 +276,7 @@ export function TeamGroupingPage() {
           {unassigned.length > 0 ? (
             <Card className="p-4">
               <div className="text-sm font-bold">Not on a team ({unassigned.length})</div>
-              <div className="mt-1 text-xs text-muted">Players who joined after these teams were saved.</div>
+              <div className="mt-1 text-xs text-muted">Players who checked in after these teams were saved.</div>
               <ul className="mt-3 flex flex-wrap gap-2">
                 {unassigned.map((player) => (
                   <li key={player.key} className="flex items-center gap-2 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-sm">

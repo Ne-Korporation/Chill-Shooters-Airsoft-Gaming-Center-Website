@@ -210,7 +210,7 @@ export async function calculateBookingPrice({ db, payload, players, findDocument
       throw new Error('One or more selected weapons are unavailable.')
     }
     if (equipment.some((item) => String(item.status || 'available').toLowerCase() !== 'available')) {
-      throw new Error('One or more selected equipment pieces are unavailable.')
+      throw new Error('One or more selected gear pieces are unavailable.')
     }
 
     // Custom rentals are individual pieces: each chosen piece is rented once at its own price.

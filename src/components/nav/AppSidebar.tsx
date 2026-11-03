@@ -1,8 +1,7 @@
 import React, { useEffect, useState } from 'react'
-import { NavLink } from 'react-router-dom'
+import { NavLink, useLocation } from 'react-router-dom'
 import type { IconType } from 'react-icons'
 import { useAuth } from '../../context/AuthContext'
-import { useNotifications } from '../../context/NotificationContext'
 import { apiGet } from '../../utils/apiClient'
 import { SPLIT_PAYMENTS_CHANGED_EVENT } from '../../pages/payments/SplitPaymentPage'
 import {
@@ -14,10 +13,8 @@ import {
   FiPackage,
   FiUsers,
   FiUser,
-  FiSearch,
   FiBarChart2,
   FiFileText,
-  FiBell,
   FiSettings,
   FiTruck,
   FiShield,
@@ -33,6 +30,8 @@ import {
   FiShoppingBag,
   FiLogOut,
   FiCloudRain,
+  FiChevronDown,
+  FiPlusCircle,
 } from 'react-icons/fi'
 
 type Role = 'user' | 'admin' | 'marshal' | 'registrar'
@@ -41,76 +40,60 @@ type Item = {
   label: string
   to: string
   icon: IconType
-  roles?: Role[]
-  // Heading shown above the first item of each group (used by the admin menu).
+  // Admin menu group the item belongs to. "Overview" items are always shown; the other groups
+  // fold open and closed.
   section?: string
 }
 
-const baseItems: Item[] = [
-  // Shared items the operator/registrar/marshal can see; admin gets only the admin module nav.
-  { label: 'Dashboard Home', to: '/app', icon: FiGrid, roles: ['user'] },
-  { label: 'Reservations', to: '/app/reservations', icon: FiCalendar, roles: ['user'] },
-  { label: 'My Reservations', to: '/app/my-reservations', icon: FiList, roles: ['user'] },
-  { label: 'Recommended Packages', to: '/app/packages', icon: FiPackage, roles: ['user'] },
-  { label: 'Online Waiver', to: '/app/waiver', icon: FiShield, roles: ['user'] },
-  { label: 'Game Evaluation', to: '/app/feedback', icon: FiMessageSquare, roles: ['user'] },
-]
-
-
-
 const marshalItems: Item[] = [
-  { label: 'Marshal Dashboard', to: '/app', icon: FiGrid, roles: ['marshal'] },
-  { label: 'Games', to: '/app/games', icon: FiZap, roles: ['marshal'] },
-  { label: 'Equipment', to: '/app/admin/equipment', icon: FiTool, roles: ['marshal'] },
-  { label: 'Weapons', to: '/app/admin/weapons', icon: FiTruck, roles: ['marshal'] },
-  { label: 'Safety Logs', to: '/app/safety', icon: FiAlertTriangle, roles: ['marshal'] },
-  { label: 'Field Check-in', to: '/app/check-in', icon: FiClipboard, roles: ['marshal'] },
-  { label: 'Team Grouping', to: '/app/team-grouping', icon: FiShuffle, roles: ['marshal'] },
-  { label: 'Rental Check-out', to: '/app/rentals', icon: FiLogOut, roles: ['marshal'] },
-  { label: 'Repairs', to: '/app/repairs', icon: FiTool, roles: ['marshal'] },
-  { label: 'Weather', to: '/app/weather', icon: FiCloudRain, roles: ['marshal'] },
+  { label: 'Dashboard', to: '/app', icon: FiGrid },
+  { label: 'Games', to: '/app/games', icon: FiZap },
+  { label: 'Gear', to: '/app/admin/equipment', icon: FiTool },
+  { label: 'Weapons', to: '/app/admin/weapons', icon: FiTruck },
+  { label: 'Safety Logs', to: '/app/safety', icon: FiAlertTriangle },
+  { label: 'Field Check-in', to: '/app/check-in', icon: FiClipboard },
+  { label: 'Team Grouping', to: '/app/team-grouping', icon: FiShuffle },
+  { label: 'Rental Check-out', to: '/app/rentals', icon: FiLogOut },
+  { label: 'Repairs', to: '/app/repairs', icon: FiTool },
 ]
-
 
 // Grouped by the job the admin is doing, in the order a game day runs: check what needs
 // attention, handle bookings, run the field, keep inventory, look after people, keep records.
 const adminItems: Item[] = [
-  { section: 'Overview', label: 'Dashboard', to: '/app/admin', icon: FiGrid, roles: ['admin'] },
-  { section: 'Overview', label: 'Reports', to: '/app/admin/reports', icon: FiBarChart2, roles: ['admin'] },
-  { section: 'Bookings', label: 'Reservations', to: '/app/admin/reservations', icon: FiCalendar, roles: ['admin'] },
-  { section: 'Bookings', label: 'Payments', to: '/app/admin/payments', icon: FiCreditCard, roles: ['admin'] },
-  { section: 'Bookings', label: 'Waivers', to: '/app/admin/waivers', icon: FiShield, roles: ['admin'] },
-  { section: 'Bookings', label: 'Games', to: '/app/games', icon: FiZap, roles: ['admin'] },
-  { section: 'Game day', label: 'Counter (walk-ins)', to: '/app/counter', icon: FiShoppingBag, roles: ['admin'] },
-  { section: 'Game day', label: 'Rental check-out', to: '/app/rentals', icon: FiLogOut, roles: ['admin'] },
-  { section: 'Game day', label: 'Field check-in', to: '/app/check-in', icon: FiClipboard, roles: ['admin'] },
-  { section: 'Game day', label: 'Team grouping', to: '/app/team-grouping', icon: FiShuffle, roles: ['admin'] },
-  { section: 'Game day', label: 'Safety logs', to: '/app/safety', icon: FiAlertTriangle, roles: ['admin'] },
-  { section: 'Game day', label: 'Weather', to: '/app/weather', icon: FiCloudRain, roles: ['admin'] },
-  { section: 'Inventory', label: 'Weapons', to: '/app/admin/weapons', icon: FiTruck, roles: ['admin'] },
-  { section: 'Inventory', label: 'Equipment', to: '/app/admin/equipment', icon: FiTool, roles: ['admin'] },
-  { section: 'Inventory', label: 'Rental packages', to: '/app/admin/rental-packages', icon: FiPackage, roles: ['admin'] },
-  { section: 'Inventory', label: 'Repairs', to: '/app/repairs', icon: FiSettings, roles: ['admin'] },
-  { section: 'People', label: 'Players & staff', to: '/app/admin/player-management', icon: FiUsers, roles: ['admin'] },
-  { section: 'People', label: 'Partnerships', to: '/app/admin/partnerships', icon: FiBriefcase, roles: ['admin'] },
-  { section: 'People', label: 'Player feedback', to: '/app/admin/feedback', icon: FiMessageSquare, roles: ['admin'] },
-  { section: 'Records', label: 'REACH fund', to: '/app/admin/reach-fund', icon: FiHeart, roles: ['admin'] },
-  { section: 'Records', label: 'Audit logs', to: '/app/admin/audit-logs', icon: FiFileText, roles: ['admin'] },
+  { section: 'Overview', label: 'Dashboard', to: '/app/admin', icon: FiGrid },
+  { section: 'Overview', label: 'Reports', to: '/app/admin/reports', icon: FiBarChart2 },
+  { section: 'Bookings', label: 'Reservations', to: '/app/admin/reservations', icon: FiCalendar },
+  { section: 'Bookings', label: 'Payments', to: '/app/admin/payments', icon: FiCreditCard },
+  { section: 'Bookings', label: 'Waivers', to: '/app/admin/waivers', icon: FiShield },
+  { section: 'Bookings', label: 'Games', to: '/app/games', icon: FiZap },
+  { section: 'Game day', label: 'Counter (walk-ins)', to: '/app/counter', icon: FiShoppingBag },
+  { section: 'Game day', label: 'Rental check-out', to: '/app/rentals', icon: FiLogOut },
+  { section: 'Game day', label: 'Field check-in', to: '/app/check-in', icon: FiClipboard },
+  { section: 'Game day', label: 'Team grouping', to: '/app/team-grouping', icon: FiShuffle },
+  { section: 'Game day', label: 'Safety logs', to: '/app/safety', icon: FiAlertTriangle },
+  { section: 'Game day', label: 'Weather', to: '/app/weather', icon: FiCloudRain },
+  { section: 'Inventory', label: 'Weapons', to: '/app/admin/weapons', icon: FiTruck },
+  { section: 'Inventory', label: 'Gear', to: '/app/admin/equipment', icon: FiTool },
+  { section: 'Inventory', label: 'Rental packages', to: '/app/admin/rental-packages', icon: FiPackage },
+  { section: 'Inventory', label: 'Repairs', to: '/app/repairs', icon: FiSettings },
+  { section: 'People', label: 'Players & staff', to: '/app/admin/player-management', icon: FiUsers },
+  { section: 'People', label: 'Partnerships', to: '/app/admin/partnerships', icon: FiBriefcase },
+  { section: 'People', label: 'Player feedback', to: '/app/admin/feedback', icon: FiMessageSquare },
+  { section: 'Records', label: 'REACH fund', to: '/app/admin/reach-fund', icon: FiHeart },
+  { section: 'Records', label: 'Audit logs', to: '/app/admin/audit-logs', icon: FiFileText },
 ]
 
 const registrarItems: Item[] = [
-  { label: 'Reservations', to: '/app/registrar/reservations', icon: FiCalendar, roles: ['registrar'] },
-  { label: 'Counter', to: '/app/counter', icon: FiShoppingBag, roles: ['registrar'] },
-  { label: 'Field Check-in', to: '/app/check-in', icon: FiClipboard, roles: ['registrar'] },
-  { label: 'Rental Check-out', to: '/app/rentals', icon: FiLogOut, roles: ['registrar'] },
-  { label: 'Weather', to: '/app/weather', icon: FiCloudRain, roles: ['registrar'] },
-  { label: 'Games', to: '/app/registrar/games', icon: FiZap, roles: ['registrar'] },
-  { label: 'Availed Packages', to: '/app/registrar/availed-packages', icon: FiPackage, roles: ['registrar'] },
-  { label: 'Submitted Waivers', to: '/app/registrar/waivers', icon: FiShield, roles: ['registrar'] },
-  { label: 'Submitted Payments', to: '/app/registrar/submitted-payments', icon: FiCreditCard, roles: ['registrar'] },
+  { label: 'Dashboard', to: '/app', icon: FiGrid },
+  { label: 'Reservations', to: '/app/registrar/reservations', icon: FiCalendar },
+  { label: 'Counter', to: '/app/counter', icon: FiShoppingBag },
+  { label: 'Field Check-in', to: '/app/check-in', icon: FiClipboard },
+  { label: 'Rental Check-out', to: '/app/rentals', icon: FiLogOut },
+  { label: 'Games', to: '/app/registrar/games', icon: FiZap },
+  { label: 'Availed Packages', to: '/app/registrar/availed-packages', icon: FiPackage },
+  { label: 'Submitted Waivers', to: '/app/registrar/waivers', icon: FiShield },
+  { label: 'Submitted Payments', to: '/app/registrar/submitted-payments', icon: FiCreditCard },
 ]
-
-
 
 // Players see the Split Payment module only while they owe a share or, as captain, are waiting on the team.
 function useHasOpenSplitPayment(enabled: boolean) {
@@ -157,6 +140,31 @@ function useHasPackages(enabled: boolean) {
   return hasPackages
 }
 
+const OPEN_GROUPS_KEY = 'adminMenuOpenGroups'
+
+function SidebarLink({ item, onNavigate, nested = false }: { item: Item; onNavigate?: () => void; nested?: boolean }) {
+  const Icon = item.icon
+  return (
+    <NavLink
+      to={item.to}
+      onClick={onNavigate}
+      end
+      className={({ isActive }) =>
+        `flex items-center gap-3 rounded-xl py-2 text-sm transition ${nested ? 'pl-6 pr-3' : 'px-3'} ` +
+        (isActive ? 'nav-active font-medium' : 'hover-row text-muted hover:text-text')
+      }
+    >
+      {({ isActive }) => (
+        <>
+          <Icon className={`h-4 w-4 shrink-0 ${isActive ? 'text-accent' : ''}`} />
+          <span className="truncate">{item.label}</span>
+        </>
+      )}
+    </NavLink>
+  )
+}
+
+// Notifications are reached from the bell in the top bar, not from this menu.
 export function AppSidebar({
   role,
   onNavigate,
@@ -167,77 +175,86 @@ export function AppSidebar({
   className?: string
 }) {
   const { user } = useAuth()
-  const { unreadCount, getNotificationsForRole } = useNotifications()
-  const userUnread = user?.role ? getNotificationsForRole(user.role, user.id).filter((n) => !n.read).length : 0
+  const { pathname } = useLocation()
   const profilePath = user?.id ? `/app/players/${encodeURIComponent(user.id)}` : '/app/players/1'
   const hasOpenSplitPayment = useHasOpenSplitPayment(role === 'user' && !!user?.id)
   const hasPackages = useHasPackages(role === 'user')
+  const profile: Item = { label: 'Profile', to: profilePath, icon: FiUser }
 
-  const items = [
-    ...(role === 'user' || role === 'registrar' || role === 'marshal'
-      ? [
-          { label: 'Profile', to: profilePath, icon: FiUser, roles: ['user', 'registrar', 'marshal'] },
-        ]
-      : []),
-    ...baseItems.filter((it) => (!it.roles || it.roles.includes(role)) && (it.to !== '/app/packages' || hasPackages)),
-    ...(hasOpenSplitPayment
-      ? [{ label: 'Split Payment', to: '/app/split-payments', icon: FiDollarSign, roles: ['user'] }]
-      : []),
-    ...(role === 'user' || role === 'registrar' || role === 'marshal'
-      ? [
-          { label: 'My Weapons & Equipment', to: `/app/players/${encodeURIComponent(user?.id || '1')}/weapons-and-equipment`, icon: FiTarget, roles: ['user'] },
-        ]
-      : []),
-    ...(role === 'registrar' ? registrarItems.filter((it) => !it.roles || it.roles.includes(role)) : []),
-    ...(role === 'admin' ? adminItems.filter((it) => !it.roles || it.roles.includes(role)) : []),
-    ...(role === 'marshal' ? marshalItems.filter((it) => !it.roles || it.roles.includes(role)) : []),
-    ...(role === 'admin' || role === 'user' || role === 'registrar' || role === 'marshal'
-      ? [{ label: 'Notifications', to: '/app/notifications', icon: FiBell, roles: ['user', 'admin', 'registrar', 'marshal'], ...(role === 'admin' ? { section: 'Records' } : {}) }]
-      : []),
+  const playerItems: Item[] = [
+    { label: 'Dashboard', to: '/app', icon: FiGrid },
+    profile,
+    { label: 'Book a game', to: '/app/reservations', icon: FiPlusCircle },
+    { label: 'My Reservations', to: '/app/my-reservations', icon: FiList },
+    { label: 'My Weapons & Gear', to: `/app/players/${encodeURIComponent(user?.id || '1')}/weapons-and-equipment`, icon: FiTarget },
+    ...(hasPackages ? [{ label: 'Recommended Packages', to: '/app/packages', icon: FiPackage }] : []),
+    { label: 'Online Waiver', to: '/app/waiver', icon: FiShield },
+    { label: 'Game Evaluation', to: '/app/feedback', icon: FiMessageSquare },
+    ...(hasOpenSplitPayment ? [{ label: 'Split Payment', to: '/app/split-payments', icon: FiDollarSign }] : []),
   ]
 
+  // Every menu opens with the dashboard, then the profile.
+  const withProfile = (list: Item[]) => [list[0], { ...profile, section: list[0].section }, ...list.slice(1)]
+  const items =
+    role === 'admin' ? withProfile(adminItems)
+    : role === 'marshal' ? withProfile(marshalItems)
+    : role === 'registrar' ? withProfile(registrarItems)
+    : playerItems
 
+  // Admin groups: the one holding the current page is always open; others remember their state.
+  const [openGroups, setOpenGroups] = useState<string[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem(OPEN_GROUPS_KEY) || '[]')
+    } catch {
+      return []
+    }
+  })
+  const toggleGroup = (section: string) => {
+    setOpenGroups((current) => {
+      const next = current.includes(section) ? current.filter((s) => s !== section) : [...current, section]
+      localStorage.setItem(OPEN_GROUPS_KEY, JSON.stringify(next))
+      return next
+    })
+  }
 
-  const roleLabel =
-    role === 'admin' ? 'Admin' : role === 'marshal' ? 'Marshal' : role === 'registrar' ? 'Registrar' : 'Player'
+  if (role !== 'admin') {
+    return (
+      <div className={'surface rounded-2xl p-3 ' + (className || '')}>
+        <nav className="space-y-0.5">
+          {items.map((item) => <SidebarLink key={item.to} item={item} onNavigate={onNavigate} />)}
+        </nav>
+      </div>
+    )
+  }
 
+  const sections = [...new Set(items.map((item) => item.section || 'Overview'))]
   return (
-    <div className={'surface rounded-2xl p-3 ' + (className ? className : '')}>
-      <div className="px-3 pb-2 pt-1 text-xs font-medium text-muted">{roleLabel} menu</div>
-
+    <div className={'surface rounded-2xl p-3 ' + (className || '')}>
       <nav className="space-y-0.5">
-        {items.map((item, index) => {
-          const Icon = item.icon
-          const startsSection = !!item.section && item.section !== items[index - 1]?.section
+        {sections.map((section) => {
+          const sectionItems = items.filter((item) => (item.section || 'Overview') === section)
+          if (section === 'Overview') {
+            return sectionItems.map((item) => <SidebarLink key={item.to} item={item} onNavigate={onNavigate} />)
+          }
+          const holdsCurrentPage = sectionItems.some((item) => item.to === pathname)
+          const open = holdsCurrentPage || openGroups.includes(section)
           return (
-            <React.Fragment key={item.to}>
-            {startsSection ? (
-              <div className={`px-3 pb-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted ${index === 0 ? 'pt-1' : 'pt-4'}`}>
-                {item.section}
-              </div>
-            ) : null}
-            <NavLink
-              to={item.to}
-              onClick={onNavigate}
-              end
-              className={({ isActive }) =>
-                'flex items-center gap-3 rounded-xl px-3 py-2 text-sm transition ' +
-                (isActive ? 'nav-active font-medium' : 'hover-row text-muted hover:text-text')
-              }
-            >
-              {({ isActive }) => (
-                <>
-                  <Icon className={`h-4 w-4 shrink-0 ${isActive ? 'text-accent' : ''}`} />
-                  <span className="truncate">{item.label}</span>
-                  {item.label === 'Notifications' && userUnread > 0 && (
-                    <span className="ml-auto rounded-full bg-danger px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
-                      {userUnread > 9 ? '9+' : userUnread}
-                    </span>
-                  )}
-                </>
-              )}
-            </NavLink>
-            </React.Fragment>
+            <div key={section} className="pt-1">
+              <button
+                type="button"
+                onClick={() => toggleGroup(section)}
+                aria-expanded={open}
+                className={`hover-row flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm ${holdsCurrentPage ? 'font-medium text-text' : 'text-muted hover:text-text'}`}
+              >
+                <span>{section}</span>
+                <FiChevronDown className={`h-4 w-4 transition ${open ? 'rotate-180' : ''}`} />
+              </button>
+              {open ? (
+                <div className="mt-0.5 space-y-0.5">
+                  {sectionItems.map((item) => <SidebarLink key={item.to} item={item} onNavigate={onNavigate} nested />)}
+                </div>
+              ) : null}
+            </div>
           )
         })}
       </nav>

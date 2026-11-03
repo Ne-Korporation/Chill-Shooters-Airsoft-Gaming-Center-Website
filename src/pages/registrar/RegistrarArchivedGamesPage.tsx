@@ -1,12 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { FiArchive, FiArrowLeft, FiClock, FiSearch, FiShield, FiX } from 'react-icons/fi'
+import { FiArchive, FiArrowLeft, FiSearch, FiShield, FiX } from 'react-icons/fi'
 import { toast } from 'react-hot-toast'
 
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { apiGetAll } from '../../utils/apiClient'
 import { Pagination, usePagination } from '../../components/ui/Pagination'
+import { formatSchedule, locationName } from './RegistrarOngoingGamesPage'
 
 type GameplayStatus = 'Scheduled' | 'Ongoing' | 'Completed' | 'Cancelled' | 'Archived'
 
@@ -19,6 +20,8 @@ type GameplayDoc = {
   Mode?: string
   Group?: string
   Package?: string
+  LocationId?: string
+  Location?: string
   Status?: GameplayStatus | string
   archivedAtISO?: string
   createdAtISO?: string
@@ -104,7 +107,7 @@ export function RegistrarArchivedGamesPage() {
     const q = query.trim().toLowerCase()
     if (!q) return archivedItems
     return archivedItems.filter((doc) => {
-      const haystack = [doc.id, doc._id, doc.Game, doc.Schedule, doc.Mode, doc.Group, doc.Package, doc.Status, doc.reservationId]
+      const haystack = [doc.id, doc._id, doc.Location, doc.Schedule, doc.Mode, doc.Group, doc.Package, doc.Status, doc.reservationId]
         .map((value) => String(value || '').toLowerCase())
         .join(' ')
       return haystack.includes(q)
@@ -166,8 +169,8 @@ export function RegistrarArchivedGamesPage() {
             <thead>
               <tr className="text-left text-xs uppercase tracking-widest text-muted">
                 <th className="py-2 pr-3">ID</th>
-                <th className="py-2 pr-3">Game</th>
                 <th className="py-2 pr-3">Schedule</th>
+                <th className="py-2 pr-3">Location</th>
                 <th className="py-2 pr-3">Mode</th>
                 <th className="py-2 pr-3">Group</th>
                 <th className="py-2 pr-3">Package</th>
@@ -195,13 +198,10 @@ export function RegistrarArchivedGamesPage() {
                         <div className="font-bold">{rowId(doc) || '—'}</div>
                       </td>
                       <td className="py-3 pr-3">
-                        <div className="font-bold">{doc.Game || '—'}</div>
+                        <div className="font-bold">{formatSchedule(doc)}</div>
                       </td>
                       <td className="py-3 pr-3">
-                        <div className="font-bold">{doc.Schedule || '—'}</div>
-                        <div className="mt-1 text-xs text-muted flex items-center gap-2">
-                          <FiClock /> {doc.createdAtISO || '—'}
-                        </div>
+                        <div className="font-semibold">{locationName(doc)}</div>
                       </td>
                       <td className="py-3 pr-3">
                         <div className="font-bold">{doc.Mode || '—'}</div>

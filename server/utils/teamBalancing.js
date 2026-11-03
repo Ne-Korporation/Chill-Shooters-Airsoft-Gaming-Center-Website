@@ -18,15 +18,17 @@ export function getAgeGroup(age) {
 
 const AGE_GROUP_ORDER = ['Under 18', '18–24', '25–34', '35+', 'Unknown']
 
-// Splits players into teams with similar total experience and a similar spread of age groups.
-// Players are taken strongest first; each goes to the team with the least experience so far
-// (ties: fewest players in that player's age group, then smallest team).
+// Splits players into teams with the same mix of experience levels, similar total experience,
+// and a similar spread of age groups. Players are taken strongest first; each goes to the
+// smallest team with the fewest players of their experience level (ties: least experience so
+// far, then fewest players in that player's age group).
 export function suggestBalancedTeams(players, teamCount = 2) {
   const count = Math.min(Math.max(Math.round(Number(teamCount) || 2), 2), 6)
   const teams = Array.from({ length: count }, (_, index) => ({
     name: `Team ${index + 1}`,
     playerKeys: [],
     totalExperience: 0,
+    levels: {},
     ageGroups: {},
   }))
 
@@ -37,17 +39,20 @@ export function suggestBalancedTeams(players, teamCount = 2) {
   )
 
   for (const player of ordered) {
+    const level = getExperienceLevel(player.experience)
     // Only the smallest teams are candidates, so team sizes stay within one of each other.
     const smallest = Math.min(...teams.map((team) => team.playerKeys.length))
     const target = teams
       .filter((team) => team.playerKeys.length === smallest)
       .sort((a, b) =>
+        (a.levels[level] || 0) - (b.levels[level] || 0) ||
         a.totalExperience - b.totalExperience ||
         (a.ageGroups[player.ageGroup] || 0) - (b.ageGroups[player.ageGroup] || 0),
       )[0]
 
     target.playerKeys.push(player.key)
     target.totalExperience += player.experience || 0
+    target.levels[level] = (target.levels[level] || 0) + 1
     target.ageGroups[player.ageGroup] = (target.ageGroups[player.ageGroup] || 0) + 1
   }
 
@@ -55,6 +60,7 @@ export function suggestBalancedTeams(players, teamCount = 2) {
     name: team.name,
     playerKeys: team.playerKeys,
     totalExperience: team.totalExperience,
+    levels: team.levels,
     ageGroups: team.ageGroups,
   }))
 }

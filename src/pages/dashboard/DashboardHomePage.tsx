@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
 import { DashboardPostsPanel } from '../../components/dashboard/DashboardPostsPanel'
 import { Link } from 'react-router-dom'
-import { FiCalendar, FiCheckCircle, FiCreditCard, FiPlus, FiShield } from 'react-icons/fi'
+import { FiCalendar, FiPlus, FiShield } from 'react-icons/fi'
 import { ActivityList, DashboardHeader, Panel, StatTile, type ActivityTone } from '../../components/dashboard/DashboardParts'
 import { apiGet } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
@@ -236,7 +236,7 @@ export function DashboardHomePage() {
   return (
     <div className="space-y-6">
       <DashboardHeader
-        eyebrow="Player dashboard"
+        eyebrow="Dashboard"
         title={`Welcome back, ${firstName}`}
         description="Your bookings, payments, and waiver in one place."
         actions={
@@ -249,77 +249,69 @@ export function DashboardHomePage() {
         }
       />
 
-      <div className="grid gap-4 sm:grid-cols-3">
-        <StatTile
-          label="My reservations"
-          value={dashboard.totalReservations}
-          icon={FiCalendar}
-          hint="All time"
-          loading={loading}
+      {/* Announcements get the main column; the player's own summary sits small on the right. */}
+      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+        <DashboardPostsPanel
+          title="Announcements"
+          subtitle="Updates and reminders from the Chill Shooters team."
         />
-        <StatTile
-          label="Upcoming bookings"
-          value={dashboard.upcomingReservations}
-          icon={FiCheckCircle}
-          hint="Confirmed and ready"
-          loading={loading}
-        />
-        <StatTile
-          label="Pending payments"
-          value={dashboard.pendingPayments}
-          icon={FiCreditCard}
-          hint={dashboard.pendingPayments > 0 ? 'Needs your follow-up' : 'All settled'}
-          attention={dashboard.pendingPayments > 0}
-          loading={loading}
-        />
-      </div>
 
-      <div className="grid gap-4 lg:grid-cols-[1.2fr_1fr]">
-        <Panel title="Next up" description={loading ? undefined : dashboard.statusLabel}>
-          <div className="divider divide-y">
-            <div className="divider flex items-center gap-3 pb-3">
-              <span className="chip-accent grid h-9 w-9 shrink-0 place-items-center rounded-xl">
-                <FiCalendar className="h-4 w-4" />
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="text-xs text-muted">Next booking</div>
-                <div className="truncate text-sm font-medium">
-                  {loading ? <span className="skeleton inline-block h-4 w-40" /> : dashboard.nextReservation}
-                </div>
-              </div>
-            </div>
-            <div className="divider flex items-center gap-3 pt-3">
-              <span className="chip-accent grid h-9 w-9 shrink-0 place-items-center rounded-xl">
-                <FiShield className="h-4 w-4" />
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="text-xs text-muted">Waiver</div>
-                <div className="text-sm font-medium">
-                  {loading ? <span className="skeleton inline-block h-4 w-24" /> : dashboard.waiverStatus}
-                </div>
-              </div>
-              {!loading && !waiverApproved ? (
-                <Link to="/app/waiver" className="text-sm font-medium text-accent hover:underline">
-                  {dashboard.waiverStatus === 'Not submitted' ? 'Sign now' : 'View'}
-                </Link>
-              ) : null}
-            </div>
+        <aside className="space-y-3">
+          <div className="grid grid-cols-3 gap-2">
+            <StatTile compact label="Bookings" value={dashboard.totalReservations} hint="All time" loading={loading} />
+            <StatTile compact label="Upcoming" value={dashboard.upcomingReservations} hint="Confirmed" loading={loading} />
+            <StatTile
+              compact
+              label="To pay"
+              value={dashboard.pendingPayments}
+              hint={dashboard.pendingPayments > 0 ? 'Follow up' : 'Settled'}
+              attention={dashboard.pendingPayments > 0}
+              loading={loading}
+            />
           </div>
-        </Panel>
 
-        <Panel title="Recent activity">
-          <ActivityList
-            items={dashboard.recentActivity}
-            loading={loading}
-            emptyText="No activity yet. Book your first game to get started."
-          />
-        </Panel>
+          <Panel compact title="Next up" description={loading ? undefined : dashboard.statusLabel}>
+            <div className="divider divide-y">
+              <div className="divider flex items-center gap-2 pb-2">
+                <span className="chip-accent grid h-7 w-7 shrink-0 place-items-center rounded-lg">
+                  <FiCalendar className="h-3.5 w-3.5" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="text-[11px] text-muted">Next booking</div>
+                  <div className="truncate text-xs font-medium">
+                    {loading ? <span className="skeleton inline-block h-3 w-32" /> : dashboard.nextReservation}
+                  </div>
+                </div>
+              </div>
+              <div className="divider flex items-center gap-2 pt-2">
+                <span className="chip-accent grid h-7 w-7 shrink-0 place-items-center rounded-lg">
+                  <FiShield className="h-3.5 w-3.5" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="text-[11px] text-muted">Waiver</div>
+                  <div className="text-xs font-medium">
+                    {loading ? <span className="skeleton inline-block h-3 w-20" /> : dashboard.waiverStatus}
+                  </div>
+                </div>
+                {!loading && !waiverApproved ? (
+                  <Link to="/app/waiver" className="text-xs font-medium text-accent hover:underline">
+                    {dashboard.waiverStatus === 'Not submitted' ? 'Sign now' : 'View'}
+                  </Link>
+                ) : null}
+              </div>
+            </div>
+          </Panel>
+
+          <Panel compact title="Recent activity">
+            <ActivityList
+              compact
+              items={dashboard.recentActivity}
+              loading={loading}
+              emptyText="No activity yet. Book your first game to get started."
+            />
+          </Panel>
+        </aside>
       </div>
-
-      <DashboardPostsPanel
-        title="Announcements"
-        subtitle="Updates and reminders from the Chill Shooters team."
-      />
     </div>
   )
 }

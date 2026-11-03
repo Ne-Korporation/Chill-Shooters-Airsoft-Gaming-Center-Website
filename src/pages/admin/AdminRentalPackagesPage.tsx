@@ -93,7 +93,7 @@ const StatusPill = ({ status }: { status: PackageStatus }) => {
 const DISCOUNT_TARGET_OPTIONS: Array<{ value: PackageDiscountTarget; label: string }> = [
   { value: 'package_total', label: 'Package total' },
   { value: 'weapons', label: 'Weapons' },
-  { value: 'equipment', label: 'Equipment' },
+  { value: 'equipment', label: 'Gear' },
   { value: 'entrance', label: 'Entrance fee' },
 ]
 
@@ -241,7 +241,7 @@ export function AdminRentalPackagesPage() {
       setEquipment(eqDocs.map((d: any) => ({
         id: d.id ?? (d._id ? String(d._id) : undefined),
         _id: d._id,
-        name: d.name || 'Unnamed equipment',
+        name: d.name || 'Unnamed gear',
         model: modelOf(d),
         source: d.source,
         category: d.category || 'gear',
@@ -544,7 +544,7 @@ export function AdminRentalPackagesPage() {
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h1 className="text-3xl font-bold">Package Recommendation</h1>
-          <p className="mt-1 text-sm text-muted">Review package offerings, manage pricing, and align included equipment with booking tiers.</p>
+          <p className="mt-1 text-sm text-muted">Review package offerings, manage pricing, and align included gear with booking tiers.</p>
         </div>
 
         <div className="flex items-center gap-2">
@@ -784,7 +784,7 @@ export function AdminRentalPackagesPage() {
                     </div>
                     <div className="mt-2 text-[11px] text-muted">
                       {form.discountMode === 'settled'
-                        ? 'Settled amount is the entire package price. Discount targets are disabled, while selected weapons and equipment remain included in the package.'
+                        ? 'Settled amount is the entire package price. Discount targets are disabled, while selected weapons and gear remain included in the package.'
                         : 'Package total applies to the full reservation total. When it is selected, the other targets stay visible but cannot be changed.'}
                     </div>
                   </div>
@@ -872,11 +872,11 @@ export function AdminRentalPackagesPage() {
               </div>
 
               <div className="mt-4">
-                <div className="mb-2 text-sm font-semibold text-text">Equipment ({form.equipmentIds.length} selected)</div>
+                <div className="mb-2 text-sm font-semibold text-text">Gear ({form.equipmentIds.length} selected)</div>
                 {inventoryLoading ? (
-                  <div className="text-xs text-muted">Loading equipment inventory...</div>
+                  <div className="text-xs text-muted">Loading gear inventory...</div>
                 ) : equipment.length === 0 ? (
-                  <div className="text-xs text-muted">No equipment available. Add equipment first in the Equipment module.</div>
+                  <div className="text-xs text-muted">No gear available. Add gear first in the Gear module.</div>
                 ) : (
                   <div className="max-h-48 overflow-y-auto rounded-xl border border-white/10 bg-white/5 p-2 space-y-1">
                     {equipmentModels.map((eq) => {
@@ -964,7 +964,7 @@ export function AdminRentalPackagesPage() {
 
           <Card className="p-4 bg-white/5/60">
             <div className="text-xs uppercase tracking-widest text-muted">Included items</div>
-            <div className="mt-2 text-sm text-muted">This bundle includes the following weapons and equipment from inventory.</div>
+            <div className="mt-2 text-sm text-muted">This bundle includes the following weapons and gear from inventory.</div>
             <div className="mt-4 rounded-xl border border-white/5 bg-white/5 p-3">
               <div className="text-[11px] uppercase tracking-widest text-muted">Selected package</div>
               <div className="mt-1 text-sm font-semibold">{form.name.trim() || selectedPackage?.name || (isAdding ? '(New package)' : '—')}</div>
@@ -1005,7 +1005,7 @@ export function AdminRentalPackagesPage() {
                       <span>₱{(Number(form.basePrice) || 0).toLocaleString()}</span>
                     </div>
                     <div className="flex items-center justify-between text-muted">
-                      <span>Included weapons &amp; equipment</span>
+                      <span>Included weapons &amp; gear</span>
                       <span>₱{Math.round(totalItemPrice).toLocaleString()}</span>
                     </div>
                     <div className="flex items-center justify-between text-muted">
@@ -1058,11 +1058,11 @@ export function AdminRentalPackagesPage() {
 
               {/* Equipment section */}
               <div className="mt-4">
-                <div className="text-[11px] uppercase tracking-widest text-muted">Equipment</div>
+                <div className="text-[11px] uppercase tracking-widest text-muted">Gear</div>
                 <div className="mt-2 space-y-2">
                   {form.equipmentIds.length === 0 ? (
                     <div className="rounded-lg border border-white/5 bg-white/5 px-3 py-2 text-sm text-muted">
-                      No equipment selected
+                      No gear selected
                     </div>
                   ) : (
                     form.equipmentIds.map((eid) => {

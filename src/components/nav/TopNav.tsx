@@ -1,12 +1,14 @@
 import React, { useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { FiBell, FiLogOut, FiMenu } from 'react-icons/fi'
+import { FiBell, FiCloudRain, FiLogOut, FiMenu } from 'react-icons/fi'
 import { Link, useNavigate } from 'react-router-dom'
 import { ThemeToggle } from './ThemeToggle'
 import { useTheme } from '../../context/ThemeContext'
 import { useAuth } from '../../context/AuthContext'
 import { useNotifications } from '../../context/NotificationContext'
 import { resolveNotificationRoute } from '../../utils/notificationRoutes'
+import { Modal } from '../ui/Modal'
+import { WeatherPanel } from '../../pages/admin/AdminWeatherPage'
 
 function NotificationBell({ userId, role }: { userId: string; role?: string }) {
   const { notifications, unreadCount, markAsRead, markAllAsRead, getNotificationsForRole } = useNotifications()
@@ -16,7 +18,8 @@ function NotificationBell({ userId, role }: { userId: string; role?: string }) {
   const navigate = useNavigate()
   const dropdownRef = React.useRef<HTMLDivElement>(null)
 
-  const userNotifications = roleNotifs.slice(0, 5)
+  // The bell is the only way into notifications: it previews the latest three, then "View all".
+  const userNotifications = roleNotifs.slice(0, 3)
 
   // Close on click outside
   React.useEffect(() => {
@@ -126,6 +129,28 @@ function NotificationBell({ userId, role }: { userId: string; role?: string }) {
   )
 }
 
+// Weather icon beside the notification bell; opens the forecast and advisories in a pop-up.
+function WeatherButton() {
+  const [open, setOpen] = React.useState(false)
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="hover-row rounded-xl p-2 text-text"
+        aria-label="Weather"
+        title="Weather"
+      >
+        <FiCloudRain className="text-lg" />
+      </button>
+      {open ? (
+        <Modal eyebrow="Weather" title="Weather advisories" onClose={() => setOpen(false)} size="xl">
+          <WeatherPanel />
+        </Modal>
+      ) : null}
+    </>
+  )
+}
 
 const roleLabels: Record<string, string> = {
   admin: 'Admin',
@@ -187,6 +212,7 @@ export function TopNav({
         </div>
 
         <div className="flex items-center gap-1.5">
+          {user?.role === 'admin' || user?.role === 'marshal' || user?.role === 'registrar' ? <WeatherButton /> : null}
           {user?.id && <NotificationBell userId={user.id} role={user.role} />}
 
           <div className="hidden sm:block">
@@ -195,13 +221,18 @@ export function TopNav({
 
           <div className="divider mx-2 hidden h-8 border-l md:block" />
 
-          <div className="hidden items-center gap-2.5 md:flex">
+          <Link
+            to={user?.id ? `/app/players/${encodeURIComponent(user.id)}` : '/app'}
+            className="hover-row flex items-center gap-2.5 rounded-xl px-1.5 py-1"
+            title="View profile"
+            aria-label="View profile"
+          >
             <span className="chip-accent grid h-9 w-9 place-items-center rounded-full text-sm font-semibold">{initial}</span>
-            <div className="leading-tight">
+            <div className="hidden leading-tight md:block">
               <div className="max-w-[160px] truncate text-sm font-medium">{userName}</div>
               <div className="text-[11px] text-muted">{roleLabels[user?.role || 'user'] || 'Player'}</div>
             </div>
-          </div>
+          </Link>
 
           <div className="relative ml-1" ref={logoutRef}>
             <button

@@ -1,12 +1,14 @@
 import React from 'react'
-import { FiCheck, FiEdit2, FiTrash2, FiX } from 'react-icons/fi'
+import { FiCheck, FiEdit2, FiPlus, FiTrash2, FiX } from 'react-icons/fi'
 import toast from 'react-hot-toast'
 import { ActionGroup, Button } from '../../components/ui/Button'
 import { FilterTabs } from '../../components/ui/FilterTabs'
 import { Card } from '../../components/ui/Card'
+import { Modal } from '../../components/ui/Modal'
 import { apiGet, apiGetAll, apiPost, apiPut, apiDelete } from '../../utils/apiClient'
 import { Pagination, usePagination } from '../../components/ui/Pagination'
 import { ModelSummaryStrip } from '../../components/inventory/ModelSummaryStrip'
+import { BulkActionBar, forEachPiece, type BulkChange } from '../../components/inventory/BulkActionBar'
 import { modelOf, summarizeModels } from '../../utils/inventoryModels'
 import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
 
@@ -90,6 +92,8 @@ export function AdminWeaponsPage() {
   const [saving, setSaving] = React.useState(false)
   const [form, setForm] = React.useState(emptyForm())
   const [selectedWeaponId, setSelectedWeaponId] = React.useState<string | null>(null)
+  // The add/edit form opens in a pop-up.
+  const [formOpen, setFormOpen] = React.useState(false)
   const [rejectionTargetId, setRejectionTargetId] = React.useState<string | null>(null)
   const [rejectionReason, setRejectionReason] = React.useState('')
   // Approving a player's own weapon needs a passing chronograph reading.
@@ -204,6 +208,7 @@ export function AdminWeaponsPage() {
       const ids = res.data.map((piece) => piece.id)
       toast.success(count === 1 ? `Added ${ids[0]}` : `Added ${count} pieces (${ids[0]} – ${ids[ids.length - 1]})`)
       setForm(emptyForm())
+      setFormOpen(false)
       await refresh()
     } catch (e: any) {
       toast.error(String(e?.message || e))
@@ -214,6 +219,7 @@ export function AdminWeaponsPage() {
 
   const handleSelect = (weapon: WeaponItem) => {
     setSelectedWeaponId(weapon.id)
+    setFormOpen(true)
     setForm({
       name: weapon.name,
       description: weapon.description || weapon.note || '',
@@ -264,6 +270,7 @@ export function AdminWeaponsPage() {
       toast.success(form.applyToModel && piece ? `Updated ${piece.name} and all ${piece.model} pieces` : 'Weapon updated')
       setSelectedWeaponId(null)
       setForm(emptyForm())
+      setFormOpen(false)
       await refresh()
     } catch (e: any) {
       toast.error(String(e?.message || e))
@@ -317,6 +324,37 @@ export function AdminWeaponsPage() {
   }
 
   const { addNotification } = useNotifications()
+
+  // Bulk selection: tick rows (or every row matching the filters) and change them together.
+  const [selectedIds, setSelectedIds] = React.useState<string[]>([])
+  const [bulkBusy, setBulkBusy] = React.useState(false)
+  React.useEffect(() => setSelectedIds([]), [category, status, sourceFilter, search])
+  const allFilteredSelected = filtered.length > 0 && filtered.every((weapon) => selectedIds.includes(weapon.id))
+  const toggleSelected = (id: string) =>
+    setSelectedIds((current) => (current.includes(id) ? current.filter((x) => x !== id) : [...current, id]))
+  const toggleAll = () => setSelectedIds(allFilteredSelected ? [] : filtered.map((weapon) => weapon.id))
+
+  const applyBulk = async (change: BulkChange) => {
+    setBulkBusy(true)
+    const failed = await forEachPiece(selectedIds, (id) =>
+      apiPut(`/api/weapons/${encodeURIComponent(id)}`, { ...change, updatedAtISO: new Date().toISOString() }))
+    setBulkBusy(false)
+    if (failed) toast.error(`${failed} of ${selectedIds.length} weapons could not be updated.`)
+    else toast.success(`Updated ${selectedIds.length} weapon${selectedIds.length === 1 ? '' : 's'}.`)
+    setSelectedIds([])
+    await refresh()
+  }
+
+  const removeBulk = async () => {
+    if (!window.confirm(`Remove ${selectedIds.length} weapon${selectedIds.length === 1 ? '' : 's'} from the list? This cannot be undone.`)) return
+    setBulkBusy(true)
+    const failed = await forEachPiece(selectedIds, (id) => apiDelete(`/api/weapons/${encodeURIComponent(id)}`))
+    setBulkBusy(false)
+    if (failed) toast.error(`${failed} of ${selectedIds.length} weapons could not be removed.`)
+    else toast.success(`Removed ${selectedIds.length} weapon${selectedIds.length === 1 ? '' : 's'}.`)
+    setSelectedIds([])
+    await refresh()
+  }
 
   const openApproveDialog = (weapon: { id: string; category?: string }) => {
     setApprovalTarget({ id: weapon.id, fpsClass: String(weapon.category || '').toLowerCase().startsWith('sniper') ? 'sniper' : 'aeg' })
@@ -386,6 +424,16 @@ export function AdminWeaponsPage() {
     setForm(emptyForm())
   }
 
+  const openAddForm = () => {
+    resetForm()
+    setFormOpen(true)
+  }
+
+  const closeForm = () => {
+    resetForm()
+    setFormOpen(false)
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
@@ -393,20 +441,23 @@ export function AdminWeaponsPage() {
           <h1 className="text-3xl font-bold">Weapons</h1>
           <p className="mt-1 text-sm text-muted">Manage the weapon catalog, inspect conditions, and keep the maintenance queue current.</p>
         </div>
+        <Button onClick={openAddForm}>
+          <FiPlus /> Add weapon
+        </Button>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-3">
-        <Card className="p-4">
-          <div className="text-xs uppercase tracking-widest text-muted">Weapons in catalog</div>
-          <div className="mt-2 text-2xl font-bold text-accent">{weapons.length}</div>
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
+        <Card className="rounded-xl px-3 py-2 md:px-3 md:py-2">
+          <div className="truncate text-[10px] uppercase tracking-wider text-muted">Weapons in catalog</div>
+          <div className="mt-0.5 text-base font-bold text-accent">{weapons.length}</div>
         </Card>
-        <Card className="p-4">
-          <div className="text-xs uppercase tracking-widest text-muted">Currently rented</div>
-          <div className="mt-2 text-2xl font-bold text-danger">{weapons.filter((weapon) => weapon.status === 'rented').length}</div>
+        <Card className="rounded-xl px-3 py-2 md:px-3 md:py-2">
+          <div className="truncate text-[10px] uppercase tracking-wider text-muted">Currently rented</div>
+          <div className="mt-0.5 text-base font-bold text-danger">{weapons.filter((weapon) => weapon.status === 'rented').length}</div>
         </Card>
-        <Card className="p-4">
-          <div className="text-xs uppercase tracking-widest text-muted">Needs check</div>
-          <div className="mt-2 text-2xl font-bold text-success">{maintenanceCount}</div>
+        <Card className="rounded-xl px-3 py-2 md:px-3 md:py-2">
+          <div className="truncate text-[10px] uppercase tracking-wider text-muted">Needs check</div>
+          <div className="mt-0.5 text-base font-bold text-success">{maintenanceCount}</div>
         </Card>
       </div>
 
@@ -503,10 +554,23 @@ export function AdminWeaponsPage() {
 
         {sourceFilter === 'business' ? <ModelSummaryStrip models={models} unit="piece" /> : null}
 
+        <BulkActionBar
+          count={selectedIds.length}
+          statuses={(Object.keys(STATUS_LABELS) as WeaponStatus[]).map((value) => ({ value, label: STATUS_LABELS[value] }))}
+          categories={categoryOptions.map((option) => ({ value: option.key, label: option.label }))}
+          busy={bulkBusy}
+          onApply={applyBulk}
+          onRemove={removeBulk}
+          onClear={() => setSelectedIds([])}
+        />
+
         <div className="mt-4 overflow-x-auto rounded-2xl border border-white/5">
           <div className="min-w-[920px]">
             <div className="grid grid-cols-12 gap-3 bg-white/5 px-3 py-2 text-xs uppercase tracking-widest text-muted">
-              <div className="col-span-2">ID</div>
+              <label className="col-span-2 flex items-center gap-2">
+                <input type="checkbox" checked={allFilteredSelected} onChange={toggleAll} className="h-4 w-4 accent-[var(--color-accent)]" aria-label="Select all weapons matching the filters" />
+                ID
+              </label>
               <div className="col-span-3">Weapon</div>
               <div className="col-span-1 text-right">Piece</div>
               <div className="col-span-1 text-right">Price</div>
@@ -522,7 +586,10 @@ export function AdminWeaponsPage() {
             ) : (
               pageItems.map((weapon) => (
                 <div key={weapon.id} className={"grid grid-cols-12 items-center gap-3 px-3 py-3 " + (selectedWeaponId === weapon.id ? 'bg-white/6 ring-2 ring-white/10' : '')}>
-                  <div className="col-span-2 text-sm font-semibold">{weapon.id}</div>
+                  <label className="col-span-2 flex items-center gap-2 text-sm font-semibold">
+                    <input type="checkbox" checked={selectedIds.includes(weapon.id)} onChange={() => toggleSelected(weapon.id)} className="h-4 w-4 accent-[var(--color-accent)]" aria-label={`Select ${weapon.id}`} />
+                    {weapon.id}
+                  </label>
                   <div className="col-span-3">
                     <div className="flex flex-wrap items-center gap-2">
                       <div className="text-sm font-semibold">{weapon.name}</div>
@@ -576,181 +643,7 @@ export function AdminWeaponsPage() {
         <Pagination page={page} pageCount={pageCount} total={total} onPageChange={setPage} />
 
         {sourceFilter === 'business' ? (
-        <div className="mt-4 grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
-          <Card className="p-4 bg-white/5/60">
-            <div className="text-xs uppercase tracking-widest text-muted">{selectedWeaponId ? `Edit ${selectedWeaponId}` : 'Add weapons'}</div>
-            <div className="mt-2 text-sm text-muted">
-              {selectedWeaponId ? 'Update this piece, or every piece of the same model.' : 'Every physical weapon is its own piece with its own ID.'}
-            </div>
-            <div className="mt-4 grid gap-3">
-              <label className="block">
-                <div className="mb-2 text-sm font-semibold text-text">Weapon name</div>
-                <input
-                  ref={nameRef}
-                  value={form.name}
-                  readOnly={Boolean(selectedWeaponId)}
-                  onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
-                  className="w-full rounded-xl border border-white/10 bg-transparent px-4 py-3 text-sm text-text placeholder:text-muted read-only:opacity-70"
-                  placeholder="e.g. M4 Rifle"
-                />
-              </label>
-
-              <label className="block">
-                <div className="mb-2 text-sm font-semibold text-text">Price (₱)</div>
-                <input
-                  type="number"
-                  min="0"
-                  value={form.price}
-                  onChange={(event) => setForm((prev) => ({ ...prev, price: event.target.value }))}
-                  placeholder="e.g. 150"
-                  className="w-full rounded-xl border border-white/10 bg-transparent px-4 py-3 text-sm text-text placeholder:text-muted"
-                />
-              </label>
-
-              <label className="block">
-                <div className="mb-2 text-sm font-semibold text-text">Replacement value (₱)</div>
-                <input
-                  type="number"
-                  min="0"
-                  value={form.replacementValue}
-                  onChange={(event) => setForm((prev) => ({ ...prev, replacementValue: event.target.value }))}
-                  placeholder="What it costs to replace if lost"
-                  className="w-full rounded-xl border border-white/10 bg-transparent px-4 py-3 text-sm text-text placeholder:text-muted"
-                />
-              </label>
-
-              {selectedWeaponId ? (
-                <label className="flex items-start gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-3 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={form.applyToModel}
-                    onChange={(event) => setForm((prev) => ({ ...prev, applyToModel: event.target.checked }))}
-                    className="mt-0.5 h-4 w-4 accent-[var(--color-accent)]"
-                  />
-                  <span>
-                    Apply price, category, owner, and FPS settings to every {weapons.find((w) => w.id === selectedWeaponId)?.model || 'matching'} piece
-                    <span className="block text-xs text-muted">Status and notes always change only this piece.</span>
-                  </span>
-                </label>
-              ) : (
-                <label className="block">
-                  <div className="mb-2 text-sm font-semibold text-text">Pieces to add</div>
-                  <input
-                    type="number"
-                    min="1"
-                    max="200"
-                    step="1"
-                    value={form.pieces}
-                    onChange={(event) => setForm((prev) => ({ ...prev, pieces: event.target.value }))}
-                    className="w-full rounded-xl border border-white/10 bg-transparent px-4 py-3 text-sm text-text placeholder:text-muted"
-                  />
-                  <div className="mt-1 text-xs text-muted">Each piece gets its own ID and number (e.g. M4 Rifle #1, #2, …) so players can pick a specific one.</div>
-                </label>
-              )}
-
-              <label className="block">
-                <div className="mb-2 text-sm font-semibold text-text">Short description</div>
-                <input
-                  value={form.description}
-                  onChange={(event) => setForm((prev) => ({ ...prev, description: event.target.value }))}
-                  placeholder="e.g. Ready for the 2:30 PM group booking."
-                  className="w-full rounded-xl border border-white/10 bg-transparent px-4 py-3 text-sm text-text placeholder:text-muted"
-                />
-              </label>
-
-              <div className="grid gap-3 md:grid-cols-2">
-                <label className="block">
-                  <div className="mb-2 text-sm font-semibold text-text">Category</div>
-                  <select
-                    value={form.category}
-                    onChange={(event) => {
-                      const nextCategory = event.target.value as WeaponCategory
-                      const defaultPrice = DEFAULT_CATEGORY_PRICES[nextCategory]
-                      setForm((prev) => ({
-                        ...prev,
-                        category: nextCategory,
-                        ...(defaultPrice !== undefined ? { price: String(defaultPrice) } : {}),
-                      }))
-                    }}
-                    className="w-full rounded-xl border border-white/10 glass px-4 py-3 text-sm text-text"
-                  >
-                    {categoryOptions.map((option) => (
-                      <option key={option.key} value={option.key}>{option.label}</option>
-                    ))}
-                  </select>
-                </label>
-                <label className="block">
-                  <div className="mb-2 text-sm font-semibold text-text">Status</div>
-                  <select
-                    value={form.status}
-                    onChange={(event) => setForm((prev) => ({ ...prev, status: event.target.value as WeaponStatus }))}
-                    className="w-full rounded-xl border border-white/10 glass px-4 py-3 text-sm text-text"
-                  >
-                    <option value="available">Available</option>
-                    <option value="rented">Rented</option>
-                    <option value="needs-check">Damage</option>
-                  </select>
-                </label>
-              </div>
-
-              <div className="grid gap-3 md:grid-cols-2">
-                <label className="block">
-                  <div className="mb-2 text-sm font-semibold text-text">FPS classification</div>
-                  <select
-                    value={form.fpsClass}
-                    onChange={(event) => setForm((prev) => ({ ...prev, fpsClass: event.target.value }))}
-                    className="w-full rounded-xl border border-white/10 glass px-4 py-3 text-sm text-text"
-                  >
-                    <option value="">From category ({form.category === 'snipers' ? 'sniper / VSR' : 'AEG'})</option>
-                    <option value="aeg">AEG / rifle / pistol (450 FPS)</option>
-                    <option value="sniper">Sniper / VSR (550 FPS, 0.20g BBs)</option>
-                  </select>
-                </label>
-                <label className="block">
-                  <div className="mb-2 text-sm font-semibold text-text">FPS limit override</div>
-                  <input
-                    type="number"
-                    min="0"
-                    value={form.fpsLimit}
-                    onChange={(event) => setForm((prev) => ({ ...prev, fpsLimit: event.target.value }))}
-                    placeholder="Blank = class limit"
-                    className="w-full rounded-xl border border-white/10 bg-transparent px-4 py-3 text-sm text-text placeholder:text-muted"
-                  />
-                </label>
-              </div>
-              {partners.length > 0 ? (
-            <label className="mt-3 block">
-              <div className="mb-2 text-sm font-semibold text-text">Owned by partner</div>
-              <select
-                value={form.partnerId}
-                onChange={(event) => setForm((prev) => ({ ...prev, partnerId: event.target.value }))}
-                className="w-full rounded-xl border border-white/10 bg-background px-4 py-3 text-sm text-text [&>option]:bg-background"
-              >
-                <option value="">Center-owned</option>
-                {partners.map((partner) => (
-                  <option key={partner.id} value={partner.id}>{partner.name}</option>
-                ))}
-              </select>
-              <div className="mt-1 text-xs text-muted">Partner-owned items count toward that partner's income share.</div>
-            </label>
-              ) : null}
-            </div>
-            <div className="mt-4">
-              {selectedWeaponId ? (
-                <div className="flex items-center gap-2">
-                  <Button onClick={handleUpdate} disabled={saving}>
-                    {saving ? 'Saving...' : 'Update weapon'}
-                  </Button>
-                  <Button variant="ghost" onClick={resetForm}>New</Button>
-                </div>
-              ) : (
-                <Button onClick={addWeapon} disabled={saving}>
-                  {saving ? 'Saving...' : Number(form.pieces) > 1 ? `Add ${form.pieces} pieces` : 'Add weapon'}
-                </Button>
-              )}
-            </div>
-          </Card>
-
+        <div className="mt-4">
           <Card className="p-4 bg-white/5/60">
             <div className="text-xs uppercase tracking-widest text-muted">Maintenance queue</div>
             <div className="mt-2 text-sm text-muted">Weapons that need servicing or re-inspection are surfaced here.</div>
@@ -829,6 +722,179 @@ export function AdminWeaponsPage() {
             </div>
           </div>
         </div>
+      ) : null}
+      {formOpen ? (
+        <Modal eyebrow="Weapons" title={selectedWeaponId ? `Edit ${selectedWeaponId}` : 'Add weapons'} onClose={closeForm}>
+          <div className="text-sm text-muted">
+            {selectedWeaponId ? 'Update this piece, or every piece of the same model.' : 'Every physical weapon is its own piece with its own ID.'}
+          </div>
+          <div className="mt-4 grid gap-3">
+            <label className="block">
+              <div className="mb-2 text-sm font-semibold text-text">Weapon name</div>
+              <input
+                ref={nameRef}
+                value={form.name}
+                readOnly={Boolean(selectedWeaponId)}
+                onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
+                className="w-full rounded-xl border border-white/10 bg-transparent px-4 py-3 text-sm text-text placeholder:text-muted read-only:opacity-70"
+                placeholder="e.g. M4 Rifle"
+              />
+            </label>
+
+            <label className="block">
+              <div className="mb-2 text-sm font-semibold text-text">Price (₱)</div>
+              <input
+                type="number"
+                min="0"
+                value={form.price}
+                onChange={(event) => setForm((prev) => ({ ...prev, price: event.target.value }))}
+                placeholder="e.g. 150"
+                className="w-full rounded-xl border border-white/10 bg-transparent px-4 py-3 text-sm text-text placeholder:text-muted"
+              />
+            </label>
+
+            <label className="block">
+              <div className="mb-2 text-sm font-semibold text-text">Replacement value (₱)</div>
+              <input
+                type="number"
+                min="0"
+                value={form.replacementValue}
+                onChange={(event) => setForm((prev) => ({ ...prev, replacementValue: event.target.value }))}
+                placeholder="What it costs to replace if lost"
+                className="w-full rounded-xl border border-white/10 bg-transparent px-4 py-3 text-sm text-text placeholder:text-muted"
+              />
+            </label>
+
+            {selectedWeaponId ? (
+              <label className="flex items-start gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-3 text-sm">
+                <input
+                  type="checkbox"
+                  checked={form.applyToModel}
+                  onChange={(event) => setForm((prev) => ({ ...prev, applyToModel: event.target.checked }))}
+                  className="mt-0.5 h-4 w-4 accent-[var(--color-accent)]"
+                />
+                <span>
+                  Apply price, category, owner, and FPS settings to every {weapons.find((w) => w.id === selectedWeaponId)?.model || 'matching'} piece
+                  <span className="block text-xs text-muted">Status and notes always change only this piece.</span>
+                </span>
+              </label>
+            ) : (
+              <label className="block">
+                <div className="mb-2 text-sm font-semibold text-text">Pieces to add</div>
+                <input
+                  type="number"
+                  min="1"
+                  max="200"
+                  step="1"
+                  value={form.pieces}
+                  onChange={(event) => setForm((prev) => ({ ...prev, pieces: event.target.value }))}
+                  className="w-full rounded-xl border border-white/10 bg-transparent px-4 py-3 text-sm text-text placeholder:text-muted"
+                />
+                <div className="mt-1 text-xs text-muted">Each piece gets its own ID and number (e.g. M4 Rifle #1, #2, …) so players can pick a specific one.</div>
+              </label>
+            )}
+
+            <label className="block">
+              <div className="mb-2 text-sm font-semibold text-text">Short description</div>
+              <input
+                value={form.description}
+                onChange={(event) => setForm((prev) => ({ ...prev, description: event.target.value }))}
+                placeholder="e.g. Ready for the 2:30 PM group booking."
+                className="w-full rounded-xl border border-white/10 bg-transparent px-4 py-3 text-sm text-text placeholder:text-muted"
+              />
+            </label>
+
+            <div className="grid gap-3 md:grid-cols-2">
+              <label className="block">
+                <div className="mb-2 text-sm font-semibold text-text">Category</div>
+                <select
+                  value={form.category}
+                  onChange={(event) => {
+                    const nextCategory = event.target.value as WeaponCategory
+                    const defaultPrice = DEFAULT_CATEGORY_PRICES[nextCategory]
+                    setForm((prev) => ({
+                      ...prev,
+                      category: nextCategory,
+                      ...(defaultPrice !== undefined ? { price: String(defaultPrice) } : {}),
+                    }))
+                  }}
+                  className="w-full rounded-xl border border-white/10 glass px-4 py-3 text-sm text-text"
+                >
+                  {categoryOptions.map((option) => (
+                    <option key={option.key} value={option.key}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="block">
+                <div className="mb-2 text-sm font-semibold text-text">Status</div>
+                <select
+                  value={form.status}
+                  onChange={(event) => setForm((prev) => ({ ...prev, status: event.target.value as WeaponStatus }))}
+                  className="w-full rounded-xl border border-white/10 glass px-4 py-3 text-sm text-text"
+                >
+                  <option value="available">Available</option>
+                  <option value="rented">Rented</option>
+                  <option value="needs-check">Damage</option>
+                </select>
+              </label>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2">
+              <label className="block">
+                <div className="mb-2 text-sm font-semibold text-text">FPS classification</div>
+                <select
+                  value={form.fpsClass}
+                  onChange={(event) => setForm((prev) => ({ ...prev, fpsClass: event.target.value }))}
+                  className="w-full rounded-xl border border-white/10 glass px-4 py-3 text-sm text-text"
+                >
+                  <option value="">From category ({form.category === 'snipers' ? 'sniper / VSR' : 'AEG'})</option>
+                  <option value="aeg">AEG / rifle / pistol (450 FPS)</option>
+                  <option value="sniper">Sniper / VSR (550 FPS, 0.20g BBs)</option>
+                </select>
+              </label>
+              <label className="block">
+                <div className="mb-2 text-sm font-semibold text-text">FPS limit override</div>
+                <input
+                  type="number"
+                  min="0"
+                  value={form.fpsLimit}
+                  onChange={(event) => setForm((prev) => ({ ...prev, fpsLimit: event.target.value }))}
+                  placeholder="Blank = class limit"
+                  className="w-full rounded-xl border border-white/10 bg-transparent px-4 py-3 text-sm text-text placeholder:text-muted"
+                />
+              </label>
+            </div>
+            {partners.length > 0 ? (
+          <label className="mt-3 block">
+            <div className="mb-2 text-sm font-semibold text-text">Owned by partner</div>
+            <select
+              value={form.partnerId}
+              onChange={(event) => setForm((prev) => ({ ...prev, partnerId: event.target.value }))}
+              className="w-full rounded-xl border border-white/10 bg-background px-4 py-3 text-sm text-text [&>option]:bg-background"
+            >
+              <option value="">Center-owned</option>
+              {partners.map((partner) => (
+                <option key={partner.id} value={partner.id}>{partner.name}</option>
+              ))}
+            </select>
+            <div className="mt-1 text-xs text-muted">Partner-owned items count toward that partner's income share.</div>
+          </label>
+            ) : null}
+          </div>
+          <div className="mt-4">
+            {selectedWeaponId ? (
+              <div className="flex items-center gap-2">
+                <Button onClick={handleUpdate} disabled={saving}>
+                  {saving ? 'Saving...' : 'Update weapon'}
+                </Button>
+              </div>
+            ) : (
+              <Button onClick={addWeapon} disabled={saving}>
+                {saving ? 'Saving...' : Number(form.pieces) > 1 ? `Add ${form.pieces} pieces` : 'Add weapon'}
+              </Button>
+            )}
+          </div>
+        </Modal>
       ) : null}
     </div>
   )

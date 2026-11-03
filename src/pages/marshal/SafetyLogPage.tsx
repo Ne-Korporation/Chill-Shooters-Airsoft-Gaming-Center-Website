@@ -4,6 +4,7 @@ import { FiAlertTriangle, FiCrosshair } from 'react-icons/fi'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
+import { ItemCombobox, type ComboItem } from '../../components/ui/ItemCombobox'
 import { apiGet, apiPost, apiPut } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
 import { Paged } from '../../components/ui/Pagination'
@@ -58,6 +59,8 @@ function formatDateTime(iso?: string) {
   const date = new Date(iso)
   return Number.isNaN(date.getTime()) ? iso : date.toLocaleString()
 }
+
+const toOption = (item: InventoryItem): ComboItem => ({ key: item.id, label: item.name, detail: item.id })
 
 function toItems(docs: any[]): InventoryItem[] {
   return docs
@@ -200,6 +203,7 @@ export function SafetyLogPage() {
   }
 
   const damageItems = damageForm.itemType === 'weapon' ? weapons : equipment
+  const weaponOptions = weapons.map(toOption)
 
   return (
     <div className="space-y-4">
@@ -231,25 +235,16 @@ export function SafetyLogPage() {
           <Card className="p-4 md:p-5">
             <div className="flex items-center gap-2 text-sm font-bold"><FiCrosshair /> Record a chronograph reading</div>
             <form className="mt-4 space-y-3" onSubmit={submitFps}>
-              <label className="block">
-                <div className="mb-2 text-sm font-semibold text-text">Center weapon</div>
-                <select
-                  value={fpsForm.weaponId}
-                  onChange={(e) => setFpsForm((c) => ({ ...c, weaponId: e.target.value }))}
-                  className={selectClass}
-                >
-                  <option value="">Player-owned / not listed</option>
-                  {weapons.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-                </select>
-              </label>
-              {!fpsForm.weaponId ? (
-                <Input
-                  label="Weapon description"
-                  placeholder="e.g. Player's M4 (blue tape)"
-                  value={fpsForm.weaponName}
-                  onChange={(e) => setFpsForm((c) => ({ ...c, weaponName: e.target.value }))}
-                />
-              ) : null}
+              <ItemCombobox
+                label="Weapon"
+                placeholder="Type a weapon name or pick one, e.g. M4 Rifle or Player's M4 (blue tape)"
+                items={weaponOptions}
+                selectedKey={fpsForm.weaponId}
+                onSelect={(item) => setFpsForm((c) => ({ ...c, weaponId: item?.key || '' }))}
+                allowCustom
+                customText={fpsForm.weaponName}
+                onCustomText={(text) => setFpsForm((c) => ({ ...c, weaponName: text }))}
+              />
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="block">
                   <div className="mb-2 text-sm font-semibold text-text">Class</div>
@@ -349,28 +344,21 @@ export function SafetyLogPage() {
                     className={selectClass}
                   >
                     <option value="weapon">Weapon</option>
-                    <option value="equipment">Equipment</option>
+                    <option value="equipment">Gear</option>
                   </select>
                 </label>
-                <label className="block">
-                  <div className="mb-2 text-sm font-semibold text-text">Item</div>
-                  <select
-                    value={damageForm.itemId}
-                    onChange={(e) => setDamageForm((c) => ({ ...c, itemId: e.target.value }))}
-                    className={selectClass}
-                  >
-                    <option value="">Not listed</option>
-                    {damageItems.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-                  </select>
-                </label>
-              </div>
-              {!damageForm.itemId ? (
-                <Input
-                  label="Item description"
-                  value={damageForm.itemName}
-                  onChange={(e) => setDamageForm((c) => ({ ...c, itemName: e.target.value }))}
+                <ItemCombobox
+                  key={damageForm.itemType}
+                  label="Item"
+                  placeholder={damageForm.itemType === 'weapon' ? 'Type or pick a weapon' : 'Type or pick gear'}
+                  items={damageItems.map(toOption)}
+                  selectedKey={damageForm.itemId}
+                  onSelect={(item) => setDamageForm((c) => ({ ...c, itemId: item?.key || '' }))}
+                  allowCustom
+                  customText={damageForm.itemName}
+                  onCustomText={(text) => setDamageForm((c) => ({ ...c, itemName: text }))}
                 />
-              ) : null}
+              </div>
               <Input
                 label="Reservation ID"
                 hint="Needed to bill a damage charge to the responsible booking."
@@ -401,7 +389,7 @@ export function SafetyLogPage() {
           <Card className="p-4 md:p-5">
             <div className="text-xs uppercase tracking-widest text-muted">Penalty rules</div>
             <div className="mt-2 space-y-1 text-sm text-muted">
-              <div><span className="font-semibold text-text">Lost item:</span> the item's replacement value (set on the Weapons / Equipment page).</div>
+              <div><span className="font-semibold text-text">Lost item:</span> the item's replacement value (set on the Weapons / Gear page).</div>
               <div><span className="font-semibold text-text">Damaged item:</span> gunsmith repair cost (parts + labor) plus a {handlingFee || 0}% handling fee.</div>
               <div>Billing a different amount needs a written reason.</div>
             </div>
