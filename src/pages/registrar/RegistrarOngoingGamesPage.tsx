@@ -1,13 +1,16 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { FiArchive, FiCheck, FiClock, FiChevronRight, FiMapPin, FiSearch, FiShield, FiX } from 'react-icons/fi'
+import { FiArchive, FiCheck, FiChevronRight, FiEye, FiMapPin, FiSearch, FiShield, FiX } from 'react-icons/fi'
 import { toast } from 'react-hot-toast'
 
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
+import { Modal } from '../../components/ui/Modal'
 import { apiGet, apiPut } from '../../utils/apiClient'
 import { DEFAULT_PAGE_SIZE, Pagination } from '../../components/ui/Pagination'
 import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
+import { useAuth } from '../../context/AuthContext'
+import { LOCATIONS } from '../operations/shared'
 
 type GameplayStatus = 'Scheduled' | 'Ongoing' | 'Completed' | 'Cancelled' | 'Archived'
 
@@ -20,6 +23,8 @@ type GameplayDoc = {
   Mode?: string
   Group?: string
   Package?: string
+  LocationId?: string
+  Location?: string
   LayoutRequest?: string
   LayoutBlueprintUrl?: string
   Notes?: string
@@ -38,12 +43,36 @@ const normalizeStatus = (value: any): GameplayStatus => {
 }
 
 // Game day from a "YYYY-MM-DD • slot" schedule, or '' when it can't be read.
-const gameDayOf = (doc: GameplayDoc) => {
+const gameDayOf = (doc: { Schedule?: string }) => {
   const day = String(doc.Schedule || '').slice(0, 10)
   return /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : ''
 }
 
 const manilaToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(new Date())
+
+// "2026-11-03 • morning" → "November 03, 2026 · Morning".
+export const formatSchedule = (doc: { Schedule?: string }) => {
+  const day = gameDayOf(doc)
+  if (!day) return doc.Schedule || '—'
+  const date = new Date(`${day}T12:00:00Z`).toLocaleDateString('en-US', { month: 'long', day: '2-digit', year: 'numeric', timeZone: 'UTC' })
+  const slot = String(doc.Schedule || '').split('•')[1]?.trim() || ''
+  return slot ? `${date} · ${slot.charAt(0).toUpperCase()}${slot.slice(1)}` : date
+}
+
+export const locationName = (doc: { LocationId?: string; Location?: string }) =>
+  LOCATIONS.find((loc) => loc.id === doc.LocationId)?.name || doc.Location || doc.LocationId || '—'
+
+type GameWeapon = {
+  id: string
+  name: string
+  unitNumber: number
+  status: string
+  source: 'rental' | 'own'
+  rentedTo: string
+  rentalStatus: string
+}
+
+const WEAPON_STATUS_LABELS: Record<string, string> = { available: 'Available', rented: 'Rented', 'needs-check': 'Needs check', removed: 'Removed' }
 
 const statusTone = (status: GameplayStatus) => {
   switch (status) {
@@ -87,12 +116,13 @@ type GameFilters = {
   fromDate: string
   toDate: string
   slot: string
+  location: string
   mode: string
   search: string
   sort: 'soonest' | 'latest' | 'newest'
 }
 
-const DEFAULT_FILTERS: GameFilters = { status: 'active', date: 'any', onDate: '', fromDate: '', toDate: '', slot: '', mode: '', search: '', sort: 'soonest' }
+const DEFAULT_FILTERS: GameFilters = { status: 'active', date: 'any', onDate: '', fromDate: '', toDate: '', slot: '', location: '', mode: '', search: '', sort: 'soonest' }
 
 const addDays = (iso: string, days: number) => {
   const date = new Date(`${iso}T00:00:00Z`)
@@ -122,12 +152,13 @@ function buildGameQuery(filters: GameFilters) {
     and.push({ Schedule: { ...(filters.fromDate ? { $gte: filters.fromDate } : {}), ...(filters.toDate ? { $lt: addDays(filters.toDate, 1) } : {}) } })
   }
   if (filters.slot) and.push({ Schedule: { $regex: `${filters.slot}$`, $options: 'i' } })
+  if (filters.location) and.push({ LocationId: filters.location })
   if (filters.mode) and.push({ Mode: filters.mode })
 
   const term = filters.search.trim()
   if (term) {
     const pattern = { $regex: escapeRegex(term), $options: 'i' }
-    and.push({ $or: ['id', 'reservationId', 'Game', 'Schedule', 'Mode', 'Group', 'Package', 'Notes', 'LayoutRequest'].map((field) => ({ [field]: pattern })) })
+    and.push({ $or: ['id', 'reservationId', 'Schedule', 'Location', 'Mode', 'Group', 'Package', 'Notes', 'LayoutRequest'].map((field) => ({ [field]: pattern })) })
   }
   const sort = filters.sort === 'newest' ? { createdAtISO: -1 } : { Schedule: filters.sort === 'soonest' ? 1 : -1 }
   return { q: { $and: and }, sort }
@@ -161,7 +192,45 @@ export function RegistrarOngoingGamesPage() {
   const [total, setTotal] = useState(0)
   const [counts, setCounts] = useState({ Scheduled: 0, Ongoing: 0, Completed: 0, Cancelled: 0, Archived: 0 })
   const { addNotification } = useNotifications()
-  const setFilter = <K extends keyof GameFilters>(key: K, value: GameFilters[K]) => {
+  const { user } = useAuth()
+  const canUpdateWeapons = user?.role === 'admin' || user?.role === 'marshal'
+  // The game whose details pop-up is open; the row is re-read from the list after each refresh.
+  const [detail, setDetail] = useState<GameplayDoc | null>(null)
+  const detailDoc = detail ? items.find((doc) => rowId(doc) === rowId(detail)) || detail : null
+  const [weapons, setWeapons] = useState<GameWeapon[] | null>(null)
+  const [updatingWeaponId, setUpdatingWeaponId] = useState('')
+
+  const loadWeapons = React.useCallback(async (reservationId: string) => {
+    try {
+      const res = await apiGet<{ ok: boolean; data: GameWeapon[] }>(`/api/reservations/${encodeURIComponent(reservationId)}/weapons`)
+      setWeapons(Array.isArray(res?.data) ? res.data : [])
+    } catch (e: any) {
+      toast.error(String(e?.message || e))
+      setWeapons([])
+    }
+  }, [])
+
+  const openDetails = (doc: GameplayDoc) => {
+    setDetail(doc)
+    setWeapons(null)
+    if (doc.reservationId) void loadWeapons(doc.reservationId)
+    else setWeapons([])
+  }
+
+  const setWeaponStatus = async (weapon: GameWeapon, status: 'available' | 'needs-check') => {
+    setUpdatingWeaponId(weapon.id)
+    try {
+      await apiPut(`/api/weapons/${encodeURIComponent(weapon.id)}`, { status, updatedAtISO: new Date().toISOString() })
+      toast.success(`${weapon.name} marked ${status === 'available' ? 'available' : 'for a check'}`)
+      if (detailDoc?.reservationId) await loadWeapons(detailDoc.reservationId)
+    } catch (e: any) {
+      toast.error(String(e?.message || e))
+    } finally {
+      setUpdatingWeaponId('')
+    }
+  }
+
+  const setFilter =<K extends keyof GameFilters>(key: K, value: GameFilters[K]) => {
     setFilters((current) => ({ ...current, [key]: value }))
     setPage(1)
   }
@@ -306,26 +375,26 @@ export function RegistrarOngoingGamesPage() {
         </Button>
       </div>
 
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
-        <Card className="p-4">
-          <div className="text-xs uppercase tracking-widest text-muted">Scheduled</div>
-          <div className="mt-2 text-2xl font-bold text-accent">{counts.Scheduled}</div>
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
+        <Card className="rounded-xl px-3 py-2 md:px-3 md:py-2">
+          <div className="truncate text-[10px] uppercase tracking-wider text-muted">Scheduled</div>
+          <div className="mt-0.5 text-base font-bold text-accent">{counts.Scheduled}</div>
         </Card>
-        <Card className="p-4">
-          <div className="text-xs uppercase tracking-widest text-muted">Ongoing</div>
-          <div className="mt-2 text-2xl font-bold text-success">{counts.Ongoing}</div>
+        <Card className="rounded-xl px-3 py-2 md:px-3 md:py-2">
+          <div className="truncate text-[10px] uppercase tracking-wider text-muted">Ongoing</div>
+          <div className="mt-0.5 text-base font-bold text-success">{counts.Ongoing}</div>
         </Card>
-        <Card className="p-4">
-          <div className="text-xs uppercase tracking-widest text-muted">Completed</div>
-          <div className="mt-2 text-2xl font-bold text-success">{counts.Completed}</div>
+        <Card className="rounded-xl px-3 py-2 md:px-3 md:py-2">
+          <div className="truncate text-[10px] uppercase tracking-wider text-muted">Completed</div>
+          <div className="mt-0.5 text-base font-bold text-success">{counts.Completed}</div>
         </Card>
-        <Card className="p-4">
-          <div className="text-xs uppercase tracking-widest text-muted">Cancelled</div>
-          <div className="mt-2 text-2xl font-bold text-danger">{counts.Cancelled}</div>
+        <Card className="rounded-xl px-3 py-2 md:px-3 md:py-2">
+          <div className="truncate text-[10px] uppercase tracking-wider text-muted">Cancelled</div>
+          <div className="mt-0.5 text-base font-bold text-danger">{counts.Cancelled}</div>
         </Card>
-        <Card className="p-4">
-          <div className="text-xs uppercase tracking-widest text-muted">Archived</div>
-          <div className="mt-2 text-2xl font-bold text-muted">{counts.Archived}</div>
+        <Card className="rounded-xl px-3 py-2 md:px-3 md:py-2">
+          <div className="truncate text-[10px] uppercase tracking-wider text-muted">Archived</div>
+          <div className="mt-0.5 text-base font-bold text-muted">{counts.Archived}</div>
         </Card>
       </div>
 
@@ -343,7 +412,7 @@ export function RegistrarOngoingGamesPage() {
               <input
                 value={filters.search}
                 onChange={(e) => setFilter('search', e.target.value)}
-                placeholder="Search ID, reservation, game, mode, group, package, notes"
+                placeholder="Search ID, reservation, location, mode, group, package, notes"
                 className="w-full rounded-2xl border border-white/10 bg-white/5 px-10 py-3 text-sm outline-none focus:border-accent/40"
               />
               {filters.search.trim() ? (
@@ -360,7 +429,7 @@ export function RegistrarOngoingGamesPage() {
           </div>
         </div>
 
-        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
           <label className="block text-xs font-semibold text-muted">
             Status
             <select value={filters.status} onChange={(e) => setFilter('status', e.target.value as StatusFilter)} className="select-field mt-1 h-10 w-full">
@@ -403,6 +472,13 @@ export function RegistrarOngoingGamesPage() {
             </>
           ) : null}
           <label className="block text-xs font-semibold text-muted">
+            Location
+            <select value={filters.location} onChange={(e) => setFilter('location', e.target.value)} className="select-field mt-1 h-10 w-full">
+              <option value="">Any location</option>
+              {LOCATIONS.map((loc) => <option key={loc.id} value={loc.id}>{loc.name}</option>)}
+            </select>
+          </label>
+          <label className="block text-xs font-semibold text-muted">
             Time slot
             <select value={filters.slot} onChange={(e) => setFilter('slot', e.target.value)} className="select-field mt-1 h-10 w-full">
               <option value="">Any slot</option>
@@ -441,99 +517,47 @@ export function RegistrarOngoingGamesPage() {
             <thead>
               <tr className="text-left text-xs uppercase tracking-widest text-muted">
                 <th className="py-2 pr-3">ID</th>
-                <th className="py-2 pr-3">Game</th>
                 <th className="py-2 pr-3">Schedule</th>
-                <th className="py-2 pr-3">Mode</th>
-                <th className="py-2 pr-3">Group</th>
-                <th className="py-2 pr-3">Package</th>
+                <th className="py-2 pr-3">Location</th>
                 <th className="py-2 pr-3">Status</th>
-                <th className="py-2 pr-3">Actions</th>
+                <th className="py-2 pr-3 text-right">Details</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={8} className="py-6 text-sm text-muted">
+                  <td colSpan={5} className="py-6 text-sm text-muted">
                     Loading gameplay…
                   </td>
                 </tr>
               ) : filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-6 text-sm text-muted">
+                  <td colSpan={5} className="py-6 text-sm text-muted">
                     {filtersActive ? 'No games match these filters.' : 'No gameplay records.'}
                   </td>
                 </tr>
               ) : (
-                filtered.map((doc) => {
-                  const status = normalizeStatus(doc.Status)
-                  const gameDay = gameDayOf(doc)
-                  const beforeGameDay = Boolean(gameDay) && gameDay > manilaToday()
-                  return (
-                    <tr key={rowId(doc)} className="border-t border-white/5">
-                      <td className="py-3 pr-3">
-                        <div className="font-bold">{rowId(doc) || '—'}</div>
-                      </td>
-                      <td className="py-3 pr-3">
-                        <div className="font-bold">{doc.Game || '—'}</div>
-                        <div className="mt-1 text-xs text-muted flex items-center gap-2">
-
-                        </div>
-                      </td>
-                      <td className="py-3 pr-3">
-                        <div className="font-bold">{doc.Schedule || '—'}</div>
-                        <div className="mt-1 text-xs text-muted flex items-center gap-2">
-                          <FiClock /> {doc.createdAtISO || '—'}
-                        </div>
-                      </td>
-                      <td className="py-3 pr-3">
-                        <div className="font-bold">{doc.Mode || '—'}</div>
-                        {doc.LayoutRequest ? <div className="mt-1 max-w-[220px] text-xs text-muted">Layout: {doc.LayoutRequest}</div> : null}
-                        {doc.LayoutBlueprintUrl ? (
-                          <a href={doc.LayoutBlueprintUrl} target="_blank" rel="noreferrer" className="mt-1 inline-block text-xs font-semibold text-accent hover:underline">
-                            View layout blueprint
-                          </a>
-                        ) : null}
-                        {doc.Notes ? <div className="mt-1 max-w-[220px] text-xs text-muted">Notes: {doc.Notes}</div> : null}
-                      </td>
-                      <td className="py-3 pr-3">
-                        <div className="font-bold">{doc.Group || '—'}</div>
-                      </td>
-                      <td className="py-3 pr-3">
-                        <div className="font-bold">{doc.Package || '—'}</div>
-                      </td>
-                      <td className="py-3 pr-3">
-                        <StatusBadge status={status} />
-                      </td>
-                      <td className="py-3 pr-3">
-                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                          {status === 'Scheduled' && beforeGameDay ? (
-                            <span className="text-xs text-muted">Starts on {gameDay}</span>
-                          ) : null}
-                          {status === 'Scheduled' && !beforeGameDay ? (
-                            <Button variant="primary" className="w-full sm:w-auto" onClick={() => startGame(doc)}>
-                              Start
-                              <FiChevronRight />
-                            </Button>
-                          ) : null}
-                          {status === 'Ongoing' ? (
-                            <Button variant="ghost" className="w-full sm:w-auto" onClick={() => completeGame(doc)}>
-                              Complete
-                              <FiCheck />
-                            </Button>
-                          ) : null}
-                          {status === 'Completed' ? (
-                            <Button variant="ghost" className="w-full sm:w-auto border-accent/30 text-accent" onClick={() => archiveGame(doc)}>
-                              <FiArchive />
-                              Archive
-                            </Button>
-                          ) : null}
-                          {status === 'Archived' ? <span className="text-xs text-muted italic">In game history</span> : null}
-                          {status === 'Cancelled' ? <span className="text-xs text-muted italic">No actions</span> : null}
-                        </div>
-                      </td>
-                    </tr>
-                  )
-                })
+                filtered.map((doc) => (
+                  <tr key={rowId(doc)} className="border-t border-white/5">
+                    <td className="py-3 pr-3">
+                      <div className="font-bold">{rowId(doc) || '—'}</div>
+                    </td>
+                    <td className="py-3 pr-3">
+                      <div className="font-bold">{formatSchedule(doc)}</div>
+                    </td>
+                    <td className="py-3 pr-3">
+                      <div className="font-semibold">{locationName(doc)}</div>
+                    </td>
+                    <td className="py-3 pr-3">
+                      <StatusBadge status={normalizeStatus(doc.Status)} />
+                    </td>
+                    <td className="py-3 pr-3 text-right">
+                      <Button size="sm" variant="ghost" onClick={() => openDetails(doc)}>
+                        <FiEye /> Game details
+                      </Button>
+                    </td>
+                  </tr>
+                ))
               )}
             </tbody>
           </table>
@@ -554,7 +578,152 @@ export function RegistrarOngoingGamesPage() {
         </div>
     </div>
     </Card>
+
+    {detailDoc ? (
+      <GameDetailsDialog
+        doc={detailDoc}
+        weapons={weapons}
+        canUpdateWeapons={canUpdateWeapons}
+        updatingWeaponId={updatingWeaponId}
+        onWeaponStatus={setWeaponStatus}
+        onStart={() => startGame(detailDoc)}
+        onComplete={() => completeGame(detailDoc)}
+        onArchive={() => archiveGame(detailDoc)}
+        onClose={() => setDetail(null)}
+      />
+    ) : null}
     </div>
-    
+  )
+}
+
+function DetailRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex justify-between gap-4 border-b border-white/5 py-2 text-sm last:border-b-0">
+      <div className="text-muted">{label}</div>
+      <div className="text-right font-semibold">{children}</div>
+    </div>
+  )
+}
+
+// Everything about one game: package, mode, group, layout, the status actions, and the weapons
+// used, which admins and marshals can mark available again or flag for a check.
+function GameDetailsDialog({
+  doc,
+  weapons,
+  canUpdateWeapons,
+  updatingWeaponId,
+  onWeaponStatus,
+  onStart,
+  onComplete,
+  onArchive,
+  onClose,
+}: {
+  doc: GameplayDoc
+  weapons: GameWeapon[] | null
+  canUpdateWeapons: boolean
+  updatingWeaponId: string
+  onWeaponStatus: (weapon: GameWeapon, status: 'available' | 'needs-check') => void
+  onStart: () => void
+  onComplete: () => void
+  onArchive: () => void
+  onClose: () => void
+}) {
+  const status = normalizeStatus(doc.Status)
+  const gameDay = gameDayOf(doc)
+  const beforeGameDay = Boolean(gameDay) && gameDay > manilaToday()
+
+  const actions = (
+    <>
+      {status === 'Scheduled' && beforeGameDay ? <span className="self-center text-xs text-muted">Starts on {formatSchedule(doc).split(' · ')[0]}</span> : null}
+      {status === 'Scheduled' && !beforeGameDay ? (
+        <Button variant="primary" onClick={onStart}>
+          Start <FiChevronRight />
+        </Button>
+      ) : null}
+      {status === 'Ongoing' ? (
+        <Button variant="ghost" onClick={onComplete}>
+          Complete <FiCheck />
+        </Button>
+      ) : null}
+      {status === 'Completed' ? (
+        <Button variant="ghost" className="border-accent/30 text-accent" onClick={onArchive}>
+          <FiArchive /> Archive
+        </Button>
+      ) : null}
+    </>
+  )
+
+  return (
+    <Modal eyebrow={`Game ${rowId(doc)}`} title={formatSchedule(doc)} onClose={onClose} footer={actions}>
+      <div className="grid gap-4 md:grid-cols-2">
+        <section>
+          <div className="text-xs uppercase tracking-widest text-muted">Game</div>
+          <div className="mt-1">
+            <DetailRow label="Status"><StatusBadge status={status} /></DetailRow>
+            <DetailRow label="Location">{locationName(doc)}</DetailRow>
+            <DetailRow label="Package">{doc.Package || '—'}</DetailRow>
+            <DetailRow label="Mode">{doc.Mode || '—'}</DetailRow>
+            <DetailRow label="Group">{doc.Group || '—'}</DetailRow>
+            {doc.reservationId ? <DetailRow label="Reservation">{doc.reservationId}</DetailRow> : null}
+          </div>
+        </section>
+        <section>
+          <div className="text-xs uppercase tracking-widest text-muted">Layout and notes</div>
+          <div className="mt-2 space-y-2 text-sm">
+            <div>{doc.LayoutRequest ? <>Layout: {doc.LayoutRequest}</> : <span className="text-muted">No layout request.</span>}</div>
+            {doc.LayoutBlueprintUrl ? (
+              <a href={doc.LayoutBlueprintUrl} target="_blank" rel="noreferrer" className="inline-block text-xs font-semibold text-accent hover:underline">
+                View layout blueprint
+              </a>
+            ) : null}
+            <div>{doc.Notes ? <>Notes: {doc.Notes}</> : <span className="text-muted">No notes.</span>}</div>
+          </div>
+        </section>
+      </div>
+
+      <section className="mt-5">
+        <div className="text-xs uppercase tracking-widest text-muted">Weapons used</div>
+        {weapons === null ? (
+          <div className="mt-2 text-sm text-muted">Loading weapons…</div>
+        ) : weapons.length === 0 ? (
+          <div className="mt-2 text-sm text-muted">No weapons are recorded for this game.</div>
+        ) : (
+          <ul className="mt-2 divide-y divide-white/5 rounded-2xl border border-white/10">
+            {weapons.map((weapon) => {
+              const available = weapon.status === 'available'
+              return (
+                <li key={weapon.id} className="flex flex-col gap-2 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold">
+                      {weapon.name}{weapon.unitNumber ? ` #${weapon.unitNumber}` : ''}
+                    </div>
+                    <div className="text-[11px] text-muted">
+                      {weapon.id} · {weapon.source === 'own' ? "Player's own" : 'Rental'}
+                      {weapon.rentedTo ? ` · ${weapon.rentalStatus === 'out' ? 'with' : 'used by'} ${weapon.rentedTo}` : ''}
+                    </div>
+                  </div>
+                  <div className="flex flex-none items-center gap-2">
+                    <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${available ? 'border-success/30 bg-success/15 text-success' : weapon.status === 'rented' ? 'border-accent/30 bg-accent/15 text-accent' : 'border-danger/30 bg-danger/15 text-danger'}`}>
+                      {WEAPON_STATUS_LABELS[weapon.status] || weapon.status}
+                    </span>
+                    {canUpdateWeapons && weapon.status !== 'removed' ? (
+                      available ? (
+                        <Button size="xs" variant="danger-soft" disabled={updatingWeaponId === weapon.id} onClick={() => onWeaponStatus(weapon, 'needs-check')}>
+                          <FiX /> Not available
+                        </Button>
+                      ) : (
+                        <Button size="xs" variant="success-soft" disabled={updatingWeaponId === weapon.id} onClick={() => onWeaponStatus(weapon, 'available')}>
+                          <FiCheck /> Mark available
+                        </Button>
+                      )
+                    ) : null}
+                  </div>
+                </li>
+              )
+            })}
+          </ul>
+        )}
+      </section>
+    </Modal>
   )
 }

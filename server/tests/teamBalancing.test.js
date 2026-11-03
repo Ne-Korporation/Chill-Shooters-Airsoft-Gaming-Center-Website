@@ -23,3 +23,13 @@ test('balanced teams have even sizes and close experience totals', () => {
   assert.ok(Math.abs(teams[0].totalExperience - teams[1].totalExperience) <= 10)
   assert.equal(new Set(teams.flatMap((t) => t.playerKeys)).size, players.length)
 })
+
+test('each experience level is spread evenly across teams', () => {
+  // One very experienced player would otherwise pull every intermediate onto the other team.
+  const players = [80, 30, 20, 18, 15, 12, 2, 1].map((experience, i) => ({ key: `p${i}`, experience, ageGroup: '25–34' }))
+  const teams = suggestBalancedTeams(players, 2)
+  for (const level of ['Experienced', 'Intermediate', 'Beginner']) {
+    const counts = teams.map((t) => t.levels[level] || 0)
+    assert.ok(Math.max(...counts) - Math.min(...counts) <= 1, `${level}: ${counts}`)
+  }
+})

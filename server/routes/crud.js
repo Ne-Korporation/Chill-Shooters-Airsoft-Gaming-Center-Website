@@ -1536,6 +1536,7 @@ router.post('/:collection', requireAuth, async (req, res) => {
       }
       payload.gameModePreference = gameModePreference || undefined
       payload.layoutRequest = String(payload.layoutRequest || '').trim().slice(0, 500) || undefined
+      payload.teamName = String(payload.teamName || '').trim().slice(0, 60) || undefined
       payload.notes = String(payload.notes || '').trim().slice(0, 1000)
 
       const knownFieldIds = new Set((LOCATION_FIELD_DEFS[locationId] || []).map((f) => f.id))
@@ -1773,8 +1774,8 @@ const STAFF_REVIEW_NOTICES = {
   }),
   equipments: (doc) => ({
     type: 'equipment_submitted',
-    title: 'New Equipment Request',
-    message: `A player submitted equipment request "${doc.name || doc.id}" for review.`,
+    title: 'New Gear Request',
+    message: `A player submitted gear request "${doc.name || doc.id}" for review.`,
   }),
 }
 

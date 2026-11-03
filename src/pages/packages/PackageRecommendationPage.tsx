@@ -330,7 +330,7 @@ export function PackageRecommendationPage() {
         const eqDocs = Array.isArray(eqRes?.data) ? eqRes.data : []
         setEquipment(eqDocs.map((d: any) => ({
           id: d.id ?? (d._id ? String(d._id) : undefined),
-          name: d.name || 'Unnamed equipment',
+          name: d.name || 'Unnamed gear',
           category: d.category || 'gear',
           price: typeof d.price === 'number' ? d.price : 0,
           qty: typeof d.qty === 'number' ? d.qty : 1,
@@ -819,7 +819,7 @@ export function PackageRecommendationPage() {
                         </div>
                         {item.pkg.equipmentIds.length > 0 ? (
                           <div className="inline-flex items-center gap-1 rounded-xl border border-white/10 bg-black/20 px-2 py-1 text-[11px] text-muted">
-                            <FiPackage /> {item.pkg.equipmentIds.length} equipment
+                            <FiPackage /> {item.pkg.equipmentIds.length} gear
                           </div>
                         ) : null}
                       </div>
@@ -1139,12 +1139,12 @@ export function PackageRecommendationPage() {
 
                   <div>
                     <div className="mb-2 text-xs font-bold uppercase tracking-[0.18em] text-muted">
-                      Equipment ({detailsIncluded.equipmentRows.reduce((n, r) => n + r.qty, 0)})
+                      Gear ({detailsIncluded.equipmentRows.reduce((n, r) => n + r.qty, 0)})
                     </div>
                     {detailsIncluded.equipmentRows.length ? (
                       <IncludedRows rows={detailsIncluded.equipmentRows} />
                     ) : (
-                      <div className="text-xs text-muted">No equipment in this package.</div>
+                      <div className="text-xs text-muted">No gear in this package.</div>
                     )}
                   </div>
 
@@ -1173,7 +1173,7 @@ export function PackageRecommendationPage() {
                       <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Price per player</div>
                       <div className="mt-3 space-y-2 text-sm">
                         <div className="flex items-center justify-between"><span className="text-muted">Package base</span><span>₱{detailsItem.pkg.basePrice.toLocaleString()}</span></div>
-                        <div className="flex items-center justify-between"><span className="text-muted">Weapons &amp; equipment</span><span>₱{detailsItem.pricing.equipmentCost.toLocaleString()}</span></div>
+                        <div className="flex items-center justify-between"><span className="text-muted">Weapons &amp; gear</span><span>₱{detailsItem.pricing.equipmentCost.toLocaleString()}</span></div>
                         <div className="flex items-center justify-between"><span className="text-muted">Entrance fee</span><span>₱{detailsItem.pricing.entranceFee.toLocaleString()}</span></div>
                         <div className="flex items-center justify-between border-t border-white/10 pt-2 font-semibold"><span>Subtotal</span><span>₱{detailsItem.pricing.perPlayerBeforeDiscount.toLocaleString()}</span></div>
                         {detailsItem.pricing.discountAmount > 0 ? (

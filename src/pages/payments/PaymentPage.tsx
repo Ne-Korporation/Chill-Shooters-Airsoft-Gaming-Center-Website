@@ -191,7 +191,7 @@ function PaymentPageContent() {
           }))
         : [
             { label: 'Field reservation', amount: field },
-            { label: 'Equipment', amount: equipment },
+            { label: 'Weapons & gear', amount: equipment },
             { label: `Player entrance fee (${Number(pendingReservation?.numberOfPlayers || 1)} × ₱150)`, amount: entranceFee },
             { label: 'Service fee', amount: service },
           ]
@@ -722,7 +722,7 @@ function PaymentPageContent() {
                 <div className="mt-3 h-px bg-white/10" />
                 {(breakdown.itemized.length > 0 ? breakdown.itemized : [
                   { label: 'Field reservation', amount: breakdown.field },
-                  { label: 'Equipment', amount: breakdown.equipment },
+                  { label: 'Weapons & gear', amount: breakdown.equipment },
                   { label: 'Player entrance fee (150 each)', amount: breakdown.entranceFee },
                   { label: 'Service fee', amount: breakdown.service },
                 ]).map((item) => (
@@ -786,7 +786,7 @@ function PaymentPageContent() {
                 <Button variant="primary" onClick={() => navigate('/app')}>
                   Go to Dashboard <FiChevronRight />
                 </Button>
-                <Button variant="ghost" onClick={() => navigate('/app/reservations')}>
+                <Button variant="ghost" onClick={() => navigate('/app/my-reservations')}>
                   View My Reservations
                 </Button>
               </div>
@@ -803,7 +803,7 @@ function PaymentPageContent() {
           <div className="mt-3 space-y-2 text-sm">
             {(breakdown.itemized.length > 0 ? breakdown.itemized : [
               { label: 'Field reservation', amount: breakdown.field },
-              { label: 'Equipment', amount: breakdown.equipment },
+              { label: 'Weapons & gear', amount: breakdown.equipment },
               { label: 'Player entrance fee (150 each)', amount: breakdown.entranceFee },
               { label: 'Service fee', amount: breakdown.service },
             ]).map((item) => (

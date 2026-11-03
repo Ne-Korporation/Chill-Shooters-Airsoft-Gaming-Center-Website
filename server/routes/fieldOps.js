@@ -293,21 +293,32 @@ async function getSessionRoster(db, { location, date, slot }) {
   return roster
 }
 
-// GET /api/team-grouping?location&date&slot&teams=2 — roster, a balanced suggestion, and the
-// marshal's saved assignment if there is one.
+// Players booked on the session who have been checked in at the field.
+async function getPresentRoster(db, session) {
+  const [roster, checkins] = await Promise.all([
+    getSessionRoster(db, session),
+    db.collection('field_checkins').findOne({ _id: sessionKey(session.location, session.date, session.slot) }),
+  ])
+  const checkedIn = checkins?.players || {}
+  return { roster: roster.filter((player) => checkedIn[player.key]), booked: roster.length }
+}
+
+// GET /api/team-grouping?location&date&slot&teams=2 — the players present (checked in), a
+// suggestion balanced on experience level, and the marshal's saved assignment if there is one.
 router.get('/team-grouping', requireAuth, requireRole('admin', 'marshal'), async (req, res) => {
   try {
     const session = readSession(req.query)
     const teamCount = Math.min(Math.max(Number(req.query.teams) || 2, 2), 6)
     const db = await getDb()
-    const roster = await getSessionRoster(db, session)
+    const { roster, booked } = await getPresentRoster(db, session)
     const saved = await db.collection('team_assignments').findOne({ _id: sessionKey(session.location, session.date, session.slot) })
     return res.json({
       ok: true,
       data: {
         roster,
+        booked,
         suggestion: suggestBalancedTeams(roster, teamCount),
-        saved: saved ? { teams: saved.teams, savedAtISO: saved.savedAtISO, savedBy: saved.savedBy } : null,
+        saved: saved ? { teams: saved.teams, presentPlayers: saved.presentPlayers || [], savedAtISO: saved.savedAtISO, savedBy: saved.savedBy } : null,
       },
     })
   } catch (err) {
@@ -331,13 +342,29 @@ router.post('/team-grouping', requireAuth, requireRole('admin', 'marshal'), asyn
       seen.add(key)
     }
     const db = await getDb()
+    // Only players checked in for this session can be put on a team.
+    const { roster } = await getPresentRoster(db, session)
+    const present = new Map(roster.map((player) => [player.key, player]))
+    const absent = [...seen].filter((key) => !present.has(key))
+    if (absent.length) return res.status(400).json({ ok: false, error: 'Only players checked in for this session can be put on a team. Reload the session.' })
+    // The list of who was present is saved with the teams, so it stays on record after the day.
+    const presentPlayers = roster.map((player) => ({
+      key: player.key,
+      id: player.id,
+      name: player.name,
+      guest: player.guest,
+      gamesPlayed: player.gamesPlayed,
+      experienceLevel: player.experienceLevel,
+      ageGroup: player.ageGroup,
+      reservationId: player.reservationId,
+    }))
     const nowISO = new Date().toISOString()
     await db.collection('team_assignments').updateOne(
       { _id: sessionKey(session.location, session.date, session.slot) },
-      { $set: { ...session, teams: cleaned, savedAtISO: nowISO, savedBy: actorOf(req) } },
+      { $set: { ...session, teams: cleaned, presentPlayers, savedAtISO: nowISO, savedBy: actorOf(req) } },
       { upsert: true },
     )
-    return res.json({ ok: true, data: { teams: cleaned, savedAtISO: nowISO } })
+    return res.json({ ok: true, data: { teams: cleaned, presentPlayers, savedAtISO: nowISO } })
   } catch (err) {
     return sendError(res, err)
   }
@@ -348,7 +375,7 @@ router.post('/team-grouping', requireAuth, requireRole('admin', 'marshal'), asyn
 // ---------------------------------------------------------------------------
 
 // GET /api/field-checkin?location&date&slot — every booked team with its players and who has
-// checked in. Registrars tick players off; marshals see the same list read-only.
+// checked in. Registrars and marshals tick players off.
 router.get('/field-checkin', requireAuth, requireRole(...STAFF), async (req, res) => {
   try {
     const session = readSession(req.query)
@@ -394,7 +421,7 @@ router.get('/field-checkin', requireAuth, requireRole(...STAFF), async (req, res
 })
 
 // PUT /api/field-checkin { location, date, slot, playerKey, checkedIn } — registrar marks a player in or out.
-router.put('/field-checkin', requireAuth, requireRole('admin', 'registrar'), async (req, res) => {
+router.put('/field-checkin', requireAuth, requireRole('admin', 'registrar', 'marshal'), async (req, res) => {
   try {
     const session = readSession(req.body || {})
     const playerKey = String(req.body?.playerKey || '')
@@ -673,12 +700,59 @@ router.get('/rentals', requireAuth, requireRole(...STAFF), async (req, res) => {
   }
 })
 
+// GET /api/reservations/:id/weapons — the weapons used in a game: rental pieces reserved for the
+// booking, pieces checked out at Rentals, and players' own approved weapons, each with its
+// current status so staff can mark it available again or flag it for a check.
+router.get('/reservations/:id/weapons', requireAuth, requireRole(...STAFF), async (req, res) => {
+  try {
+    const db = await getDb()
+    const reservation = await findById(db, 'reservations', req.params.id)
+    if (!reservation) return res.status(404).json({ ok: false, error: 'Reservation not found' })
+    const reservationId = keyOf(reservation)
+    const [holds, rentals] = await Promise.all([
+      db.collection('inventory_holds').find({ reservationId, collection: 'weapons' }).toArray(),
+      db.collection('rentals').find({ reservationId, itemCollection: 'weapons' }).sort({ issuedAtISO: 1 }).toArray(),
+    ])
+    const sources = new Map()
+    const add = (itemId, source) => {
+      const key = String(itemId || '')
+      if (key && !sources.has(key)) sources.set(key, source)
+    }
+    for (const rental of rentals) add(rental.itemId, 'rental')
+    for (const hold of holds) add(hold.itemId, 'rental')
+    for (const id of reservation.selectedOwnWeaponIds || []) add(id, 'own')
+
+    const ids = [...sources.keys()]
+    const weapons = ids.length
+      ? await db.collection('weapons').find({ $or: [{ id: { $in: ids } }, { _id: { $in: ids.filter(ObjectId.isValid).map((id) => new ObjectId(id)) } }] }).toArray()
+      : []
+    const byKey = new Map(weapons.map((weapon) => [keyOf(weapon), weapon]))
+    const data = ids.map((id) => {
+      const weapon = byKey.get(id)
+      const rental = [...rentals].reverse().find((r) => String(r.itemId) === id)
+      return {
+        id,
+        name: weapon?.name || rental?.itemName || id,
+        unitNumber: Number(weapon?.unitNumber) || 0,
+        category: weapon?.category || rental?.itemCategory || '',
+        status: weapon ? String(weapon.status || 'available') : 'removed',
+        source: sources.get(id),
+        rentedTo: rental?.playerName || '',
+        rentalStatus: rental?.status || '',
+      }
+    })
+    return res.json({ ok: true, data })
+  } catch (err) {
+    return sendError(res, err)
+  }
+})
+
 // POST /api/rentals/issue { reservationId, playerName, playerId?, itemCollection, itemId, unitLabel }
 router.post('/rentals/issue', requireAuth, requireRole(...STAFF), async (req, res) => {
   const body = req.body || {}
   const itemCollection = String(body.itemCollection || '')
   const playerName = String(body.playerName || '').trim().slice(0, 120)
-  if (!RENTAL_COLLECTIONS.includes(itemCollection)) return res.status(400).json({ ok: false, error: 'Choose a weapon or equipment item.' })
+  if (!RENTAL_COLLECTIONS.includes(itemCollection)) return res.status(400).json({ ok: false, error: 'Choose a weapon or gear item.' })
   if (!playerName) return res.status(400).json({ ok: false, error: 'Enter who is receiving the item.' })
   try {
     const db = await getDb()
@@ -855,7 +929,7 @@ router.post('/repairs', requireAuth, requireRole('admin', 'marshal'), async (req
   const body = req.body || {}
   const itemCollection = String(body.itemCollection || '')
   const damage = String(body.damage || '').trim().slice(0, 1000)
-  if (!RENTAL_COLLECTIONS.includes(itemCollection)) return res.status(400).json({ ok: false, error: 'Choose a weapon or equipment item.' })
+  if (!RENTAL_COLLECTIONS.includes(itemCollection)) return res.status(400).json({ ok: false, error: 'Choose a weapon or gear item.' })
   if (!damage) return res.status(400).json({ ok: false, error: 'Describe the damage.' })
   try {
     const db = await getDb()

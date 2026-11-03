@@ -115,11 +115,11 @@ export function AdminReachFundPage() {
         </p>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-2 xl:grid-cols-4">
         {tiles.map((tile) => (
-          <Card key={tile.label} className="p-4">
-            <div className="text-xs uppercase tracking-widest text-muted">{tile.label}</div>
-            <div className={`mt-2 text-2xl font-bold ${tile.tone}`}>{loading ? '…' : tile.value}</div>
+          <Card key={tile.label} className="rounded-xl px-3 py-2 md:px-3 md:py-2">
+            <div className="truncate text-[10px] uppercase tracking-wider text-muted">{tile.label}</div>
+            <div className={`mt-0.5 text-base font-bold ${tile.tone}`}>{loading ? '…' : tile.value}</div>
           </Card>
         ))}
       </div>

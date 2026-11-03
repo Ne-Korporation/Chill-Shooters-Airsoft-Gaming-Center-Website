@@ -46,12 +46,12 @@ export function RegistrarDashboardHomePage() {
   return (
     <div className="space-y-6">
       <DashboardHeader
-        eyebrow="Registrar"
+        eyebrow="Dashboard"
         title="Today's queue"
         description="Approve reservations, then verify waivers and payments to confirm each booking."
       />
 
-      <div className="grid gap-4 sm:grid-cols-3">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
         <StatTile
           label="Reservations to approve"
           value={pendingReservations}

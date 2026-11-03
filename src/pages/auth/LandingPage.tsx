@@ -462,7 +462,7 @@ export function LandingPage() {
         a: 'Yes, the field is open to beginners, casual players, and experienced players. Game marshals are present to guide first-time players.',
       },
       {
-        q: 'Is safety equipment required?',
+        q: 'Is safety gear required?',
         a: 'Yes, protective masks are required at all times during gameplay. Other safety rules will be discussed during the orientation.',
       },
       {

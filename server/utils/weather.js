@@ -7,7 +7,7 @@ import { DEFAULT_SLOT_HOURS, SLOT_ORDER, getSlotHours, slotWindow } from './slot
 
 // Day-before weather advisories from the OpenWeatherMap 5-day / 3-hour forecast
 // (OPENWEATHER_API_KEY). For every location with games tomorrow, each slot's
-// forecast is checked; when it shows a thunderstorm, likely heavy rain, or strong
+// forecast is checked; when it shows rain is likely, a thunderstorm, or strong
 // wind, the booked players get an in-app notice and an email. Staff can also send
 // a manual advisory for any date, location and slot.
 
@@ -33,11 +33,14 @@ function weatherConfig(env = process.env) {
   const pop = Number(env.WEATHER_RAIN_CHANCE_THRESHOLD)
   const rain = Number(env.WEATHER_RAIN_MM_THRESHOLD)
   const wind = Number(env.WEATHER_WIND_MS_THRESHOLD)
+  const rainy = Number(env.WEATHER_RAINY_CHANCE_THRESHOLD)
   return {
     apiKey: String(env.OPENWEATHER_API_KEY || '').trim(),
     // Chance of rain (0–1) and rain per 3 hours (mm) that together count as heavy rain.
     rainChance: Number.isFinite(pop) && pop > 0 ? Math.min(pop, 1) : 0.7,
     rainMm: Number.isFinite(rain) && rain >= 0 ? rain : 2.5,
+    // Chance of rain (0–1) at which a slot counts as rainy, even when the rain is light.
+    rainyChance: Number.isFinite(rainy) && rainy > 0 ? Math.min(rainy, 1) : 0.6,
     // Sustained wind (m/s); 17 m/s is gale force.
     windMs: Number.isFinite(wind) && wind > 0 ? wind : 17,
   }
@@ -71,16 +74,25 @@ export function summarizeSlotForecast(entries, date, slot, config = weatherConfi
   const thunder = inSlot.some((e) => (e.weather || []).some((w) => Number(w.id) >= 200 && Number(w.id) < 300))
   const descriptions = [...new Set(inSlot.flatMap((e) => (e.weather || []).map((w) => w.description)).filter(Boolean))]
 
+  // Rain or drizzle (OpenWeather condition codes 3xx and 5xx) in any of the slot's blocks.
+  const wet = maxRain > 0 || inSlot.some((e) => (e.weather || []).some((w) => Number(w.id) >= 300 && Number(w.id) < 600))
+  const heavy = maxChance >= config.rainChance && maxRain >= config.rainMm
+
   const reasons = []
   if (thunder) reasons.push('thunderstorms forecast')
-  if (maxChance >= config.rainChance && maxRain >= config.rainMm) reasons.push(`heavy rain likely (${Math.round(maxChance * 100)}% chance, up to ${maxRain.toFixed(1)} mm per 3 hours)`)
+  if (heavy) reasons.push(`heavy rain likely (${Math.round(maxChance * 100)}% chance, up to ${maxRain.toFixed(1)} mm per 3 hours)`)
   if (maxWind >= config.windMs) reasons.push(`strong wind up to ${Math.round(maxWind * 3.6)} km/h`)
+  const severe = reasons.length > 0
+  // Light rain is not severe, but booked players are still told about it the day before.
+  const lightRain = !heavy && wet && maxChance >= (config.rainyChance ?? 0.6)
+  if (lightRain) reasons.push(`rain likely (${Math.round(maxChance * 100)}% chance)`)
 
   return {
     date,
     slot,
     available: true,
-    severe: reasons.length > 0,
+    severe,
+    rainy: heavy || lightRain,
     reasons,
     rainChancePercent: Math.round(maxChance * 100),
     rainMm: Math.round(maxRain * 10) / 10,
@@ -205,7 +217,7 @@ export async function sendWeatherAlerts(db, { force = false, http, env = process
     for (const slot of slots) {
       if (!SLOT_ORDER.includes(slot)) continue
       const forecast = summarizeSlotForecast(entries, tomorrow, slot, weatherConfig(env), hours)
-      if (!forecast.severe) continue
+      if (!forecast.severe && !forecast.rainy) continue
       // One automatic advisory per location/date/slot, even across restarts.
       const marker = await db.collection('weather_advisories').findOne({ source: 'auto', locationId, date: tomorrow, slot })
       if (marker) continue

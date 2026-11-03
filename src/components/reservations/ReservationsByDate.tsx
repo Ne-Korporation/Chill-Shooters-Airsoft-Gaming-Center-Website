@@ -8,6 +8,7 @@ import { Input } from '../ui/Input'
 import { FilterTabs } from '../ui/FilterTabs'
 import { DEFAULT_PAGE_SIZE, Pagination, usePagination } from '../ui/Pagination'
 import { apiGetAll } from '../../utils/apiClient'
+import { reservationStatusLabel } from '../../utils/reservationStatus'
 
 type ReservationDoc = {
   _id?: any
@@ -233,7 +234,7 @@ export function ReservationsByDate() {
                           </div>
                         </div>
                         <div className="text-right">
-                          <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase ${statusTone(status)}`}>{status}</span>
+                          <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase ${statusTone(status)}`}>{reservationStatusLabel(booking)}</span>
                           {statusChangeLabel(booking) ? <div className="mt-1 text-[11px] text-muted">{statusChangeLabel(booking)}</div> : null}
                         </div>
                       </div>

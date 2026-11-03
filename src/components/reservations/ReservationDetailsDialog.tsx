@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { FiX } from 'react-icons/fi'
 import { Button } from '../ui/Button'
 import { formatSlotRange, type SlotHours } from '../../utils/slotHours'
+import { reservationStatusLabel } from '../../utils/reservationStatus'
 
 export type ReservationDetails = {
   id?: string
@@ -12,12 +13,14 @@ export type ReservationDetails = {
   reservationTime?: string
   slot?: string
   reservationStatus?: string
+  cancellationReason?: string
   locationName?: string
   locationId?: string
   fieldNames?: string
   fieldIds?: string[]
   sessionType?: string
   numberOfPlayers?: number
+  teamName?: string
   packageName?: string
   selectionMode?: string
   gameModePreference?: string
@@ -100,10 +103,11 @@ export function ReservationDetailsDialog({
           <section>
             <div className="text-xs uppercase tracking-widest text-muted">Booking</div>
             <div className="mt-1">
-              <Row label="Status"><span className="capitalize">{reservation.reservationStatus || 'pending'}</span></Row>
+              <Row label="Status"><span className="capitalize">{reservationStatusLabel(reservation)}</span></Row>
               <Row label="Location">{reservation.locationName || reservation.locationId || '—'}</Row>
               <Row label="Field">{fields || '—'}</Row>
               <Row label="Session"><span className="capitalize">{reservation.sessionType || 'public'}</span></Row>
+              {reservation.teamName ? <Row label="Team">{reservation.teamName}</Row> : null}
               <Row label="Players">{reservation.numberOfPlayers || 0}</Row>
               <Row label="Package">{reservation.packageName || 'Custom selection'}</Row>
               {reservation.createdAtISO ? <Row label="Booked on">{new Date(reservation.createdAtISO).toLocaleDateString('en-PH', { dateStyle: 'medium' })}</Row> : null}

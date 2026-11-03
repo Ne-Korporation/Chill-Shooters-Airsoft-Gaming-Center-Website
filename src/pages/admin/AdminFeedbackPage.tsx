@@ -20,7 +20,7 @@ type FeedbackRecord = {
 const categories = [
   { key: 'reservationRating', label: 'Reservation' },
   { key: 'cleanlinessRating', label: 'Cleanliness' },
-  { key: 'equipmentRating', label: 'Equipment' },
+  { key: 'equipmentRating', label: 'Gear' },
   { key: 'layoutRating', label: 'Field layout' },
   { key: 'staffRating', label: 'Staff / marshals' },
 ] as const
@@ -57,11 +57,11 @@ export function AdminFeedbackPage() {
         <p className="mt-1 text-sm text-muted">Submitted post-game evaluations and category averages.</p>
       </div>
       {error ? <div className="rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger">{error}</div> : null}
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-2 xl:grid-cols-5">
         {averages.map((item) => (
-          <Card key={item.label} className="p-4">
-            <div className="text-xs uppercase tracking-widest text-muted">{item.label}</div>
-            <div className="mt-2 text-2xl font-bold">{loading ? '…' : `${item.average} / 5`}</div>
+          <Card key={item.label} className="rounded-xl px-3 py-2 md:px-3 md:py-2">
+            <div className="truncate text-[10px] uppercase tracking-wider text-muted">{item.label}</div>
+            <div className="mt-0.5 text-base font-bold">{loading ? '…' : `${item.average} / 5`}</div>
             <div className="text-xs text-muted">{item.count} ratings</div>
           </Card>
         ))}

@@ -31,6 +31,7 @@ const { default: weatherRouter } = await import('./routes/weather.js')
 const { expireOverdueReservations } = await import('./utils/paymentProgress.js')
 const { sendDueReminders } = await import('./utils/reminders.js')
 const { sendWeatherAlerts } = await import('./utils/weather.js')
+const { backfillGameplayLocations } = await import('./utils/reservationGameplay.js')
 const { parseAddress } = await import('./services/mailService.js')
 
 const app = express()
@@ -63,6 +64,7 @@ getDb()
     } catch (err) {
       console.error('Database setup failed:', err)
     }
+    backfillGameplayLocations(db).catch((err) => console.warn('Gameplay location backfill failed:', String(err)))
   })
   .catch((err) => console.warn('MongoDB not connected yet:', String(err)))
 

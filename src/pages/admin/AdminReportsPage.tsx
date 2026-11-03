@@ -5,6 +5,7 @@ import { Button } from '../../components/ui/Button'
 import { FilterTabs } from '../../components/ui/FilterTabs'
 import { apiGet } from '../../utils/apiClient'
 import { equipmentAlerts } from '../../utils/inventoryModels'
+import { ReportTrendCharts } from './ReportTrendCharts'
 import { useAuth } from '../../context/AuthContext'
 
 type Metric = { label: string; value: string; tone: 'accent' | 'success' | 'danger' }
@@ -19,11 +20,11 @@ const METRIC_PRIORITY = [
   'Players booked',
   'Penalties & extra charges',
   'Damage / repair penalties',
-  'Equipment alerts (current)',
+  'Gear alerts (current)',
   'Cancelled / rejected',
   'Waivers submitted',
   'Player registrations',
-  'Equipment rentals issued',
+  'Rentals issued',
 ]
 const metricRank = (label: string) => {
   const index = METRIC_PRIORITY.indexOf(label)
@@ -365,10 +366,10 @@ export function AdminReportsPage() {
       { label: 'Pending approvals', value: String(pendingApprovals), tone: 'danger' },
       { label: 'Waivers submitted', value: String(periodWaivers.length), tone: 'accent' },
       { label: 'Player registrations', value: String(registrations), tone: 'accent' },
-      { label: 'Equipment rentals issued', value: `${periodRentals.length}${unreturned ? ` · ${unreturned} not returned` : ''}`, tone: 'accent' },
+      { label: 'Rentals issued', value: `${periodRentals.length}${unreturned ? ` · ${unreturned} not returned` : ''}`, tone: 'accent' },
       { label: 'Penalties & extra charges', value: `${penalties.length} · ${formatCurrency(penaltyTotal)}`, tone: 'danger' },
       { label: 'Damage / repair penalties', value: formatCurrency(damageTotal), tone: 'danger' },
-      { label: 'Equipment alerts (current)', value: String(equipmentAlertCount), tone: 'danger' },
+      { label: 'Gear alerts (current)', value: String(equipmentAlertCount), tone: 'danger' },
     ]
 
     return { metrics, breakdown, periodPayments, collected, players, statement, penalties, topRentals, periodRentals }
@@ -436,6 +437,14 @@ export function AdminReportsPage() {
         aside, nav, header, .no-print { display: none !important; }
         body { background: #fff !important; color: #000 !important; }
         .print-area * { color: #000 !important; border-color: #ccc !important; background: transparent !important; box-shadow: none !important; }
+        /* Summary tiles print four to a row, small, and never split across pages. */
+        .print-metrics { display: grid !important; grid-template-columns: repeat(4, minmax(0, 1fr)) !important; gap: 4px !important; }
+        .print-metrics > * { padding: 4px 8px !important; border-radius: 6px !important; break-inside: avoid; }
+        .print-metrics .metric-label { font-size: 8px !important; }
+        .print-metrics .metric-value { font-size: 12px !important; margin-top: 0 !important; }
+        /* The trend charts sit on the first page, side by side. */
+        .report-charts { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 6px !important; break-inside: avoid; }
+        .report-chart { padding: 4px 8px !important; border-radius: 6px !important; }
       }`}</style>
 
       <div className="no-print flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
@@ -510,11 +519,15 @@ export function AdminReportsPage() {
           <Card className="p-4 text-sm text-muted">No activity in this period.</Card>
         ) : null}
 
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {!loading && hasActivity ? (
+          <ReportTrendCharts rows={report.breakdown} start={range.start} end={range.end} byMonth={period === 'yearly'} />
+        ) : null}
+
+        <div className="print-metrics grid grid-cols-2 gap-2 md:grid-cols-3">
           {shown.metrics.map((metric) => (
-            <Card key={metric.label} className="p-4">
-              <div className="text-xs uppercase tracking-widest text-muted">{metric.label}</div>
-              <div className={`mt-2 text-2xl font-bold ${metric.tone === 'accent' ? 'text-accent' : metric.tone === 'success' ? 'text-success' : 'text-danger'}`}>
+            <Card key={metric.label} className="rounded-xl px-3 py-2 md:px-3 md:py-2">
+              <div className="metric-label truncate text-[10px] uppercase tracking-wider text-muted">{metric.label}</div>
+              <div className={`metric-value mt-0.5 text-base font-bold ${metric.tone === 'accent' ? 'text-accent' : metric.tone === 'success' ? 'text-success' : 'text-danger'}`}>
                 {loading ? '…' : metric.value}
               </div>
             </Card>
@@ -541,7 +554,7 @@ export function AdminReportsPage() {
         <div className="grid gap-4 lg:grid-cols-2">
           {report.topRentals.length ? (
           <Card className="p-4">
-            <div className="text-xs uppercase tracking-widest text-muted">Most rented equipment</div>
+            <div className="text-xs uppercase tracking-widest text-muted">Most rented items</div>
             <table className="mt-3 w-full text-sm">
               <tbody className="divide-y divide-white/5">
                 {report.topRentals.map(([name, count]) => (

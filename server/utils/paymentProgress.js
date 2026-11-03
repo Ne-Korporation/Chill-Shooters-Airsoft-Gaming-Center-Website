@@ -172,8 +172,9 @@ export async function syncReservationPaymentState(db, reservation) {
 
 let lastExpiryRun = 0
 
-// Cancels pending reservations whose payment window ran out before every share was submitted,
-// which releases their slot and inventory. Throttled so request handlers can call it freely.
+// Expires pending reservations whose payment window ran out before every share was submitted,
+// which releases their slot and inventory. This is the only way a booking ends early: there is
+// no cancellation policy. It is stored as "cancelled" with reason "payment_window_expired". Throttled so request handlers can call it freely.
 export async function expireOverdueReservations(db, startSession, { force = false } = {}) {
   const now = Date.now()
   if (!force && now - lastExpiryRun < 60_000) return 0
@@ -205,7 +206,7 @@ export async function expireOverdueReservations(db, startSession, { force = fals
           userId,
           type: 'reservation_status_update',
           title: 'Reservation released — payment window expired',
-          message: `The reservation for ${reservationLabel(reservation)} was cancelled because payment was not completed within ${PAYMENT_WINDOW_HOURS} hours. The slot has been released.`,
+          message: `The reservation for ${reservationLabel(reservation)} expired because payment was not completed within ${PAYMENT_WINDOW_HOURS} hours. The slot has been released.`,
           linkedResourceId: reservation.id,
         })
       }

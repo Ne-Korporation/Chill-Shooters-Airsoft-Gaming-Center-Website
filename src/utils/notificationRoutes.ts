@@ -20,7 +20,7 @@ export function resolveNotificationRoute(notification: NotificationItem, role?: 
     if (currentRole === 'admin') return '/app/admin/reservations'
     if (currentRole === 'registrar') return '/app/registrar/reservations'
     if (currentRole === 'marshal') return '/app/games'
-    return '/app/reservations'
+    return '/app/my-reservations'
   }
 
   if (notificationType.startsWith('waiver_')) {

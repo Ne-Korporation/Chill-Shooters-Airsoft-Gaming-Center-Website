@@ -47,6 +47,7 @@ export function StatTile({
   hint,
   attention = false,
   loading = false,
+  compact = true,
 }: {
   label: string
   value: React.ReactNode
@@ -54,19 +55,21 @@ export function StatTile({
   hint?: string
   attention?: boolean
   loading?: boolean
+  // Small summary tile (the default); pass compact={false} for the large version.
+  compact?: boolean
 }) {
   return (
-    <div className="surface rounded-2xl p-5">
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-sm text-muted">{label}</span>
+    <div className={`surface rounded-2xl ${compact ? 'p-3' : 'p-5'}`}>
+      <div className="flex items-center justify-between gap-2">
+        <span className={`${compact ? 'text-xs' : 'text-sm'} text-muted`}>{label}</span>
         {Icon ? (
-          <span className="chip-accent grid h-9 w-9 shrink-0 place-items-center rounded-xl">
-            <Icon className="h-4 w-4" />
+          <span className={`chip-accent grid shrink-0 place-items-center ${compact ? 'h-6 w-6 rounded-lg' : 'h-9 w-9 rounded-xl'}`}>
+            <Icon className={compact ? 'h-3 w-3' : 'h-4 w-4'} />
           </span>
         ) : null}
       </div>
-      <div className="mt-3 text-3xl font-semibold tabular-nums">
-        {loading ? <span className="skeleton inline-block h-8 w-14 align-middle" /> : value}
+      <div className={`${compact ? 'mt-1 text-xl' : 'mt-3 text-3xl'} font-semibold tabular-nums`}>
+        {loading ? <span className={`skeleton inline-block align-middle ${compact ? 'h-5 w-8' : 'h-8 w-14'}`} /> : value}
       </div>
       {hint ? (
         <div className={`mt-1 flex items-center gap-1.5 text-xs ${attention ? 'text-danger' : 'text-muted'}`}>
@@ -84,23 +87,26 @@ export function Panel({
   action,
   children,
   className = '',
+  compact = false,
 }: {
   title: string
   description?: string
   action?: React.ReactNode
   children: React.ReactNode
   className?: string
+  // Smaller padding and type for side columns.
+  compact?: boolean
 }) {
   return (
-    <section className={`surface rounded-2xl p-5 ${className}`}>
+    <section className={`surface rounded-2xl ${compact ? 'p-4' : 'p-5'} ${className}`}>
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h2 className="text-base font-semibold">{title}</h2>
-          {description ? <p className="mt-0.5 text-sm text-muted">{description}</p> : null}
+          <h2 className={`${compact ? 'text-sm' : 'text-base'} font-semibold`}>{title}</h2>
+          {description ? <p className={`mt-0.5 ${compact ? 'text-xs' : 'text-sm'} text-muted`}>{description}</p> : null}
         </div>
         {action}
       </div>
-      <div className="mt-4">{children}</div>
+      <div className={compact ? 'mt-3' : 'mt-4'}>{children}</div>
     </section>
   )
 }
@@ -140,10 +146,12 @@ export function ActivityList({
   items,
   loading,
   emptyText,
+  compact = false,
 }: {
   items: { title: string; subtitle?: string; meta?: string; tone: ActivityTone }[]
   loading?: boolean
   emptyText: string
+  compact?: boolean
 }) {
   if (loading) {
     return (
@@ -162,13 +170,13 @@ export function ActivityList({
   return (
     <ul className="divider divide-y">
       {items.map((item, idx) => (
-        <li key={`${item.title}-${idx}`} className="divider flex items-start gap-3 py-3 first:pt-0 last:pb-0">
+        <li key={`${item.title}-${idx}`} className={`divider flex items-start first:pt-0 last:pb-0 ${compact ? 'gap-2 py-2' : 'gap-3 py-3'}`}>
           <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${toneDot[item.tone]}`} />
           <div className="min-w-0 flex-1">
-            <div className="text-sm font-medium capitalize">{item.title}</div>
-            {item.subtitle ? <div className="truncate text-xs text-muted">{item.subtitle}</div> : null}
+            <div className={`${compact ? 'text-xs' : 'text-sm'} font-medium capitalize`}>{item.title}</div>
+            {item.subtitle ? <div className={`truncate ${compact ? 'text-[11px]' : 'text-xs'} text-muted`}>{item.subtitle}</div> : null}
           </div>
-          {item.meta ? <div className="shrink-0 text-xs text-muted">{item.meta}</div> : null}
+          {item.meta ? <div className={`shrink-0 ${compact ? 'text-[11px]' : 'text-xs'} text-muted`}>{item.meta}</div> : null}
         </li>
       ))}
     </ul>

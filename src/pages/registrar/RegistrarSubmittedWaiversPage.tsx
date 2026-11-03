@@ -143,18 +143,18 @@ export function RegistrarSubmittedWaiversPage() {
         <p className="text-muted text-sm">Review waiver submissions and accept or flag them.</p>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-3">
-        <Card className="p-4">
-          <div className="text-xs uppercase tracking-widest text-muted">Pending</div>
-          <div className="mt-2 text-2xl font-bold text-accent">{pendingCount}</div>
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
+        <Card className="rounded-xl px-3 py-2 md:px-3 md:py-2">
+          <div className="truncate text-[10px] uppercase tracking-wider text-muted">Pending</div>
+          <div className="mt-0.5 text-base font-bold text-accent">{pendingCount}</div>
         </Card>
-        <Card className="p-4">
-          <div className="text-xs uppercase tracking-widest text-muted">Flagged</div>
-          <div className="mt-2 text-2xl font-bold text-danger">{flaggedCount}</div>
+        <Card className="rounded-xl px-3 py-2 md:px-3 md:py-2">
+          <div className="truncate text-[10px] uppercase tracking-wider text-muted">Flagged</div>
+          <div className="mt-0.5 text-base font-bold text-danger">{flaggedCount}</div>
         </Card>
-        <Card className="p-4">
-          <div className="text-xs uppercase tracking-widest text-muted">Accepted</div>
-          <div className="mt-2 text-2xl font-bold text-success">{rows.filter((r) => r.status === 'accepted').length}</div>
+        <Card className="rounded-xl px-3 py-2 md:px-3 md:py-2">
+          <div className="truncate text-[10px] uppercase tracking-wider text-muted">Accepted</div>
+          <div className="mt-0.5 text-base font-bold text-success">{rows.filter((r) => r.status === 'accepted').length}</div>
         </Card>
       </div>
 

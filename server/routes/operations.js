@@ -823,7 +823,7 @@ router.post('/partner-loans', requireAuth, requireRole('admin'), async (req, res
   const borrowedOn = String(body.borrowedOn || '')
   const dueOn = String(body.dueOn || '')
   if (!LOAN_DIRECTIONS.includes(direction)) return res.status(400).json({ ok: false, error: 'Choose borrowed from or lent to the partner.' })
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(borrowedOn)) return res.status(400).json({ ok: false, error: 'Enter the date the equipment changed hands.' })
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(borrowedOn)) return res.status(400).json({ ok: false, error: 'Enter the date the item changed hands.' })
   if (dueOn && (!/^\d{4}-\d{2}-\d{2}$/.test(dueOn) || dueOn < borrowedOn)) return res.status(400).json({ ok: false, error: 'The return date must be on or after the borrow date.' })
 
   try {

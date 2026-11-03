@@ -3,6 +3,8 @@ import { useParams } from 'react-router-dom'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
+import { Modal } from '../../components/ui/Modal'
+import { FiPlus } from 'react-icons/fi'
 import { apiGet, apiPost } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
 import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
@@ -34,6 +36,13 @@ export function MyWeaponsAndEquipmentPage() {
   const [tableFilter, setTableFilter] = React.useState<'all' | 'equipment' | 'weapon'>('all')
   const [equipmentForm, setEquipmentForm] = React.useState({ name: '', category: 'gear', description: '' })
   const [weaponForm, setWeaponForm] = React.useState({ name: '', category: 'rifles', description: '' })
+  // Which add form is open in a pop-up, and its own error message.
+  const [adding, setAddingState] = React.useState<'weapon' | 'gear' | null>(null)
+  const [formError, setFormError] = React.useState<string | null>(null)
+  const setAdding = (next: 'weapon' | 'gear' | null) => {
+    setFormError(null)
+    setAddingState(next)
+  }
 
   React.useEffect(() => {
     const lookupId = playerId || user?.id
@@ -92,13 +101,13 @@ export function MyWeaponsAndEquipmentPage() {
   const handleSubmitEquipment = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!equipmentForm.name.trim()) {
-      setError('Equipment name is required.')
+      setFormError('Gear name is required.')
       return
     }
 
     try {
       setSubmitting(true)
-      setError(null)
+      setFormError(null)
       const created = await apiPost<{ ok: boolean; data: UserEquipmentItem }>('/api/equipments', {
         id: `EQ-PLAYER-${Date.now()}`,
         kind: 'equipment',
@@ -117,16 +126,17 @@ export function MyWeaponsAndEquipmentPage() {
       if (user?.role !== 'user') sendRoleNotifications(addNotification, {
         roles: ['admin', 'registrar', 'marshal'],
         type: 'equipment_submitted',
-        title: 'New Equipment Request',
-        message: `A player submitted equipment request "${equipmentForm.name.trim()}" for review.`,
+        title: 'New Gear Request',
+        message: `A player submitted gear request "${equipmentForm.name.trim()}" for review.`,
         linkedResourceId: created?.data?.id,
       })
 
       setEquipment((current) => current.concat(created?.data ? [created.data] : []))
-      toast.success('Equipment submitted for admin review.')
+      toast.success('Gear submitted for admin review.')
+      setAdding(null)
       setEquipmentForm({ name: '', category: 'gear', description: '' })
     } catch (e: any) {
-      setError(String(e?.message || e))
+      setFormError(String(e?.message || e))
     } finally {
       setSubmitting(false)
     }
@@ -135,13 +145,13 @@ export function MyWeaponsAndEquipmentPage() {
   const handleSubmitWeapon = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!weaponForm.name.trim()) {
-      setError('Weapon name is required.')
+      setFormError('Weapon name is required.')
       return
     }
 
     try {
       setSubmitting(true)
-      setError(null)
+      setFormError(null)
       const created = await apiPost<{ ok: boolean; data: UserEquipmentItem }>('/api/weapons', {
         id: `W-PLAYER-${Date.now()}`,
         kind: 'weapon',
@@ -166,9 +176,10 @@ export function MyWeaponsAndEquipmentPage() {
 
       setWeapons((current) => current.concat(created?.data || []))
       toast.success('Weapon submitted for admin review.')
+      setAdding(null)
       setWeaponForm({ name: '', category: 'rifles', description: '' })
     } catch (e: any) {
-      setError(String(e?.message || e))
+      setFormError(String(e?.message || e))
     } finally {
       setSubmitting(false)
     }
@@ -176,10 +187,15 @@ export function MyWeaponsAndEquipmentPage() {
 
   return (
     <div className="space-y-4">
-      <div className="space-y-2">
-        <div className="text-sm font-medium text-accent">Player Access</div>
-        <h1 className="text-3xl font-bold">My Weapons and Equipment</h1>
-        <p className="text-sm text-muted">See the gear and weapons available to your account.</p>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div className="space-y-2">
+          <h1 className="text-3xl font-bold">My Weapons and Gear</h1>
+          <p className="text-sm text-muted">Add your own weapons and gear. Staff review each one before you can bring it to a game.</p>
+        </div>
+        <div className="flex gap-2">
+          <Button onClick={() => setAdding('weapon')}><FiPlus /> Add weapon</Button>
+          <Button variant="ghost" onClick={() => setAdding('gear')}><FiPlus /> Add gear</Button>
+        </div>
       </div>
 
       {loading ? (
@@ -194,7 +210,7 @@ export function MyWeaponsAndEquipmentPage() {
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <div className="text-xs uppercase tracking-widest text-muted">My submissions</div>
-                <div className="mt-1 text-lg font-semibold">Weapons and equipment awaiting review</div>
+                <div className="mt-1 text-lg font-semibold">Weapons and gear awaiting review</div>
               </div>
               <select
                 value={tableFilter}
@@ -202,7 +218,7 @@ export function MyWeaponsAndEquipmentPage() {
                 className="min-w-[170px] rounded-full border border-white/10 bg-background px-3 py-2 text-sm text-text outline-none"
               >
                 <option value="all">All items</option>
-                <option value="equipment">Equipment</option>
+                <option value="equipment">Gear</option>
                 <option value="weapon">Weapons</option>
               </select>
             </div>
@@ -247,21 +263,15 @@ export function MyWeaponsAndEquipmentPage() {
             </div>
           </Card>
 
-          <div className="mt-4 grid gap-4 lg:grid-cols-2">
-          <Card className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-xs uppercase tracking-widest text-muted">Equipment</div>
-                <div className="mt-1 text-lg font-semibold">Add your gear</div>
-              </div>
-              <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-muted">
-                {ownedEquipment.length} saved
-              </span>
-            </div>
+        </>
+      ) : null}
 
-            <form className="mt-4 space-y-3" onSubmit={handleSubmitEquipment}>
+      {adding === 'gear' ? (
+        <Modal eyebrow={`Gear · ${ownedEquipment.length} saved`} title="Add your gear" onClose={() => setAdding(null)} size="md">
+            {formError ? <div className="mb-3 text-sm text-danger">{formError}</div> : null}
+            <form className="space-y-3" onSubmit={handleSubmitEquipment}>
               <Input
-                label="Equipment name"
+                label="Gear name"
                 value={equipmentForm.name}
                 onChange={(event) => setEquipmentForm((current) => ({ ...current, name: event.target.value }))}
                 placeholder="e.g. Tactical Vest"
@@ -286,24 +296,16 @@ export function MyWeaponsAndEquipmentPage() {
                 placeholder="Describe condition or details"
               />
               <Button type="submit" className="w-full" disabled={submitting}>
-                {submitting ? 'Submitting…' : 'Submit equipment'}
+                {submitting ? 'Submitting…' : 'Submit gear'}
               </Button>
             </form>
+        </Modal>
+      ) : null}
 
-          </Card>
-
-          <Card className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-xs uppercase tracking-widest text-muted">Weapons</div>
-                <div className="mt-1 text-lg font-semibold">Add your weapon</div>
-              </div>
-              <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-muted">
-                {ownedWeapons.length} saved
-              </span>
-            </div>
-
-            <form className="mt-4 space-y-3" onSubmit={handleSubmitWeapon}>
+      {adding === 'weapon' ? (
+        <Modal eyebrow={`Weapons · ${ownedWeapons.length} saved`} title="Add your weapon" onClose={() => setAdding(null)} size="md">
+            {formError ? <div className="mb-3 text-sm text-danger">{formError}</div> : null}
+            <form className="space-y-3" onSubmit={handleSubmitWeapon}>
               <Input
                 label="Weapon name"
                 value={weaponForm.name}
@@ -335,10 +337,7 @@ export function MyWeaponsAndEquipmentPage() {
                 {submitting ? 'Submitting…' : 'Submit weapon'}
               </Button>
             </form>
-
-          </Card>
-          </div>
-        </>
+        </Modal>
       ) : null}
     </div>
   )

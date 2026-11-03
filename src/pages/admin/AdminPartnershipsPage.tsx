@@ -190,7 +190,7 @@ export function AdminPartnershipsPage() {
               <label className="mb-1 block text-xs font-bold uppercase tracking-[0.18em] text-muted">Type</label>
               <select value={form.type} onChange={(event) => setForm({ ...form, type: event.target.value })} className="w-full rounded-xl border border-white/10 bg-background px-3 py-2 text-sm outline-none focus:border-accent/40 [&>option]:bg-background">
                 <option value="sponsor">Sponsor</option>
-                <option value="equipment_partner">Equipment partner (income sharing)</option>
+                <option value="equipment_partner">Gear partner (income sharing)</option>
                 <option value="school">School</option>
                 <option value="community">Community</option>
                 <option value="institution">Institution</option>
@@ -201,7 +201,7 @@ export function AdminPartnershipsPage() {
               <div>
                 <label className="mb-1 block text-xs font-bold uppercase tracking-[0.18em] text-muted">Partner's share of rental income (%)</label>
                 <input type="number" min={0} max={100} value={form.revenueSharePercent ?? ''} onChange={(event) => setForm({ ...form, revenueSharePercent: Number(event.target.value) })} className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm outline-none focus:border-accent/40" />
-                <p className="mt-1 text-xs text-muted">Tag this partner's weapons and equipment on the Weapons and Equipment pages.</p>
+                <p className="mt-1 text-xs text-muted">Tag this partner's weapons and gear on the Weapons and Gear pages.</p>
               </div>
             ) : null}
             <div>
@@ -259,7 +259,7 @@ export function AdminPartnershipsPage() {
                     <div>
                       <div className="text-base font-semibold">{item.name}</div>
                       <div className="mt-1 text-xs text-muted">
-                        {item.type === 'equipment_partner' ? `Equipment partner · ${item.revenueSharePercent ?? 0}% share` : item.type} · {item.status}
+                        {item.type === 'equipment_partner' ? `Gear partner · ${item.revenueSharePercent ?? 0}% share` : item.type} · {item.status}
                         {Number(item.discountPercent) > 0 ? ` · ${item.discountPercent}% member discount` : ''}
                       </div>
                     </div>
@@ -286,7 +286,7 @@ export function AdminPartnershipsPage() {
       <Card className="p-4">
         <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
           <div>
-            <div className="text-xs uppercase tracking-widest text-muted">Partner equipment income sharing</div>
+            <div className="text-xs uppercase tracking-widest text-muted">Partner gear income sharing</div>
             <p className="mt-1 text-sm text-muted">Rental income from partner-owned items on confirmed and completed reservations.</p>
           </div>
           <div className="flex flex-wrap gap-2 text-xs text-muted">

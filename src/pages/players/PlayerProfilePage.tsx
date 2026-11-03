@@ -678,18 +678,18 @@ export function PlayerProfilePage() {
           </div>
 
           <div className="mt-4 rounded-2xl bg-white/5 border border-white/10 p-4">
-            <div className="text-xs uppercase tracking-widest text-muted">Equipment Owned</div>
+            <div className="text-xs uppercase tracking-widest text-muted">Gear Owned</div>
             <div className="mt-2 flex flex-wrap gap-2">
               {equipmentLoading ? (
-                <span className="text-sm text-muted">Loading equipment…</span>
+                <span className="text-sm text-muted">Loading gear…</span>
               ) : ownedEquipment.length > 0 ? (
                 ownedEquipment.map((item) => (
                   <span key={item.id || item.name} className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-sm text-text">
-                    {item.name || 'Unnamed equipment'}
+                    {item.name || 'Unnamed gear'}
                   </span>
                 ))
               ) : (
-                <span className="text-sm text-muted">No equipment assigned yet.</span>
+                <span className="text-sm text-muted">No gear assigned yet.</span>
               )}
             </div>
           </div>
@@ -732,7 +732,7 @@ export function PlayerProfilePage() {
           ) : null}
 
           <div className="mt-4 space-y-2">
-            {!playerId || playerId === user?.id ? (
+            {(!playerId || playerId === user?.id) && user?.role === 'user' ? (
               <Button className="w-full" onClick={() => navigate('/app/my-reservations')}>View Reservation History</Button>
             ) : null}
             <Button

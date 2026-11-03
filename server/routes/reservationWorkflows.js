@@ -39,7 +39,6 @@ function parseStatus(body) {
   if (lower === 'pending') return 'pending'
   if (lower === 'needs review' || lower === 'needs_review' || lower === 'review' || lower === 'rejected') return 'needs review'
   if (lower === 'confirmed' || lower === 'approved') return 'confirmed'
-  if (lower === 'cancelled' || lower === 'canceled') return 'cancelled'
   return null
 }
 
@@ -77,7 +76,12 @@ async function updateReservationStatus(req, res) {
 
   const { reservationStatus } = req.body || {}
   const nextStatus = parseStatus({ reservationStatus })
-  if (!nextStatus) return res.status(400).json({ ok: false, error: 'reservationStatus is required' })
+  // There is no cancellation policy: staff can't cancel bookings. Only unpaid bookings expire,
+  // automatically, when their payment window runs out (utils/paymentProgress.js).
+  if (/^cancel/i.test(String(reservationStatus || '').trim())) {
+    return res.status(400).json({ ok: false, error: 'Reservations cannot be cancelled. Send the booking back to the player with a note instead.' })
+  }
+  if (!nextStatus) return res.status(400).json({ ok: false, error: 'reservationStatus must be pending, needs review, or confirmed' })
   // Sending a booking back to the player: staff explain why, and the player can pick a new date.
   const sendBackNote = req.body?.sendBack === true ? String(req.body?.note || '').trim().slice(0, 500) : ''
   if (req.body?.sendBack === true && (nextStatus !== 'needs review' || !sendBackNote)) {
@@ -192,37 +196,5 @@ async function updateReservationStatus(req, res) {
 
 router.put('/reservations/:id/status', requireAuth, requireRole('admin', 'registrar'), updateReservationStatus)
 router.put('/reservations/:id/confirm', requireAuth, requireRole('admin', 'registrar'), updateReservationStatus)
-
-// Keep reservations and financial/gameplay history; cancellation releases active inventory holds.
-router.delete('/reservations/:id', requireAuth, requireRole('admin'), async (req, res) => {
-  const { id } = req.params
-  if (!id) return res.status(400).json({ ok: false, error: 'invalid id' })
-
-  try {
-    const db = await getDb()
-
-    const reservation = await findReservation(db, id)
-    if (!reservation) return res.status(404).json({ ok: false, error: 'reservation not found' })
-
-    const reservationFilter = reservation._id ? { _id: reservation._id } : { id: String(reservation.id || id) }
-    await updateReservationStatusAtomically({
-      db,
-      startSession: startDbSession,
-      reservationFilter,
-      reservationId: reservationKey(reservation),
-      nextStatus: 'cancelled',
-      actor: req.user,
-    })
-
-    return res.json({
-      ok: true,
-      message: 'Reservation cancelled; linked payment and gameplay history was retained.',
-      cancelledReservationId: id,
-    })
-  } catch (err) {
-    if (err?.statusCode) return res.status(err.statusCode).json({ ok: false, error: err.message })
-    return res.status(500).json({ ok: false, error: String(err) })
-  }
-})
 
 export default router

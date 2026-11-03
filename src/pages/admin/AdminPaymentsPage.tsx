@@ -306,18 +306,18 @@ export function AdminPaymentsPage() {
 
       <BookingPaymentReview />
 
-      <div className="grid gap-4 md:grid-cols-3">
-        <Card className="p-4">
-          <div className="text-xs uppercase tracking-widest text-muted">Needs review</div>
-          <div className="mt-2 text-2xl font-bold text-accent">{reviewCount}</div>
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
+        <Card className="rounded-xl px-3 py-2 md:px-3 md:py-2">
+          <div className="truncate text-[10px] uppercase tracking-wider text-muted">Needs review</div>
+          <div className="mt-0.5 text-base font-bold text-accent">{reviewCount}</div>
         </Card>
-        <Card className="p-4">
-          <div className="text-xs uppercase tracking-widest text-muted">Pending amount</div>
-          <div className="mt-2 text-2xl font-bold text-danger">₱{pendingValue}</div>
+        <Card className="rounded-xl px-3 py-2 md:px-3 md:py-2">
+          <div className="truncate text-[10px] uppercase tracking-wider text-muted">Pending amount</div>
+          <div className="mt-0.5 text-base font-bold text-danger">₱{pendingValue}</div>
         </Card>
-        <Card className="p-4">
-          <div className="text-xs uppercase tracking-widest text-muted">Completed today</div>
-          <div className="mt-2 text-2xl font-bold text-success">{completedToday}</div>
+        <Card className="rounded-xl px-3 py-2 md:px-3 md:py-2">
+          <div className="truncate text-[10px] uppercase tracking-wider text-muted">Completed today</div>
+          <div className="mt-0.5 text-base font-bold text-success">{completedToday}</div>
         </Card>
       </div>
 

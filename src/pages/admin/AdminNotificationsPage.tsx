@@ -20,7 +20,7 @@ export function AdminNotificationsPage() {
   const { addNotification, deleteNotification, getNotificationsForRole, getAllNotifications, markAsRead, markAllAsRead, clearAllNotifications, clearNotificationsByIds } = useNotifications()
   const [channel, setChannel] = useState<NotifChannel>('system')
   const [title, setTitle] = useState('Weekend package reminder')
-  const [body, setBody] = useState('Please confirm the equipment checklist for the Saturday booking before 5:00 PM.')
+  const [body, setBody] = useState('Please confirm the gear checklist for the Saturday booking before 5:00 PM.')
   const [targetUserId, setTargetUserId] = useState('')
   const [sendMode, setSendMode] = useState<'audience' | 'user'>('audience')
   const [feedAudience, setFeedAudience] = useState<Audience>('all')
