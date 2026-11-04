@@ -115,7 +115,7 @@ export function GuardianApprovalPage() {
               <div className="mt-4 text-xs uppercase tracking-widest text-muted">Guardian details they gave us</div>
               <div className="mt-2 divide-y divide-white/10">
                 <Row label="Guardian name" value={data.guardian.name} />
-                <Row label="Guardian phone number" value={formatPhPhone(data.guardian.phone)} highlight />
+                {data.guardian.phone ? <Row label="Guardian phone number" value={formatPhPhone(data.guardian.phone)} highlight /> : null}
                 <Row label="Guardian email" value={data.guardian.email} />
               </div>
               <p className="mt-3 text-xs text-muted">Please make sure the phone number is yours. We call this number in an emergency.</p>

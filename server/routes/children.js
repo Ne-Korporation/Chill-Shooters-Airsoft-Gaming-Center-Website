@@ -27,6 +27,10 @@ function fail(statusCode, message) {
 
 const cleanName = (value) => String(value || '').replace(/\s+/g, ' ').trim().slice(0, 60)
 
+// A minor the parent removed stays on record (staff still see the archived waiver), but is no
+// longer on the parent's account, even if staff unarchive the waiver later.
+const ON_ACCOUNT = { removedByGuardianAtISO: { $exists: false } }
+
 async function latestWaivers(db, userIds) {
   const waivers = await db.collection('waivers').find(
     { userId: { $in: userIds }, archived: { $ne: true } },
@@ -67,7 +71,7 @@ export async function hasApprovedWaiver(db, userId) {
 
 // A parent's own child, or null.
 export async function findOwnChild(db, parentId, childId) {
-  return db.collection(ACCOUNTS).findOne({ id: String(childId), guardianId: String(parentId), isChildProfile: true })
+  return db.collection(ACCOUNTS).findOne({ id: String(childId), guardianId: String(parentId), isChildProfile: true, ...ON_ACCOUNT })
 }
 
 async function sendConfirmation(db, req, parent, child) {
@@ -85,7 +89,7 @@ async function sendConfirmation(db, req, parent, child) {
 router.get('/children', requireAuth, requireRole('user'), async (req, res) => {
   try {
     const db = await getDb()
-    const children = await db.collection(ACCOUNTS).find({ guardianId: String(req.user.id), isChildProfile: true }).sort({ createdAtISO: 1 }).toArray()
+    const children = await db.collection(ACCOUNTS).find({ guardianId: String(req.user.id), isChildProfile: true, ...ON_ACCOUNT }).sort({ createdAtISO: 1 }).toArray()
     const waivers = await latestWaivers(db, children.map((child) => String(child.id)))
     return res.json({ ok: true, data: children.map((child) => childView(child, waivers.get(String(child.id)))) })
   } catch (err) {
@@ -113,7 +117,7 @@ router.post('/children', requireAuth, requireRole('user'), async (req, res) => {
     if (age >= 18) throw fail(400, 'Players 18 and older make their own account.')
 
     const name = [firstName, middleInitial ? `${middleInitial.replace(/\.$/, '')}.` : '', lastName].filter(Boolean).join(' ')
-    const duplicate = await db.collection(ACCOUNTS).findOne({ guardianId: String(parent.id), isChildProfile: true, name: { $regex: `^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, $options: 'i' } })
+    const duplicate = await db.collection(ACCOUNTS).findOne({ guardianId: String(parent.id), isChildProfile: true, ...ON_ACCOUNT, name: { $regex: `^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, $options: 'i' } })
     if (duplicate) throw fail(409, `${name} is already on your account.`)
 
     const nowISO = new Date().toISOString()
@@ -158,13 +162,50 @@ router.post('/children/:id/confirmation-email', requireAuth, requireRole('user')
   }
 })
 
+// DELETE /api/children/:id — the parent removes a minor and their waiver from their account.
+// Nothing is deleted: the minor is marked removed and their waivers are archived, so staff keep
+// the signed record. Unarchiving it later doesn't put the minor back on the parent's account.
+router.delete('/children/:id', requireAuth, requireRole('user'), async (req, res) => {
+  try {
+    const db = await getDb()
+    const child = await findOwnChild(db, req.user.id, req.params.id)
+    if (!child) throw fail(404, 'Child not found.')
+    const nowISO = new Date().toISOString()
+    await db.collection(ACCOUNTS).updateOne({ _id: child._id }, { $set: { removedByGuardianAtISO: nowISO, updatedAtISO: nowISO } })
+    const archived = await db.collection('waivers').updateMany(
+      { userId: String(child.id), archived: { $ne: true } },
+      {
+        $set: {
+          archived: true,
+          archivedAtISO: nowISO,
+          archivedReason: 'removed_by_guardian',
+          removedByGuardian: true,
+          archivedBy: { id: String(req.user.id), role: 'user', name: 'Guardian' },
+        },
+      },
+    )
+    await db.collection('audit_logs').insertOne({
+      action: 'minor_removed_by_guardian',
+      resourceType: 'user_accounts',
+      resourceId: String(child.id),
+      actorId: String(req.user.id),
+      actorRole: 'user',
+      details: { childName: child.name || '', waiversArchived: archived.modifiedCount },
+      createdAtISO: nowISO,
+    }).catch(() => null)
+    return res.json({ ok: true, data: { id: String(child.id), waiversArchived: archived.modifiedCount } })
+  } catch (err) {
+    return sendError(res, err)
+  }
+})
+
 // GET /api/children/of-team?ids=P-1,P-2 — children of the booker and the given teammates, for
 // "A minor will join this game". Only names, ages and whether they can play are returned.
 router.get('/children/of-team', requireAuth, requireRole('user'), async (req, res) => {
   try {
     const db = await getDb()
     const parentIds = [...new Set([String(req.user.id), ...String(req.query.ids || '').split(',').map((id) => id.trim()).filter(Boolean)])].slice(0, 100)
-    const children = await db.collection(ACCOUNTS).find({ guardianId: { $in: parentIds }, isChildProfile: true }).toArray()
+    const children = await db.collection(ACCOUNTS).find({ guardianId: { $in: parentIds }, isChildProfile: true, ...ON_ACCOUNT }).toArray()
     const waivers = await latestWaivers(db, children.map((child) => String(child.id)))
     const parents = await db.collection(ACCOUNTS).find({ id: { $in: parentIds } }, { projection: { id: 1, name: 1 } }).toArray()
     const parentName = new Map(parents.map((parent) => [String(parent.id), parent.name || '']))

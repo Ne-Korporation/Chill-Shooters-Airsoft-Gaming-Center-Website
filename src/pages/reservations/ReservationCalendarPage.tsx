@@ -949,22 +949,11 @@ export function ReservationCalendarPage() {
   // Field availability + minimum player rules
   // ---------------------------------------------------------------------
 
-  const isFieldSlotAvailable = useCallback((fieldId: string, slotToCheck: TimeSlot): boolean => {
-    // Weekdays (private): one game per field per slot
-    if (isWd) {
-      const field = getFieldById(fieldId)
-      if (!field) return false
-      return !reservations.some(
-        (r) =>
-          r.dateISO === dateISO &&
-          r.fieldIds.includes(fieldId) &&
-          r.slot === slotToCheck &&
-          r.locationId === selectedLocation,
-      )
-    }
-    // Weekends (public): multiple games allowed
-    return true
-  }, [isWd, reservations, dateISO, selectedLocation])
+  // Fields aren't exclusive: several groups can book the same location, field and time until the
+  // slot's player capacity is full (isSlotFullyBooked), matching the server's check.
+  const isFieldSlotAvailable = useCallback((fieldId: string, _slotToCheck: TimeSlot): boolean => (
+    Boolean(getFieldById(fieldId))
+  ), [])
 
   // Taken because another player is in the middle of booking it (not yet a reservation).
   const isFieldBeingBooked = useCallback((fieldId: string, slotToCheck: TimeSlot): boolean => (
@@ -1057,13 +1046,7 @@ export function ReservationCalendarPage() {
 
   // Check if a specific slot is fully booked for ALL fields at this location
   const isSlotFullyBooked = (slotToCheck: TimeSlot): boolean => {
-    const fields = getFieldsForLocation(selectedLocation)
-
-    if (isWd) {
-      const freeFields = fields.filter(f => isFieldSlotAvailable(f.id, slotToCheck))
-      return freeFields.length === 0
-    }
-    // For weekends: slots have capacity limits
+    // Any day: the slot is full once its player capacity is used up.
     const cap = serverCapacities?.[selectedLocation]?.[slotToCheck] ?? capacityFor(selectedLocation, slotToCheck)
     const used = reservations
       .filter((r) => r.dateISO === dateISO &&
@@ -1789,7 +1772,7 @@ export function ReservationCalendarPage() {
               </div>
               <p className="mt-1 text-xs text-muted">
                 {isWd
-                  ? 'Weekdays: Private sessions only. One game per field per time slot. Minimum 10 players.'
+                  ? 'Weekdays: Private sessions only. Fields can be shared until the time slot is full. Minimum 10 players.'
                   : 'Weekends: Public sessions only. Multiple time slots available.'}
               </p>
 
@@ -1929,7 +1912,7 @@ export function ReservationCalendarPage() {
                   )}
                   {isWd && (
                     <div className="mt-3 text-xs text-muted/60">
-                      One game per field per time slot on weekdays
+                      Fields can be shared by several groups until the time slot is full
                     </div>
                   )}
                 </div>
