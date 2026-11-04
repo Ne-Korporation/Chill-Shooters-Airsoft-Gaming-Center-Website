@@ -24,7 +24,7 @@ import {
   FiX,
 } from 'react-icons/fi'
 
-import { apiBase, apiGet, apiPost, getApiAuthHeaders } from '../../utils/apiClient'
+import { apiBase, apiDelete, apiGet, apiPost, getApiAuthHeaders } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
 import { LANDING_PREFILL_KEY, type LandingReservationPrefill } from '../auth/LandingPage'
 import { Card } from '../../components/ui/Card'
@@ -35,7 +35,7 @@ import { formatDiscountTargetLabel, resolvePackageDiscountConfig } from '../../u
 import { loadPackagePrefill } from '../../utils/packagePrefill'
 import { isAmmo, modelOf } from '../../utils/inventoryModels'
 import { cancelBookingDraftLeft, markBookingDraftLeft, readBookingDraft, saveBookingDraft, scheduleBookingDraftLeft } from '../../utils/bookingDraft'
-import { PiecePicker, type PickerGroup } from '../../components/inventory/PiecePicker'
+import type { PickerGroup } from '../../components/inventory/PiecePicker'
 import { ModelQuantityPicker } from '../../components/inventory/ModelQuantityPicker'
 import { FieldLayoutDesigner, type LayoutItem } from '../../components/reservations/FieldLayoutDesigner'
 import { formatSlotRange, useSlotHours } from '../../utils/slotHours'
@@ -143,7 +143,7 @@ type TeamMember = {
 type TeamChild = { id: string; name: string; age: number | null; guardianId: string; guardianName: string; canPlay: boolean }
 
 type PaymentMode = 'self' | 'split'
-// full: pay everything online now. cash_balance: the 50% downpayment online now, the rest in cash at the field.
+// full: pay everything online now. cash_balance: the 50% downpayment online now, the rest at the field.
 type PaymentPlan = 'full' | 'cash_balance'
 
 type StockEntry = { stock: number; held: number; available: number }
@@ -267,7 +267,9 @@ function slotSort(a: TimeSlot, b: TimeSlot) {
 
 const ENTRANCE_FEE_PER_PLAYER = 150
 // Price of one extra BB reload until the server sends its own (AMMO_RELOAD_PRICE).
-const DEFAULT_AMMO_RELOAD_PRICE = 100
+const DEFAULT_AMMO_RELOAD_PRICE = 50
+// Every package includes this many BB reloads per player at no charge (matches the server).
+const INCLUDED_RELOADS_PER_PLAYER = 2
 const MAX_EXTRA_AMMO_RELOADS = 50
 
 type BookingStep = 1 | 2 | 3 | 4 | 5
@@ -820,17 +822,22 @@ export function ReservationCalendarPage() {
   }, [user?.id])
 
   // Only players with an approved weapon on file count; the rest are charged a rental weapon.
-  const captainBringsOwnWeapon = selectedOwnWeaponIds.length > 0
+  // Bringing your own weapon belongs to a custom selection: a package always rents its weapons.
+  const ownWeaponsAllowed = selectionMode === 'custom'
+  const captainBringsOwnWeapon = ownWeaponsAllowed && selectedOwnWeaponIds.length > 0
   const verifiedTeammateBringers = useMemo(
     () => selectedTeammates.filter((member) => teammateOwnWeaponIds.includes(member.id) && member.hasApprovedWeapon),
     [selectedTeammates, teammateOwnWeaponIds],
   )
-  const verifiedOwnWeaponCount = Math.min(players, (captainBringsOwnWeapon ? 1 : 0) + verifiedTeammateBringers.length)
-  const ownWeaponShortfall = Math.max(0, ownWeaponTarget - verifiedOwnWeaponCount)
-  // The team step comes before gear: teammates marked there raise the own-weapon count.
-  const markedOwnWeaponCount = Math.min(players, (captainBringsOwnWeapon ? 1 : 0) + teammateOwnWeaponIds.length)
+  const verifiedOwnWeaponCount = ownWeaponsAllowed
+    ? Math.min(players, (captainBringsOwnWeapon ? 1 : 0) + verifiedTeammateBringers.length)
+    : 0
+  // How many players said they bring their own weapon (marked in Bring Your Own).
+  const markedOwnWeaponCount = ownWeaponsAllowed
+    ? Math.min(players, (captainBringsOwnWeapon ? 1 : 0) + teammateOwnWeaponIds.length)
+    : 0
   useEffect(() => {
-    setOwnWeaponTarget((current) => (current < markedOwnWeaponCount ? markedOwnWeaponCount : current))
+    setOwnWeaponTarget(markedOwnWeaponCount)
   }, [markedOwnWeaponCount])
 
   // Rental stock left for the chosen date/slot, so players see shortages here
@@ -1098,25 +1105,11 @@ export function ReservationCalendarPage() {
     return weaponPrices + equipmentPrices
   }, [packageWeapons, packageEquipment])
 
-  // Pieces the player picked for a package (optional; the rest are assigned automatically).
-  const [pickedUnitIds, setPickedUnitIds] = useState<string[]>(() => draftState.pickedUnitIds ?? [])
   const packageWeaponModels = useMemo(() => (selectedPackage ? modelsOfIds(rentalWeapons, selectedPackage.weaponIds) : []), [selectedPackage, modelsOfIds, rentalWeapons])
   // Ammo is given per refill (in grams), not reserved as pieces, so it has no picker or stock check.
   const packageEquipmentModels = useMemo(() => (selectedPackage ? modelsOfIds(rentalEquipment.filter((item) => !isAmmo(item)), selectedPackage.equipmentIds) : []), [selectedPackage, modelsOfIds, rentalEquipment])
   const packageWeaponGroups = useMemo(() => weaponGroups.filter((group) => packageWeaponModels.includes(group.model)), [weaponGroups, packageWeaponModels])
   const packageEquipmentGroups = useMemo(() => equipmentGroups.filter((group) => packageEquipmentModels.includes(group.model)), [equipmentGroups, packageEquipmentModels])
-
-  // Drop picks that no longer apply (package, slot, or headcount changed).
-  // Drop picks that are no longer free. Waits for the inventory so restored picks aren't wiped
-  // while the lists are still empty.
-  useEffect(() => {
-    if (loadingPackages) return
-    const allowed = new Set(packageWeaponGroups.flatMap((group) => group.pieces.filter((piece) => piece.free).map((piece) => piece.id)))
-    setPickedUnitIds((current) => {
-      const next = current.filter((id) => allowed.has(id))
-      return next.length === current.length ? current : next
-    })
-  }, [packageWeaponGroups, loadingPackages])
 
   useEffect(() => {
     if (loadingPackages) return
@@ -1125,12 +1118,7 @@ export function ReservationCalendarPage() {
     setCustomEquipmentIds((current) => (current.every((id) => free.has(id)) ? current : current.filter((id) => free.has(id))))
   }, [weaponGroups, gearGroups, loadingPackages])
 
-  const togglePickedUnit = (id: string) => {
-    setPickedUnitIds((current) => (current.includes(id) ? current.filter((unit) => unit !== id) : [...current, id]))
-  }
-
   const packageWeaponsNeeded = selectedPackage ? packageWeaponStock(selectedPackage).needed : 0
-  const pickedPackageWeapons = pickedUnitIds.filter((id) => rentalWeapons.some((w) => w.id === id)).length
 
   const customSelectedWeapons = useMemo(() => {
     return weapons.filter((w) => customWeaponIds.includes(w.id))
@@ -1254,6 +1242,7 @@ export function ReservationCalendarPage() {
         })
         itemizedBreakdown.push({ label: `Player entrance fee (${players} × ₱${ENTRANCE_FEE_PER_PLAYER})`, amount: entranceFee })
       }
+      itemizedBreakdown.push({ label: `BB reloads included (${INCLUDED_RELOADS_PER_PLAYER * players}) — free`, amount: 0 })
       if (details.discountAmount > 0) itemizedBreakdown.push({ label: `Package discount (${details.discountSummary})`, amount: -details.discountAmount })
     } else if (selectionMode === 'custom') {
       equipmentPrice = customItemsTotal
@@ -1305,6 +1294,17 @@ export function ReservationCalendarPage() {
   }, [dateISO, selectedFieldIds, selectedLocation, selectionMode, selectedPackage?.name, sessionType, slot, players, notes, customSelectedWeapons, customSelectedEquipment, ownWeapons, ownEquipment, availableFields])
 
   const maxTeammates = Math.max(0, players - 1)
+  // Booking for yourself only: there is no team to add, so the team step is skipped.
+  const soloBooking = maxTeammates === 0
+  // Public games are an open roster run by the marshals: no game mode or layout to request.
+  const publicGame = sessionType === 'public'
+  const visibleSteps = ([1, 2, 3, 4, 5] as BookingStep[]).filter((s) => !(s === 2 && soloBooking) && !(s === 4 && publicGame))
+  // The number shown to the player, which shifts down when the team step is hidden.
+  const stepNumber = (s: BookingStep) => visibleSteps.indexOf(s) + 1
+  useEffect(() => {
+    if (soloBooking && step === 2) setStep(3)
+    if (publicGame && step === 4) setStep(5)
+  }, [soloBooking, publicGame, step])
   const hasCurrentUserWaiver = !user?.id ? false : waiverEligibleSet.has(String(user.id))
   // Only registered players can be booked: every spot besides the captain needs a teammate account.
   const teamSelectionComplete = maxTeammates === 0 || selectedTeammateIds.length === maxTeammates
@@ -1352,6 +1352,14 @@ export function ReservationCalendarPage() {
 
   // Locks the chosen slot on the server so nobody else can book it while this player finishes.
   const placeSlotHold = useCallback(async (silent = false) => {
+    // Public games are never locked: anyone can keep booking while spots remain, and the
+    // server checks the remaining spots when the reservation is created. Drop any hold left
+    // from a private slot picked earlier.
+    if (slotHoldPayload.sessionType === 'public') {
+      if (hasSlotHoldRef.current) apiDelete('/api/slot-holds/mine').catch(() => null)
+      setSlotHoldExpiresAt(null)
+      return true
+    }
     try {
       const res = await apiPost<{ ok: boolean; data: { expiresAtISO: string } }>('/api/slot-holds', slotHoldPayload)
       setSlotHoldExpiresAt(res.data.expiresAtISO)
@@ -1382,7 +1390,7 @@ export function ReservationCalendarPage() {
     setPlacingHold(true)
     const held = await placeSlotHold()
     setPlacingHold(false)
-    if (held) setStep(2)
+    if (held) setStep(soloBooking ? 3 : 2)
   }
 
   // Once the slot is held, every choice is saved as a draft so a player who leaves can come back
@@ -1397,14 +1405,14 @@ export function ReservationCalendarPage() {
         step, selectedLocation, selectedFieldIds, dateISO, slot, selectedSlots, players, notes, teamName, gameModePreference,
         layoutRequest, layoutBlueprintUrl, selectedPackageId, selectionMode, customWeaponIds, customEquipmentIds,
         ownWeapons, ownEquipment, selectedOwnWeaponIds, selectedOwnEquipmentIds, ownWeaponTarget, teammateOwnWeaponIds,
-        pickedUnitIds, selectedTeammates, paymentMode, paymentPlan, extraAmmoReloads, fieldLayoutItems,
+        selectedTeammates, paymentMode, paymentPlan, extraAmmoReloads, fieldLayoutItems,
       },
     })
   }, [
     user?.id, step, draftLabel, selectedLocation, selectedFieldIds, dateISO, slot, selectedSlots, players, notes, teamName,
     gameModePreference, layoutRequest, layoutBlueprintUrl, selectedPackageId, selectionMode, customWeaponIds,
     customEquipmentIds, ownWeapons, ownEquipment, selectedOwnWeaponIds, selectedOwnEquipmentIds, ownWeaponTarget,
-    teammateOwnWeaponIds, pickedUnitIds, selectedTeammates, paymentMode, paymentPlan, extraAmmoReloads, fieldLayoutItems,
+    teammateOwnWeaponIds, selectedTeammates, paymentMode, paymentPlan, extraAmmoReloads, fieldLayoutItems,
   ])
 
   // Coming back to a draft: hold the slot again (it may have been taken in the meantime).
@@ -1537,9 +1545,9 @@ export function ReservationCalendarPage() {
         itemizedBreakdown,
         notes,
         teamName: teamName.trim(),
-        gameModePreference,
-        layoutRequest: layoutRequest.trim(),
-        ...(layoutBlueprintUrl ? { layoutBlueprintUrl } : {}),
+        gameModePreference: publicGame ? GAME_MODES[0] : gameModePreference,
+        layoutRequest: publicGame ? '' : layoutRequest.trim(),
+        ...(layoutBlueprintUrl && !publicGame ? { layoutBlueprintUrl } : {}),
         ...(extraAmmoReloads > 0 ? { extraAmmoReloads } : {}),
         reservationStatus: 'pending',
         packageName: pkgName,
@@ -1555,19 +1563,15 @@ export function ReservationCalendarPage() {
         paymentPlan,
         teamSize: paymentMode === 'split' ? splitPartySize : 1,
         payerShareAmount,
-        ownWeaponTarget,
-        ownWeaponBringerIds: [
-          ...(captainBringsOwnWeapon ? [user.id] : []),
-          ...teammateOwnWeaponIds,
-        ],
+        ownWeaponTarget: ownWeaponsAllowed ? ownWeaponTarget : 0,
+        ownWeaponBringerIds: ownWeaponsAllowed
+          ? [...(captainBringsOwnWeapon ? [user.id] : []), ...teammateOwnWeaponIds]
+          : [],
       }
 
       if (selectionMode === 'package') {
         pendingReservation.selectedPackageId = selectedPackage?.id
         pendingReservation.selectedGameplayName = selectedPackage?.name
-        pendingReservation.selectedOwnWeaponIds = selectedOwnWeaponIds
-        pendingReservation.selectedOwnEquipmentIds = selectedOwnEquipmentIds
-        pendingReservation.selectedUnitIds = pickedUnitIds
       } else {
         pendingReservation.customWeaponIds = customWeaponIds
         pendingReservation.customEquipmentIds = customEquipmentIds
@@ -1662,8 +1666,7 @@ export function ReservationCalendarPage() {
             <div className="font-bold">Package from your recommendation: {selectedPackage?.name || packagePrefill.selectedPackageName}</div>
             <div className="mt-0.5 text-xs text-muted">
               {packagePrefill.players ? `${packagePrefill.players} players` : ''}
-              {ownWeaponTarget > 0 ? ` · ${ownWeaponTarget} bringing their own weapon` : ''}
-              {' '}· You can still change it in step 3.
+              {' '}· You can still change it in step {stepNumber(3)}.
             </div>
           </div>
         </div>
@@ -1678,8 +1681,8 @@ export function ReservationCalendarPage() {
         </div>
       ) : null}
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-        {([1, 2, 3, 4, 5] as const).map((s) => {
+      <div className={['grid grid-cols-2 gap-3 sm:grid-cols-3', ({ 3: 'lg:grid-cols-3', 4: 'lg:grid-cols-4', 5: 'lg:grid-cols-5' } as Record<number, string>)[visibleSteps.length]].join(' ')}>
+        {visibleSteps.map((s) => {
           const active = s === step
           const done = s < step
           const labels = STEP_LABELS
@@ -1704,7 +1707,7 @@ export function ReservationCalendarPage() {
                   {done ? <FiCheck /> : s}
                 </div>
                 <div className="min-w-0">
-                  <div className="text-[10px] font-bold uppercase tracking-[0.12em] text-muted">Step {s}</div>
+                  <div className="text-[10px] font-bold uppercase tracking-[0.12em] text-muted">Step {stepNumber(s)}</div>
                   <div className="text-sm font-bold leading-tight">{labels[s]}</div>
                 </div>
               </div>
@@ -1900,6 +1903,8 @@ export function ReservationCalendarPage() {
               </div>
             </Card>
 
+            {/* Public games are an open roster: the marshals place players, so there is no field to pick. */}
+            {!publicGame && (
             <Card className="p-4 md:p-6">
               <div className="flex items-center gap-2 text-sm font-bold">
                 <FiMapPin /> <span>Field</span>
@@ -1995,6 +2000,7 @@ export function ReservationCalendarPage() {
                 </div>
               )}
             </Card>
+            )}
           </div>
 
           <div className="space-y-4">
@@ -2312,34 +2318,11 @@ export function ReservationCalendarPage() {
                     </div>
 
                     {selectedTeammates.map((member) => {
-                      const bringsOwn = teammateOwnWeaponIds.includes(member.id)
                       return (
                         <div key={member.id} className="flex items-start justify-between gap-3 rounded-2xl border border-accent/30 bg-accent/10 p-3">
                           <div className="min-w-0">
                             <div className="truncate text-sm font-bold">{member.name}</div>
                             <div className="truncate text-xs text-muted">{member.email}</div>
-                            {/* The team step comes before gear, so the toggle is always offered here. */}
-                            {!member.isMinor ? (
-                              <button
-                                type="button"
-                                role="checkbox"
-                                aria-checked={bringsOwn}
-                                onClick={() => toggleTeammateOwnWeapon(member)}
-                                className={[
-                                  'mt-2 inline-flex items-center gap-1.5 rounded-xl border px-2 py-1 text-[11px] font-semibold',
-                                  bringsOwn
-                                    ? member.hasApprovedWeapon
-                                      ? 'border-success/30 bg-success/10 text-success'
-                                      : 'border-warning/30 bg-warning/10 text-warning'
-                                    : 'border-white/10 bg-white/5 text-muted',
-                                ].join(' ')}
-                              >
-                                <FiCrosshair className="h-3 w-3" />
-                                {bringsOwn
-                                  ? member.hasApprovedWeapon ? 'Brings own weapon' : 'No registered weapon'
-                                  : 'Brings own weapon?'}
-                              </button>
-                            ) : null}
                           </div>
                           <button
                             type="button"
@@ -2370,22 +2353,6 @@ export function ReservationCalendarPage() {
                   </div>
                 )}
 
-                {ownWeaponTarget > 0 && (
-                  <div className={[
-                    'rounded-2xl border p-3 text-xs',
-                    ownWeaponShortfall > 0 ? 'border-warning/25 bg-warning/10 text-warning' : 'border-success/25 bg-success/10 text-success',
-                  ].join(' ')}>
-                    <div className="font-bold">
-                      Own weapons: {verifiedOwnWeaponCount} of {ownWeaponTarget} verified
-                    </div>
-                    <div className="mt-1 text-muted">
-                      {captainBringsOwnWeapon ? 'You are bringing one of your approved weapons. ' : ''}
-                      {ownWeaponShortfall > 0
-                        ? `${ownWeaponShortfall} more player${ownWeaponShortfall === 1 ? '' : 's'} will rent a weapon instead — you can still continue, and the price below already includes those rentals.`
-                        : 'Every own weapon is verified, so those rental charges are removed from the total.'}
-                    </div>
-                  </div>
-                )}
               </div>
             </Card>
           </div>
@@ -2407,9 +2374,6 @@ export function ReservationCalendarPage() {
                     ? `Team: you, ${selectedTeammates.map((member) => member.name).join(', ')}`
                     : maxTeammates > 0 ? 'No teammates added yet.' : 'Just you.'}
                 </div>
-                {markedOwnWeaponCount > 0 ? (
-                  <div className="mt-2 text-xs text-success">{markedOwnWeaponCount} bringing their own weapon</div>
-                ) : null}
               </div>
 
               <div className="mt-4 flex flex-col gap-2">
@@ -2505,62 +2469,63 @@ export function ReservationCalendarPage() {
                               active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
                             ].join(' ')}
                           >
-                            <div className="flex items-start justify-between gap-3">
-                              <div>
-                                <div className="flex items-center gap-2">
-                                  <div className="text-sm font-bold">{pkg.name}</div>
-                                  <div className="rounded-xl border border-white/10 bg-black/20 px-2 py-1 text-[11px] font-bold text-muted">
-                                    Min {pkg.minPlayers} players
-                                  </div>
-                                </div>
-                                {pkg.description && (
-                                  <div className="mt-1 text-xs text-muted">{pkg.description}</div>
-                                )}
-                              </div>
-                              {active && <FiCheck className="text-gold" />}
-                            </div>
-
-                            <div className="mt-3 flex flex-wrap gap-2">
-                                {[...modelsOfIds(rentalWeapons, pkg.weaponIds), ...modelsOfIds(rentalEquipment, pkg.equipmentIds)].map((model) => (
-                                <div key={model} className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-muted">
-                                  {model}
-                                </div>
-                              ))}
-                              <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-muted">Entrance fee included</div>
-                              {pkg.bbReloadGrams > 0 ? (
-                                <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-muted">{pkg.bbReloadGrams}g BBs per refill</div>
-                              ) : null}
-                              {(() => {
-                                const pkgDiscount = resolvePackageDiscountConfig(pkg)
-                                if (pkgDiscount.value <= 0 || pkgDiscount.mode === 'settled') return null
-                                return (
-                                  <div className="rounded-xl border border-success/20 bg-success/10 px-3 py-2 text-xs font-semibold text-success">
-                                    {pkgDiscount.mode === 'percent'
-                                      ? `${pkgDiscount.value}% off ${formatDiscountTargetLabel(pkgDiscount.targets)}`
-                                      : `₱${Math.round(pkgDiscount.value).toLocaleString()} off ${formatDiscountTargetLabel(pkgDiscount.targets)}`}
-                                  </div>
-                                )
-                              })()}
-                            </div>
-
-                            {pkg.weaponIds.length > 0 && (() => {
-                              const stock = packageWeaponStock(pkg)
-                              if (stock.available === null) {
-                                return <div className="mt-3 text-xs text-muted">{loadingSlotStock ? 'Checking weapon stock…' : 'Weapon stock unavailable'}</div>
-                              }
+                            {(() => {
+                              const price = calculatePackagePricing({
+                                pkg,
+                                players,
+                                sessionMultiplier: 1,
+                                weapons,
+                                equipment,
+                                entranceFeePerPlayer: ENTRANCE_FEE_PER_PLAYER,
+                                ownWeapons: verifiedOwnWeaponCount,
+                              })
+                              const discount = resolvePackageDiscountConfig(pkg)
+                              const stock = pkg.weaponIds.length > 0 ? packageWeaponStock(pkg) : null
+                              const includes = [
+                                ...modelsOfIds(rentalWeapons, pkg.weaponIds),
+                                ...modelsOfIds(rentalEquipment.filter((item) => !isAmmo(item)), pkg.equipmentIds),
+                                `${INCLUDED_RELOADS_PER_PLAYER} BB reloads`,
+                                'Entrance fee',
+                              ]
                               return (
-                                <div className={['mt-3 rounded-xl border px-3 py-2 text-xs', stock.ok ? 'border-success/20 bg-success/10 text-success' : 'border-danger/30 bg-danger/10 text-danger'].join(' ')}>
-                                  {stock.ok
-                                    ? `${stock.available} rental weapon${stock.available === 1 ? '' : 's'} free this slot · needs ${stock.needed}`
-                                    : `Not enough weapons: needs ${stock.needed}, only ${stock.available} free this slot`}
-                                </div>
+                                <>
+                                  <div className="flex items-start justify-between gap-3">
+                                    <div className="min-w-0">
+                                      <div className="flex items-center gap-2 text-sm font-bold">
+                                        {active ? <FiCheck className="shrink-0 text-gold" /> : null}
+                                        <span className="truncate">{pkg.name}</span>
+                                      </div>
+                                      {discount.value > 0 && discount.mode !== 'settled' ? (
+                                        <div className="mt-0.5 text-[11px] font-semibold text-success">
+                                          {discount.mode === 'percent' ? `${discount.value}% off` : `₱${Math.round(discount.value).toLocaleString()} off`}
+                                        </div>
+                                      ) : null}
+                                    </div>
+                                    <div className="shrink-0 text-right">
+                                      <div className="text-base font-bold text-accent">{formatCurrency(price.perPlayer)}</div>
+                                      <div className="text-[11px] text-muted">per player</div>
+                                    </div>
+                                  </div>
+
+                                  <div className="mt-3 text-[11px] font-bold uppercase tracking-[0.12em] text-muted">Each player gets</div>
+                                  <ul className="mt-1.5 grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-text">
+                                    {includes.map((label) => (
+                                      <li key={label} className="flex items-center gap-1.5">
+                                        <FiCheck className="h-3 w-3 shrink-0 text-success" />
+                                        <span className="truncate">{label}</span>
+                                      </li>
+                                    ))}
+                                  </ul>
+
+                                  {players < pkg.minPlayers ? (
+                                    <div className="mt-3 text-xs text-warning">Needs at least {pkg.minPlayers} players</div>
+                                  ) : null}
+                                  {stock && stock.available !== null && !stock.ok ? (
+                                    <div className="mt-3 text-xs text-danger">Not enough weapons free this slot ({stock.available} of {stock.needed})</div>
+                                  ) : null}
+                                </>
                               )
                             })()}
-
-                            <div className="mt-3 flex items-center justify-between">
-                              <div className="text-xs text-muted">Base price (per player)</div>
-                              <div className="text-sm font-bold text-accent">{formatCurrency(pkg.basePrice)}</div>
-                            </div>
                           </button>
                         )
                       })}
@@ -2575,11 +2540,23 @@ export function ReservationCalendarPage() {
                       <FiShield /> <span>Included Weapons &amp; Gear</span>
                     </div>
                     <p className="mt-1 text-xs text-muted">
-                      Each player gets the items below. Gear and accessories are assigned automatically from what's free for your slot.
+                      Each player gets the items below. Everything is assigned automatically from what's free for your slot.
                     </p>
 
-                    {packageEquipmentGroups.length > 0 && (
-                      <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                    <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                        {packageWeaponGroups.length > 0 && packageWeaponsNeeded > 0 && (() => {
+                          const free = packageWeaponGroups.reduce((sum, group) => sum + group.pieces.filter((piece) => piece.free).length, 0)
+                          const short = slotStock ? free < packageWeaponsNeeded : false
+                          return (
+                            <div className={['flex items-center justify-between gap-3 rounded-2xl border p-3', short ? 'border-danger/30 bg-danger/10' : 'border-white/10 bg-white/5'].join(' ')}>
+                              <div className="min-w-0">
+                                <div className="truncate text-sm font-bold">{packageWeaponGroups.map((group) => group.model).join(' / ')}</div>
+                                <div className="text-xs text-muted">Weapon · {short ? <span className="text-danger">only {free} free</span> : 'auto-assigned'}</div>
+                              </div>
+                              <div className="shrink-0 rounded-xl bg-black/30 px-2.5 py-1 text-xs font-bold">× {packageWeaponsNeeded}</div>
+                            </div>
+                          )
+                        })()}
                         {packageEquipmentGroups.map((group) => {
                           const needed = players * equipmentPerPlayer(group.model)
                           const free = group.pieces.filter((piece) => piece.free).length
@@ -2594,27 +2571,8 @@ export function ReservationCalendarPage() {
                             </div>
                           )
                         })}
-                      </div>
-                    )}
+                    </div>
 
-                    {packageWeaponGroups.length > 0 && (
-                      <details className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-3" open={pickedPackageWeapons > 0}>
-                        <summary className="cursor-pointer text-sm font-semibold">
-                          Weapons: {packageWeaponsNeeded} for the group, assigned automatically
-                          <span className="ml-1 text-xs font-normal text-muted">(optional: choose specific units)</span>
-                        </summary>
-                        <PiecePicker
-                          groups={packageWeaponGroups}
-                          selected={pickedUnitIds}
-                          onToggle={togglePickedUnit}
-                          limitFor={(model) => {
-                            // Weapons share one allowance across the package's weapon models.
-                            const pickedHere = pickedUnitIds.filter((id) => rentalWeapons.find((w) => w.id === id)?.model === model).length
-                            return pickedHere + Math.max(0, packageWeaponsNeeded - pickedPackageWeapons)
-                          }}
-                        />
-                      </details>
-                    )}
                   </Card>
                 )}
               </>
@@ -2659,10 +2617,10 @@ export function ReservationCalendarPage() {
                     <FiPlus /> <span>Additional Ammo</span>
                   </div>
                   <p className="mt-1 text-xs text-muted">
-                    {selectionMode === 'package' && selectedPackage?.bbReloadGrams
-                      ? `Your package includes ${selectedPackage.bbReloadGrams}g of BBs per refill. Add extra reloads for the group if you expect a long game.`
-                      : 'Add BB reloads for the group. They are handed out by the marshals at the field.'}
-                    {' '}₱{ammoReloadPrice.toLocaleString()} per reload.
+                    {selectionMode === 'package'
+                      ? `${INCLUDED_RELOADS_PER_PLAYER} reloads per player are free with your package (${INCLUDED_RELOADS_PER_PLAYER * players} for the group). Need more? `
+                      : 'Add BB reloads for the group. '}
+                    ₱{ammoReloadPrice.toLocaleString()} per extra reload.
                   </p>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
@@ -2676,26 +2634,14 @@ export function ReservationCalendarPage() {
               ) : null}
             </Card>
 
-            {/* Bring Your Own */}
+            {/* Bring Your Own: part of a custom selection only (packages always rent their weapons) */}
+            {selectionMode === 'custom' && (
             <Card className="p-4 md:p-6">
               <div className="flex items-center gap-2 text-sm font-bold">
                 <FiTool /> <span>Bring Your Own (Free)</span>
               </div>
-              <p className="mt-1 text-xs text-muted">Select from your admin-approved weapons and equipment. Each player who brings an approved weapon skips one rental weapon charge.</p>
+              <p className="mt-1 text-xs text-muted">Bringing your own weapon? Mark it here and rent fewer weapons above. Only weapons registered and approved on a player's profile count.</p>
 
-              <div className="mt-4 flex flex-col gap-3 rounded-2xl border border-white/10 bg-black/20 p-4 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <div className="text-sm font-bold">Players bringing their own weapon</div>
-                  <div className="mt-1 text-xs text-muted">
-                    Mark which teammates bring one in step 2 (Your team). Only weapons registered and approved on a player's profile are deducted.
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button variant="ghost" size="sm" onClick={() => setOwnWeaponTarget((n) => Math.max(0, n - 1))} aria-label="Fewer own weapons"><FiMinus /></Button>
-                  <span className="w-8 text-center text-lg font-bold">{ownWeaponTarget}</span>
-                  <Button variant="ghost" size="sm" onClick={() => setOwnWeaponTarget((n) => Math.min(players, n + 1))} aria-label="More own weapons"><FiPlus /></Button>
-                </div>
-              </div>
 
               {playerApprovedWeapons.length === 0 && playerApprovedEquipment.length === 0 ? (
                 <div className="mt-4 text-sm text-muted">
@@ -2790,7 +2736,39 @@ export function ReservationCalendarPage() {
                   )}
                 </div>
               )}
+
+              {selectedTeammates.some((member) => !member.isMinor) ? (
+                <div className="mt-4">
+                  <div className="mb-2 text-xs font-bold uppercase tracking-[0.18em] text-muted">Teammates bringing their own weapon</div>
+                  <div className="flex flex-wrap gap-2">
+                    {selectedTeammates.filter((member) => !member.isMinor).map((member) => {
+                      const bringsOwn = teammateOwnWeaponIds.includes(member.id)
+                      return (
+                        <button
+                          key={member.id}
+                          type="button"
+                          role="checkbox"
+                          aria-checked={bringsOwn}
+                          onClick={() => toggleTeammateOwnWeapon(member)}
+                          className={[
+                            'inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-semibold transition',
+                            bringsOwn
+                              ? member.hasApprovedWeapon
+                                ? 'border-success/30 bg-success/10 text-success'
+                                : 'border-warning/30 bg-warning/10 text-warning'
+                              : 'border-white/10 bg-white/5 text-muted hover:bg-white/10',
+                          ].join(' ')}
+                        >
+                          {bringsOwn ? <FiCheck className="h-3 w-3" /> : <FiCrosshair className="h-3 w-3" />}
+                          {member.name}{bringsOwn && !member.hasApprovedWeapon ? ' · no registered weapon' : ''}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              ) : null}
             </Card>
+            )}
           </div>
 
           <div className="space-y-4">
@@ -2855,7 +2833,7 @@ export function ReservationCalendarPage() {
               </div>
 
               <div className="mt-4 flex flex-col gap-2 sm:flex-row">
-                <Button variant="ghost" onClick={() => setStep(2)}>Back</Button>
+                <Button variant="ghost" onClick={() => setStep(soloBooking ? 1 : 2)}>Back</Button>
                 <Button
                   variant="primary"
                   disabled={
@@ -2870,7 +2848,7 @@ export function ReservationCalendarPage() {
                       toast.error(`${shortage?.name || 'Gear'}: needs ${shortage?.required ?? players}, only ${shortage?.available ?? 0} free this slot.`)
                       return
                     }
-                    setStep(4)
+                    setStep(publicGame ? 5 : 4)
                   }}
                 >
                   Continue <FiChevronRight />
@@ -3022,12 +3000,12 @@ export function ReservationCalendarPage() {
                 <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
                   <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Location</div>
                   <div className="mt-2 text-sm font-bold">{reservationSummary.locationLabel}</div>
-                  <div className="mt-1 text-xs text-muted">{reservationSummary.fields.map((field) => field.name).join(', ')}</div>
+                  {!publicGame && <div className="mt-1 text-xs text-muted">{reservationSummary.fields.map((field) => field.name).join(', ')}</div>}
                 </div>
                 <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
                   <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Field</div>
-                  <div className="mt-2 text-sm font-bold">{reservationSummary.fields.map((field) => field.name).join(', ')}</div>
-                  <div className="mt-1 text-xs text-muted">{reservationSummary.fields.map((field) => field.location).join(' • ')}</div>
+                  <div className="mt-2 text-sm font-bold">{publicGame ? 'Assigned by the marshals' : reservationSummary.fields.map((field) => field.name).join(', ')}</div>
+                  <div className="mt-1 text-xs text-muted">{publicGame ? 'Open public game' : reservationSummary.fields.map((field) => field.location).join(' • ')}</div>
                 </div>
                 <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
                   <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Date / Slot</div>
@@ -3099,6 +3077,7 @@ export function ReservationCalendarPage() {
                 </div>
               )}
 
+              {!publicGame && (
               <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
                 <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Gameplay request</div>
                 <div className="mt-2 text-sm text-text">{gameModePreference}</div>
@@ -3109,6 +3088,7 @@ export function ReservationCalendarPage() {
                   </a>
                 ) : null}
               </div>
+              )}
 
               <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
                 <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Team{teamName.trim() ? ` · ${teamName.trim()}` : ''}</div>
@@ -3145,22 +3125,28 @@ export function ReservationCalendarPage() {
 
               {selectionMode === 'package' ? (
                 <div className="mt-4 grid gap-3 md:grid-cols-2">
+                  {/* Package price as the player pays it (gear, weapons and entrance included), not the
+                      package's optional base fee, which is often ₱0. */}
                   <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                    <div className="text-xs text-muted">Base package (per player)</div>
-                    <div className="mt-2 text-sm font-bold">{formatCurrency(selectedPackage?.basePrice)}</div>
+                    <div className="text-xs text-muted">Package price (per player)</div>
+                    <div className="mt-2 text-sm font-bold">{formatCurrency(basePricing.perPlayer)}</div>
                   </div>
                   <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                    <div className="text-xs text-muted">Gear add-ons (per player)</div>
-                    <div className="mt-2 text-sm font-bold">{formatCurrency(equipmentTotalPerPlayer)}</div>
+                    <div className="text-xs text-muted">Players</div>
+                    <div className="mt-2 text-sm font-bold">× {players}</div>
                   </div>
-                  <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                    <div className="text-xs text-muted">Session multiplier</div>
-                    <div className="mt-2 text-sm font-bold">{dynamicPricing.sessionMultiplier}×</div>
-                  </div>
-                  <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                    <div className="text-xs text-muted">Discount</div>
-                    <div className="mt-2 text-sm font-bold">{dynamicPricing.discountSummary}</div>
-                  </div>
+                  {basePricing.discountAmount > 0 ? (
+                    <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                      <div className="text-xs text-muted">Discount</div>
+                      <div className="mt-2 text-sm font-bold text-success">−{formatCurrency(basePricing.discountAmount)}</div>
+                    </div>
+                  ) : null}
+                  {extraAmmoTotal > 0 ? (
+                    <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                      <div className="text-xs text-muted">Extra ammo ({extraAmmoReloads} × ₱{ammoReloadPrice})</div>
+                      <div className="mt-2 text-sm font-bold">{formatCurrency(extraAmmoTotal)}</div>
+                    </div>
+                  ) : null}
                 </div>
               ) : (
                 <div className="mt-4 grid gap-3 md:grid-cols-2">
@@ -3237,7 +3223,7 @@ export function ReservationCalendarPage() {
               </div>
 
               <div className="mt-4 flex flex-col gap-2">
-                <Button variant="ghost" onClick={() => setStep(4)}>Back</Button>
+                <Button variant="ghost" onClick={() => setStep(publicGame ? 3 : 4)}>Back</Button>
                 <Button
                   variant="primary"
                   disabled={isConfirming || !canSubmitReservation || !teamSelectionComplete}

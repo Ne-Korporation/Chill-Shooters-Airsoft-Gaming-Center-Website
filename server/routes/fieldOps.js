@@ -460,7 +460,7 @@ function readPrice(name, fallback) {
 
 export function getChargeConfig() {
   return {
-    ammo_reload: { label: 'Extra ammo reload', unitPrice: readPrice('AMMO_RELOAD_PRICE', 100) },
+    ammo_reload: { label: 'Extra ammo reload', unitPrice: readPrice('AMMO_RELOAD_PRICE', 50) },
     field_modification: { label: 'Field modification fee', unitPrice: readPrice('FIELD_MODIFICATION_FEE', 500) },
     other: { label: 'Other charge', unitPrice: 0 },
   }

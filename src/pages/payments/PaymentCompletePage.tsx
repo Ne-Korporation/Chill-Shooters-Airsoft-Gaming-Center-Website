@@ -72,7 +72,7 @@ export function PaymentCompletePage() {
             <div className="flex items-center gap-2 text-lg font-bold text-success"><FiCheckCircle /> Payment successful</div>
             <p className="text-sm">Your payment of {peso(result.amount)} was verified and your reservation is <b>confirmed</b>.</p>
             {result.balanceDue ? (
-              <p className="text-sm text-muted">Please bring the remaining <b>{peso(result.balanceDue)}</b> in cash on game day.</p>
+              <p className="text-sm text-muted">Please pay the remaining <b>{peso(result.balanceDue)}</b> at the counter on game day by cash, GCash, or bank transfer.</p>
             ) : null}
           </>
         ) : waitingGuardian ? (

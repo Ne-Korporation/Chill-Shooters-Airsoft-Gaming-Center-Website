@@ -5,7 +5,7 @@ import { requireAuth, requireRole } from '../middleware/auth.js'
 import { getGcashAmountDue, getSplitPayerIds } from '../utils/paymentRules.js'
 import { syncReservationPaymentState } from '../utils/paymentProgress.js'
 import { emailPaymentEvent } from '../services/notificationEmails.js'
-import { createInvoice, paidPaymentOf, retrieveInvoice, verifyCallbackToken, xenditEnabled } from '../utils/xendit.js'
+import { createInvoice, paidPaymentOf, retrieveInvoice, verifyCallbackToken, XENDIT_CHANNELS, xenditEnabled } from '../utils/xendit.js'
 import { XENDIT_CHECKOUTS, recordXenditPayment } from '../utils/xenditPayments.js'
 import { appUrlFrom } from './guardianApprovals.js'
 
@@ -64,7 +64,7 @@ router.get('/xendit/config', (_req, res) => {
   res.json({ ok: true, data: { enabled: xenditEnabled } })
 })
 
-// POST /api/xendit/checkout { reservationId } — a Xendit invoice for what this player owes
+// POST /api/xendit/checkout { reservationId, channel? } — a Xendit invoice for what this player owes
 // right now: the downpayment or full amount, or their share of a split payment.
 router.post('/xendit/checkout', requireAuth, requireRole('user'), async (req, res) => {
   if (!xenditEnabled) return res.status(503).json({ ok: false, error: 'Online payment is not set up. Please pay by GCash or bank transfer.' })
@@ -85,9 +85,12 @@ router.post('/xendit/checkout', requireAuth, requireRole('user'), async (req, re
     const amount = getGcashAmountDue(reservation, payments, userId)
     if (amount <= 0) return res.status(409).json({ ok: false, error: 'Your payment for this reservation is already in.' })
 
+    // gcash or qrph: the invoice page offers only that channel.
+    const channelKey = String(req.body?.channel || '').toLowerCase()
+    const channel = XENDIT_CHANNELS[channelKey] || ''
     const checkouts = db.collection(XENDIT_CHECKOUTS)
     const open = await checkouts.findOne({
-      reservationId, userId, amount, status: 'open',
+      reservationId, userId, amount, status: 'open', channel,
       createdAtISO: { $gt: new Date(Date.now() - REUSE_CHECKOUT_MS).toISOString() },
     })
     if (open) {
@@ -102,7 +105,7 @@ router.post('/xendit/checkout', requireAuth, requireRole('user'), async (req, re
     const appUrl = appUrlFrom(req)
     const fullPlan = reservation.paymentPlan === 'full'
     const share = String(reservation.paymentMode || 'self').toLowerCase() === 'split'
-    const label = share ? 'Your share of the payment' : fullPlan ? 'Full payment' : 'Downpayment (balance paid in cash at the field)'
+    const label = share ? 'Your share of the payment' : fullPlan ? 'Full payment' : 'Downpayment (balance paid at the field)'
     const account = await db.collection('user_accounts').findOne(
       { $or: [{ id: userId }, ...(toObjectId(userId) ? [{ _id: toObjectId(userId) }] : [])] },
       { projection: { name: 1, email: 1 } },
@@ -114,6 +117,7 @@ router.post('/xendit/checkout', requireAuth, requireRole('user'), async (req, re
       successUrl: `${appUrl}/app/payment/complete?ref=${encodeURIComponent(ref)}`,
       failureUrl: `${appUrl}/app/payment/complete?ref=${encodeURIComponent(ref)}&cancelled=1`,
       customer: account?.email ? { name: account.name, email: account.email } : null,
+      channels: channel ? [channel] : undefined,
     })
     await checkouts.insertOne({
       _id: ref,
@@ -122,6 +126,7 @@ router.post('/xendit/checkout', requireAuth, requireRole('user'), async (req, re
       amount,
       invoiceId: invoice.id,
       invoiceUrl: invoice.invoiceUrl,
+      channel,
       status: 'open',
       createdAtISO: new Date().toISOString(),
     })

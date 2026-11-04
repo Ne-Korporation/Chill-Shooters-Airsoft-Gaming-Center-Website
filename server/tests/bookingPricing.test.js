@@ -240,11 +240,12 @@ test('extra ammo reloads are added at the reload price and capped', async () => 
   const base = { selectionMode: 'package', selectedPackageId: 'full-rental', sessionType: 'public' }
   const without = await calculateBookingPrice({ db: {}, payload: base, players: 1, findDocumentById, userId: 'player' })
   const withAmmo = await calculateBookingPrice({ db: {}, payload: { ...base, extraAmmoReloads: 3 }, players: 1, findDocumentById, userId: 'player' })
-  assert.equal(withAmmo.totalAmount, without.totalAmount + 300)
-  assert.ok(withAmmo.pricingBreakdown.some((line) => line.label === 'Extra ammo reloads (3)' && line.amount === 300))
+  assert.equal(withAmmo.totalAmount, without.totalAmount + 150)
+  assert.ok(withAmmo.pricingBreakdown.some((line) => line.label === 'Extra ammo reloads (3)' && line.amount === 150))
 
   const bogus = await calculateBookingPrice({ db: {}, payload: { ...base, extraAmmoReloads: -4 }, players: 1, findDocumentById, userId: 'player' })
   assert.equal(bogus.totalAmount, without.totalAmount)
   const huge = await calculateBookingPrice({ db: {}, payload: { ...base, extraAmmoReloads: 9999 }, players: 1, findDocumentById, userId: 'player' })
-  assert.equal(huge.totalAmount, without.totalAmount + 50 * 100)
+  assert.equal(huge.totalAmount, without.totalAmount + 50 * 50)
+  assert.ok(without.pricingBreakdown.some((line) => line.label === 'BB reloads included (2) — free' && line.amount === 0))
 })

@@ -49,7 +49,12 @@ async function request(method, path, body) {
 }
 
 // amount is in pesos (Xendit takes PHP amounts as-is).
-export async function createInvoice({ amount, externalId, description, successUrl, failureUrl, customer, durationSeconds = 3600 }) {
+// The channels players can pick on the payment page, by the key the page sends.
+export const XENDIT_CHANNELS = { gcash: 'GCASH', qrph: 'QRPH' }
+
+export async function createInvoice({ amount, externalId, description, successUrl, failureUrl, customer, durationSeconds = 3600, channels }) {
+  // A channel the player picked limits the invoice page to it; otherwise XENDIT_PAYMENT_METHODS applies.
+  const methods = Array.isArray(channels) && channels.length ? channels : paymentMethods
   const invoice = await request('POST', '/v2/invoices', {
     external_id: externalId,
     amount: Math.round(Number(amount) * 100) / 100,
@@ -59,7 +64,7 @@ export async function createInvoice({ amount, externalId, description, successUr
     success_redirect_url: successUrl,
     failure_redirect_url: failureUrl,
     ...(customer?.email ? { payer_email: customer.email, customer: { given_names: customer.name || 'Player', email: customer.email } } : {}),
-    ...(paymentMethods.length ? { payment_methods: paymentMethods } : {}),
+    ...(methods.length ? { payment_methods: methods } : {}),
   })
   return { id: invoice.id, invoiceUrl: invoice.invoice_url }
 }

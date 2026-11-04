@@ -163,7 +163,7 @@ async function confirmedReservationLines(db, reservation) {
   const balance = Math.max(0, total - Number(reservation.depositAmount || 0))
   const link = `${appUrl()}/app/my-reservations?view=${encodeURIComponent(id)}`
   const details = [
-    detailRow('Price', `${formatPHP(total)}${balance > 0 ? ` (${formatPHP(balance)} to pay in cash at the field)` : ' (fully paid)'}`),
+    detailRow('Price', `${formatPHP(total)}${balance > 0 ? ` (${formatPHP(balance)} to pay at the field by cash, GCash, or bank transfer)` : ' (fully paid)'}`),
     ...(reservation.teamName ? [detailRow('Team name', escapeHtml(reservation.teamName))] : []),
     detailRow('Team', team.join('<br>')),
     detailRow('Date', escapeHtml(reservation.reservationDate || reservation.dateISO || '')),
