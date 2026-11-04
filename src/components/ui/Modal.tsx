@@ -44,7 +44,7 @@ export function Modal({
 
   return createPortal(
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true" aria-labelledby={titleId} onClick={onClose}>
-      <div className={`max-h-[90vh] w-full ${width} overflow-y-auto rounded-3xl border border-white/10 bg-background p-5 shadow-soft`} onClick={(event) => event.stopPropagation()}>
+      <div className={`max-h-[90dvh] w-full ${width} overflow-y-auto rounded-3xl border border-white/10 bg-background p-5 shadow-soft`} onClick={(event) => event.stopPropagation()}>
         {/* The title row stays pinned while the content scrolls, so the X is always in reach. */}
         <div
           className="sticky top-0 z-10 -mx-5 -mt-5 flex items-start justify-between gap-3 border-b border-white/10 px-5 py-4"

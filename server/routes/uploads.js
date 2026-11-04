@@ -8,6 +8,7 @@ import { isCloudinaryConfigured, requireCloudinary } from './cloudinary.js'
 import { getDb, getUserAccountsCollection } from '../db/mongo.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
 import { findIdentityIdType } from '../utils/idTypes.js'
+import { hasValidIdentity } from '../utils/identityValidity.js'
 
 const router = express.Router()
 
@@ -218,9 +219,11 @@ router.post('/scan-id', requireAuth, (req, res, next) => {
     if (!account.birthDate) {
       return res.status(400).json({ ok: false, error: 'Add your birthday to your profile before verifying your ID.' })
     }
-    if (account.identityVerificationStatus === 'verified') {
-      return res.status(409).json({ ok: false, error: 'This identity is already verified.' })
-    }
+    // Updating a still-valid ID: the current verification keeps counting until it would expire,
+    // so the player can keep booking and joining teams while the new one is reviewed.
+    const keepPrevious = account.identityVerificationStatus === 'verified' && hasValidIdentity(account)
+      ? account.identityValidUntilISO || null
+      : account.identityPreviousValidUntilISO || null
 
     const frontUrl = await storeUpload(req, front.buffer, front.originalname || 'id-front', front.mimetype)
     const backUrl = idType.sides === 'front_back'
@@ -242,6 +245,7 @@ router.post('/scan-id', requireAuth, (req, res, next) => {
           identityScanText: scanResult.extractedText,
           identityScanDetected: scanResult.cardDetected,
           identityVerificationUpdatedAt: new Date().toISOString(),
+          ...(keepPrevious ? { identityPreviousValidUntilISO: keepPrevious } : {}),
         },
         $unset: { identityReviewReason: '' },
       },

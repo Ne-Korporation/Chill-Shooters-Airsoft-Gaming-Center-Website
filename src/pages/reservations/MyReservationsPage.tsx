@@ -120,8 +120,8 @@ export function MyReservationsPage() {
     }, { replace: true })
   }, [viewId, reservations, setSearchParams])
 
-  const load = useCallback(async () => {
-    setLoading(true)
+  const load = useCallback(async (background = false) => {
+    if (!background) setLoading(true)
     try {
       const [res, paymentsRes] = await Promise.all([
         apiGet<{ ok: boolean; data: ReservationDoc[] }>('/api/reservations?limit=200'),
@@ -130,14 +130,24 @@ export function MyReservationsPage() {
       setReservations(Array.isArray(res?.data) ? res.data : [])
       setPayments(Array.isArray(paymentsRes?.data) ? paymentsRes.data : [])
     } catch (err: any) {
-      toast.error(err?.message || 'Unable to load your reservations')
+      if (!background) toast.error(err?.message || 'Unable to load your reservations')
     } finally {
       setLoading(false)
     }
   }, [])
 
+  // Payment status changes as teammates pay their shares, so keep it current while open.
   useEffect(() => {
     void load()
+    const refresh = () => {
+      if (document.visibilityState === 'visible') void load(true)
+    }
+    const timer = window.setInterval(refresh, 20_000)
+    window.addEventListener('focus', refresh)
+    return () => {
+      window.clearInterval(timer)
+      window.removeEventListener('focus', refresh)
+    }
   }, [load])
 
   // Unpaid reservations can be paid online from here (e.g. after leaving Xendit's payment page).

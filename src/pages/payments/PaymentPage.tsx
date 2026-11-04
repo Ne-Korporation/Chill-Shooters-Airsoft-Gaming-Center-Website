@@ -566,7 +566,7 @@ function PaymentPageContent() {
               <div className="mt-2 text-xs text-muted">
                 Your card payment was verified with Stripe and your reservation is confirmed.
                 {paymentMode === 'split'
-                  ? ' Your teammates have been notified of their shares. Track who has paid under Split Payment in the menu — the slot stays reserved for 24 hours while the team pays.'
+                  ? ' Your teammates have been notified of their shares. Track who has paid under Split Payment in the menu — the team has 24 hours to pay. Teammates who have not paid get reminders, and if not every share is in by then, the booking is released for anyone to take.'
                   : ''}
               </div>
 

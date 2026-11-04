@@ -26,7 +26,7 @@ import { formatPhPhone, isValidPhPhone, PH_PHONE_PLACEHOLDER, toStoredPhPhone } 
 import { signedWaiverText, useCurrentWaiverText, type WaiverText } from '../../utils/waiverText'
 import { printWaiverDocument } from '../../utils/waiverPrint'
 import { useAuth } from '../../context/AuthContext'
-import { MinorsOnAccount } from './MinorsOnAccount'
+import { MinorsWaivers } from './MinorsOnAccount'
 import { ageFromBirthDate, isValidBirthDate, maxAdultBirthDate, maxBirthDate } from '../../utils/age'
 import { composeFullName, splitFullName, type NameParts } from '../../utils/names'
 
@@ -217,7 +217,7 @@ export function WaiverPage({
 
   // A player's own waiver opens once their ID is verified on their profile; the verified name,
   // birthday and ID are then filled in and the signed waiver is approved straight away.
-  const [identity, setIdentity] = useState<{ status: string; idType: string; nameParts: NameParts } | null>(null)
+  const [identity, setIdentity] = useState<{ status: string; idType: string; nameParts: NameParts; photoUrl: string } | null>(null)
   const [identityLoaded, setIdentityLoaded] = useState(false)
   useEffect(() => {
     if (child || !user?.id) {
@@ -226,15 +226,18 @@ export function WaiverPage({
     }
     let alive = true
     setIdentityLoaded(false)
-    apiGet<{ ok: boolean; data: { name?: string; firstName?: string; middleInitial?: string; lastName?: string; birthDate?: string; identityVerificationStatus?: string; identityIdType?: string } }>(`/api/user_accounts/${encodeURIComponent(user.id)}`)
+    apiGet<{ ok: boolean; data: { name?: string; firstName?: string; middleInitial?: string; lastName?: string; birthDate?: string; identityVerificationStatus?: string; identityIdType?: string; identityValidUntilISO?: string; profileImageUrl?: string } }>(`/api/user_accounts/${encodeURIComponent(user.id)}`)
       .then((res) => {
         const account = res?.data
         if (!alive || !account) return
-        const status = String(account.identityVerificationStatus || 'not_submitted')
+        // A verification older than a year counts as expired even before the server marks it.
+        const expiredByDate = Boolean(account.identityValidUntilISO && Date.parse(account.identityValidUntilISO) <= Date.now())
+        const rawStatus = String(account.identityVerificationStatus || 'not_submitted')
+        const status = rawStatus === 'verified' && expiredByDate ? 'expired' : rawStatus
         const parts = account.firstName || account.lastName
           ? { firstName: account.firstName || '', middleInitial: account.middleInitial || '', lastName: account.lastName || '' }
           : splitFullName(account.name || '')
-        setIdentity({ status, idType: account.identityIdType || '', nameParts: parts })
+        setIdentity({ status, idType: account.identityIdType || '', nameParts: parts, photoUrl: account.profileImageUrl || '' })
         if (status === 'verified') {
           setNameParts(parts)
           if (account.birthDate) setState((current) => ({ ...current, birthDate: account.birthDate || current.birthDate }))
@@ -833,6 +836,9 @@ export function WaiverPage({
   }
 
   const isEmbedded = variant === 'embedded'
+  // A player's own approved waiver: nothing left to fill in, so the page shows a short summary
+  // (the full record is under "View my waiver") and the header offers adding a minor instead.
+  const approvedOwn = !child && !isEmbedded && submitted && String(waiverStatus || '').trim().toLowerCase() === 'approved'
 
   const handlePlayerSignatureChange = (dataUrl: string) => {
     setSignatureImage(dataUrl)
@@ -941,19 +947,24 @@ export function WaiverPage({
               <p className="text-muted text-sm">Sign once before your first game. This waiver is for players 18 and older; once it's approved, parents can add their children below.</p>
             </div>
             <div className="flex items-center gap-3">
-              <Button variant="ghost" disabled={viewWaiverLoading} onClick={handleViewWaiver}>
-                <FiPrinter />
-                {viewWaiverLoading ? 'Loading waiver…' : 'View my waiver'}
-              </Button>
+              {/* Once approved, "View my waiver" sits on the summary card below. */}
+              {!approvedOwn ? (
+                <Button variant="ghost" disabled={viewWaiverLoading} onClick={handleViewWaiver}>
+                  <FiPrinter />
+                  {viewWaiverLoading ? 'Loading waiver…' : 'View my waiver'}
+                </Button>
+              ) : null}
             </div>
           </div>
-          <div className="mt-3 text-sm text-muted">
-            {checkingSubmission
-              ? 'Checking for an existing waiver…'
-              : submittedWaiver
-              ? 'Saved waiver ready to view.'
-              : 'No waiver loaded yet. Click View my waiver to search.'}
-          </div>
+          {!approvedOwn ? (
+            <div className="mt-3 text-sm text-muted">
+              {checkingSubmission
+                ? 'Checking for an existing waiver…'
+                : submittedWaiver
+                ? 'Saved waiver ready to view.'
+                : 'No waiver loaded yet. Click View my waiver to search.'}
+            </div>
+          ) : null}
           {viewWaiverLoading ? (
             <div className="mt-3 rounded-2xl border border-accent/15 bg-accent/10 px-4 py-3 text-sm text-accent">
               {viewWaiverInfo}
@@ -980,7 +991,7 @@ export function WaiverPage({
         </div>
       ) : null}
 
-      {submitted && !isEmbedded ? (
+      {submitted && !isEmbedded && !approvedOwn ? (
         <div className="rounded-2xl border border-success/25 bg-success/10 p-4 text-sm text-success">
           {String(waiverStatus || '').trim().toLowerCase() === 'approved'
             ? `Waiver approved. Your waiver is cleared for play and ready to print.${submittedWaiver?.validUntilISO ? ` Valid until ${new Date(submittedWaiver.validUntilISO).toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric' })}.` : ''}`
@@ -990,7 +1001,7 @@ export function WaiverPage({
 
       {viewWaiverOpen && submittedWaiver ? createPortal(
         <div className="waiver-print-overlay fixed inset-0 z-[9999] grid place-items-center bg-black/60 p-4">
-          <div className="waiver-print-sheet max-h-[90vh] w-full max-w-5xl overflow-y-auto bg-white text-slate-950 dark:bg-slate-950 dark:text-white p-6 shadow-2xl">
+          <div className="waiver-print-sheet max-h-[90dvh] w-full max-w-5xl overflow-y-auto bg-white text-slate-950 dark:bg-slate-950 dark:text-white p-6 shadow-2xl">
             {/* Pinned so the close button stays reachable while scrolling the waiver. */}
             <div className="sticky -top-6 z-10 -mx-6 -mt-6 flex flex-col gap-4 border-b border-slate-200/70 bg-white px-6 pb-4 pt-6 dark:bg-slate-950 sm:flex-row sm:items-center sm:justify-between">
               <div>
@@ -1122,6 +1133,42 @@ export function WaiverPage({
         document.body,
       ) : null}
 
+      {approvedOwn ? (
+        <Card className="p-4 md:p-6">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex min-w-0 items-center gap-4">
+              <div className="h-16 w-16 shrink-0 overflow-hidden rounded-2xl border border-white/10 bg-white/5">
+                {identity?.photoUrl ? (
+                  <img src={identity.photoUrl} alt={submittedWaiver?.fullName || 'Profile photo'} className="h-full w-full object-cover" />
+                ) : (
+                  <div className="grid h-full w-full place-items-center text-xl font-bold text-muted">
+                    {(submittedWaiver?.fullName || user?.name || '?').trim().charAt(0).toUpperCase()}
+                  </div>
+                )}
+              </div>
+              <div className="min-w-0">
+                <div className="truncate text-lg font-bold">{submittedWaiver?.fullName || user?.name}</div>
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
+                  <span className="inline-flex items-center gap-1 rounded-full border border-success/30 bg-success/10 px-2.5 py-0.5 font-semibold text-success">
+                    <FiCheckCircle /> Waiver approved
+                  </span>
+                  {submittedWaiver?.validUntilISO ? (
+                    <span className="text-muted">
+                      Valid until {new Date(submittedWaiver.validUntilISO).toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric' })}
+                    </span>
+                  ) : null}
+                </div>
+                <div className="mt-1 text-xs text-muted">You're cleared to book a game.</div>
+              </div>
+            </div>
+            <Button variant="ghost" className="shrink-0" disabled={viewWaiverLoading} onClick={handleViewWaiver}>
+              <FiPrinter />
+              {viewWaiverLoading ? 'Loading waiver…' : 'View my waiver'}
+            </Button>
+          </div>
+        </Card>
+      ) : (
+      <>
       {waiverLocked ? (
         <div className="flex flex-col gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-start gap-3">
@@ -1133,6 +1180,8 @@ export function WaiverPage({
                   ? 'Your ID is waiting for staff review. The waiver opens as soon as it is verified, with your name, birthday and ID filled in.'
                   : identity?.status === 'rejected'
                     ? 'Your ID was not accepted. Submit a clearer photo on your profile; the waiver opens once it is verified.'
+                    : identity?.status === 'expired'
+                      ? 'Your ID verification is over a year old and has expired. Submit your ID again on your profile to sign a new waiver.'
                     : 'Add your birthday and verify your ID on your profile. Once staff verify it, this waiver opens with your details filled in.'}
               </div>
             </div>
@@ -1551,9 +1600,11 @@ export function WaiverPage({
       </div>
 
       </fieldset>
+      </>
+      )}
 
-      {/* Parents add their children once their own (adult) waiver is approved. */}
-      {!isEmbedded && !child && String(waiverStatus || '').toLowerCase() === 'approved' ? <MinorsOnAccount /> : null}
+      {/* Minors are added on the profile; their waivers are answered here by the parent. */}
+      {!isEmbedded && !child ? <MinorsWaivers ownWaiverApproved={String(waiverStatus || '').toLowerCase() === 'approved'} /> : null}
     </div>
   )
 }
