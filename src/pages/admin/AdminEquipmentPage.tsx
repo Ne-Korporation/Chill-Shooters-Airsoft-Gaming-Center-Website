@@ -787,7 +787,7 @@ export function AdminEquipmentPage() {
       </Card>
       {rejectionTargetId ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" role="dialog" aria-modal="true" aria-labelledby="equipment-rejection-title">
-          <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-background p-5 shadow-2xl">
+          <div className="max-h-[90dvh] overflow-y-auto overscroll-contain w-full max-w-lg rounded-2xl border border-white/10 bg-background p-5 shadow-2xl">
             <div id="equipment-rejection-title" className="text-lg font-bold">Reject player gear</div>
             <p className="mt-1 text-sm text-muted">Add a comment explaining why this submission was rejected.</p>
             <textarea

@@ -257,7 +257,7 @@ export function FieldLayoutDesigner({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-3" role="dialog" aria-modal="true" aria-labelledby="layout-designer-title">
-      <Card className="flex max-h-[95vh] w-full max-w-5xl flex-col overflow-hidden p-4 md:p-5">
+      <Card className="flex max-h-[95dvh] w-full max-w-5xl flex-col overflow-hidden p-4 md:p-5">
         <div className="flex items-start justify-between gap-3">
           <div>
             <div id="layout-designer-title" className="text-base font-bold">Design your field layout · {fieldName}</div>

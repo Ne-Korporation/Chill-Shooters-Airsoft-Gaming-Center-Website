@@ -1,4 +1,5 @@
 import express from 'express'
+import { hasValidIdentity } from '../utils/identityValidity.js'
 import { randomBytes } from 'crypto'
 import { getDb } from '../db/mongo.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
@@ -92,14 +93,15 @@ router.get('/children', requireAuth, requireRole('user'), async (req, res) => {
   }
 })
 
-// POST /api/children { firstName, lastName, birthDate } — adds a child profile once the parent's
-// own waiver is approved, and emails the parent to confirm they are the guardian.
+// POST /api/children { firstName, middleInitial, lastName, birthDate } — adds a child profile once
+// the parent's ID is verified, and emails the parent to confirm they are the guardian. The child's
+// waiver is then answered on the Waivers page (it needs the parent's own approved waiver).
 router.post('/children', requireAuth, requireRole('user'), async (req, res) => {
   try {
     const db = await getDb()
     const parent = await db.collection(ACCOUNTS).findOne({ id: String(req.user.id) })
     if (!parent || parent.isChildProfile) throw fail(403, 'Only a parent account can add a minor.')
-    if (!(await hasApprovedWaiver(db, parent.id))) throw fail(409, 'Your own waiver must be approved before you can add a minor.')
+    if (!hasValidIdentity(parent)) throw fail(409, 'Verify your ID on your profile before you can add a minor.')
 
     const firstName = cleanName(req.body?.firstName)
     const lastName = cleanName(req.body?.lastName)

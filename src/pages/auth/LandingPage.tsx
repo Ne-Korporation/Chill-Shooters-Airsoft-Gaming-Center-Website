@@ -23,6 +23,7 @@ import {
 import toast from 'react-hot-toast'
 
 import { Button } from '../../components/ui/Button'
+import { WeekendCapacity } from '../../components/booking/WeekendCapacity'
 import { useAuth } from '../../context/AuthContext'
 import { getApiBase } from '../../utils/apiClient'
 import { formatSlotRange, useSlotHours } from '../../utils/slotHours'
@@ -971,6 +972,13 @@ export function LandingPage() {
         </div>
       </section>
 
+      {/* How full the coming weekend's public games are */}
+      <section className="mx-auto max-w-[1200px] px-4 pt-14 md:px-6 md:pt-10">
+        <WeekendCapacity
+          action={<Button size="sm" variant="primary" onClick={handleReserve}>Reserve a spot</Button>}
+        />
+      </section>
+
       {/* How it works */}
       <section id="about" className="mx-auto max-w-[1200px] scroll-mt-24 px-4 pb-16 pt-14 md:px-6 md:pt-10">
         <SectionTitle eyebrow="How it works" title="From booking to battle in four steps" />
@@ -997,7 +1005,7 @@ export function LandingPage() {
         </ol>
       </section>
 
-      <PackagesSection onBook={() => navigate(isAuthenticated ? '/app/packages' : '/login', isAuthenticated ? undefined : { state: { from: '/app/packages' } })} />
+      <PackagesSection onBook={() => navigate(isAuthenticated ? '/app/reservations' : '/login', isAuthenticated ? undefined : { state: { from: '/app/reservations' } })} />
 
       {/* FAQ */}
       <section id="guidelines" className="mx-auto max-w-[1200px] scroll-mt-24 px-4 pb-16 md:px-6">

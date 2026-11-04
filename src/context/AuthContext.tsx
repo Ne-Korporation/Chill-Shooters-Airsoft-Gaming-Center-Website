@@ -250,7 +250,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       {children}
       {idleWarning && user ? (
         <div className="fixed inset-0 z-[100001] flex items-center justify-center bg-black/60 p-4" role="alertdialog" aria-modal="true" aria-labelledby="idle-warning-title">
-          <div className="w-full max-w-sm rounded-3xl border border-white/10 bg-background p-5 text-text shadow-soft">
+          <div className="max-h-[90dvh] overflow-y-auto overscroll-contain w-full max-w-sm rounded-3xl border border-white/10 bg-background p-5 text-text shadow-soft">
             <div id="idle-warning-title" className="text-lg font-bold">Still there?</div>
             <p className="mt-2 text-sm text-muted">You haven't used the app for a while. For your security you'll be logged out in about a minute.</p>
             <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-end">

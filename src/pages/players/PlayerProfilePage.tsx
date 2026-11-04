@@ -13,6 +13,7 @@ import { ageFromBirthDate, isValidBirthDate, maxAdultBirthDate } from '../../uti
 import { composeFullName, splitFullName } from '../../utils/names'
 import { formatPhPhone } from '../../utils/phone'
 import { IDENTITY_ID_TYPES, idTypeNeedsBack } from '../../utils/idTypes'
+import { MinorsOnProfile } from '../waiver/MinorsOnAccount'
 
 type IdSide = 'front' | 'back'
 type IdPhoto = { blob: Blob; name: string; preview: string }
@@ -32,6 +33,9 @@ type PlayerProfileDoc = {
   identityIdType?: string
   identityDocumentUrl?: string
   identityDocumentBackUrl?: string
+  // A verified ID counts for a year; while a newer one is reviewed the previous one still counts.
+  identityValidUntilISO?: string
+  identityPreviousValidUntilISO?: string
   profileImageUrl?: string
   emailVerified?: boolean
   equipmentIds?: string[]
@@ -75,6 +79,7 @@ export function PlayerProfilePage() {
   const [loading, setLoading] = React.useState(true)
   // The minors on a parent's account, for switching to their profiles.
   const [myChildren, setMyChildren] = React.useState<Array<{ id: string; name: string }>>([])
+  const [childrenVersion, setChildrenVersion] = React.useState(0)
   React.useEffect(() => {
     if (user?.role !== 'user') return
     let alive = true
@@ -82,7 +87,7 @@ export function PlayerProfilePage() {
       .then((res) => { if (alive) setMyChildren(Array.isArray(res?.data) ? res.data : []) })
       .catch(() => {})
     return () => { alive = false }
-  }, [user?.role, user?.id])
+  }, [user?.role, user?.id, childrenVersion])
   const [uploading, setUploading] = React.useState(false)
   const [savingProfile, setSavingProfile] = React.useState(false)
   const [profileImageUploading, setProfileImageUploading] = React.useState(false)
@@ -293,6 +298,7 @@ export function PlayerProfilePage() {
       setIdPhoto('back', null)
       setReplacingId(false)
       toast.success('ID submitted. Staff will verify it shortly.')
+      setIsEditing(false)
     } catch (e: any) {
       setError(String(e?.message || e))
     } finally {
@@ -300,7 +306,12 @@ export function PlayerProfilePage() {
     }
   }
 
-  const isVerified = player?.identityVerificationStatus === 'verified'
+  const idValidUntilMs = Date.parse(player?.identityValidUntilISO || '')
+  const idPastValidity = Number.isFinite(idValidUntilMs) && idValidUntilMs <= Date.now()
+  const isVerified = player?.identityVerificationStatus === 'verified' && !idPastValidity
+  const idExpired = player?.identityVerificationStatus === 'expired' || (player?.identityVerificationStatus === 'verified' && idPastValidity)
+  // Counts for adding minors: a current verification, or the previous one while a newer ID is reviewed.
+  const hasValidIdentity = isVerified || Date.parse(player?.identityPreviousValidUntilISO || '') > Date.now()
 
   const handleIdentityUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     if (isVerified) return
@@ -555,21 +566,192 @@ export function PlayerProfilePage() {
 
   const verificationLabel = player?.identityVerificationStatus === 'pending_review'
     ? 'Pending Review'
-    : player?.identityVerificationStatus === 'verified'
+    : isVerified
       ? 'Verified'
-      : player?.identityVerificationStatus === 'rejected'
-        ? 'Not Accepted'
-        : 'Not Submitted'
+      : idExpired
+        ? 'Expired'
+        : player?.identityVerificationStatus === 'rejected'
+          ? 'Not Accepted'
+          : 'Not Submitted'
   const hasBirthday = Boolean(player?.birthDate)
-  const idSubmitted = ['pending_review', 'verified'].includes(String(player?.identityVerificationStatus || ''))
-  const showIdForm = isPlayerAccount && hasBirthday && !isVerified && (!idSubmitted || replacingId)
+  const idSubmitted = player?.identityVerificationStatus === 'pending_review' || isVerified
+  const showIdForm = isPlayerAccount && hasBirthday && (replacingId || !idSubmitted)
+  const formatLongDate = (iso?: string) => (iso
+    ? new Date(iso).toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric' })
+    : '')
+
+  // Identity verification: on the profile until the ID is verified, then inside Edit Profile
+  // (where the player can update it; a new submission brings it back out).
+  const identitySection = (
+    <>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-xs uppercase tracking-widest text-muted">Identity Verification</div>
+              <div className="mt-1 text-sm font-semibold">{verificationLabel}</div>
+              <div className="mt-1 text-sm text-muted">
+                {isVerified
+                  ? `Your ID is verified${player?.identityValidUntilISO ? ` until ${formatLongDate(player.identityValidUntilISO)}` : ''}. Update it every year to keep signing waivers.`
+                  : idExpired
+                    ? 'Your ID verification is over a year old. Submit your ID again to keep signing waivers and joining teams.'
+                    : 'Submit a government-issued ID for staff to verify. Your waiver opens once it is verified.'}
+              </div>
+            </div>
+            <span className={`shrink-0 rounded-full border px-3 py-1 text-[11px] font-semibold ${isVerified ? 'border-success/30 bg-success/20 text-success' : player?.identityVerificationStatus === 'pending_review' ? 'border-accent/30 bg-accent/20 text-accent' : idExpired ? 'border-danger/30 bg-danger/15 text-danger' : 'border-white/10 bg-white/5 text-muted'}`}>
+              {verificationLabel}
+            </span>
+          </div>
+
+          <div className="mt-4 space-y-3">
+            {!hasBirthday ? (
+              // The ID is checked against the birthday, so it comes first.
+              <div className="rounded-2xl border border-dashed border-white/15 bg-white/5 p-4 text-sm">
+                <div className="font-semibold">Add your birthday first</div>
+                <div className="mt-1 text-xs text-muted">Your ID is checked against the birthday on your profile. Add it, then you can submit your ID.</div>
+                {!viewingChild && (viewingOwn || user?.role === 'admin') ? (
+                  <Button type="button" className="mt-3 w-full" onClick={openEditProfile}>Add birthday</Button>
+                ) : null}
+              </div>
+            ) : null}
+
+            {hasBirthday && idSubmitted && !replacingId ? (
+              <div className="space-y-3">
+                <div className="rounded-2xl border border-white/10 bg-white/5 p-3 text-sm">
+                  <div className="text-xs text-muted">ID submitted</div>
+                  <div className="font-semibold">{player?.identityIdType || 'Government ID'}</div>
+                  {!isVerified ? (
+                    <div className="mt-1 text-xs text-muted">
+                      Waiting for staff to verify it.
+                      {Date.parse(player?.identityPreviousValidUntilISO || '') > Date.now()
+                        ? ` Your previous ID still counts until ${formatLongDate(player?.identityPreviousValidUntilISO)}.`
+                        : ''}
+                    </div>
+                  ) : player?.identityValidUntilISO ? (
+                    <div className="mt-1 text-xs text-muted">Valid until {formatLongDate(player.identityValidUntilISO)}</div>
+                  ) : null}
+                </div>
+                {player?.identityDocumentUrl || player?.identityDocumentBackUrl ? (
+                  <div className={`grid gap-2 ${player?.identityDocumentBackUrl ? 'sm:grid-cols-2' : ''}`}>
+                    {([['Front', player?.identityDocumentUrl], ['Back', player?.identityDocumentBackUrl]] as const).map(([side, url]) => url ? (
+                      <a
+                        key={side}
+                        href={url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="group block overflow-hidden rounded-2xl border border-white/10 bg-black/20 transition hover:border-accent/40"
+                        title={`Open the ${side.toLowerCase()} of your ID in full size`}
+                      >
+                        <img src={url} alt={`Your ID (${side.toLowerCase()})`} className="h-auto max-h-60 w-full object-contain" />
+                        <div className="flex items-center justify-between px-3 py-2 text-xs">
+                          <span className="font-semibold">{side}</span>
+                          <span className="text-muted group-hover:text-text">View full size</span>
+                        </div>
+                      </a>
+                    ) : null)}
+                  </div>
+                ) : (
+                  <div className="text-xs text-muted">Your ID photo isn't available to preview.</div>
+                )}
+                <Button type="button" variant="ghost" className="w-full" onClick={() => setReplacingId(true)}>
+                  {isVerified ? 'Update my ID' : 'Submit a different ID'}
+                </Button>
+                {isVerified ? (
+                  <div className="text-[11px] text-muted">
+                    A new ID goes to staff for review and this section moves back to your profile until it's verified. Your current ID keeps counting meanwhile.
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {showIdForm ? (
+              <div className="space-y-3">
+                {idExpired ? (
+                  <div className="rounded-2xl border border-danger/20 bg-danger/10 p-3 text-xs text-danger">
+                    Your ID verification expired after a year. Submit your current ID to verify again.
+                  </div>
+                ) : null}
+                {player?.identityVerificationStatus === 'rejected' ? (
+                  <div className="rounded-2xl border border-danger/20 bg-danger/10 p-3 text-xs text-danger">
+                    Your last ID was not accepted. Please submit a clear photo of a valid ID.
+                  </div>
+                ) : null}
+                <label className="block">
+                  <div className="mb-1 text-xs font-semibold text-muted">Which ID are you submitting?</div>
+                  <select
+                    value={idTypeChoice}
+                    onChange={(event) => chooseIdType(event.target.value)}
+                    className="w-full rounded-xl border border-white/10 bg-background px-4 py-3 text-sm text-text focus:outline-none focus:ring-2 focus:ring-accent/40 [&>option]:bg-background [&>optgroup]:bg-background"
+                  >
+                    <option value="">Select the ID type…</option>
+                    <optgroup label="Front side only">
+                      {IDENTITY_ID_TYPES.filter((type) => type.sides === 'front').map((type) => <option key={type.name} value={type.name}>{type.name}</option>)}
+                    </optgroup>
+                    <optgroup label="Front and back">
+                      {IDENTITY_ID_TYPES.filter((type) => type.sides === 'front_back').map((type) => <option key={type.name} value={type.name}>{type.name}</option>)}
+                    </optgroup>
+                  </select>
+                  {idTypeChoice ? (
+                    <div className="mt-1 text-xs text-muted">
+                      {needsBack ? 'Needs photos of the front and the back. ' : 'Only the front is needed. '}
+                      {IDENTITY_ID_TYPES.find((type) => type.name === idTypeChoice)?.note}
+                    </div>
+                  ) : null}
+                </label>
+
+                {idTypeChoice ? (
+                  <div className={`grid gap-3 ${needsBack ? 'sm:grid-cols-2' : ''}`}>
+                    {(needsBack ? (['front', 'back'] as const) : (['front'] as const)).map((side) => {
+                      const photo = idPhotos[side]
+                      return (
+                        <div key={side} className="rounded-2xl border border-white/10 bg-white/5 p-3">
+                          <div className="text-xs font-bold uppercase tracking-widest text-muted">{side === 'front' ? 'Front' : 'Back'}</div>
+                          {photo ? (
+                            <div className="mt-2 overflow-hidden rounded-xl border border-white/10">
+                              <img src={photo.preview} alt={`ID ${side}`} className="h-auto max-h-48 w-full object-contain" />
+                            </div>
+                          ) : (
+                            <div className="mt-2 grid h-24 place-items-center rounded-xl border border-dashed border-white/15 bg-black/20 text-xs text-muted">
+                              No photo yet
+                            </div>
+                          )}
+                          <div className="mt-2 flex gap-2">
+                            <Button type="button" size="sm" className="flex-1" onClick={() => openIdentityCapture(side)}>
+                              {photo ? 'Retake' : 'Camera'}
+                            </Button>
+                            <Button type="button" size="sm" variant="ghost" className="flex-1" onClick={() => pickIdFile(side)}>
+                              {photo ? 'Replace' : 'Upload'}
+                            </Button>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                ) : null}
+
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Button type="button" className="flex-1" onClick={submitIdentity} disabled={!idPhotosReady || uploading}>
+                    {uploading ? 'Submitting…' : isVerified ? 'Submit new ID for verification' : 'Submit ID for verification'}
+                  </Button>
+                  {replacingId ? (
+                    <Button type="button" variant="ghost" className="flex-1" onClick={() => setReplacingId(false)} disabled={uploading}>
+                      Cancel
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+
+          </div>
+    </>
+  )
+
 
   return (
     <div className="space-y-4">
+      <input ref={fileInputRef} type="file" accept="image/png,image/jpeg,image/webp" onChange={handleIdentityUpload} className="hidden" />
       {mounted && cameraActive
         ? createPortal(
-            <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/90 p-4 backdrop-blur-sm">
-              <div className="w-full max-w-4xl rounded-3xl border border-white/10 bg-background p-4 shadow-[0_0_0_1px_rgba(255,255,255,0.05),0_30px_80px_rgba(0,0,0,0.65)]">
+            <div className="fixed inset-0 z-[100002] flex items-center justify-center bg-black/90 p-4 backdrop-blur-sm">
+              <div className="max-h-[90dvh] overflow-y-auto overscroll-contain w-full max-w-4xl rounded-3xl border border-white/10 bg-background p-4 shadow-[0_0_0_1px_rgba(255,255,255,0.05),0_30px_80px_rgba(0,0,0,0.65)]">
                 <div className="mb-3 flex items-center justify-between">
                   <div>
                     <div className="text-sm font-semibold">Capture the {captureSide} of your {idTypeChoice || 'ID'}</div>
@@ -581,7 +763,7 @@ export function PlayerProfilePage() {
                 </div>
                 <div className="space-y-3">
                   <div className="relative">
-                    <video ref={videoRef} autoPlay playsInline muted className="h-[60vh] w-full rounded-2xl bg-black object-cover" />
+                    <video ref={videoRef} autoPlay playsInline muted className="h-[45dvh] w-full rounded-2xl bg-black object-cover sm:h-[60dvh]" />
                     <div className={`absolute inset-0 rounded-2xl border-2 transition ${scanStatus === 'success' ? 'border-success' : scanStatus === 'scanning' ? 'border-amber-400' : 'border-danger/80'}`} />
                     <div className={`absolute left-4 top-4 rounded-full px-3 py-1 text-xs font-semibold ${scanStatus === 'success' ? 'bg-success/20 text-success' : scanStatus === 'scanning' ? 'bg-amber-200 text-amber-700' : 'bg-danger/20 text-danger'}`}>
                       {scanStatus === 'scanning'
@@ -611,7 +793,7 @@ export function PlayerProfilePage() {
 
       {isEditing ? createPortal(
         <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
-          <div className="relative z-[100000] w-full max-w-xl rounded-3xl border border-white/10 bg-background p-4 shadow-[0_0_0_1px_rgba(255,255,255,0.05),0_30px_80px_rgba(0,0,0,0.65)]">
+          <div className="relative z-[100000] max-h-[90dvh] overflow-y-auto overscroll-contain w-full max-w-xl rounded-3xl border border-white/10 bg-background p-4 shadow-[0_0_0_1px_rgba(255,255,255,0.05),0_30px_80px_rgba(0,0,0,0.65)]">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <div className="text-sm font-semibold">Edit Profile</div>
@@ -788,6 +970,12 @@ export function PlayerProfilePage() {
                     : 'Needed before you can verify your ID. Also fills in your age on waivers.'}
               />
 
+              {!viewingChild && isPlayerAccount && isVerified ? (
+                <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                  {identitySection}
+                </div>
+              ) : null}
+
               {error ? <div className="rounded-2xl border border-danger/20 bg-danger/10 p-3 text-sm text-danger">{error}</div> : null}
 
               <div className="flex flex-col gap-2 sm:flex-row">
@@ -854,8 +1042,8 @@ export function PlayerProfilePage() {
               </div>
               {isPlayerAccount ? (
                 <div className="mt-1 flex flex-wrap items-center gap-2">
-                  <span className={`rounded-full border px-3 py-1 text-[11px] font-semibold ${player?.identityVerificationStatus === 'verified' ? 'border-success/30 bg-success/20 text-success' : player?.identityVerificationStatus === 'pending_review' ? 'border-accent/30 bg-accent/20 text-accent' : 'border-danger/30 bg-danger/20 text-danger'}`}>
-                    {player?.identityVerificationStatus === 'verified' ? 'Verified' : player?.identityVerificationStatus === 'pending_review' ? 'Verification pending' : 'Verification required'}
+                  <span className={`rounded-full border px-3 py-1 text-[11px] font-semibold ${isVerified ? 'border-success/30 bg-success/20 text-success' : player?.identityVerificationStatus === 'pending_review' ? 'border-accent/30 bg-accent/20 text-accent' : 'border-danger/30 bg-danger/20 text-danger'}`}>
+                    {isVerified ? 'Verified' : player?.identityVerificationStatus === 'pending_review' ? 'Verification pending' : idExpired ? 'ID expired' : 'Verification required'}
                   </span>
                 </div>
               ) : null}
@@ -938,148 +1126,18 @@ export function PlayerProfilePage() {
           </div>
         </Card>
 
-        {!viewingChild && isPlayerAccount ? (
+        {!viewingChild && isPlayerAccount && !isVerified ? (
         <Card className="p-4">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-xs uppercase tracking-widest text-muted">Identity Verification</div>
-              <div className="mt-1 text-sm font-semibold">{verificationLabel}</div>
-              <div className="mt-1 text-sm text-muted">
-                {isVerified
-                  ? 'Your ID is verified. Your waiver is filled in from it and approved as soon as you sign.'
-                  : 'Submit a government-issued ID for staff to verify. Your waiver opens once it is verified.'}
-              </div>
-            </div>
-            <span className={`rounded-full border px-3 py-1 text-[11px] font-semibold ${player?.identityVerificationStatus === 'verified' ? 'border-success/30 bg-success/20 text-success' : player?.identityVerificationStatus === 'pending_review' ? 'border-accent/30 bg-accent/20 text-accent' : 'border-white/10 bg-white/5 text-muted'}`}>
-              {verificationLabel}
-            </span>
-          </div>
-
-          <div className="mt-4 space-y-3">
-            {!hasBirthday ? (
-              // The ID is checked against the birthday, so it comes first.
-              <div className="rounded-2xl border border-dashed border-white/15 bg-white/5 p-4 text-sm">
-                <div className="font-semibold">Add your birthday first</div>
-                <div className="mt-1 text-xs text-muted">Your ID is checked against the birthday on your profile. Add it, then you can submit your ID.</div>
-                {!viewingChild && (viewingOwn || user?.role === 'admin') ? (
-                  <Button type="button" className="mt-3 w-full" onClick={openEditProfile}>Add birthday</Button>
-                ) : null}
-              </div>
-            ) : null}
-
-            {hasBirthday && idSubmitted && !replacingId ? (
-              <div className="space-y-3">
-                <div className="rounded-2xl border border-white/10 bg-white/5 p-3 text-sm">
-                  <div className="text-xs text-muted">ID submitted</div>
-                  <div className="font-semibold">{player?.identityIdType || 'Government ID'}</div>
-                  {!isVerified ? <div className="mt-1 text-xs text-muted">Waiting for staff to verify it.</div> : null}
-                </div>
-                {player?.identityDocumentUrl || player?.identityDocumentBackUrl ? (
-                  <div className={`grid gap-2 ${player?.identityDocumentBackUrl ? 'sm:grid-cols-2' : ''}`}>
-                    {([['Front', player?.identityDocumentUrl], ['Back', player?.identityDocumentBackUrl]] as const).map(([side, url]) => url ? (
-                      <a
-                        key={side}
-                        href={url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="group block overflow-hidden rounded-2xl border border-white/10 bg-black/20 transition hover:border-accent/40"
-                        title={`Open the ${side.toLowerCase()} of your ID in full size`}
-                      >
-                        <img src={url} alt={`Your ID (${side.toLowerCase()})`} className="h-auto max-h-60 w-full object-contain" />
-                        <div className="flex items-center justify-between px-3 py-2 text-xs">
-                          <span className="font-semibold">{side}</span>
-                          <span className="text-muted group-hover:text-text">View full size</span>
-                        </div>
-                      </a>
-                    ) : null)}
-                  </div>
-                ) : (
-                  <div className="text-xs text-muted">Your ID photo isn't available to preview.</div>
-                )}
-                {!isVerified ? (
-                  <Button type="button" variant="ghost" className="w-full" onClick={() => setReplacingId(true)}>
-                    Submit a different ID
-                  </Button>
-                ) : null}
-              </div>
-            ) : null}
-
-            {showIdForm ? (
-              <div className="space-y-3">
-                {player?.identityVerificationStatus === 'rejected' ? (
-                  <div className="rounded-2xl border border-danger/20 bg-danger/10 p-3 text-xs text-danger">
-                    Your last ID was not accepted. Please submit a clear photo of a valid ID.
-                  </div>
-                ) : null}
-                <label className="block">
-                  <div className="mb-1 text-xs font-semibold text-muted">Which ID are you submitting?</div>
-                  <select
-                    value={idTypeChoice}
-                    onChange={(event) => chooseIdType(event.target.value)}
-                    className="w-full rounded-xl border border-white/10 bg-background px-4 py-3 text-sm text-text focus:outline-none focus:ring-2 focus:ring-accent/40 [&>option]:bg-background [&>optgroup]:bg-background"
-                  >
-                    <option value="">Select the ID type…</option>
-                    <optgroup label="Front side only">
-                      {IDENTITY_ID_TYPES.filter((type) => type.sides === 'front').map((type) => <option key={type.name} value={type.name}>{type.name}</option>)}
-                    </optgroup>
-                    <optgroup label="Front and back">
-                      {IDENTITY_ID_TYPES.filter((type) => type.sides === 'front_back').map((type) => <option key={type.name} value={type.name}>{type.name}</option>)}
-                    </optgroup>
-                  </select>
-                  {idTypeChoice ? (
-                    <div className="mt-1 text-xs text-muted">
-                      {needsBack ? 'Needs photos of the front and the back. ' : 'Only the front is needed. '}
-                      {IDENTITY_ID_TYPES.find((type) => type.name === idTypeChoice)?.note}
-                    </div>
-                  ) : null}
-                </label>
-
-                {idTypeChoice ? (
-                  <div className={`grid gap-3 ${needsBack ? 'sm:grid-cols-2' : ''}`}>
-                    {(needsBack ? (['front', 'back'] as const) : (['front'] as const)).map((side) => {
-                      const photo = idPhotos[side]
-                      return (
-                        <div key={side} className="rounded-2xl border border-white/10 bg-white/5 p-3">
-                          <div className="text-xs font-bold uppercase tracking-widest text-muted">{side === 'front' ? 'Front' : 'Back'}</div>
-                          {photo ? (
-                            <div className="mt-2 overflow-hidden rounded-xl border border-white/10">
-                              <img src={photo.preview} alt={`ID ${side}`} className="h-auto max-h-48 w-full object-contain" />
-                            </div>
-                          ) : (
-                            <div className="mt-2 grid h-24 place-items-center rounded-xl border border-dashed border-white/15 bg-black/20 text-xs text-muted">
-                              No photo yet
-                            </div>
-                          )}
-                          <div className="mt-2 flex gap-2">
-                            <Button type="button" size="sm" className="flex-1" onClick={() => openIdentityCapture(side)}>
-                              {photo ? 'Retake' : 'Camera'}
-                            </Button>
-                            <Button type="button" size="sm" variant="ghost" className="flex-1" onClick={() => pickIdFile(side)}>
-                              {photo ? 'Replace' : 'Upload'}
-                            </Button>
-                          </div>
-                        </div>
-                      )
-                    })}
-                  </div>
-                ) : null}
-
-                <div className="flex flex-col gap-2 sm:flex-row">
-                  <Button type="button" className="flex-1" onClick={submitIdentity} disabled={!idPhotosReady || uploading}>
-                    {uploading ? 'Submitting…' : 'Submit ID for verification'}
-                  </Button>
-                  {replacingId ? (
-                    <Button type="button" variant="ghost" className="flex-1" onClick={() => setReplacingId(false)} disabled={uploading}>
-                      Cancel
-                    </Button>
-                  ) : null}
-                </div>
-              </div>
-            ) : null}
-
-            <input ref={fileInputRef} type="file" accept="image/png,image/jpeg,image/webp" onChange={handleIdentityUpload} className="hidden" />
-          </div>
+          {identitySection}
         </Card>
+        ) : null}
+
+        {viewingOwn && !viewingChild && user?.role === 'user' && isPlayerAccount ? (
+          <MinorsOnProfile
+            canAdd={hasValidIdentity}
+            blockedReason={hasValidIdentity ? undefined : 'Verify your ID first. Once staff verify it, you can add the children who play with you.'}
+            onChanged={() => setChildrenVersion((n) => n + 1)}
+          />
         ) : null}
 
         {user?.role === 'user' && String(player?.id || '') === String(user.id) ? (

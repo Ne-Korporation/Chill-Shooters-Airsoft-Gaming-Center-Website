@@ -685,7 +685,7 @@ export function AdminWeaponsPage() {
       </Card>
       {approvalTarget ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" role="dialog" aria-modal="true" aria-labelledby="weapon-approval-title">
-          <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-background p-5 shadow-2xl">
+          <div className="max-h-[90dvh] overflow-y-auto overscroll-contain w-full max-w-lg rounded-2xl border border-white/10 bg-background p-5 shadow-2xl">
             <div id="weapon-approval-title" className="text-lg font-bold">Approve player weapon</div>
             <p className="mt-1 text-sm text-muted">
               Chrono the weapon first. It's approved only if the reading is within the limit (AEG 450 FPS, sniper 550 FPS unless changed in settings).
@@ -723,7 +723,7 @@ export function AdminWeaponsPage() {
       ) : null}
       {rejectionTargetId ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" role="dialog" aria-modal="true" aria-labelledby="weapon-rejection-title">
-          <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-background p-5 shadow-2xl">
+          <div className="max-h-[90dvh] overflow-y-auto overscroll-contain w-full max-w-lg rounded-2xl border border-white/10 bg-background p-5 shadow-2xl">
             <div id="weapon-rejection-title" className="text-lg font-bold">Reject player weapon</div>
             <p className="mt-1 text-sm text-muted">Add a comment explaining why this submission was rejected.</p>
             <textarea

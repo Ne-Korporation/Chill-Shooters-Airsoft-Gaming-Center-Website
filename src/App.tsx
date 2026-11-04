@@ -12,7 +12,6 @@ import { DashboardHomePage } from './pages/dashboard/DashboardHomePage'
 import { ReservationCalendarPage } from './pages/reservations/ReservationCalendarPage'
 import { MyReservationsPage } from './pages/reservations/MyReservationsPage'
 
-import { PackageRecommendationPage } from './pages/packages/PackageRecommendationPage'
 import { WaiverPage } from './pages/waiver/WaiverPage'
 import { PaymentPage } from './pages/payments/PaymentPage'
 import { PaymentCompletePage } from './pages/payments/PaymentCompletePage'
@@ -149,7 +148,8 @@ export default function App() {
         <Route index element={<AppHomePage />} />
         <Route path="reservations" element={<RequireRole roles={['user']}><ReservationCalendarPage /></RequireRole>} />
         <Route path="my-reservations" element={<RequireRole roles={['user']}><MyReservationsPage /></RequireRole>} />
-        <Route path="packages" element={<RequireRole roles={['user']}><PackageRecommendationPage /></RequireRole>} />
+        {/* Packages are chosen in Book a game now; old links land there. */}
+        <Route path="packages" element={<Navigate to="/app/reservations" replace />} />
         <Route path="waiver" element={<RequireRole roles={['user']}><WaiverPage /></RequireRole>} />
         <Route path="payment" element={<RequireRole roles={['user']}><PaymentPage /></RequireRole>} />
         <Route path="payment/complete" element={<RequireRole roles={['user']}><PaymentCompletePage /></RequireRole>} />
