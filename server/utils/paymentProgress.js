@@ -87,7 +87,7 @@ export async function autoConfirmIfVerified(db, reservationId, startSession) {
     userId: reservation.userId,
     type: 'reservation_confirmed',
     title: 'Reservation confirmed',
-    message: `Your payment was verified and your reservation for ${reservationLabel(reservation)} is confirmed.${balance > 0 ? ` Please bring the remaining ₱${balance.toLocaleString()} in cash on game day.` : ''}`,
+    message: `Your payment was verified and your reservation for ${reservationLabel(reservation)} is confirmed.${balance > 0 ? ` Please pay the remaining ₱${balance.toLocaleString()} at the counter on game day by cash, GCash, or bank transfer.` : ''}`,
     linkedResourceId: reservation.id,
   })
   await notifyRole(db, {

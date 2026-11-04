@@ -1336,9 +1336,11 @@ async function resolveTeamAndOwnWeapons(db, doc, { requireFullTeam = false } = {
   }
 
   const memberIds = new Set([captainId, ...teamMembers.map((member) => member.id)])
-  const bringerIds = Array.from(new Set(
+  // Bringing your own weapon is part of a custom selection only: a package always rents its weapons.
+  const allowsOwnWeapons = String(doc.selectionMode || '').toLowerCase() !== 'package'
+  const bringerIds = allowsOwnWeapons ? Array.from(new Set(
     (Array.isArray(doc.ownWeaponBringerIds) ? doc.ownWeaponBringerIds : []).map(String).filter((id) => memberIds.has(id)),
-  ))
+  )) : []
   const owners = bringerIds.length ? await getApprovedWeaponOwnerIds(db, bringerIds) : new Set()
   const ownWeaponBringers = bringerIds.map((userId) => ({ userId, verified: owners.has(userId) }))
 
@@ -1350,7 +1352,7 @@ async function resolveTeamAndOwnWeapons(db, doc, { requireFullTeam = false } = {
     splitPayerIds: split ? payers.map((member) => member.id) : [],
     ownWeaponBringerIds: bringerIds,
     ownWeaponBringers,
-    ownWeaponTarget: Math.max(0, Math.round(Number(doc.ownWeaponTarget) || 0)),
+    ownWeaponTarget: allowsOwnWeapons ? Math.max(0, Math.round(Number(doc.ownWeaponTarget) || 0)) : 0,
     verifiedOwnWeaponCount: Math.min(doc.numberOfPlayers, ownWeaponBringers.filter((bringer) => bringer.verified).length),
   }
 }
@@ -1738,7 +1740,7 @@ router.post('/:collection', requireAuth, async (req, res) => {
       } catch (err) {
         return res.status(400).json({ ok: false, error: err.message || 'Unable to calculate reservation price' })
       }
-      // Payment plan: everything online now, or the downpayment online and the balance in cash
+      // Payment plan: everything online now, or the downpayment online and the balance at the field
       // at the field. The cash plan never skips the online downpayment.
       doc.paymentPlan = String(doc.paymentPlan || '') === 'full' ? 'full' : 'cash_balance'
       if (doc.paymentPlan === 'full') {

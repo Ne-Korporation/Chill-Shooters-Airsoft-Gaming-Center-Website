@@ -51,9 +51,11 @@ function getPricingConfig(env = process.env) {
 // Extra BB reloads a player can add when booking, on top of what the package gives.
 // Same price as the "Extra ammo reload" charge staff add at the field (AMMO_RELOAD_PRICE).
 export const MAX_EXTRA_AMMO_RELOADS = 50
+// Every package booking includes this many BB reloads per player at no charge.
+export const INCLUDED_RELOADS_PER_PLAYER = 2
 
 export function getAmmoReloadPrice(env = process.env) {
-  return readNonNegativeNumber(env.AMMO_RELOAD_PRICE, 100, 'AMMO_RELOAD_PRICE')
+  return readNonNegativeNumber(env.AMMO_RELOAD_PRICE, 50, 'AMMO_RELOAD_PRICE')
 }
 
 export function normalizeExtraAmmoReloads(value) {
@@ -237,6 +239,10 @@ export async function calculateBookingPrice({ db, payload, players, findDocument
     breakdown.push({ label: 'Player entrance fee', amount: entranceFee })
   } else {
     return { pricingVerified: false, reason: 'Select a package or choose custom/own gear.' }
+  }
+
+  if (selectionMode === 'package') {
+    breakdown.push({ label: `BB reloads included (${INCLUDED_RELOADS_PER_PLAYER * players}) — free`, amount: 0 })
   }
 
   const extraAmmoReloads = normalizeExtraAmmoReloads(payload.extraAmmoReloads)

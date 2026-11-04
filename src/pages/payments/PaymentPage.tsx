@@ -13,15 +13,15 @@ import { clearPackagePrefill } from '../../utils/packagePrefill'
 import { StripeCardPayment } from '../../components/payments/StripeCardPayment'
 import { cancelBookingDraftLeft, clearBookingDraft, hasBookingDraft, markBookingDraftLeft, readBookingDraft, saveBookingDraft, scheduleBookingDraftLeft } from '../../utils/bookingDraft'
 
-// Players pay online through Xendit's payment page (GCash, Maya, bank, card), which verifies the
-// payment itself, so no staff check is needed and the booking is confirmed automatically. With the
-// downpayment plan the rest is paid in cash at the field. Card payments through Stripe (test mode)
-// are offered alongside when the server has Stripe keys.
-type PaymentMethod = 'xendit' | 'stripe'
+// Players pay online with GCash or QR Ph (Xendit's payment page, limited to that channel) or by
+// card (Stripe). Both providers verify the payment themselves, so no staff check is needed and the
+// booking is confirmed automatically. With the downpayment plan the rest is paid at the field
+// (cash, GCash, or bank transfer).
+type PaymentMethod = 'gcash' | 'qrph' | 'stripe'
 
-const METHOD_LABELS: Record<PaymentMethod, string> = { xendit: 'Online (Xendit)', stripe: 'Card (Stripe)' }
+const METHOD_LABELS: Record<PaymentMethod, string> = { gcash: 'GCash', qrph: 'QR Ph', stripe: 'Card (Stripe)' }
 
-// Pay everything online, or the downpayment online and the rest in cash at the field.
+// Pay everything online, or the downpayment online and the rest at the field.
 type PaymentPlan = 'full' | 'cash_balance'
 
 type PaymentMode = 'self' | 'split'
@@ -69,7 +69,9 @@ function PaymentPageContent() {
   const navigate = useNavigate()
   const { user } = useAuth()
 
-  const [method, setMethod] = useState<PaymentMethod>('xendit')
+  const [method, setMethod] = useState<PaymentMethod>('gcash')
+  // GCash and QR Ph both go through Xendit.
+  const isXendit = method !== 'stripe'
   // Whether the server has Xendit set up; null while checking.
   const [xenditEnabled, setXenditEnabled] = useState<boolean | null>(null)
   useEffect(() => {
@@ -97,6 +99,7 @@ function PaymentPageContent() {
   // Who pays and how can change until the reservation is created; then the server has fixed them.
   const [choicesLocked, setChoicesLocked] = useState(() => Boolean(localStorage.getItem('pending_reservation_id')))
   const canSplit = teamMembers.length > 0
+  const showWhoPays = canSplit || paymentMode === 'split'
   const teamSize = paymentMode === 'split' ? teamMembers.length + 1 : 1
   const paysInFull = paymentPlan === 'full'
   // Estimate shown before submitting; the server recalculates the exact amount.
@@ -231,11 +234,16 @@ function PaymentPageContent() {
     return () => window.clearInterval(timer)
   }, [success, draftExpired])
 
+  // Card can't cover a split payment (or may not be set up): fall back to GCash.
+  useEffect(() => {
+    if (method === 'stripe' && !stripeSession && (paymentMode === 'split' || !stripeConfig.enabled)) setMethod('gcash')
+  }, [method, paymentMode, stripeConfig.enabled, stripeSession])
+
   const canSubmit = useMemo(() => {
     if (submitting) return false
-    if (method === 'xendit') return xenditEnabled === true
+    if (isXendit) return xenditEnabled === true
     return !stripeSession && paymentMode !== 'split'
-  }, [method, submitting, stripeSession, paymentMode, xenditEnabled])
+  }, [isXendit, submitting, stripeSession, paymentMode, xenditEnabled])
 
   const submit = async () => {
     setSubmitting(true)
@@ -256,7 +264,7 @@ function PaymentPageContent() {
       pendingReservation = { ...pendingReservation, paymentMode, paymentPlan, teamSize }
 
       if (method === 'stripe' && paymentMode === 'split') throw new Error('Split payments are paid online through Xendit; card payment covers the whole amount.')
-      if (method === 'xendit' && xenditEnabled !== true) throw new Error('Online payment is not available right now. Please try again later.')
+      if (isXendit && xenditEnabled !== true) throw new Error('Online payment is not available right now. Please try again later.')
 
       let reservationId = localStorage.getItem('pending_reservation_id') || ''
       let serverReservation: any
@@ -297,10 +305,10 @@ function PaymentPageContent() {
 
       localStorage.setItem('active_reservation_id', String(reservationId))
 
-      if (method === 'xendit') {
+      if (isXendit) {
         // Off to Xendit's payment page. The reservation now holds the slot, so the draft and the
         // pending booking data are no longer needed; the payment is verified when the player returns.
-        const checkout = await apiPost<{ ok: boolean; data: { checkoutUrl: string } }>('/api/xendit/checkout', { reservationId: String(reservationId) })
+        const checkout = await apiPost<{ ok: boolean; data: { checkoutUrl: string } }>('/api/xendit/checkout', { reservationId: String(reservationId), channel: method })
         successRef.current = true
         localStorage.removeItem('pending_reservation')
         localStorage.removeItem('pending_reservation_id')
@@ -325,12 +333,14 @@ function PaymentPageContent() {
         <div className="text-sm font-medium text-accent">Payment</div>
         <h1 className="text-3xl font-bold">Reservation Payment</h1>
         <p className="text-muted text-sm">
-          Pay online through Xendit with GCash, Maya, your bank, or a card. The payment is checked automatically and your reservation is confirmed as soon as it goes through. If you chose the downpayment, the rest is paid in cash at the field.
+          Pay online with GCash, QR Ph, or a card. The payment is checked automatically and your reservation is confirmed as soon as it goes through. If you chose the downpayment, the rest is paid at the field by cash, GCash, or bank transfer.
         </p>
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[1.6fr_0.9fr]">
         <Card className="p-4 md:p-6">
+          {/* Who pays only matters with teammates to split with; a solo booking skips it. */}
+          {showWhoPays && (<>
           <div className="text-xs uppercase tracking-widest text-muted">Who pays</div>
           <p className="mt-1 text-xs text-muted">
             {choicesLocked ? 'These were saved with your reservation and can no longer be changed.' : 'Choose who pays for this reservation.'}
@@ -358,12 +368,13 @@ function PaymentPageContent() {
               </button>
             ))}
           </div>
+          </>)}
 
-          <div className="mt-5 text-xs uppercase tracking-widest text-muted">How you'll pay</div>
+          <div className={[showWhoPays ? 'mt-5' : '', 'text-xs uppercase tracking-widest text-muted'].join(' ')}>How you'll pay</div>
           <div className="mt-3 grid gap-2 sm:grid-cols-2">
             {([
               ['full', 'Pay in full online', 'Pay the whole amount now. Nothing to pay at the field.'],
-              ['cash_balance', '50% online + cash at the field', 'Pay the 50% downpayment online now, then the rest in cash at the counter on game day.'],
+              ['cash_balance', '50% online + rest at the field', 'Pay the 50% downpayment online now, then the rest at the counter on game day by cash, GCash, or bank transfer.'],
             ] as const).map(([plan, title, description]) => (
               <button
                 key={plan}
@@ -390,15 +401,21 @@ function PaymentPageContent() {
             </div>
           </div>
 
-          <div className="mt-4 grid gap-2 sm:grid-cols-2">
+          <div className="mt-4 grid gap-2 sm:grid-cols-3">
             {([
-              { key: 'xendit', title: 'Pay online', hint: 'GCash, Maya, bank or card · confirmed automatically · Xendit test mode' },
-              ...(stripeConfig.enabled ? [{ key: 'stripe', title: 'Credit / debit card', hint: 'Visa, Mastercard · Stripe test mode' }] : []),
-            ] as Array<{ key: PaymentMethod; title: string; hint: string }>).map((option) => (
+              { key: 'gcash', title: 'GCash', hint: 'Pay with your GCash app', unavailable: '' },
+              { key: 'qrph', title: 'QR Ph', hint: 'Scan with any bank or e-wallet app', unavailable: '' },
+              {
+                key: 'stripe',
+                title: 'Card',
+                hint: 'Visa or Mastercard via Stripe',
+                unavailable: !stripeConfig.enabled ? 'Not available right now' : paymentMode === 'split' ? 'Not for split payments' : '',
+              },
+            ] as Array<{ key: PaymentMethod; title: string; hint: string; unavailable: string }>).map((option) => (
               <button
                 key={option.key}
                 type="button"
-                disabled={Boolean(stripeSession)}
+                disabled={Boolean(stripeSession) || Boolean(option.unavailable)}
                 onClick={() => setMethod(option.key)}
                 className={[
                   'w-full text-left rounded-2xl border px-4 py-3 transition disabled:cursor-not-allowed disabled:opacity-50',
@@ -408,12 +425,12 @@ function PaymentPageContent() {
                 ].join(' ')}
               >
                 <div className="text-sm font-bold">{option.title}</div>
-                <div className="mt-1 text-xs text-muted">{option.hint}</div>
+                <div className="mt-1 text-xs text-muted">{option.unavailable || option.hint}</div>
               </button>
             ))}
           </div>
 
-          {xenditEnabled === false && method === 'xendit' ? (
+          {xenditEnabled === false && isXendit ? (
             <div className="mt-4 flex items-start gap-2 rounded-2xl border border-danger/30 bg-danger/10 p-3 text-sm text-danger">
               <FiAlertTriangle className="mt-0.5 shrink-0" />
               Online payment is not available right now, so the reservation can't be paid yet. Please try again later or contact the staff.
@@ -429,13 +446,15 @@ function PaymentPageContent() {
               <ul className="mt-2 space-y-1 text-xs text-muted list-disc pl-5">
                 <li>Enter your card in Stripe's secure form. Card details go straight to Stripe and are never stored by Chill Shooters.</li>
                 <li>Your reservation is confirmed automatically once the server verifies the payment with Stripe.</li>
-                <li>Card payment covers the whole online amount; split payments are paid through Xendit.</li>
+                <li>Card payment covers the whole online amount; split payments are paid with GCash or QR Ph.</li>
                 <li>Test mode: no real money is charged.</li>
               </ul>
             ) : (
               <ul className="mt-2 space-y-1 text-xs text-muted list-disc pl-5">
-                <li>You'll be taken to Xendit's secure payment page to pay with GCash, Maya, your bank, or a card.</li>
-                <li>Your reservation is confirmed automatically as soon as Xendit confirms the payment. No proof to upload and no staff review.</li>
+                <li>{method === 'qrph'
+                  ? "You'll be taken to a secure Xendit page with a QR Ph code. Scan it with any bank or e-wallet app."
+                  : "You'll be taken to a secure Xendit page to pay with your GCash account."}</li>
+                <li>Your reservation is confirmed automatically as soon as the payment goes through. No proof to upload and no staff review.</li>
                 <li>Test mode: no real money is charged. Use Xendit's test payment options.</li>
               </ul>
             )}
@@ -501,7 +520,7 @@ function PaymentPageContent() {
                 </div>
                 <div className="mt-2 flex items-center justify-between gap-3">
                   <div className="text-xs text-muted">Reference</div>
-                  <div className="text-xs font-bold">{method === 'xendit' ? 'Issued by Xendit' : 'Issued by Stripe'}</div>
+                  <div className="text-xs font-bold">{isXendit ? 'Issued by Xendit' : 'Issued by Stripe'}</div>
                 </div>
                 <div className="mt-3 h-px bg-white/10" />
                 {(breakdown.itemized.length > 0 ? breakdown.itemized : [
@@ -521,7 +540,7 @@ function PaymentPageContent() {
                   <div className="text-sm font-black text-gold">{formatPHP(amountDue || payerShareAmount || breakdown.total)}</div>
                 </div>
                 {!paysInFull ? (
-                  <div className="mt-2 text-[11px] text-muted">The rest is paid in cash at the counter on game day.</div>
+                  <div className="mt-2 text-[11px] text-muted">The rest is paid at the counter on game day by cash, GCash, or bank transfer.</div>
                 ) : null}
               </div>
             </div>
@@ -529,7 +548,7 @@ function PaymentPageContent() {
 
           <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:items-center">
             <Button variant="primary" disabled={!canSubmit} onClick={submit}>
-              {submitting ? (method === 'xendit' ? 'Opening Xendit…' : 'Submitting…') : success ? 'Paid' : method === 'xendit' ? 'Continue to payment' : 'Continue to card payment'}
+              {submitting ? (isXendit ? 'Opening Xendit…' : 'Submitting…') : success ? 'Paid' : isXendit ? 'Continue to payment' : 'Continue to card payment'}
               <FiChevronRight />
             </Button>
           </div>
@@ -605,7 +624,7 @@ function PaymentPageContent() {
             </div>
             {balanceDue > 0 ? (
               <div className="flex items-center justify-between">
-                <span className="text-muted">Balance: pay in cash at the field</span>
+                <span className="text-muted">Balance: pay at the field (cash, GCash, or bank transfer)</span>
                 <span className="font-semibold">{formatPHP(balanceDue)}</span>
               </div>
             ) : null}
