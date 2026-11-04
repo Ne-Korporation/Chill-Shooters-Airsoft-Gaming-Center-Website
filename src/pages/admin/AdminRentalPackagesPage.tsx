@@ -6,7 +6,7 @@ import { FilterTabs, titleCaseLabel } from '../../components/ui/FilterTabs'
 import { Card } from '../../components/ui/Card'
 import { apiGet, apiPost, apiPut, apiDelete } from '../../utils/apiClient'
 import { formatDiscountTargetLabel, MAX_EQUIPMENT_PER_PLAYER, packageEquipmentQty, resolvePackageDiscountConfig, type PackageDiscountMode, type PackageDiscountTarget } from '../../utils/packagePricing'
-import { modelOf, summarizeModels } from '../../utils/inventoryModels'
+import { isAmmo, modelOf, summarizeModels } from '../../utils/inventoryModels'
 
 type PackageStatus = 'active' | 'draft' | 'archived'
 
@@ -33,6 +33,8 @@ type RentalPackage = {
   weaponCount: number
   // Pieces of each equipment item every player gets, keyed by equipment id (default 1)
   equipmentQuantities: Record<string, number>
+  // Grams of BBs given per reload / refill (0 = not stated)
+  bbReloadGrams: number
 }
 
 type WeaponItem = {
@@ -58,6 +60,8 @@ type EquipmentItem = {
   status: string
   qty: number
   price: number
+  // Grams of BBs in stock; only used for ammo
+  stockGrams: number
   note: string
   description?: string
 }
@@ -68,6 +72,7 @@ type FormErrors = {
   players?: string
   settledAmount?: string
   weaponCount?: string
+  bbReloadGrams?: string
 }
 
 const statusTone: Record<PackageStatus, 'accent' | 'success' | 'danger' | 'muted'> = {
@@ -99,6 +104,8 @@ const DISCOUNT_TARGET_OPTIONS: Array<{ value: PackageDiscountTarget; label: stri
 
 // Preview a legacy settled package that still stores a percent or fixed discount.
 function settledAfterDiscount(settled: number, mode: PackageDiscountMode, value: number) {
+  // Settled mode sets the whole package price, so there is no discount to subtract
+  if (mode === 'settled') return { discount: 0, total: Math.max(0, Math.round(settled)) }
   const raw = mode === 'percent' ? (settled * value) / 100 : value
   const discount = Math.round(Math.max(0, Math.min(settled, raw)))
   return { discount, total: Math.max(0, settled - discount) }
@@ -118,6 +125,7 @@ type FormState = {
   weaponIds: string[]
   equipmentIds: string[]
   equipmentQuantities: Record<string, number>
+  bbReloadGrams: string
 }
 
 const EMPTY_FORM: FormState = {
@@ -134,6 +142,7 @@ const EMPTY_FORM: FormState = {
   weaponIds: [],
   equipmentIds: [],
   equipmentQuantities: {},
+  bbReloadGrams: '0',
 }
 
 function formFromPackage(pkg: RentalPackage): FormState {
@@ -153,6 +162,7 @@ function formFromPackage(pkg: RentalPackage): FormState {
     weaponIds: [...pkg.weaponIds],
     equipmentIds: [...pkg.equipmentIds],
     equipmentQuantities: { ...pkg.equipmentQuantities },
+    bbReloadGrams: String(pkg.bbReloadGrams),
   }
 }
 
@@ -217,6 +227,7 @@ export function AdminRentalPackagesPage() {
           settledAmount: typeof d.settledAmount === 'number' ? d.settledAmount : 0,
           weaponCount: typeof d.weaponCount === 'number' && d.weaponCount > 0 ? d.weaponCount : weaponIds.length,
           equipmentQuantities: d.equipmentQuantities && typeof d.equipmentQuantities === 'object' ? d.equipmentQuantities : {},
+          bbReloadGrams: typeof d.bbReloadGrams === 'number' && d.bbReloadGrams > 0 ? d.bbReloadGrams : 0,
         }
       })
       setPackages(normalized)
@@ -247,6 +258,7 @@ export function AdminRentalPackagesPage() {
         category: d.category || 'gear',
         status: d.status || 'available',
         qty: typeof d.qty === 'number' ? d.qty : 1,
+        stockGrams: Number(d.stockGrams) || 0,
         price: typeof d.price === 'number' ? d.price : 0,
         note: d.note || d.description || '',
         description: d.description || d.note || '',
@@ -312,6 +324,9 @@ export function AdminRentalPackagesPage() {
     const weaponCount = Number(form.weaponCount)
     if (!Number.isInteger(weaponCount) || weaponCount < 0) newErrors.weaponCount = 'Enter a whole number.'
 
+    const bbReloadGrams = Number(form.bbReloadGrams)
+    if (!Number.isFinite(bbReloadGrams) || bbReloadGrams < 0) newErrors.bbReloadGrams = 'Enter the grams of BBs per refill (0 if none).'
+
     return newErrors
   }
 
@@ -341,6 +356,7 @@ export function AdminRentalPackagesPage() {
       equipmentIds: form.equipmentIds,
       equipmentQuantities: Object.fromEntries(form.equipmentIds.map((id) => [id, packageEquipmentQty(form, id)])),
       equipmentCount: totalItems,
+      bbReloadGrams: Math.max(0, Math.round(Number(form.bbReloadGrams) || 0)),
     }
   }
 
@@ -593,7 +609,7 @@ export function AdminRentalPackagesPage() {
               ) : (
                 filtered.map((pkg) => {
                   const pkgDiscount = resolvePackageDiscountConfig(pkg)
-                  const discountSummary = `${pkgDiscount.mode === 'percent' ? `${pkgDiscount.value}%` : `₱${Math.round(pkgDiscount.value).toLocaleString()}`} off ${formatDiscountTargetLabel(pkgDiscount.targets)}`
+                  const discountSummary = pkgDiscount.mode === 'settled' ? 'Settled amount' : `${pkgDiscount.mode === 'percent' ? `${pkgDiscount.value}%` : `₱${Math.round(pkgDiscount.value).toLocaleString()}`} off ${formatDiscountTargetLabel(pkgDiscount.targets)}`
                   const rowSettled = pkg.settledAmount > 0
                     ? settledAfterDiscount(pkg.settledAmount, pkgDiscount.mode, pkgDiscount.value)
                     : null
@@ -612,7 +628,10 @@ export function AdminRentalPackagesPage() {
                       <div className="col-span-2">
                         <div className="text-sm font-semibold">{pkg.name}</div>
                       </div>
-                      <div className="col-span-2 text-right text-xs text-muted">{discountSummary}</div>
+                      <div className="col-span-2 text-right text-xs text-muted">
+                        <div>{discountSummary}</div>
+                        <div className="text-[10px]">Entrance included{pkg.bbReloadGrams > 0 ? ` • ${pkg.bbReloadGrams}g BBs/refill` : ''}</div>
+                      </div>
                       <div className="col-span-1 text-right text-sm text-muted">
                         {pkg.players > 0 ? `${pkg.players}` : `${pkg.minPlayers} min`}
                       </div>
@@ -822,6 +841,20 @@ export function AdminRentalPackagesPage() {
                 </div>
 
                 <label className="block">
+                  <div className="mb-2 text-sm font-semibold text-text">BB reload per refill (grams)</div>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={form.bbReloadGrams}
+                    onChange={(event) => setForm((prev) => ({ ...prev, bbReloadGrams: event.target.value }))}
+                    className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-text"
+                  />
+                  <div className="mt-1 text-[11px] text-muted">How many grams of BBs a player gets each time they refill. Each booking takes players × refills × these grams out of the ammo stock (given back if cancelled). Leave at 0 to not show it or use up stock.</div>
+                  {errors.bbReloadGrams ? <div className="mt-1 text-xs text-danger">{errors.bbReloadGrams}</div> : null}
+                </label>
+
+                <label className="block">
                   <div className="mb-2 text-sm font-semibold text-text">Description</div>
                   <textarea
                     rows={3}
@@ -898,11 +931,11 @@ export function AdminRentalPackagesPage() {
                           <div className="flex-1 flex items-center justify-between">
                             <div>
                               <div className="text-sm font-semibold text-text">{eq.model}</div>
-                              <div className="text-[11px] text-muted">{eq.category.toUpperCase()} • {eq.available} of {eq.total} pieces available</div>
+                              <div className="text-[11px] text-muted">{eq.category.toUpperCase()} • {isAmmo(eq) ? `${eq.grams.toLocaleString()} g in stock` : `${eq.available} of ${eq.total} pieces available`}</div>
                             </div>
                             <div className="flex items-center gap-3 text-right">
                               {selectedId ? (
-                                // How many of this item each player gets (e.g. 2 gloves).
+                                // How many of this item each player gets (e.g. 2 magazines).
                                 <span className="flex items-center gap-1 text-[11px] text-muted" onClick={(e) => e.preventDefault()}>
                                   <input
                                     type="number"
@@ -913,10 +946,10 @@ export function AdminRentalPackagesPage() {
                                     aria-label={`${eq.model} per player`}
                                     className="w-14 rounded-lg border border-white/10 bg-background px-2 py-1 text-sm text-text"
                                   />
-                                  per player
+                                  {isAmmo(eq) ? 'refill(s) per player' : 'per player'}
                                 </span>
                               ) : null}
-                              <div className="text-[11px] font-semibold text-accent">₱{eq.price}</div>
+                              <div className="text-[11px] font-semibold text-accent">₱{eq.price}{isAmmo(eq) ? '/refill' : ''}</div>
                             </div>
                           </div>
                         </label>
@@ -994,7 +1027,7 @@ export function AdminRentalPackagesPage() {
                       <span>Total</span>
                       <span>₱{settledPreview.total.toLocaleString()}</span>
                     </div>
-                    <div className="pt-1 text-[11px] text-muted">Holds as long as the player count stays at {settledPreview.players}.</div>
+                    <div className="pt-1 text-[11px] text-muted">Entrance fee is included. Holds as long as the player count stays at {settledPreview.players}.</div>
                   </div>
                 ) : (
                   <div className="mt-2 space-y-1 text-xs">
@@ -1076,13 +1109,26 @@ export function AdminRentalPackagesPage() {
                           <div className="mt-1 flex items-center justify-between">
                             <div className="text-[11px] text-muted">{eq ? `${equipmentModels.find((g) => g.model === modelOf(eq))?.total ?? 0} pieces in inventory` : `ID: ${eid}`}</div>
                             {eq?.price !== undefined && (
-                              <div className="text-[11px] font-semibold text-accent">₱{eq.price} × {packageEquipmentQty(form, eid)} per player</div>
+                              <div className="text-[11px] font-semibold text-accent">₱{eq.price} × {packageEquipmentQty(form, eid)} {isAmmo(eq) ? 'refill(s) ' : ''}per player</div>
                             )}
                           </div>
                         </div>
                       )
                     })
                   )}
+                </div>
+              </div>
+
+              {/* Always-included extras */}
+              <div className="mt-4">
+                <div className="text-[11px] uppercase tracking-widest text-muted">Also included</div>
+                <div className="mt-2 space-y-2">
+                  <div className="rounded-lg border border-white/5 bg-white/5 px-3 py-2 text-sm text-text">Entrance fee</div>
+                  {Number(form.bbReloadGrams) > 0 ? (
+                    <div className="rounded-lg border border-white/5 bg-white/5 px-3 py-2 text-sm text-text">
+                      BB reload: {Math.round(Number(form.bbReloadGrams))}g per refill
+                    </div>
+                  ) : null}
                 </div>
               </div>
 

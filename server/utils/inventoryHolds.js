@@ -33,6 +33,12 @@ export async function getHeldQuantities(db, { reservationDate, reservationTime }
   return new Map(rows.map((row) => [holdKey(row._id.collection, row._id.itemId), Number(row.quantity || 0)]))
 }
 
+// Ammo is tracked in grams, not pieces: a package booking uses up
+// players × refills per player × the package's grams per refill (bbReloadGrams).
+function isAmmo(item) {
+  return String(item?.category || '').toLowerCase() === 'ammo'
+}
+
 function isUsable(item) {
   return Boolean(item) && String(item.status || 'available').toLowerCase() === 'available'
 }
@@ -77,6 +83,7 @@ export async function getBookingInventoryRequirements({
         if (!isUsable(item) || !isRentalPiece(item)) {
           throw new Error(`${item?.name || 'One of the selected items'} is unavailable.`)
         }
+        if (isAmmo(item)) continue
         if (freeUnits(item, collection) < 1) {
           throw new Error(`${item.name || id} is already reserved for this slot. Choose another piece.`)
         }
@@ -104,6 +111,7 @@ export async function getBookingInventoryRequirements({
     for (const id of [...new Set((Array.isArray(ids) ? ids : []).map(String))]) {
       const item = await findDocumentById(db, collection, id)
       if (!item) throw new Error('The selected package references inventory that is no longer available.')
+      if (isAmmo(item)) continue
       const model = modelOf(item)
       if (!models.includes(model)) models.push(model)
     }
@@ -112,12 +120,25 @@ export async function getBookingInventoryRequirements({
 
   // Pieces needed per equipment model: players × the package's per-player quantity.
   const equipmentNeeds = new Map()
+  const requirements = []
+  const gramsPerRefill = Math.max(0, Math.round(Number(pkg.bbReloadGrams) || 0))
   for (const id of [...new Set((Array.isArray(pkg.equipmentIds) ? pkg.equipmentIds : []).map(String))]) {
+    const item = await findDocumentById(db, 'equipments', id)
+    if (isAmmo(item)) {
+      const grams = players * packageEquipmentQty(pkg, id) * gramsPerRefill
+      if (grams <= 0) continue
+      const inStock = Math.max(0, Number(item.stockGrams) || 0)
+      if (!isUsable(item) || inStock < grams) {
+        throw new Error(`Not enough BBs: ${item.name || 'Ammo'} has ${inStock.toLocaleString()} g left, but this booking needs ${grams.toLocaleString()} g.`)
+      }
+      requirements.push({ itemId: String(item.id || item._id), collection: 'equipments', kind: 'ammo_grams', grams, quantity: 0, capacity: 0, name: item.name || 'Ammo' })
+      continue
+    }
     const [model] = await modelsOf('equipments', [id])
+    if (!model) continue
     equipmentNeeds.set(model, Math.max(equipmentNeeds.get(model) || 0, packageEquipmentQty(pkg, id)))
   }
 
-  const requirements = []
   for (const [model, perPlayer] of equipmentNeeds) {
     const needed = players * perPlayer
     const free = await freePiecesOf('equipments', model)
@@ -156,6 +177,31 @@ export async function holdBookingInventory({ db, session, reservationId, require
   const inventoryHolds = db.collection('inventory_holds')
   const slot = slotHoldMatch({ reservationDate, reservationTime })
   for (const requirement of [...requirements].sort((a, b) => a.itemId.localeCompare(b.itemId))) {
+    if (requirement.kind === 'ammo_grams') {
+      // Take the grams out of stock now; cancelling the booking puts them back.
+      const taken = await db.collection('equipments').updateOne(
+        { id: requirement.itemId, stockGrams: { $gte: requirement.grams } },
+        { $inc: { stockGrams: -requirement.grams } },
+        { session },
+      )
+      if (!taken.matchedCount) {
+        const short = new Error(`Not enough BBs left in ${requirement.name} for this booking (needs ${requirement.grams.toLocaleString()} g).`)
+        short.statusCode = 409
+        throw short
+      }
+      await inventoryHolds.insertOne({
+        reservationId,
+        itemId: requirement.itemId,
+        collection: requirement.collection,
+        kind: 'ammo_grams',
+        grams: requirement.grams,
+        quantity: 0,
+        ...slot,
+        status: 'held',
+        createdAtISO: new Date().toISOString(),
+      }, { session })
+      continue
+    }
     await db.collection('inventory_item_locks').updateOne(
       { _id: `${requirement.collection}:${requirement.itemId}` },
       { $inc: { version: 1 } },
@@ -189,6 +235,17 @@ export async function holdBookingInventory({ db, session, reservationId, require
 }
 
 export async function releaseBookingInventory(db, reservationId, session) {
+  // Put the BB grams this booking used back into stock.
+  const ammoHolds = await db.collection('inventory_holds')
+    .find({ reservationId: String(reservationId), status: 'held', kind: 'ammo_grams' }, session ? { session } : {})
+    .toArray()
+  for (const hold of ammoHolds) {
+    await db.collection('equipments').updateOne(
+      { id: hold.itemId },
+      { $inc: { stockGrams: Number(hold.grams) || 0 } },
+      session ? { session } : {},
+    )
+  }
   return db.collection('inventory_holds').updateMany(
     { reservationId: String(reservationId), status: 'held' },
     {

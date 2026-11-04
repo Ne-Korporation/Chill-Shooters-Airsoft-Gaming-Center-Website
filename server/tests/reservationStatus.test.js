@@ -51,6 +51,7 @@ function createFakeDatabase(initialReservation, payments = []) {
       }
       if (name === 'inventory_holds') {
         return {
+          find: () => ({ toArray: async () => [] }),
           updateMany: async (_filter, update, options) => {
             state.operations.push({ name: 'releaseHolds', session: options.session })
             state.inventoryHolds.forEach((hold) => Object.assign(hold, update.$set))

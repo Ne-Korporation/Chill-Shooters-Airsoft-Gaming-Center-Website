@@ -31,7 +31,7 @@ import { Button } from '../../components/ui/Button'
 import { calculatePackagePricing, packageEquipmentQty } from '../../utils/packagePricing'
 import { formatDiscountTargetLabel, resolvePackageDiscountConfig } from '../../utils/packagePricing'
 import { loadPackagePrefill } from '../../utils/packagePrefill'
-import { modelOf } from '../../utils/inventoryModels'
+import { isAmmo, modelOf } from '../../utils/inventoryModels'
 import { cancelBookingDraftLeft, markBookingDraftLeft, readBookingDraft, saveBookingDraft, scheduleBookingDraftLeft } from '../../utils/bookingDraft'
 import { PiecePicker, type PickerGroup } from '../../components/inventory/PiecePicker'
 import { formatSlotRange, useSlotHours } from '../../utils/slotHours'
@@ -70,6 +70,8 @@ type RentalPackage = {
   equipmentQuantities: Record<string, number>
   equipmentCount: number
   status: string
+  // Grams of BBs given per reload / refill (0 = not stated)
+  bbReloadGrams: number
 }
 
 // Rental gear is one record per physical piece (e.g. "M4 Rifle #3"), grouped by model.
@@ -722,6 +724,7 @@ export function ReservationCalendarPage() {
             equipmentQuantities: d.equipmentQuantities && typeof d.equipmentQuantities === 'object' ? d.equipmentQuantities : {},
             equipmentCount: (d.weaponIds?.length || 0) + (d.equipmentIds?.length || 0),
             status: d.status || 'active',
+            bbReloadGrams: typeof d.bbReloadGrams === 'number' && d.bbReloadGrams > 0 ? d.bbReloadGrams : 0,
           }))
         setPackages(parsedPackages)
 
@@ -1063,7 +1066,8 @@ export function ReservationCalendarPage() {
   // Pieces the player picked for a package (optional; the rest are assigned automatically).
   const [pickedUnitIds, setPickedUnitIds] = useState<string[]>(() => draftState.pickedUnitIds ?? [])
   const packageWeaponModels = useMemo(() => (selectedPackage ? modelsOfIds(rentalWeapons, selectedPackage.weaponIds) : []), [selectedPackage, modelsOfIds, rentalWeapons])
-  const packageEquipmentModels = useMemo(() => (selectedPackage ? modelsOfIds(rentalEquipment, selectedPackage.equipmentIds) : []), [selectedPackage, modelsOfIds, rentalEquipment])
+  // Ammo is given per refill (in grams), not reserved as pieces, so it has no picker or stock check.
+  const packageEquipmentModels = useMemo(() => (selectedPackage ? modelsOfIds(rentalEquipment.filter((item) => !isAmmo(item)), selectedPackage.equipmentIds) : []), [selectedPackage, modelsOfIds, rentalEquipment])
   const packageWeaponGroups = useMemo(() => weaponGroups.filter((group) => packageWeaponModels.includes(group.model)), [weaponGroups, packageWeaponModels])
   const packageEquipmentGroups = useMemo(() => equipmentGroups.filter((group) => packageEquipmentModels.includes(group.model)), [equipmentGroups, packageEquipmentModels])
 
@@ -2238,9 +2242,13 @@ export function ReservationCalendarPage() {
                                   {model}
                                 </div>
                               ))}
+                              <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-muted">Entrance fee included</div>
+                              {pkg.bbReloadGrams > 0 ? (
+                                <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-muted">{pkg.bbReloadGrams}g BBs per refill</div>
+                              ) : null}
                               {(() => {
                                 const pkgDiscount = resolvePackageDiscountConfig(pkg)
-                                if (pkgDiscount.value <= 0) return null
+                                if (pkgDiscount.value <= 0 || pkgDiscount.mode === 'settled') return null
                                 return (
                                   <div className="rounded-xl border border-success/20 bg-success/10 px-3 py-2 text-xs font-semibold text-success">
                                     {pkgDiscount.mode === 'percent'
