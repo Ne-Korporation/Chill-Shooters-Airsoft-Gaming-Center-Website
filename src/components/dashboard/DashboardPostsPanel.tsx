@@ -21,6 +21,8 @@ type Props = {
   title?: string
   subtitle?: string
   canManage?: boolean
+  // Shown under the panel title, above the list of posts.
+  beforePosts?: React.ReactNode
 }
 
 function formatPostedDate(value?: string) {
@@ -46,6 +48,7 @@ export function DashboardPostsPanel({
   title = 'Dashboard posts',
   subtitle = 'Admin updates and field notices visible across every dashboard.',
   canManage = false,
+  beforePosts,
 }: Props) {
   const [posts, setPosts] = useState<DashboardPost[]>([])
   const [loading, setLoading] = useState(true)
@@ -234,6 +237,8 @@ useEffect(() => {
         </div>
       </div>
 
+      {beforePosts ? <div className="divider mt-4 border-b pb-4">{beforePosts}</div> : null}
+
       {error ? (
         <div className="mt-4 rounded-xl border border-danger/20 bg-danger/10 px-4 py-3 text-sm text-danger">
           {error}
@@ -299,7 +304,7 @@ useEffect(() => {
 
       {canManage && isComposerOpen ? (
         <div className="fixed inset-0 z-[99999] grid place-items-center bg-black/70 px-4 py-6 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="dashboard-post-composer-title">
-          <div className="w-full max-w-3xl rounded-[1.75rem] border border-white/10 bg-background p-4 shadow-2xl md:p-6">
+          <div className="max-h-[90dvh] overflow-y-auto overscroll-contain w-full max-w-3xl rounded-[1.75rem] border border-white/10 bg-background p-4 shadow-2xl md:p-6">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <div id="dashboard-post-composer-title" className="text-lg font-semibold text-text">
@@ -392,7 +397,7 @@ useEffect(() => {
         <img
           src={lightboxUrl}
           alt="Dashboard post full size"
-          className="max-h-[92vh] max-w-[96vw] object-contain"
+          className="max-h-[92dvh] max-w-[96vw] object-contain"
           onClick={(event) => event.stopPropagation()}
         />
       </div>,

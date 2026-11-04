@@ -1,6 +1,9 @@
 import React, { useEffect, useState } from 'react'
 import { FiBarChart2, FiCalendar, FiClock, FiCreditCard, FiLogOut, FiShield, FiShoppingBag, FiTool, FiUsers } from 'react-icons/fi'
+import { Link } from 'react-router-dom'
 import { DashboardPostsPanel } from '../../components/dashboard/DashboardPostsPanel'
+import { WeekendCapacity } from '../../components/booking/WeekendCapacity'
+import { useAuth } from '../../context/AuthContext'
 import { PaymentCompletePanel } from '../../components/dashboard/PaymentCompletePanel'
 import { ActionRow, ActivityList, DashboardHeader, Panel, StatTile, type ActivityTone } from '../../components/dashboard/DashboardParts'
 import { apiGet } from '../../utils/apiClient'
@@ -152,14 +155,21 @@ export function AdminDashboardPage() {
     }
   }, [])
 
+  const { user } = useAuth()
+  const firstName = String(user?.name || 'there').trim().split(/\s+/)[0]
   const attentionCount = dashboard.pendingApprovals + dashboard.reviewQueue + dashboard.waiversToReview + dashboard.equipmentAlerts
 
   return (
     <div className="space-y-6">
       <DashboardHeader
         eyebrow="Dashboard"
-        title="Overview"
+        title={`Welcome back, ${firstName}`}
         description="What's happening across reservations, players, and payments."
+        actions={
+          <Link to="/app/admin/reservations" className="inline-flex h-10 items-center gap-2 rounded-xl bg-primary px-4 text-sm font-semibold text-white transition hover:brightness-110">
+            <FiCalendar /> Reservations
+          </Link>
+        }
       />
 
       {error ? (
@@ -168,15 +178,30 @@ export function AdminDashboardPage() {
         </div>
       ) : null}
 
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-        <StatTile label="Reservations" value={dashboard.reservations} icon={FiCalendar} hint="All bookings" loading={loading} />
-        <StatTile label="Players" value={dashboard.players} icon={FiUsers} hint="Registered accounts" loading={loading} />
-        <StatTile label="Payments" value={dashboard.payments} icon={FiCreditCard} hint="Submitted to date" loading={loading} />
-      </div>
+      {/* Same layout as the player dashboard: announcements in the main column, a compact summary on the right. */}
+      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+        <DashboardPostsPanel
+          canManage
+          title="Announcements"
+          subtitle="Posts here appear on every dashboard: players, marshals, and registrars."
+          beforePosts={
+            <WeekendCapacity
+              compact
+              title="This week's public game capacity"
+              subtitle="How many players have booked this weekend's open games."
+            />
+          }
+        />
 
-      <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
-        <div className="space-y-4">
+        <aside className="space-y-3">
+          <div className="grid grid-cols-3 gap-2">
+            <StatTile compact label="Bookings" value={dashboard.reservations} hint="All" loading={loading} />
+            <StatTile compact label="Players" value={dashboard.players} hint="Accounts" loading={loading} />
+            <StatTile compact label="Payments" value={dashboard.payments} hint="Submitted" loading={loading} />
+          </div>
+
           <Panel
+            compact
             title="Needs attention"
             description={loading ? undefined : attentionCount > 0 ? `${attentionCount} items waiting on you` : 'All caught up'}
           >
@@ -214,27 +239,20 @@ export function AdminDashboardPage() {
 
           <PaymentCompletePanel />
 
-          <Panel title="Recent activity">
-            <ActivityList items={dashboard.recentActivity} loading={loading} emptyText="No recent activity yet." />
+          <Panel compact title="Shortcuts">
+            <div className="space-y-0.5">
+              <ActionRow to="/app/counter" icon={FiShoppingBag} title="Counter" description="Walk-ins and payments at the field" />
+              <ActionRow to="/app/rentals" icon={FiLogOut} title="Rental check-out" description="Issue and return gear for today's games" />
+              <ActionRow to="/app/admin/player-management" icon={FiUsers} title="Players & staff" description="Accounts, ID checks, and staff access" />
+              <ActionRow to="/app/admin/reports" icon={FiBarChart2} title="Reports" description="Sales, bookings, rentals, and penalties" />
+            </div>
           </Panel>
-        </div>
 
-        <Panel title="Shortcuts">
-          <div className="space-y-0.5">
-            <ActionRow to="/app/admin/reservations" icon={FiCalendar} title="Reservations" description="Approve, confirm, and review bookings" />
-            <ActionRow to="/app/counter" icon={FiShoppingBag} title="Counter" description="Walk-ins and payments at the field" />
-            <ActionRow to="/app/rentals" icon={FiLogOut} title="Rental check-out" description="Issue and return gear for today's games" />
-            <ActionRow to="/app/admin/player-management" icon={FiUsers} title="Players & staff" description="Accounts, ID checks, and staff access" />
-            <ActionRow to="/app/admin/reports" icon={FiBarChart2} title="Reports" description="Sales, bookings, rentals, and penalties" />
-          </div>
-        </Panel>
+          <Panel compact title="Recent activity">
+            <ActivityList compact items={dashboard.recentActivity} loading={loading} emptyText="No recent activity yet." />
+          </Panel>
+        </aside>
       </div>
-
-      <DashboardPostsPanel
-        canManage
-        title="Announcements"
-        subtitle="Posts here appear on every dashboard: players, marshals, and registrars."
-      />
     </div>
   )
 }

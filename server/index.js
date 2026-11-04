@@ -29,7 +29,8 @@ const { default: xenditRouter } = await import('./routes/xendit.js')
 const { default: recommendationsRouter } = await import('./routes/recommendations.js')
 const { default: weatherRouter } = await import('./routes/weather.js')
 const { default: childrenRouter } = await import('./routes/children.js')
-const { expireOverdueReservations } = await import('./utils/paymentProgress.js')
+const { expireOverdueReservations, sendSplitPaymentWarnings } = await import('./utils/paymentProgress.js')
+const { expireOldIdentities } = await import('./utils/identityValidity.js')
 const { sendDueReminders } = await import('./utils/reminders.js')
 const { sendWeatherAlerts } = await import('./utils/weather.js')
 const { backfillGameplayLocations } = await import('./utils/reservationGameplay.js')
@@ -72,9 +73,13 @@ getDb()
 // Release slots whose pending payment window has run out, even when nobody is browsing.
 setInterval(() => {
   getDb()
-    .then((db) => expireOverdueReservations(db, startDbSession, { force: true }))
+    .then(async (db) => {
+      await expireOverdueReservations(db, startDbSession, { force: true })
+      await sendSplitPaymentWarnings(db, { force: true })
+      await expireOldIdentities(db)
+    })
     .catch((err) => console.warn('Payment window sweep failed:', String(err)))
-}, 5 * 60_000).unref()
+}, 60_000).unref()
 
 // Game-day and waiver reminders; each one is sent once, so a frequent sweep is safe.
 setInterval(() => {

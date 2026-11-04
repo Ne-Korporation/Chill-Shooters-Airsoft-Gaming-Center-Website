@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
 import { DashboardPostsPanel } from '../../components/dashboard/DashboardPostsPanel'
+import { WeekendCapacity } from '../../components/booking/WeekendCapacity'
 import { Link } from 'react-router-dom'
 import { FiCalendar, FiPlus, FiShield } from 'react-icons/fi'
 import { ActivityList, DashboardHeader, Panel, StatTile, type ActivityTone } from '../../components/dashboard/DashboardParts'
@@ -254,6 +255,14 @@ export function DashboardHomePage() {
         <DashboardPostsPanel
           title="Announcements"
           subtitle="Updates and reminders from the Chill Shooters team."
+          beforePosts={
+            <WeekendCapacity
+              compact
+              title="This week's public game capacity"
+              subtitle="How many players have booked this weekend's open games."
+              action={<Link to="/app/reservations" className="text-xs font-semibold text-accent hover:text-text">Book a spot</Link>}
+            />
+          }
         />
 
         <aside className="space-y-3">

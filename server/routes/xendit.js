@@ -110,8 +110,12 @@ router.post('/xendit/checkout', requireAuth, requireRole('user'), async (req, re
       { $or: [{ id: userId }, ...(toObjectId(userId) ? [{ _id: toObjectId(userId) }] : [])] },
       { projection: { name: 1, email: 1 } },
     )
+    // The checkout closes when the booking's payment window does (Xendit needs at least a minute).
+    const dueMs = reservation.paymentDueAtISO ? new Date(reservation.paymentDueAtISO).getTime() - Date.now() : 3600_000
+    if (dueMs <= 60_000) return res.status(409).json({ ok: false, error: 'The payment window for this booking has ended. Please book again.' })
     const invoice = await createInvoice({
       amount,
+      durationSeconds: Math.min(3600, Math.floor(dueMs / 1000)),
       externalId: ref,
       description: `Chill Shooters reservation ${reservationId} • ${label} • ${reservation.reservationDate} ${reservation.reservationTime} • ${reservation.locationName || reservation.locationId || ''}`.slice(0, 255),
       successUrl: `${appUrl}/app/payment/complete?ref=${encodeURIComponent(ref)}`,

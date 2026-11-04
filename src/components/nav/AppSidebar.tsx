@@ -124,22 +124,6 @@ function useHasOpenSplitPayment(enabled: boolean) {
   return open
 }
 
-// Recommended Packages is hidden until the admin has created at least one active package.
-function useHasPackages(enabled: boolean) {
-  const [hasPackages, setHasPackages] = useState(false)
-  useEffect(() => {
-    if (!enabled) return
-    let active = true
-    apiGet<{ ok: boolean; data: Array<{ status?: string }> }>('/api/packages?limit=200')
-      .then((res) => {
-        const docs = Array.isArray(res?.data) ? res.data : []
-        if (active) setHasPackages(docs.some((pkg) => !pkg.status || pkg.status === 'active'))
-      })
-      .catch(() => { if (active) setHasPackages(false) })
-    return () => { active = false }
-  }, [enabled])
-  return hasPackages
-}
 
 
 function SidebarLink({ item, onNavigate, nested = false }: { item: Item; onNavigate?: () => void; nested?: boolean }) {
@@ -178,7 +162,6 @@ export function AppSidebar({
   const { pathname } = useLocation()
   const profilePath = user?.id ? `/app/players/${encodeURIComponent(user.id)}` : '/app/players/1'
   const hasOpenSplitPayment = useHasOpenSplitPayment(role === 'user' && !!user?.id)
-  const hasPackages = useHasPackages(role === 'user')
   const profile: Item = { label: 'Profile', to: profilePath, icon: FiUser }
 
   const playerItems: Item[] = [
@@ -186,7 +169,6 @@ export function AppSidebar({
     { label: 'Book a game', to: '/app/reservations', icon: FiPlusCircle },
     { label: 'My Reservations', to: '/app/my-reservations', icon: FiList },
     { label: 'My Weapons & Gear', to: `/app/players/${encodeURIComponent(user?.id || '1')}/weapons-and-equipment`, icon: FiTarget },
-    ...(hasPackages ? [{ label: 'Recommended Packages', to: '/app/packages', icon: FiPackage }] : []),
     { label: 'Online Waiver', to: '/app/waiver', icon: FiShield },
     { label: 'Game Evaluation', to: '/app/feedback', icon: FiMessageSquare },
     ...(hasOpenSplitPayment ? [{ label: 'Split Payment', to: '/app/split-payments', icon: FiDollarSign }] : []),

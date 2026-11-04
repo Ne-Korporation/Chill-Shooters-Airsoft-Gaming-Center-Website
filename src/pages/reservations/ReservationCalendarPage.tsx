@@ -42,6 +42,11 @@ import { formatSlotRange, useSlotHours } from '../../utils/slotHours'
 
 // Slot holds last 15 minutes on the server; refresh well before that while the player is booking.
 const SLOT_HOLD_REFRESH_MS = 4 * 60 * 1000
+// Step 1 of a private game: the picked field is held briefly (3 minutes on the server) and renewed
+// every minute while the tab is open, so other players see it as being booked right away.
+const BROWSING_HOLD_REFRESH_MS = 60 * 1000
+// How often step 1 re-reads which fields and slots are taken, so it reflects other players live.
+const STEP1_AVAILABILITY_REFRESH_MS = 10 * 1000
 
 type SessionType = 'public' | 'private'
 type TimeSlot = 'morning' | 'afternoon' | 'evening'
@@ -472,17 +477,23 @@ export function ReservationCalendarPage() {
     return () => { cancelled = true }
   }, [])
 
-  // Initial fetch, then keep availability fresh while the page is open
+  // Initial fetch, then keep availability fresh while the page is open.
   useEffect(() => {
     fetchReservations()
-    const interval = window.setInterval(() => fetchReservations(true), 60_000)
     const onFocus = () => fetchReservations(true)
     window.addEventListener('focus', onFocus)
-    return () => {
-      window.clearInterval(interval)
-      window.removeEventListener('focus', onFocus)
-    }
+    return () => window.removeEventListener('focus', onFocus)
   }, [fetchReservations])
+
+  // Step 1 is where fields and slots are picked, so it follows other players closely; later
+  // steps (the slot is already held) only need an occasional refresh.
+  useEffect(() => {
+    const every = step === 1 ? STEP1_AVAILABILITY_REFRESH_MS : 60_000
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') fetchReservations(true)
+    }, every)
+    return () => window.clearInterval(interval)
+  }, [fetchReservations, step])
 
   // Refresh reservations if flagged (e.g., after returning from payment)
   useEffect(() => {
@@ -955,6 +966,16 @@ export function ReservationCalendarPage() {
     return true
   }, [isWd, reservations, dateISO, selectedLocation])
 
+  // Taken because another player is in the middle of booking it (not yet a reservation).
+  const isFieldBeingBooked = useCallback((fieldId: string, slotToCheck: TimeSlot): boolean => (
+    isWd && reservations.some((r) =>
+      r.reservationStatus === 'held' &&
+      r.dateISO === dateISO &&
+      r.fieldIds.includes(fieldId) &&
+      r.slot === slotToCheck &&
+      r.locationId === selectedLocation)
+  ), [isWd, reservations, dateISO, selectedLocation])
+
   const isUpperGroundTaken = useCallback((slotToCheck: TimeSlot): boolean => {
     const upper = getFieldsForLocation(selectedLocation).find((f) =>
       f.name.toLowerCase().includes('upper'),
@@ -1385,6 +1406,49 @@ export function ReservationCalendarPage() {
     // Re-hold only when the booked slot or headcount changes, not on every hold refresh.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slotHoldPayload])
+
+  // Private games: hold the picked field while the player is still on step 1, so others see it
+  // as being booked straight away. It is a short hold, renewed only while this tab is open.
+  const [browsingHoldError, setBrowsingHoldError] = useState<string | null>(null)
+  const browsingHoldKey = JSON.stringify(slotHoldPayload)
+  const canHoldWhileBrowsing = step === 1 && sessionType === 'private' && canProceed && hasCurrentUserWaiver && !!user?.id
+  const placeBrowsingHold = useCallback(async () => {
+    try {
+      const res = await apiPost<{ ok: boolean; data: { expiresAtISO: string } }>('/api/slot-holds', { ...slotHoldPayload, browsing: true })
+      setSlotHoldExpiresAt(res.data.expiresAtISO)
+      setBrowsingHoldError(null)
+    } catch (e: any) {
+      setSlotHoldExpiresAt(null)
+      setBrowsingHoldError(e?.message || 'That field was just taken. Please choose another one.')
+      fetchReservations(true)
+    }
+  }, [slotHoldPayload, fetchReservations])
+
+  useEffect(() => {
+    if (step !== 1) return
+    if (!canHoldWhileBrowsing) {
+      setBrowsingHoldError(null)
+      // The choice is no longer a bookable private slot: let the field go.
+      if (hasSlotHoldRef.current) {
+        apiDelete('/api/slot-holds/mine').catch(() => null)
+        setSlotHoldExpiresAt(null)
+      }
+      return
+    }
+    // Wait for the player to settle on a choice before holding it.
+    const timer = window.setTimeout(() => { void placeBrowsingHold() }, 500)
+    return () => window.clearTimeout(timer)
+    // browsingHoldKey stands for the slot, field and headcount being held.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, canHoldWhileBrowsing, browsingHoldKey])
+
+  useEffect(() => {
+    if (!canHoldWhileBrowsing || !slotHoldExpiresAt) return
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void placeBrowsingHold()
+    }, BROWSING_HOLD_REFRESH_MS)
+    return () => window.clearInterval(timer)
+  }, [canHoldWhileBrowsing, slotHoldExpiresAt, placeBrowsingHold])
 
   const goToStep2 = async () => {
     setPlacingHold(true)
@@ -1918,6 +1982,7 @@ export function ReservationCalendarPage() {
                   {availableFields.map((f) => {
                     const active = selectedFieldIds.includes(f.id)
                     const isFieldBooked = isWd && !isFieldSlotAvailable(f.id, slot)
+                    const beingBooked = isFieldBooked && isFieldBeingBooked(f.id, slot)
                     const isDisabled = isFieldBooked && !active
 
                     return (
@@ -1937,7 +2002,9 @@ export function ReservationCalendarPage() {
                           onChange={() => {
                             if (isDisabled) {
                               if (isFieldBooked) {
-                                toast.error(`${f.name} is already booked for ${slotLabels[slot]}`)
+                                toast.error(beingBooked
+                                  ? `Someone is booking ${f.name} for ${slotLabels[slot]} right now. Try again in a few minutes or pick another field.`
+                                  : `${f.name} is already booked for ${slotLabels[slot]}`)
                               }
                               return
                             }
@@ -1957,14 +2024,16 @@ export function ReservationCalendarPage() {
                               </div>
                             )}
                             {isFieldBooked && !active && (
-                              <div className="text-[10px] text-danger bg-danger/10 px-2 py-0.5 rounded-full">
-                                BOOKED
+                              <div className={`rounded-full px-2 py-0.5 text-[10px] ${beingBooked ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400' : 'bg-danger/10 text-danger'}`}>
+                                {beingBooked ? 'BEING BOOKED' : 'BOOKED'}
                               </div>
                             )}
                           </div>
                           <div className="mt-1 text-xs text-muted">{f.location}</div>
                           {isFieldBooked && !active && (
-                            <div className="mt-1 text-xs text-danger">Already reserved for this time slot</div>
+                            <div className={`mt-1 text-xs ${beingBooked ? 'text-amber-600 dark:text-amber-400' : 'text-danger'}`}>
+                              {beingBooked ? 'Another player is booking it right now' : 'Already reserved for this time slot'}
+                            </div>
                           )}
                         </div>
                       </label>
@@ -2165,8 +2234,18 @@ export function ReservationCalendarPage() {
                 </div>
               </div>
 
+              {sessionType === 'private' && browsingHoldError ? (
+                <div className="mt-4 rounded-2xl border border-danger/25 bg-danger/10 p-3 text-xs font-semibold text-danger">
+                  {browsingHoldError}
+                </div>
+              ) : sessionType === 'private' && canHoldWhileBrowsing && slotHoldExpiresAt ? (
+                <div className="mt-4 flex items-center gap-2 rounded-2xl border border-success/25 bg-success/10 p-3 text-xs font-semibold text-success">
+                  <FiCheck /> This field and time are held for you while you finish booking. Other players see it as being booked.
+                </div>
+              ) : null}
+
               <div className="mt-4 flex flex-col gap-2 sm:flex-row">
-                <Button variant="primary" disabled={!canProceed || !hasCurrentUserWaiver || placingHold} onClick={goToStep2}>
+                <Button variant="primary" disabled={!canProceed || !hasCurrentUserWaiver || placingHold || (sessionType === 'private' && Boolean(browsingHoldError))} onClick={goToStep2}>
                   {placingHold ? 'Locking slot…' : 'Continue'} <FiChevronRight />
                 </Button>
                 <Button variant="ghost" onClick={() => {
@@ -3244,7 +3323,7 @@ export function ReservationCalendarPage() {
 
       {noWeaponWarning ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4" role="dialog" aria-modal="true" aria-labelledby="no-weapon-title">
-          <Card className="w-full max-w-md p-5">
+          <Card className="max-h-[90dvh] w-full max-w-md overflow-y-auto overscroll-contain p-5">
             <div className="flex items-start gap-3">
               <FiAlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-warning" />
               <div>

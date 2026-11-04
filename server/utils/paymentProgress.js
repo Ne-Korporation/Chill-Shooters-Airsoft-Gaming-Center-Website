@@ -1,9 +1,36 @@
-import { getPaymentProgress, getSplitPayerIds } from './paymentRules.js'
+import { getGcashAmountDue, getPaymentProgress, getSplitPayerIds } from './paymentRules.js'
 import { updateReservationStatusAtomically } from './reservationStatus.js'
 import { nextShortId } from './shortIds.js'
 
-// How long a pending reservation keeps its slot while the team pays.
-export const PAYMENT_WINDOW_HOURS = Math.max(1, Number(process.env.PAYMENT_WINDOW_HOURS) || 24)
+// How long a pending reservation keeps its slot while it is paid. After this the booking is
+// released and the slot opens for anyone again. A captain paying alone has 30 minutes; a team
+// splitting the payment has 24 hours, since every teammate pays their own share.
+// PAYMENT_WINDOW_MINUTES and SPLIT_PAYMENT_WINDOW_HOURS override the defaults.
+export const PAYMENT_WINDOW_MINUTES = Math.max(5, Number(process.env.PAYMENT_WINDOW_MINUTES) || 30)
+export const PAYMENT_WINDOW_MS = PAYMENT_WINDOW_MINUTES * 60_000
+export const SPLIT_PAYMENT_WINDOW_HOURS = Math.max(1, Number(process.env.SPLIT_PAYMENT_WINDOW_HOURS) || 24)
+export const SPLIT_PAYMENT_WINDOW_MS = SPLIT_PAYMENT_WINDOW_HOURS * 3600_000
+
+function isSplit(reservation) {
+  return String(reservation?.paymentMode || 'self').toLowerCase() === 'split'
+}
+
+export function paymentWindowMsFor(reservation) {
+  return isSplit(reservation) ? SPLIT_PAYMENT_WINDOW_MS : PAYMENT_WINDOW_MS
+}
+
+function durationLabel(ms) {
+  const minutes = Math.round(ms / 60_000)
+  if (minutes % 60 === 0) {
+    const hours = minutes / 60
+    return `${hours} hour${hours === 1 ? '' : 's'}`
+  }
+  return `${minutes} minutes`
+}
+
+export function paymentWindowLabel(reservation) {
+  return durationLabel(paymentWindowMsFor(reservation))
+}
 
 export function reservationIdsOf(reservation) {
   return [reservation?.id, reservation?._id].filter(Boolean).map(String)
@@ -121,10 +148,12 @@ export async function syncReservationPaymentState(db, reservation) {
     },
   })
 
+  if (isSplit(reservation)) await notifyTeamOfNewShares(db, reservation, progress)
+
   if (progress.state !== 'finalized' && reservation.forwardedToAdminAtISO) {
     // A share was rejected after forwarding; take it back off the admin queue until it's resubmitted,
     // and give the team a fresh window so the rejection doesn't instantly release the slot.
-    const freshDueISO = new Date(Date.now() + PAYMENT_WINDOW_HOURS * 3600_000).toISOString()
+    const freshDueISO = new Date(Date.now() + paymentWindowMsFor(reservation)).toISOString()
     await db.collection('reservations').updateOne(filter, {
       $unset: { forwardedToAdminAtISO: '', paymentFinalizedAtISO: '' },
       $max: { paymentDueAtISO: freshDueISO },
@@ -173,6 +202,119 @@ export async function syncReservationPaymentState(db, reservation) {
   return progress
 }
 
+// Tells the rest of the team each time a teammate's share comes in, once per teammate.
+async function notifyTeamOfNewShares(db, reservation, progress) {
+  const announced = new Set((reservation.splitPaidAnnouncedIds || []).map(String))
+  const newlyPaid = progress.paidPayerIds.filter((id) => !announced.has(id))
+  if (!newlyPaid.length) return
+  // Claim them first so two syncs at once don't both announce.
+  const claimed = await db.collection('reservations').updateOne(
+    { id: String(reservation.id), splitPaidAnnouncedIds: { $nin: newlyPaid } },
+    { $addToSet: { splitPaidAnnouncedIds: { $each: newlyPaid } } },
+  )
+  if (claimed.modifiedCount !== 1) return
+
+  const payerIds = getSplitPayerIds(reservation)
+  const accounts = await db.collection('user_accounts')
+    .find({ id: { $in: newlyPaid } }, { projection: { id: 1, name: 1 } })
+    .toArray()
+  const nameOf = (id) => accounts.find((account) => String(account.id) === id)?.name || 'A teammate'
+  const paidCount = progress.paidPayerIds.length
+  const left = progress.pendingPayerIds.length
+  for (const paidId of newlyPaid) {
+    for (const userId of payerIds.filter((id) => id !== paidId)) {
+      await notifyUser(db, {
+        userId,
+        type: 'split_share_paid',
+        title: `${nameOf(paidId)} paid their share`,
+        message: left > 0
+          ? `${paidCount} of ${payerIds.length} shares are in for ${reservationLabel(reservation)}. Waiting on ${left} more.`
+          : `Every share is in for ${reservationLabel(reservation)}.`,
+        linkedResourceId: reservation.id,
+      })
+    }
+  }
+}
+
+// Warnings sent before a split payment's deadline to teammates who haven't paid: one at 12 hours
+// left and one at 2 hours left. The captain is told who is still missing.
+const SPLIT_WARNING_STAGES = [
+  { stage: '2h', withinMs: 2 * 3600_000 },
+  { stage: '12h', withinMs: 12 * 3600_000 },
+]
+let lastWarningRun = 0
+
+export async function sendSplitPaymentWarnings(db, { force = false } = {}) {
+  const now = Date.now()
+  if (!force && now - lastWarningRun < 60_000) return 0
+  lastWarningRun = now
+
+  const reservations = await db.collection('reservations').find({
+    paymentMode: 'split',
+    reservationStatus: { $in: ['pending', 'needs review'] },
+    paymentState: { $ne: 'finalized' },
+    paymentDueAtISO: { $gt: new Date(now).toISOString(), $lte: new Date(now + SPLIT_WARNING_STAGES[1].withinMs).toISOString() },
+  }).limit(200).toArray()
+
+  const { emailSplitShareWarning } = await import('../services/notificationEmails.js')
+  const appUrl = String(process.env.PUBLIC_APP_URL || '').trim().replace(/\/+$/, '')
+  let warned = 0
+  for (const reservation of reservations) {
+    const timeLeftMs = new Date(reservation.paymentDueAtISO).getTime() - now
+    // The latest stage reached; an earlier stage that was skipped isn't sent late.
+    const current = SPLIT_WARNING_STAGES.find((entry) => timeLeftMs <= entry.withinMs)
+    if (!current || reservation.splitWarningsSent?.[current.stage]) continue
+    const claimed = await db.collection('reservations').updateOne(
+      { _id: reservation._id, [`splitWarningsSent.${current.stage}`]: { $exists: false } },
+      { $set: { [`splitWarningsSent.${current.stage}`]: new Date(now).toISOString() } },
+    )
+    if (claimed.modifiedCount !== 1) continue
+
+    const payments = await getReservationPayments(db, reservation)
+    const progress = getPaymentProgress(reservation, payments)
+    if (progress.state === 'finalized' || !progress.pendingPayerIds.length) continue
+    const dueLabel = new Date(reservation.paymentDueAtISO).toLocaleString('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short' })
+    const timeLeftLabel = timeLeftMs < 3600_000 ? `${Math.max(1, Math.round(timeLeftMs / 60_000))} minutes` : durationLabel(Math.round(timeLeftMs / 3600_000) * 3600_000)
+
+    for (const userId of progress.pendingPayerIds) {
+      let share = 0
+      try { share = getGcashAmountDue(reservation, payments, userId) } catch { share = 0 }
+      await notifyUser(db, {
+        userId,
+        type: 'split_share_due_soon',
+        title: `Pay your share: about ${timeLeftLabel} left`,
+        message: `Your team's reservation for ${reservationLabel(reservation)} is waiting on your share${share > 0 ? ` of ₱${share.toLocaleString()}` : ''}. Pay before ${dueLabel} or the reservation is released.`,
+        linkedResourceId: reservation.id,
+      })
+      void emailSplitShareWarning(db, reservation, userId, {
+        share,
+        dueLabel,
+        timeLeftLabel,
+        stage: current.stage,
+        payLink: appUrl ? `${appUrl}/app/split-payments` : '',
+      })
+      warned += 1
+    }
+
+    const captainId = String(reservation.userId || '')
+    const missing = progress.pendingPayerIds.filter((id) => id !== captainId)
+    if (captainId && missing.length) {
+      const accounts = await db.collection('user_accounts')
+        .find({ id: { $in: missing } }, { projection: { id: 1, name: 1 } })
+        .toArray()
+      const names = missing.map((id) => accounts.find((account) => String(account.id) === id)?.name || id)
+      await notifyUser(db, {
+        userId: captainId,
+        type: 'split_share_due_soon',
+        title: `${missing.length} teammate${missing.length === 1 ? '' : 's'} still haven't paid`,
+        message: `About ${timeLeftLabel} left for ${reservationLabel(reservation)}. Still waiting on: ${names.join(', ')}. If not every share is in by ${dueLabel}, the reservation is released.`,
+        linkedResourceId: reservation.id,
+      })
+    }
+  }
+  return warned
+}
+
 let lastExpiryRun = 0
 
 // Expires pending reservations whose payment window ran out before every share was submitted,
@@ -209,7 +351,7 @@ export async function expireOverdueReservations(db, startSession, { force = fals
           userId,
           type: 'reservation_status_update',
           title: 'Reservation released — payment window expired',
-          message: `The reservation for ${reservationLabel(reservation)} expired because payment was not completed within ${PAYMENT_WINDOW_HOURS} hours. The slot has been released.`,
+          message: `The reservation for ${reservationLabel(reservation)} expired because payment was not completed within ${paymentWindowLabel(reservation)}. The slot is open for anyone to book again.`,
           linkedResourceId: reservation.id,
         })
       }

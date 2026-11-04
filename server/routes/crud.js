@@ -15,6 +15,8 @@ import { nextShortId } from '../utils/shortIds.js'
 import { ageFromBirthDate } from '../utils/age.js'
 import { ACTIVE_WAIVER_STATUSES, expireOldWaivers, validUntilFrom } from '../utils/waiverValidity.js'
 import { manilaDateISO } from '../utils/reminders.js'
+import { summarizeWeekendCapacity, weekendDatesOf } from '../utils/weekendCapacity.js'
+import { hasValidIdentity, identityVerifiedFields, validIdentityFilter } from '../utils/identityValidity.js'
 import { normalizePhPhone } from '../utils/phone.js'
 import { cleanEquipmentQuantities } from '../utils/packageQuantities.js'
 import { appUrlFrom } from './guardianApprovals.js'
@@ -22,7 +24,7 @@ import { findOwnChild, hasApprovedWaiver } from './children.js'
 import { evaluateFpsReading, weaponFpsClass } from './operations.js'
 import { emailGearReviewEvent, emailGuardianWaiverSubmitted, emailReservationEvent, emailSplitShareRequest } from '../services/notificationEmails.js'
 import {
-  PAYMENT_WINDOW_HOURS,
+  paymentWindowMsFor,
   expireOverdueReservations,
   notifyRole,
   notifyUser,
@@ -94,6 +96,47 @@ router.get('/waiver-text', async (req, res) => {
     const db = await getDb()
     const saved = await db.collection('site_settings').findOne({ key: WAIVER_TEXT_KEY })
     return res.json({ ok: true, data: saved?.text || null, updatedAtISO: saved?.updatedAtISO || null })
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: String(err) })
+  }
+})
+
+const LOCATION_NAMES = {
+  salawag: 'Delta Stronghold (Salawag)',
+  langkaan: 'Delta Stronghold (Langkaan)',
+  binan: 'LOMA Binan Laguna',
+}
+
+// Public: how full this week's weekend games are (weekends are public games), for the landing
+// page and the player dashboard. Only player counts per location and slot are sent.
+router.get('/public/weekend-capacity', async (_req, res) => {
+  try {
+    const db = await getDb()
+    const todayISO = manilaDateISO()
+    const dates = weekendDatesOf(todayISO)
+    const [reservations, holds] = await Promise.all([
+      db.collection('reservations').find(
+        {
+          reservationStatus: { $in: BLOCKING_RESERVATION_STATUSES },
+          $or: [{ reservationDate: { $in: dates } }, { dateISO: { $in: dates } }],
+        },
+        { projection: { _id: 0, reservationDate: 1, dateISO: 1, reservationTime: 1, slot: 1, numberOfPlayers: 1, players: 1, locationId: 1, location: 1, locationName: 1, reservationStatus: 1 } },
+      ).toArray(),
+      db.collection('slot_holds').find(
+        { reservationDate: { $in: dates }, expiresAt: { $gt: new Date() } },
+        { projection: { _id: 0, reservationDate: 1, reservationTime: 1, locationId: 1, players: 1 } },
+      ).toArray(),
+    ])
+    const days = summarizeWeekendCapacity({
+      dates,
+      todayISO,
+      capacities: getLocationCapacities(),
+      locationNames: LOCATION_NAMES,
+      reservations,
+      holds,
+      normalizeLocationId,
+    })
+    return res.json({ ok: true, todayISO, data: days })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
   }
@@ -198,7 +241,7 @@ router.get('/team-directory/lookup', requireAuth, requireRole('user'), async (re
     // Only players whose ID is verified can join a team. Filtering here, before the limit, keeps an
     // unverified account from taking the place of the verified one that matches the same name.
     const canJoin = {
-      identityVerificationStatus: 'verified',
+      ...validIdentityFilter(),
       emailVerified: { $ne: false },
       status: { $ne: 'suspended' },
       id: { $ne: String(req.user.id) },
@@ -357,6 +400,9 @@ router.get('/reservation-availability', requireAuth, requireRole('user'), async 
 })
 
 const SLOT_HOLD_MINUTES = Math.max(1, Number(process.env.SLOT_HOLD_MINUTES) || 15)
+// A private slot picked on step 1 is held for a short time only: the page keeps renewing it
+// while the player is choosing, so a forgotten tab frees the field within a few minutes.
+const SLOT_BROWSING_HOLD_MINUTES = Math.max(1, Number(process.env.SLOT_BROWSING_HOLD_MINUTES) || 3)
 
 async function getApprovedWeaponOwnerIds(db, userIds) {
   const owners = await db.collection('weapons').distinct('submittedBy', {
@@ -471,7 +517,8 @@ router.post('/slot-holds', requireAuth, requireRole('user'), async (req, res) =>
         sessionType,
         fieldIds,
         players: playersCount,
-        expiresAt: new Date(Date.now() + SLOT_HOLD_MINUTES * 60_000),
+        browsing: body.browsing === true,
+        expiresAt: new Date(Date.now() + (body.browsing === true ? SLOT_BROWSING_HOLD_MINUTES : SLOT_HOLD_MINUTES) * 60_000),
         updatedAtISO: new Date().toISOString(),
       }
       await db.collection('slot_holds').updateOne(
@@ -1508,8 +1555,10 @@ router.post('/:collection', requireAuth, async (req, res) => {
         payload.submittedBy = String(req.user.id)
       } else {
         const account = await db.collection('user_accounts').findOne({ id: String(req.user.id) })
-        if (!account || account.identityVerificationStatus !== 'verified') {
-          return res.status(409).json({ ok: false, error: 'Complete your profile details first: add your birthday and get your ID verified on your profile.' })
+        if (!account || account.identityVerificationStatus !== 'verified' || !hasValidIdentity(account)) {
+          return res.status(409).json({ ok: false, error: account?.identityVerificationStatus === 'expired'
+            ? 'Your ID verification expired. Submit your ID again on your profile.'
+            : 'Complete your profile details first: add your birthday and get your ID verified on your profile.' })
         }
         verifiedIdentity = account
         payload.userId = String(req.user.id)
@@ -1722,12 +1771,13 @@ router.post('/:collection', requireAuth, async (req, res) => {
       doc.updatedAtISO = nowISO
       doc.reservationStatus = 'pending'
       doc.paymentState = 'awaiting'
-      doc.paymentDueAtISO = new Date(Date.now() + PAYMENT_WINDOW_HOURS * 3600_000).toISOString()
       try {
         Object.assign(doc, await resolveTeamAndOwnWeapons(db, doc, { requireFullTeam: req.user.role === 'user' }))
       } catch (err) {
         return res.status(err?.statusCode || 400).json({ ok: false, error: err.message || 'Invalid team selection' })
       }
+      // 30 minutes when the captain pays alone, 24 hours when the team splits the payment.
+      doc.paymentDueAtISO = new Date(Date.now() + paymentWindowMsFor(doc)).toISOString()
       try {
         Object.assign(doc, await calculateBookingPrice({
           db,
@@ -2046,6 +2096,12 @@ router.put('/:collection/:id', requireAuth, async (req, res) => {
 
     if (collection === 'user_accounts') {
       const changes = payload.$set || payload
+      if (updateRole === 'admin' && changes.identityVerificationStatus === 'verified' && existing.identityVerificationStatus !== 'verified') {
+        Object.assign(changes, identityVerifiedFields())
+        // The newer ID replaces the one that was still counting.
+        if (payload.$unset) payload.$unset.identityPreviousValidUntilISO = ''
+        else changes.identityPreviousValidUntilISO = null
+      }
       // The verified ID carries the birthday; the waiver is filled in from it.
       if (updateRole === 'user' && existing.identityVerificationStatus === 'verified'
         && Object.prototype.hasOwnProperty.call(changes, 'birthDate') && String(changes.birthDate || '') !== String(existing.birthDate || '')) {

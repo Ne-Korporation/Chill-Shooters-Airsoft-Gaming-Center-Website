@@ -32,7 +32,7 @@ export function PlayerManagementPage() {
 
   const [playerSearch, setPlayerSearch] = React.useState('')
   const [playerLevelFilter, setPlayerLevelFilter] = React.useState<'all' | 'Beginner' | 'Intermediate' | 'Experienced'>('all')
-  const [playerVerificationFilter, setPlayerVerificationFilter] = React.useState<'all' | 'verified' | 'pending_review' | 'not_submitted' | 'rejected'>('all')
+  const [playerVerificationFilter, setPlayerVerificationFilter] = React.useState<'all' | 'verified' | 'pending_review' | 'not_submitted' | 'rejected' | 'expired'>('all')
   const [playerAccountFilter, setPlayerAccountFilter] = React.useState<'all' | 'active' | 'suspended'>('all')
   const [statusChangingId, setStatusChangingId] = React.useState<string | null>(null)
   const [staffSearch, setStaffSearch] = React.useState('')
@@ -68,7 +68,7 @@ export function PlayerManagementPage() {
             gamesPlayed: live?.gamesPlayed ?? 0,
             status,
             verificationStatus,
-            verificationLabel: verificationStatus === 'verified' ? 'Verified' : verificationStatus === 'pending_review' ? 'Pending review' : verificationStatus === 'rejected' ? 'Rejected' : 'Not submitted',
+            verificationLabel: verificationStatus === 'verified' ? 'Verified' : verificationStatus === 'pending_review' ? 'Pending review' : verificationStatus === 'rejected' ? 'Rejected' : verificationStatus === 'expired' ? 'Expired (yearly update due)' : 'Not submitted',
             identityDocumentUrl: doc.identityDocumentUrl || null,
             identityDocumentBackUrl: doc.identityDocumentBackUrl || null,
             identityIdType: doc.identityIdType || '',
@@ -480,6 +480,7 @@ export function PlayerManagementPage() {
                     <option value="verified">Verified</option>
                     <option value="pending_review">Pending review</option>
                     <option value="rejected">Rejected</option>
+                    <option value="expired">Expired</option>
                     <option value="not_submitted">Not submitted</option>
                   </select>
                 </div>
@@ -597,7 +598,7 @@ export function PlayerManagementPage() {
       ) : null}
       {selectedPlayer ? (
         <div onClick={() => setSelectedPlayer(null)} className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/70 p-4">
-          <div onClick={(e) => e.stopPropagation()} className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-3xl border border-white/10 bg-background p-4 shadow-[0_30px_80px_rgba(0,0,0,0.75)]">
+          <div onClick={(e) => e.stopPropagation()} className="max-h-[90dvh] w-full max-w-3xl overflow-y-auto rounded-3xl border border-white/10 bg-background p-4 shadow-[0_30px_80px_rgba(0,0,0,0.75)]">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <div className="text-lg font-semibold">{selectedPlayer.name}</div>

@@ -81,6 +81,9 @@ router.get('/split-payments/mine', requireAuth, requireRole('user'), async (req,
           submitted: progress.submitted,
           remaining: progress.remaining,
           state: progress.state,
+          // Everyone sees how many shares are in; only the captain sees who paid.
+          paidCount: progress.paidPayerIds.length,
+          payerCount: payerIds.length,
         },
         // Captains see who has paid; teammates only see their own share.
         members: isCaptain

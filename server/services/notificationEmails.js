@@ -264,6 +264,25 @@ export function emailSplitShareRequest(db, reservation, userId, share, captainNa
   })
 }
 
+// Warns a teammate who hasn't paid their share that the split payment deadline is close.
+// stage ('12h' | '2h') keeps each warning to one email.
+export function emailSplitShareWarning(db, reservation, userId, { share, dueLabel, timeLeftLabel, stage, payLink = '' }) {
+  if (!reservation || !userId) return Promise.resolve({ skipped: 'missing data' })
+  const id = String(reservation.id || reservation._id)
+  return sendLogged(db, {
+    key: `split-warning:${id}:${userId}:${stage}`,
+    userId,
+    subject: `Reminder: pay your share within ${timeLeftLabel}`,
+    title: 'Your split payment share is still unpaid',
+    lines: [
+      `Your team's reservation for ${reservationLabel(reservation)} is waiting on your share${share > 0 ? ` of <b>${formatPHP(share)}</b>` : ''}.`,
+      `Pay before <b>${escapeHtml(dueLabel)}</b> (about ${escapeHtml(timeLeftLabel)} left). If the team doesn't finish paying by then, the reservation is released for anyone to book.`,
+      payLink ? button(payLink, 'Pay my share') : 'Log in and open <b>Split Payment</b> in the menu to pay.',
+      `Reservation ID: ${escapeHtml(id)}`,
+    ],
+  })
+}
+
 export function emailGameReminder(db, reservation, userId) {
   if (!reservation || !userId) return Promise.resolve({ skipped: 'missing data' })
   const id = String(reservation.id || reservation._id)
