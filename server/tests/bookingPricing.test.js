@@ -235,3 +235,16 @@ test('package equipment is charged per piece: players x quantity per player', as
   // 2 x 150 entrance + 2 x 1 x 50 mask + 2 x 2 x 50 vest
   assert.equal(result.totalAmount, 300 + 100 + 200)
 })
+
+test('extra ammo reloads are added at the reload price and capped', async () => {
+  const base = { selectionMode: 'package', selectedPackageId: 'full-rental', sessionType: 'public' }
+  const without = await calculateBookingPrice({ db: {}, payload: base, players: 1, findDocumentById, userId: 'player' })
+  const withAmmo = await calculateBookingPrice({ db: {}, payload: { ...base, extraAmmoReloads: 3 }, players: 1, findDocumentById, userId: 'player' })
+  assert.equal(withAmmo.totalAmount, without.totalAmount + 300)
+  assert.ok(withAmmo.pricingBreakdown.some((line) => line.label === 'Extra ammo reloads (3)' && line.amount === 300))
+
+  const bogus = await calculateBookingPrice({ db: {}, payload: { ...base, extraAmmoReloads: -4 }, players: 1, findDocumentById, userId: 'player' })
+  assert.equal(bogus.totalAmount, without.totalAmount)
+  const huge = await calculateBookingPrice({ db: {}, payload: { ...base, extraAmmoReloads: 9999 }, players: 1, findDocumentById, userId: 'player' })
+  assert.equal(huge.totalAmount, without.totalAmount + 50 * 100)
+})

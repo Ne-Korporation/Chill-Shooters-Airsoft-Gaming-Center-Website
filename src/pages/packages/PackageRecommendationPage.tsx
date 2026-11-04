@@ -49,6 +49,8 @@ type RentalPackage = {
   equipmentQuantities?: Record<string, number>
   tier?: string
   status?: string
+  // Grams of BBs given per reload / refill (0 = not stated)
+  bbReloadGrams?: number
 }
 
 type WeaponItem = {
@@ -313,6 +315,7 @@ export function PackageRecommendationPage() {
               equipmentQuantities: d.equipmentQuantities && typeof d.equipmentQuantities === 'object' ? d.equipmentQuantities : {},
               tier: d.tier || 'starter',
               status: d.status || 'active',
+              bbReloadGrams: typeof d.bbReloadGrams === 'number' && d.bbReloadGrams > 0 ? d.bbReloadGrams : 0,
             }
           })
         setPackages(active)
@@ -822,6 +825,14 @@ export function PackageRecommendationPage() {
                             <FiPackage /> {item.pkg.equipmentIds.length} gear
                           </div>
                         ) : null}
+                        <div className="inline-flex items-center gap-1 rounded-xl border border-white/10 bg-black/20 px-2 py-1 text-[11px] text-muted">
+                          <FiCheck /> Entrance included
+                        </div>
+                        {item.pkg.bbReloadGrams ? (
+                          <div className="inline-flex items-center gap-1 rounded-xl border border-white/10 bg-black/20 px-2 py-1 text-[11px] text-muted">
+                            {item.pkg.bbReloadGrams}g BBs per refill
+                          </div>
+                        ) : null}
                       </div>
 
                       <div className="mt-3 rounded-2xl border border-white/10 bg-black/20 p-3">
@@ -1148,6 +1159,16 @@ export function PackageRecommendationPage() {
                     )}
                   </div>
 
+                  <div>
+                    <div className="mb-2 text-xs font-bold uppercase tracking-[0.18em] text-muted">Also included</div>
+                    <ul className="space-y-1 text-sm text-muted">
+                      <li className="flex items-center gap-2"><FiCheck className="text-success" /> Entrance fee</li>
+                      {detailsItem.pkg.bbReloadGrams ? (
+                        <li className="flex items-center gap-2"><FiCheck className="text-success" /> BB reload: {detailsItem.pkg.bbReloadGrams}g per refill</li>
+                      ) : null}
+                    </ul>
+                  </div>
+
                   {detailsItem.pricing.isSettled ? (
                     <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
                       <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">
@@ -1165,7 +1186,7 @@ export function PackageRecommendationPage() {
                         </div>
                       </div>
                       <div className="mt-3 text-[11px] text-muted">
-                        This price stays the same as long as the number of players does not change.
+                        Entrance fee is included. This price stays the same as long as the number of players does not change.
                       </div>
                     </div>
                   ) : (

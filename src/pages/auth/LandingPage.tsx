@@ -498,7 +498,7 @@ export function LandingPage() {
               to={isAuthenticated ? '/app' : '/login'}
               className="hidden text-sm font-medium text-white/90 transition hover:text-white sm:inline"
             >
-              {isAuthenticated ? 'My Dashboard' : 'Login/Sign in'}
+              {isAuthenticated ? 'My Dashboard' : 'Login'}
             </Link>
             <button
               type="button"
@@ -525,7 +525,7 @@ export function LandingPage() {
               </a>
             ))}
             <Link to={isAuthenticated ? '/app' : '/login'} className="block py-3 text-sm font-medium text-white/90 sm:hidden">
-              {isAuthenticated ? 'My Dashboard' : 'Login/Sign in'}
+              {isAuthenticated ? 'My Dashboard' : 'Login'}
             </Link>
           </nav>
         ) : null}

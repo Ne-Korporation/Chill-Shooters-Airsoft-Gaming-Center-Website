@@ -823,8 +823,9 @@ router.put('/rentals/:id/return', requireAuth, requireRole(...STAFF), async (req
 // ---------------------------------------------------------------------------
 
 // replacementValue is what a lost piece costs to replace; it is the loss penalty.
-const PIECE_FIELDS = ['category', 'price', 'replacementValue', 'description', 'note', 'status', 'partnerId', 'fpsClass', 'fpsLimit']
-const NUMERIC_PIECE_FIELDS = ['price', 'replacementValue', 'fpsLimit']
+// stockGrams is the BB stock of an ammo record (ammo is tracked in grams, not pieces).
+const PIECE_FIELDS = ['category', 'price', 'replacementValue', 'description', 'note', 'status', 'partnerId', 'fpsClass', 'fpsLimit', 'stockGrams']
+const NUMERIC_PIECE_FIELDS = ['price', 'replacementValue', 'fpsLimit', 'stockGrams']
 
 function readPieceFields(body) {
   const fields = {}

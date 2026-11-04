@@ -116,6 +116,7 @@ test('held stock cannot be double-booked and cancellation releases the hold', as
           },
         }),
         insertOne: async (hold) => heldItems.push(hold),
+        find: () => ({ toArray: async () => [] }),
         updateMany: async (filter, update) => {
           for (const hold of heldItems) {
             if (hold.reservationId === filter.reservationId && hold.status === filter.status) {
@@ -143,4 +144,55 @@ test('held stock cannot be double-booked and cancellation releases the hold', as
   await releaseBookingInventory(db, 'R-1')
   await holdBookingInventory({ db, session: {}, reservationId: 'R-2', requirements: [requirement] })
   assert.equal(heldItems.filter((hold) => hold.status === 'held').length, 1)
+})
+
+test('package bookings use up BB grams and cancelling gives them back', async () => {
+  const ammo = { id: 'BB-1', name: 'BBs 0.20g', model: 'BBs 0.20g', category: 'ammo', status: 'available', stockGrams: 1000 }
+  records.equipments.push(ammo)
+  records.packages.push({ id: 'bb-package', weaponIds: [], equipmentIds: ['VS-1', 'BB-1'], equipmentQuantities: { 'BB-1': 2 }, bbReloadGrams: 100 })
+
+  // 3 players × 2 refills × 100 g = 600 g; ammo is not reserved as a piece
+  const requirements = await getBookingInventoryRequirements({
+    db: {},
+    payload: { selectionMode: 'package', selectedPackageId: 'bb-package' },
+    players: 3,
+    findDocumentById,
+    listPieces,
+  })
+  assert.deepEqual(ids(requirements), ['BB-1', 'VS-1', 'VS-2', 'VS-3'])
+  assert.equal(requirements[0].grams, 600)
+
+  await assert.rejects(
+    getBookingInventoryRequirements({ db: {}, payload: { selectionMode: 'package', selectedPackageId: 'bb-package' }, players: 6, findDocumentById, listPieces }),
+    /Not enough BBs/,
+  )
+
+  const holds = []
+  const db = {
+    collection(name) {
+      if (name === 'equipments') {
+        return {
+          updateOne: async (filter, update) => {
+            if (filter.id !== ammo.id || (filter.stockGrams && ammo.stockGrams < filter.stockGrams.$gte)) return { matchedCount: 0 }
+            ammo.stockGrams += update.$inc.stockGrams
+            return { matchedCount: 1 }
+          },
+        }
+      }
+      return {
+        insertOne: async (hold) => holds.push(hold),
+        find: (filter) => ({ toArray: async () => holds.filter((h) => h.reservationId === filter.reservationId && h.status === filter.status && h.kind === filter.kind) }),
+        updateMany: async (filter, update) => holds.filter((h) => h.reservationId === filter.reservationId).forEach((h) => Object.assign(h, update.$set)),
+      }
+    },
+  }
+  const [bbRequirement] = requirements
+  await holdBookingInventory({ db, session: {}, reservationId: 'R-BB', requirements: [bbRequirement] })
+  assert.equal(ammo.stockGrams, 400)
+  await assert.rejects(
+    holdBookingInventory({ db, session: {}, reservationId: 'R-BB-2', requirements: [bbRequirement] }),
+    (error) => error.statusCode === 409,
+  )
+  await releaseBookingInventory(db, 'R-BB')
+  assert.equal(ammo.stockGrams, 1000)
 })

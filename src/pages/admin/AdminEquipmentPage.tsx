@@ -10,10 +10,11 @@ import { apiGet, apiGetAll, apiPost, apiPut, apiDelete } from '../../utils/apiCl
 import { Pagination, usePagination } from '../../components/ui/Pagination'
 import { ModelSummaryStrip } from '../../components/inventory/ModelSummaryStrip'
 import { BulkUpdateModal, InventoryToolbar, SelectBox, forEachPiece, type BulkChange } from '../../components/inventory/BulkActionBar'
-import { modelOf, summarizeModels } from '../../utils/inventoryModels'
+import { isAmmo, modelOf, summarizeModels } from '../../utils/inventoryModels'
 import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
 
-type EquipmentCategory = 'masks' | 'vests' | 'gloves' | 'gear' | 'ammo' | 'optics' | 'consumables'
+// Rental gear is only masks, vests, and ammo.
+type EquipmentCategory = 'masks' | 'vests' | 'ammo'
 
 type EquipmentStatus = 'available' | 'rented' | 'maintenance'
 
@@ -27,6 +28,8 @@ type InventoryItem = {
   model: string
   unitNumber: number
   price: number
+  // Grams of BBs in stock; only used for ammo
+  stockGrams: number
   replacementValue?: number
   note: string
   description?: string
@@ -38,13 +41,9 @@ type InventoryItem = {
 }
 
 const categoryMeta: Record<EquipmentCategory, { subtitle: string }> = {
-  masks: { subtitle: 'Face protection, optics, and field-ready headgear' },
+  masks: { subtitle: 'Face protection and field-ready headgear' },
   vests: { subtitle: 'Body armor and protective carriers' },
-  gloves: { subtitle: 'Grip, impact, and handling gear' },
-  gear: { subtitle: 'Holsters, pouches, and accessories' },
   ammo: { subtitle: 'BB packs and magazines (e.g. 2 magazines / 600 rounds)' },
-  optics: { subtitle: 'Allowed scopes, red dots, and sights' },
-  consumables: { subtitle: 'Single-use grenades, smoke, and other one-time items' },
 }
 
 const StatusBadge = ({ status }: { status: EquipmentStatus }) => {
@@ -62,7 +61,10 @@ const StatusBadge = ({ status }: { status: EquipmentStatus }) => {
   )
 }
 
-const emptyForm = () => ({ name: '', description: '', pieces: '1', applyToModel: true, price: '0', replacementValue: '', status: 'available' as EquipmentStatus, category: 'gear' as EquipmentCategory, partnerId: '' })
+// Ammo is one record per BB type, stocked in grams and priced per refill.
+const AMMO_PRICE_PER_REFILL = '50'
+
+const emptyForm = () => ({ name: '', description: '', pieces: '1', grams: '', applyToModel: true, price: '0', replacementValue: '', status: 'available' as EquipmentStatus, category: 'masks' as EquipmentCategory, partnerId: '' })
 
 export function AdminEquipmentPage() {
   const [activeCategory, setActiveCategory] = React.useState<EquipmentCategory | 'all'>('all')
@@ -92,6 +94,7 @@ export function AdminEquipmentPage() {
         model: modelOf(d),
         unitNumber: Number(d.unitNumber) || 0,
         price: typeof d.price === 'number' ? d.price : 0,
+        stockGrams: Number(d.stockGrams) || 0,
         replacementValue: Number(d.replacementValue) || 0,
         note: d.note || d.description || '',
         description: d.description || d.note || '',
@@ -144,7 +147,14 @@ export function AdminEquipmentPage() {
       toast.error('Item name is required')
       return
     }
-    const count = Number(form.pieces)
+    const ammo = isAmmo(form)
+    const grams = Number(form.grams)
+    if (ammo && (!Number.isFinite(grams) || grams <= 0)) {
+      toast.error('Enter the grams of BBs in stock.')
+      return
+    }
+    // Ammo is a single record holding its grams; everything else is one record per piece.
+    const count = ammo ? 1 : Number(form.pieces)
     if (!Number.isInteger(count) || count < 1 || count > 200) {
       toast.error('Add between 1 and 200 pieces at a time.')
       return
@@ -159,12 +169,13 @@ export function AdminEquipmentPage() {
         status: form.status,
         price: Number(form.price) || 0,
         replacementValue: Number(form.replacementValue) || 0, 
+        ...(ammo ? { stockGrams: Math.round(grams) } : {}),
         description: form.description.trim(),
         note: form.description.trim() || 'Newly entered from admin inventory.',
         partnerId: form.partnerId,
       })
       const ids = res.data.map((piece) => piece.id)
-      toast.success(count === 1 ? `Added ${ids[0]}` : `Added ${count} pieces (${ids[0]} – ${ids[ids.length - 1]})`)
+      toast.success(ammo ? `Added ${ids[0]} (${Math.round(grams).toLocaleString()} g)` : count === 1 ? `Added ${ids[0]}` : `Added ${count} pieces (${ids[0]} – ${ids[ids.length - 1]})`)
       setForm(emptyForm())
       setFormOpen(false)
       await refresh()
@@ -182,6 +193,7 @@ export function AdminEquipmentPage() {
       name: item.name,
       description: item.description || item.note || '',
       pieces: '1',
+      grams: item.stockGrams ? String(item.stockGrams) : '',
       applyToModel: true,
       price: String(item.price),
       replacementValue: item.replacementValue ? String(item.replacementValue) : '',
@@ -327,6 +339,12 @@ export function AdminEquipmentPage() {
     }
 
     const piece = inventory.find((item) => item.id === selectedItemId)
+    const ammo = isAmmo(form)
+    const grams = Number(form.grams)
+    if (ammo && (!Number.isFinite(grams) || grams < 0)) {
+      toast.error('Enter the grams of BBs in stock.')
+      return
+    }
     setSaving(true)
     try {
       // Status and notes belong to this one piece.
@@ -334,6 +352,7 @@ export function AdminEquipmentPage() {
         status: form.status,
         description: form.description.trim(),
         note: form.description.trim() || 'Updated from admin inventory.',
+        ...(ammo ? { stockGrams: Math.round(grams) } : {}),
         ...(form.applyToModel ? {} : { price: Number(form.price) || 0, replacementValue: Number(form.replacementValue) || 0, category: form.category, partnerId: form.partnerId }),
         updatedAtISO: new Date().toISOString(),
       })
@@ -558,8 +577,8 @@ export function AdminEquipmentPage() {
                     </div>
                     <div className="mt-1 truncate text-xs text-muted">{item.description || item.note}</div>
                   </div>
-                  <div className="col-span-1 text-right text-sm font-semibold">{item.source === 'player' || !item.unitNumber ? '—' : `#${item.unitNumber}`}</div>
-                  <div className="col-span-1 text-right text-sm text-accent">₱{item.price}</div>
+                  <div className="col-span-1 text-right text-sm font-semibold">{isAmmo(item) ? `${item.stockGrams.toLocaleString()} g` : item.source === 'player' || !item.unitNumber ? '—' : `#${item.unitNumber}`}</div>
+                  <div className="col-span-1 text-right text-sm text-accent">₱{item.price}{isAmmo(item) ? <span className="block text-[10px] text-muted">per refill</span> : null}</div>
                   <div className="col-span-2 pl-4">
                     <StatusBadge status={item.status} />
                   </div>
@@ -593,7 +612,9 @@ export function AdminEquipmentPage() {
         {formOpen ? (
           <Modal eyebrow="Gear" title={selectedItemId ? `Edit ${selectedItemId}` : 'Add gear'} onClose={closeForm}>
             <div className="text-sm text-muted">
-              {selectedItemId ? 'Update this piece, or every piece of the same model.' : 'Every physical item is its own piece with its own ID (e.g. Mask #1, Mask #2).'}
+              {isAmmo(form)
+                ? 'Ammo is tracked by the grams of BBs in stock and priced per refill. Package bookings take their grams out of stock automatically; cancelled bookings put them back.'
+                : selectedItemId ? 'Update this piece, or every piece of the same model.' : 'Every physical item is its own piece with its own ID (e.g. Mask #1, Mask #2).'}
             </div>
 
             <div className="mt-4 grid gap-3 md:grid-cols-2">
@@ -618,6 +639,15 @@ export function AdminEquipmentPage() {
                     <span className="block text-xs text-muted">Status and notes change only this piece.</span>
                   </span>
                 </label>
+              ) : isAmmo(form) ? (
+                <Input
+                  label="Grams of BBs in stock"
+                  type="number"
+                  min="1"
+                  value={form.grams}
+                  onChange={(event) => setForm((prev) => ({ ...prev, grams: event.target.value }))}
+                  placeholder="e.g. 5000"
+                />
               ) : (
                 <Input
                   label="Pieces to add"
@@ -630,8 +660,21 @@ export function AdminEquipmentPage() {
               )}
             </div>
 
+            {selectedItemId && isAmmo(form) ? (
+              <div className="mt-3">
+                <Input
+                  label="Grams of BBs in stock"
+                  type="number"
+                  min="0"
+                  value={form.grams}
+                  onChange={(event) => setForm((prev) => ({ ...prev, grams: event.target.value }))}
+                  placeholder="e.g. 5000"
+                />
+              </div>
+            ) : null}
+
             <div className="mt-3">
-              <label className="block text-sm font-semibold text-text">Price (₱)</label>
+              <label className="block text-sm font-semibold text-text">{isAmmo(form) ? 'Price per refill (₱)' : 'Price (₱)'}</label>
               <input
                 type="number"
                 min="0"
@@ -669,13 +712,16 @@ export function AdminEquipmentPage() {
                 <label className="block text-sm font-semibold text-text">Category</label>
                 <select
                   value={form.category}
-                  onChange={(event) => setForm((prev) => ({ ...prev, category: event.target.value as EquipmentCategory }))}
+                  onChange={(event) => {
+                    const category = event.target.value as EquipmentCategory
+                    // Ammo starts at the standard ₱50 per refill.
+                    setForm((prev) => ({ ...prev, category, price: category === 'ammo' && (prev.price === '0' || prev.price === '') ? AMMO_PRICE_PER_REFILL : prev.price }))
+                  }}
                   className="mt-2 w-full rounded-xl border border-white/10 glass px-4 py-3 text-sm text-text"
                 >
                   <option value="masks">Masks</option>
                   <option value="vests">Vests</option>
-                  <option value="gloves">Gloves</option>
-                  <option value="gear">Gear</option>
+                  <option value="ammo">Ammo</option>
                 </select>
               </div>
               <div>
@@ -715,7 +761,7 @@ export function AdminEquipmentPage() {
                 </Button>
               ) : (
                 <Button onClick={handleCreate} disabled={saving}>
-                  {saving ? 'Saving...' : Number(form.pieces) > 1 ? `Add ${form.pieces} pieces` : 'Add item'}
+                  {saving ? 'Saving...' : !isAmmo(form) && Number(form.pieces) > 1 ? `Add ${form.pieces} pieces` : 'Add item'}
                 </Button>
               )}
             </div>
