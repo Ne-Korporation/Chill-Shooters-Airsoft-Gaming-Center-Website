@@ -9,6 +9,8 @@ import {
   FiChevronRight,
   FiClock,
   FiCrosshair,
+  FiFlag,
+  FiMap,
   FiMapPin,
   FiMinus,
   FiPackage,
@@ -34,6 +36,8 @@ import { loadPackagePrefill } from '../../utils/packagePrefill'
 import { isAmmo, modelOf } from '../../utils/inventoryModels'
 import { cancelBookingDraftLeft, markBookingDraftLeft, readBookingDraft, saveBookingDraft, scheduleBookingDraftLeft } from '../../utils/bookingDraft'
 import { PiecePicker, type PickerGroup } from '../../components/inventory/PiecePicker'
+import { ModelQuantityPicker } from '../../components/inventory/ModelQuantityPicker'
+import { FieldLayoutDesigner, type LayoutItem } from '../../components/reservations/FieldLayoutDesigner'
 import { formatSlotRange, useSlotHours } from '../../utils/slotHours'
 
 // Slot holds last 15 minutes on the server; refresh well before that while the player is booking.
@@ -262,6 +266,18 @@ function slotSort(a: TimeSlot, b: TimeSlot) {
 }
 
 const ENTRANCE_FEE_PER_PLAYER = 150
+// Price of one extra BB reload until the server sends its own (AMMO_RELOAD_PRICE).
+const DEFAULT_AMMO_RELOAD_PRICE = 100
+const MAX_EXTRA_AMMO_RELOADS = 50
+
+type BookingStep = 1 | 2 | 3 | 4 | 5
+const STEP_LABELS: Record<BookingStep, string> = {
+  1: 'Field & slot',
+  2: 'Your team',
+  3: 'Weapons & gear',
+  4: 'Game setup',
+  5: 'Review & pay',
+}
 // Public (weekend) games take bookings from a single player upward.
 const MIN_PLAYERS = 1
 
@@ -303,7 +319,10 @@ export function ReservationCalendarPage() {
     }
   }, [])
 
-  const [step, setStep] = useState<1 | 2 | 3 | 4>(() => draftState.step ?? 1)
+  const [step, setStep] = useState<BookingStep>(() => {
+    const saved = Number(draftState.step)
+    return (saved >= 1 && saved <= 5 ? saved : 1) as BookingStep
+  })
   const [isConfirming, setIsConfirming] = useState(false)
   const [packages, setPackages] = useState<RentalPackage[]>([])
   const [weapons, setWeapons] = useState<WeaponItem[]>([])
@@ -419,10 +438,11 @@ export function ReservationCalendarPage() {
     let cancelled = false
     try {
       if (!silent) setLoadingReservations(true)
-      const res = await apiGet<{ ok: boolean; data: any[]; capacities?: SlotCapacities }>('/api/reservation-availability')
+      const res = await apiGet<{ ok: boolean; data: any[]; capacities?: SlotCapacities; ammoReloadPrice?: number }>('/api/reservation-availability')
       if (cancelled) return
 
       if (res.capacities) setServerCapacities(res.capacities)
+      if (typeof res.ammoReloadPrice === 'number' && res.ammoReloadPrice >= 0) setAmmoReloadPrice(res.ammoReloadPrice)
       const data = Array.isArray(res?.data) ? res.data : []
       // Include PENDING, CONFIRMED, and APPROVED reservations
       // so slots are blocked as soon as someone books
@@ -507,9 +527,15 @@ export function ReservationCalendarPage() {
   // Optional sketch of the custom field layout the marshals should set up.
   const [layoutBlueprintUrl, setLayoutBlueprintUrl] = useState<string>(() => draftState.layoutBlueprintUrl ?? '')
   const [uploadingBlueprint, setUploadingBlueprint] = useState(false)
-  const uploadBlueprint = async (file: File) => {
-    if (!file.type.startsWith('image/')) return toast.error('Upload an image file (PNG or JPG).')
-    if (file.size > 5 * 1024 * 1024) return toast.error('The image must be 5 MB or smaller.')
+  // Obstacles placed in the field mock (see FieldLayoutDesigner); saved as the blueprint image.
+  const [fieldLayoutItems, setFieldLayoutItems] = useState<LayoutItem[]>(() => (Array.isArray(draftState.fieldLayoutItems) ? draftState.fieldLayoutItems : []))
+  const [layoutDesignerOpen, setLayoutDesignerOpen] = useState(false)
+  // Extra BB reloads bought with the booking, on top of what the package gives.
+  const [extraAmmoReloads, setExtraAmmoReloads] = useState<number>(() => Number(draftState.extraAmmoReloads) || 0)
+  const [ammoReloadPrice, setAmmoReloadPrice] = useState(DEFAULT_AMMO_RELOAD_PRICE)
+  const uploadBlueprint = async (file: File): Promise<boolean> => {
+    if (!file.type.startsWith('image/')) { toast.error('Upload an image file (PNG or JPG).'); return false }
+    if (file.size > 5 * 1024 * 1024) { toast.error('The image must be 5 MB or smaller.'); return false }
     setUploadingBlueprint(true)
     try {
       const formData = new FormData()
@@ -518,8 +544,10 @@ export function ReservationCalendarPage() {
       const json = await res.json().catch(() => null)
       if (!res.ok || !json?.url) throw new Error(json?.error || 'Upload failed')
       setLayoutBlueprintUrl(json.url)
+      return true
     } catch (e: any) {
       toast.error(e?.message || 'Could not upload the blueprint')
+      return false
     } finally {
       setUploadingBlueprint(false)
     }
@@ -799,6 +827,11 @@ export function ReservationCalendarPage() {
   )
   const verifiedOwnWeaponCount = Math.min(players, (captainBringsOwnWeapon ? 1 : 0) + verifiedTeammateBringers.length)
   const ownWeaponShortfall = Math.max(0, ownWeaponTarget - verifiedOwnWeaponCount)
+  // The team step comes before gear: teammates marked there raise the own-weapon count.
+  const markedOwnWeaponCount = Math.min(players, (captainBringsOwnWeapon ? 1 : 0) + teammateOwnWeaponIds.length)
+  useEffect(() => {
+    setOwnWeaponTarget((current) => (current < markedOwnWeaponCount ? markedOwnWeaponCount : current))
+  }, [markedOwnWeaponCount])
 
   // Rental stock left for the chosen date/slot, so players see shortages here
   // instead of hitting them when the reservation is submitted at payment.
@@ -837,6 +870,8 @@ export function ReservationCalendarPage() {
 
   const weaponGroups = useMemo(() => groupPieces('weapons', rentalWeapons), [groupPieces, rentalWeapons])
   const equipmentGroups = useMemo(() => groupPieces('equipments', rentalEquipment), [groupPieces, rentalEquipment])
+  // Ammo is sold as extra reloads (grams), not rented as pieces.
+  const gearGroups = useMemo(() => equipmentGroups.filter((group) => !isAmmo(group)), [equipmentGroups])
 
   const freeOfModel = useCallback((groups: PickerGroup[], model: string) =>
     groups.find((group) => group.model === model)?.pieces.filter((piece) => piece.free).length ?? 0,
@@ -1076,19 +1111,19 @@ export function ReservationCalendarPage() {
   // while the lists are still empty.
   useEffect(() => {
     if (loadingPackages) return
-    const allowed = new Set([...packageWeaponGroups, ...packageEquipmentGroups].flatMap((group) => group.pieces.filter((piece) => piece.free).map((piece) => piece.id)))
+    const allowed = new Set(packageWeaponGroups.flatMap((group) => group.pieces.filter((piece) => piece.free).map((piece) => piece.id)))
     setPickedUnitIds((current) => {
       const next = current.filter((id) => allowed.has(id))
       return next.length === current.length ? current : next
     })
-  }, [packageWeaponGroups, packageEquipmentGroups, loadingPackages])
+  }, [packageWeaponGroups, loadingPackages])
 
   useEffect(() => {
     if (loadingPackages) return
-    const free = new Set([...weaponGroups, ...equipmentGroups].flatMap((group) => group.pieces.filter((piece) => piece.free).map((piece) => piece.id)))
+    const free = new Set([...weaponGroups, ...gearGroups].flatMap((group) => group.pieces.filter((piece) => piece.free).map((piece) => piece.id)))
     setCustomWeaponIds((current) => (current.every((id) => free.has(id)) ? current : current.filter((id) => free.has(id))))
     setCustomEquipmentIds((current) => (current.every((id) => free.has(id)) ? current : current.filter((id) => free.has(id))))
-  }, [weaponGroups, equipmentGroups, loadingPackages])
+  }, [weaponGroups, gearGroups, loadingPackages])
 
   const togglePickedUnit = (id: string) => {
     setPickedUnitIds((current) => (current.includes(id) ? current.filter((unit) => unit !== id) : [...current, id]))
@@ -1190,7 +1225,12 @@ export function ReservationCalendarPage() {
     }
   }, [players, selectedPackage, packageWeapons, packageEquipment, equipmentTotalPerPlayer, selectionMode, customTotal, customPerPlayerTotal, verifiedOwnWeaponCount])
 
-  const dynamicPricing = basePricing
+  const extraAmmoTotal = Math.round(extraAmmoReloads * ammoReloadPrice)
+  const dynamicPricing = useMemo(() => {
+    if (extraAmmoTotal <= 0) return basePricing
+    const total = basePricing.total + extraAmmoTotal
+    return { ...basePricing, total, perPlayer: Math.round(total / Math.max(1, players)) }
+  }, [basePricing, extraAmmoTotal, players])
 
   const paymentBreakdown = useMemo(() => {
     const entranceFee = ENTRANCE_FEE_PER_PLAYER * players
@@ -1227,6 +1267,10 @@ export function ReservationCalendarPage() {
       }
       itemizedBreakdown.push({ label: `Player entrance fee (${players} × ₱${ENTRANCE_FEE_PER_PLAYER})`, amount: entranceFee })
     }
+    if (extraAmmoTotal > 0) {
+      equipmentPrice += extraAmmoTotal
+      itemizedBreakdown.push({ label: `Extra ammo reloads (${extraAmmoReloads} × ₱${ammoReloadPrice})`, amount: extraAmmoTotal })
+    }
 
     return {
       fieldPrice,
@@ -1236,7 +1280,7 @@ export function ReservationCalendarPage() {
       total: dynamicPricing.total,
       itemizedBreakdown,
     }
-  }, [customItemsTotal, customSelectedEquipment, customSelectedWeapons, dynamicPricing, packageEquipment, players, selectedPackage, selectionMode])
+  }, [customItemsTotal, customSelectedEquipment, customSelectedWeapons, dynamicPricing, packageEquipment, players, selectedPackage, selectionMode, extraAmmoTotal, extraAmmoReloads, ammoReloadPrice])
 
   const reservationSummary = useMemo(() => {
     const selectedFields = availableFields.filter((f) => selectedFieldIds.includes(f.id))
@@ -1353,14 +1397,14 @@ export function ReservationCalendarPage() {
         step, selectedLocation, selectedFieldIds, dateISO, slot, selectedSlots, players, notes, teamName, gameModePreference,
         layoutRequest, layoutBlueprintUrl, selectedPackageId, selectionMode, customWeaponIds, customEquipmentIds,
         ownWeapons, ownEquipment, selectedOwnWeaponIds, selectedOwnEquipmentIds, ownWeaponTarget, teammateOwnWeaponIds,
-        pickedUnitIds, selectedTeammates, paymentMode, paymentPlan,
+        pickedUnitIds, selectedTeammates, paymentMode, paymentPlan, extraAmmoReloads, fieldLayoutItems,
       },
     })
   }, [
     user?.id, step, draftLabel, selectedLocation, selectedFieldIds, dateISO, slot, selectedSlots, players, notes, teamName,
     gameModePreference, layoutRequest, layoutBlueprintUrl, selectedPackageId, selectionMode, customWeaponIds,
     customEquipmentIds, ownWeapons, ownEquipment, selectedOwnWeaponIds, selectedOwnEquipmentIds, ownWeaponTarget,
-    teammateOwnWeaponIds, pickedUnitIds, selectedTeammates, paymentMode, paymentPlan,
+    teammateOwnWeaponIds, pickedUnitIds, selectedTeammates, paymentMode, paymentPlan, extraAmmoReloads, fieldLayoutItems,
   ])
 
   // Coming back to a draft: hold the slot again (it may have been taken in the meantime).
@@ -1496,6 +1540,7 @@ export function ReservationCalendarPage() {
         gameModePreference,
         layoutRequest: layoutRequest.trim(),
         ...(layoutBlueprintUrl ? { layoutBlueprintUrl } : {}),
+        ...(extraAmmoReloads > 0 ? { extraAmmoReloads } : {}),
         reservationStatus: 'pending',
         packageName: pkgName,
         selectionMode,
@@ -1556,9 +1601,10 @@ export function ReservationCalendarPage() {
   const getStepTitle = () => {
     switch (step) {
       case 1: return 'Choose Field & Slot'
-      case 2: return 'Select Package & Gear'
-      case 3: return 'Reservation Summary'
-      default: return 'Select Teammates'
+      case 2: return 'Add Your Team'
+      case 3: return 'Select Package & Gear'
+      case 4: return 'Game Setup'
+      default: return 'Review & Pay'
     }
   }
 
@@ -1617,7 +1663,7 @@ export function ReservationCalendarPage() {
             <div className="mt-0.5 text-xs text-muted">
               {packagePrefill.players ? `${packagePrefill.players} players` : ''}
               {ownWeaponTarget > 0 ? ` · ${ownWeaponTarget} bringing their own weapon` : ''}
-              {' '}· You can still change it in step 2.
+              {' '}· You can still change it in step 3.
             </div>
           </div>
         </div>
@@ -1632,16 +1678,11 @@ export function ReservationCalendarPage() {
         </div>
       ) : null}
 
-      <div className="grid grid-cols-4 gap-3">
-        {([1, 2, 3, 4] as const).map((s) => {
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+        {([1, 2, 3, 4, 5] as const).map((s) => {
           const active = s === step
           const done = s < step
-          const labels = {
-            1: 'Select field location',
-            2: 'Choose package',
-            3: 'Review details',
-            4: 'Select teammates',
-          }
+          const labels = STEP_LABELS
 
           return (
             <button
@@ -2143,8 +2184,248 @@ export function ReservationCalendarPage() {
         </div>
       )}
 
-      {/* Step 2 */}
+      {/* Step 2 - Team */}
       {step === 2 && (
+        <div className="grid gap-4 lg:grid-cols-3">
+          <div className="lg:col-span-2 space-y-4">
+            <Card className="p-4 md:p-6">
+              <div className="flex items-center gap-2 text-sm font-bold">
+                <FiUsers /> <span>Select Your Teammates</span>
+              </div>
+              <p className="mt-1 text-xs text-muted">
+                Add the {maxTeammates} registered player{maxTeammates === 1 ? '' : 's'} joining this reservation. Find each one by name or by the email on their account. You are already counted. Every player needs an account with an approved waiver.
+              </p>
+
+              <div className="mt-4 space-y-4">
+                <Input
+                  label="Team name (optional)"
+                  value={teamName}
+                  onChange={(e) => setTeamName(e.target.value.slice(0, 60))}
+                  placeholder="e.g., Bravo Squad"
+                  maxLength={60}
+                />
+
+                <form
+                  className="flex flex-col gap-2 sm:flex-row sm:items-end"
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    void findTeammate()
+                  }}
+                >
+                  <div className="min-w-0 flex-1">
+                    <Input
+                      label="Teammate name or email"
+                      value={teamEmail}
+                      onChange={(e) => {
+                        setTeamEmail(e.target.value)
+                        if (teamLookup.status !== 'idle') setTeamLookup({ status: 'idle' })
+                      }}
+                      placeholder="e.g., Juan Dela Cruz or teammate@gmail.com"
+                      disabled={!hasCurrentUserWaiver || selectedTeammates.length >= maxTeammates}
+                    />
+                  </div>
+                  <Button
+                    type="submit"
+                    variant="primary"
+                    disabled={!teamEmail.trim() || teamLookup.status === 'searching' || !hasCurrentUserWaiver || selectedTeammates.length >= maxTeammates}
+                  >
+                    <FiSearch /> {teamLookup.status === 'searching' ? 'Finding…' : 'Find'}
+                  </Button>
+                </form>
+
+                {teamChildren.length > 0 ? (
+                  <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
+                    <div className="text-sm font-semibold">A minor will join this game</div>
+                    <div className="mt-1 text-xs text-muted">
+                      Children on your account or your teammates' accounts. Each one takes a player spot and pays the entrance fee.
+                    </div>
+                    <select
+                      value=""
+                      onChange={(event) => { if (event.target.value) addMinor(event.target.value) }}
+                      disabled={!hasCurrentUserWaiver}
+                      className="mt-2 w-full rounded-xl border border-white/10 bg-background px-3 py-2 text-sm text-text [&>option]:bg-background"
+                      aria-label="Add a minor to the team"
+                    >
+                      <option value="">Choose a child to add…</option>
+                      {teamChildren.filter((child) => !selectedTeammateIds.includes(child.id)).map((child) => (
+                        <option key={child.id} value={child.id} disabled={!child.canPlay}>
+                          {child.name} (age {child.age ?? '—'}, {child.guardianId === user?.id ? 'your child' : `${child.guardianName || 'a teammate'}'s child`}){child.canPlay ? '' : ' · waiver not approved yet'}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : null}
+
+                {teamLookup.status === 'error' && (
+                  <div className="rounded-2xl border border-danger/30 bg-danger/10 p-3 text-sm text-danger">{teamLookup.error}</div>
+                )}
+
+                {teamLookup.status === 'found' && teamLookup.members?.map((member) => {
+                  const alreadyAdded = selectedTeammateIds.includes(member.id)
+                  return (
+                    <div key={member.id} className="flex flex-col gap-3 rounded-2xl border border-accent/30 bg-accent/5 p-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-bold">{member.name}</div>
+                        <div className="truncate text-xs text-muted">{member.email}</div>
+                        {!member.waiverSubmitted && (
+                          <div className="mt-1 text-xs font-semibold text-warning">Waiver not approved yet — they can't be added until it is.</div>
+                        )}
+                      </div>
+                      <Button
+                        type="button"
+                        variant="primary"
+                        disabled={alreadyAdded || !member.waiverSubmitted}
+                        onClick={() => addTeammate(member)}
+                      >
+                        {alreadyAdded ? <><FiCheck /> Added</> : <><FiPlus /> Add</>}
+                      </Button>
+                    </div>
+                  )
+                })}
+
+                {loadingWaiverEligibility ? (
+                  <div className="rounded-2xl border border-dashed border-white/10 bg-black/20 p-4 text-sm text-muted">
+                    Checking waiver approval...
+                  </div>
+                ) : !hasCurrentUserWaiver ? (
+                  <div className="rounded-2xl border border-warning/20 bg-warning/10 p-4 text-sm text-warning">
+                    Your waiver must be approved before you can confirm a reservation or add teammates.
+                  </div>
+                ) : null}
+
+                <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                  <div className="flex items-center justify-between gap-3 text-xs uppercase tracking-[0.18em] text-muted">
+                    <span>Your team</span>
+                    <span>{selectedTeammates.length}/{maxTeammates} teammates</span>
+                  </div>
+
+                  <div className="mt-3 space-y-2">
+                    <div className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/10 p-3">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-bold">{user?.name || 'You'}</div>
+                        <div className="truncate text-xs text-muted">{user?.email}</div>
+                      </div>
+                      <span className="text-[10px] uppercase tracking-[0.18em] text-gold">Captain</span>
+                    </div>
+
+                    {selectedTeammates.map((member) => {
+                      const bringsOwn = teammateOwnWeaponIds.includes(member.id)
+                      return (
+                        <div key={member.id} className="flex items-start justify-between gap-3 rounded-2xl border border-accent/30 bg-accent/10 p-3">
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-bold">{member.name}</div>
+                            <div className="truncate text-xs text-muted">{member.email}</div>
+                            {/* The team step comes before gear, so the toggle is always offered here. */}
+                            {!member.isMinor ? (
+                              <button
+                                type="button"
+                                role="checkbox"
+                                aria-checked={bringsOwn}
+                                onClick={() => toggleTeammateOwnWeapon(member)}
+                                className={[
+                                  'mt-2 inline-flex items-center gap-1.5 rounded-xl border px-2 py-1 text-[11px] font-semibold',
+                                  bringsOwn
+                                    ? member.hasApprovedWeapon
+                                      ? 'border-success/30 bg-success/10 text-success'
+                                      : 'border-warning/30 bg-warning/10 text-warning'
+                                    : 'border-white/10 bg-white/5 text-muted',
+                                ].join(' ')}
+                              >
+                                <FiCrosshair className="h-3 w-3" />
+                                {bringsOwn
+                                  ? member.hasApprovedWeapon ? 'Brings own weapon' : 'No registered weapon'
+                                  : 'Brings own weapon?'}
+                              </button>
+                            ) : null}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedTeammates((current) => current.filter((m) => m.id !== member.id))
+                              setTeammateOwnWeaponIds((current) => current.filter((id) => id !== member.id))
+                            }}
+                            className="inline-flex shrink-0 items-center gap-1 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-muted transition hover:bg-white/10"
+                            aria-label={`Remove ${member.name}`}
+                          >
+                            <FiX /> Remove
+                          </button>
+                        </div>
+                      )
+                    })}
+
+                    {selectedTeammates.length === 0 && maxTeammates > 0 && (
+                      <div className="rounded-2xl border border-dashed border-white/10 bg-black/20 p-3 text-xs text-muted">
+                        No teammates added yet. Find a teammate by email above.
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {maxTeammates > 0 && missingTeammates > 0 && (
+                  <div className="rounded-2xl border border-warning/25 bg-warning/10 p-3 text-xs text-warning">
+                    Add {missingTeammates} more teammate{missingTeammates === 1 ? '' : 's'} to continue.
+                  </div>
+                )}
+
+                {ownWeaponTarget > 0 && (
+                  <div className={[
+                    'rounded-2xl border p-3 text-xs',
+                    ownWeaponShortfall > 0 ? 'border-warning/25 bg-warning/10 text-warning' : 'border-success/25 bg-success/10 text-success',
+                  ].join(' ')}>
+                    <div className="font-bold">
+                      Own weapons: {verifiedOwnWeaponCount} of {ownWeaponTarget} verified
+                    </div>
+                    <div className="mt-1 text-muted">
+                      {captainBringsOwnWeapon ? 'You are bringing one of your approved weapons. ' : ''}
+                      {ownWeaponShortfall > 0
+                        ? `${ownWeaponShortfall} more player${ownWeaponShortfall === 1 ? '' : 's'} will rent a weapon instead — you can still continue, and the price below already includes those rentals.`
+                        : 'Every own weapon is verified, so those rental charges are removed from the total.'}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </Card>
+          </div>
+
+          <div className="space-y-4">
+            <Card className="p-4 md:p-6">
+              <div className="flex items-center gap-2 text-sm font-bold">
+                <FiUsers /> <span>Team</span>
+              </div>
+              <p className="mt-1 text-xs text-muted">Every player spot needs a registered account. Next you'll pick weapons and gear.</p>
+
+              <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-xs text-muted">Players</span>
+                  <span className="text-xl font-bold text-gold">{selectedTeammates.length + 1}/{players}</span>
+                </div>
+                <div className="mt-3 text-xs text-muted">
+                  {selectedTeammates.length > 0
+                    ? `Team: you, ${selectedTeammates.map((member) => member.name).join(', ')}`
+                    : maxTeammates > 0 ? 'No teammates added yet.' : 'Just you.'}
+                </div>
+                {markedOwnWeaponCount > 0 ? (
+                  <div className="mt-2 text-xs text-success">{markedOwnWeaponCount} bringing their own weapon</div>
+                ) : null}
+              </div>
+
+              <div className="mt-4 flex flex-col gap-2">
+                <Button variant="ghost" onClick={() => setStep(1)}>Back</Button>
+                <Button
+                  variant="primary"
+                  disabled={!canSubmitReservation || !teamSelectionComplete}
+                  onClick={() => setStep(3)}
+                >
+                  Continue <FiChevronRight />
+                </Button>
+              </div>
+            </Card>
+          </div>
+        </div>
+      )}
+
+      {/* Step 3 - Gear */}
+      {step === 3 && (
         <div className="grid gap-4 lg:grid-cols-3">
           <div className="lg:col-span-2 space-y-4">
             {noPackages ? null : (
@@ -2291,22 +2572,46 @@ export function ReservationCalendarPage() {
                       <FiShield /> <span>Included Weapons &amp; Gear</span>
                     </div>
                     <p className="mt-1 text-xs text-muted">
-                      Each player gets the items below. Optionally pick the exact pieces you want; any you don't pick are assigned automatically from what's free.
+                      Each player gets the items below. Gear and accessories are assigned automatically from what's free for your slot.
                     </p>
-                    <PiecePicker
-                      groups={[...packageWeaponGroups, ...packageEquipmentGroups]}
-                      selected={pickedUnitIds}
-                      onToggle={togglePickedUnit}
-                      limitFor={(model) => {
-                        if (packageEquipmentModels.includes(model)) return players * equipmentPerPlayer(model)
-                        // Weapons share one allowance across the package's weapon models.
-                        const pickedHere = pickedUnitIds.filter((id) => rentalWeapons.find((w) => w.id === id)?.model === model).length
-                        return pickedHere + Math.max(0, packageWeaponsNeeded - pickedPackageWeapons)
-                      }}
-                      note={(group) => (packageEquipmentModels.includes(group.model)
-                        ? `${players * equipmentPerPlayer(group.model)} needed (${equipmentPerPlayer(group.model)} per player)`
-                        : `${packageWeaponsNeeded} rental weapon${packageWeaponsNeeded === 1 ? '' : 's'} needed for the group`)}
-                    />
+
+                    {packageEquipmentGroups.length > 0 && (
+                      <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                        {packageEquipmentGroups.map((group) => {
+                          const needed = players * equipmentPerPlayer(group.model)
+                          const free = group.pieces.filter((piece) => piece.free).length
+                          const short = slotStock ? free < needed : false
+                          return (
+                            <div key={group.model} className={['flex items-center justify-between gap-3 rounded-2xl border p-3', short ? 'border-danger/30 bg-danger/10' : 'border-white/10 bg-white/5'].join(' ')}>
+                              <div className="min-w-0">
+                                <div className="truncate text-sm font-bold">{group.model}</div>
+                                <div className="text-xs text-muted">{equipmentPerPlayer(group.model)} per player · {short ? <span className="text-danger">only {free} free</span> : 'auto-assigned'}</div>
+                              </div>
+                              <div className="shrink-0 rounded-xl bg-black/30 px-2.5 py-1 text-xs font-bold">× {needed}</div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+
+                    {packageWeaponGroups.length > 0 && (
+                      <details className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-3" open={pickedPackageWeapons > 0}>
+                        <summary className="cursor-pointer text-sm font-semibold">
+                          Weapons: {packageWeaponsNeeded} for the group, assigned automatically
+                          <span className="ml-1 text-xs font-normal text-muted">(optional: choose specific units)</span>
+                        </summary>
+                        <PiecePicker
+                          groups={packageWeaponGroups}
+                          selected={pickedUnitIds}
+                          onToggle={togglePickedUnit}
+                          limitFor={(model) => {
+                            // Weapons share one allowance across the package's weapon models.
+                            const pickedHere = pickedUnitIds.filter((id) => rentalWeapons.find((w) => w.id === id)?.model === model).length
+                            return pickedHere + Math.max(0, packageWeaponsNeeded - pickedPackageWeapons)
+                          }}
+                        />
+                      </details>
+                    )}
                   </Card>
                 )}
               </>
@@ -2315,33 +2620,58 @@ export function ReservationCalendarPage() {
                 {/* Custom mode: pick individual pieces */}
                 <Card className="p-4 md:p-6">
                   <div className="flex items-center gap-2 text-sm font-bold">
-                    <FiCrosshair /> <span>Pick Weapons to Rent</span>
+                    <FiCrosshair /> <span>Weapons to Rent</span>
                   </div>
                   <p className="mt-1 text-xs text-muted">
-                    Every weapon is a separate piece. Pick one for each player who needs a rental; each piece is charged once. Crossed-out pieces are taken for this slot.
+                    Set how many of each weapon your group needs. Units are assigned automatically from what's free for your slot.
                   </p>
-                  <PiecePicker
+                  <ModelQuantityPicker
                     groups={weaponGroups}
                     selected={customWeaponIds}
-                    onToggle={(id) => setCustomWeaponIds((prev) => (prev.includes(id) ? prev.filter((unit) => unit !== id) : [...prev, id]))}
+                    onChange={setCustomWeaponIds}
                     emptyText="No rental weapons in inventory."
                   />
                 </Card>
 
                 <Card className="p-4 md:p-6">
                   <div className="flex items-center gap-2 text-sm font-bold">
-                    <FiShield /> <span>Pick Gear to Rent</span>
+                    <FiShield /> <span>Gear to Rent</span>
                   </div>
-                  <p className="mt-1 text-xs text-muted">Masks, vests, and other gear — each piece is charged once.</p>
-                  <PiecePicker
-                    groups={equipmentGroups}
+                  <p className="mt-1 text-xs text-muted">Masks, vests, and other gear. Units are assigned automatically.</p>
+                  <ModelQuantityPicker
+                    groups={gearGroups}
                     selected={customEquipmentIds}
-                    onToggle={(id) => setCustomEquipmentIds((prev) => (prev.includes(id) ? prev.filter((unit) => unit !== id) : [...prev, id]))}
+                    onChange={setCustomEquipmentIds}
                     emptyText="No rental gear in inventory."
                   />
                 </Card>
               </>
             )}
+
+            {/* Extra ammo: reloads bought with the booking, on top of what the package gives */}
+            <Card className="p-4 md:p-6">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <div className="flex items-center gap-2 text-sm font-bold">
+                    <FiPlus /> <span>Additional Ammo</span>
+                  </div>
+                  <p className="mt-1 text-xs text-muted">
+                    {selectionMode === 'package' && selectedPackage?.bbReloadGrams
+                      ? `Your package includes ${selectedPackage.bbReloadGrams}g of BBs per refill. Add extra reloads for the group if you expect a long game.`
+                      : 'Add BB reloads for the group. They are handed out by the marshals at the field.'}
+                    {' '}₱{ammoReloadPrice.toLocaleString()} per reload.
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Button variant="ghost" size="sm" onClick={() => setExtraAmmoReloads((n) => Math.max(0, n - 1))} disabled={extraAmmoReloads === 0} aria-label="Fewer ammo reloads"><FiMinus /></Button>
+                  <span className="w-8 text-center text-lg font-bold" aria-live="polite">{extraAmmoReloads}</span>
+                  <Button variant="ghost" size="sm" onClick={() => setExtraAmmoReloads((n) => Math.min(MAX_EXTRA_AMMO_RELOADS, n + 1))} disabled={extraAmmoReloads >= MAX_EXTRA_AMMO_RELOADS} aria-label="More ammo reloads"><FiPlus /></Button>
+                </div>
+              </div>
+              {extraAmmoReloads > 0 ? (
+                <div className="mt-3 text-xs font-semibold text-accent">+ {formatCurrency(extraAmmoTotal)} for {extraAmmoReloads} extra reload{extraAmmoReloads === 1 ? '' : 's'}</div>
+              ) : null}
+            </Card>
 
             {/* Bring Your Own */}
             <Card className="p-4 md:p-6">
@@ -2354,7 +2684,7 @@ export function ReservationCalendarPage() {
                 <div>
                   <div className="text-sm font-bold">Players bringing their own weapon</div>
                   <div className="mt-1 text-xs text-muted">
-                    You'll choose which teammates in step 4. Only weapons registered and approved on a player's profile are deducted.
+                    Mark which teammates bring one in step 2 (Your team). Only weapons registered and approved on a player's profile are deducted.
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -2519,80 +2849,10 @@ export function ReservationCalendarPage() {
                   )}
                 </div>
 
-                {/* The game mode gets its own block, with every mode written out in full: in this narrow
-                    sidebar a dropdown cut off the longer names. */}
-                <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                  <div className="text-sm font-semibold text-text" id="game-mode-label">Preferred game mode</div>
-                  <div className="mt-2 flex flex-wrap gap-2" role="radiogroup" aria-labelledby="game-mode-label">
-                    {GAME_MODES.map((mode) => {
-                      const active = gameModePreference === mode
-                      return (
-                        <button
-                          key={mode}
-                          type="button"
-                          role="radio"
-                          aria-checked={active}
-                          onClick={() => setGameModePreference(mode)}
-                          className={[
-                            'rounded-xl border px-3 py-2 text-left text-xs font-semibold transition focus:outline-none focus:ring-2 focus:ring-accent/40',
-                            active ? 'border-accent/50 bg-accent/15 text-accent' : 'border-white/10 bg-black/10 text-text hover:border-accent/30',
-                          ].join(' ')}
-                        >
-                          {mode}
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
-                <div className="grid gap-3">
-                  <Input
-                    label="Field layout request (Optional)"
-                    hint="Obstacles, objectives, or spawn setup for the marshals to prepare."
-                    value={layoutRequest}
-                    maxLength={500}
-                    onChange={(e) => setLayoutRequest(e.target.value)}
-                  />
-                  <div className="sm:col-span-2">
-                    <div className="mb-2 text-sm font-semibold text-text">Layout blueprint (Optional)</div>
-                    <div className="flex flex-wrap items-center gap-3">
-                      <label className="cursor-pointer rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm hover:bg-white/10">
-                        {uploadingBlueprint ? 'Uploading…' : layoutBlueprintUrl ? 'Replace image' : 'Upload a sketch or diagram'}
-                        <input
-                          type="file"
-                          accept="image/*"
-                          className="hidden"
-                          disabled={uploadingBlueprint}
-                          onChange={(e) => {
-                            const file = e.target.files?.[0]
-                            e.target.value = ''
-                            if (file) void uploadBlueprint(file)
-                          }}
-                        />
-                      </label>
-                      {layoutBlueprintUrl ? (
-                        <>
-                          <a href={layoutBlueprintUrl} target="_blank" rel="noreferrer">
-                            <img src={layoutBlueprintUrl} alt="Layout blueprint" className="h-14 w-20 rounded-lg border border-white/10 object-cover" />
-                          </a>
-                          <button type="button" className="text-xs text-muted hover:text-text" onClick={() => setLayoutBlueprintUrl('')}>Remove</button>
-                        </>
-                      ) : null}
-                    </div>
-                    <div className="mt-2 text-xs text-muted">Marshals use it to set up the field. Image files up to 5 MB.</div>
-                  </div>
-                </div>
-                <div>
-                  <Input
-                    label="Operation Notes (Optional)"
-                    hint="Used by marshals for briefing and gear readiness."
-                    value={notes}
-                    onChange={(e) => setNotes(e.target.value)}
-                  />
-                </div>
               </div>
 
               <div className="mt-4 flex flex-col gap-2 sm:flex-row">
-                <Button variant="ghost" onClick={() => setStep(1)}>Back</Button>
+                <Button variant="ghost" onClick={() => setStep(2)}>Back</Button>
                 <Button
                   variant="primary"
                   disabled={
@@ -2607,7 +2867,7 @@ export function ReservationCalendarPage() {
                       toast.error(`${shortage?.name || 'Gear'}: needs ${shortage?.required ?? players}, only ${shortage?.available ?? 0} free this slot.`)
                       return
                     }
-                    setStep(3)
+                    setStep(4)
                   }}
                 >
                   Continue <FiChevronRight />
@@ -2618,8 +2878,135 @@ export function ReservationCalendarPage() {
         </div>
       )}
 
-      {/* Step 3 */}
-      {step === 3 && (
+      {/* Step 4 - Game setup */}
+      {step === 4 && (
+        <div className="grid gap-4 lg:grid-cols-3">
+          <div className="lg:col-span-2 space-y-4">
+            <Card className="p-4 md:p-6">
+              <div className="flex items-center gap-2 text-sm font-bold" id="game-mode-label">
+                <FiFlag /> <span>Preferred Game Mode</span>
+              </div>
+              <p className="mt-1 text-xs text-muted">The marshals plan the game around this. Not sure? Leave it to the marshal.</p>
+              <div className="mt-4 grid gap-2 sm:grid-cols-2" role="radiogroup" aria-labelledby="game-mode-label">
+                {GAME_MODES.map((mode) => {
+                  const active = gameModePreference === mode
+                  return (
+                    <button
+                      key={mode}
+                      type="button"
+                      role="radio"
+                      aria-checked={active}
+                      onClick={() => setGameModePreference(mode)}
+                      className={[
+                        'flex items-center justify-between gap-2 rounded-2xl border p-3 text-left text-sm font-semibold transition focus:outline-none focus:ring-2 focus:ring-accent/40',
+                        active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
+                      ].join(' ')}
+                    >
+                      <span>{mode}</span>
+                      {active ? <FiCheck className="shrink-0 text-gold" /> : null}
+                    </button>
+                  )
+                })}
+              </div>
+            </Card>
+
+            <Card className="p-4 md:p-6">
+              <div className="flex items-center gap-2 text-sm font-bold">
+                <FiMap /> <span>Field Layout (Optional)</span>
+              </div>
+              <p className="mt-1 text-xs text-muted">Design the obstacle setup on a mock of the field, or upload your own sketch. Marshals use it to set up before you arrive.</p>
+
+              <div className="mt-4 flex flex-col gap-3 rounded-2xl border border-white/10 bg-black/20 p-4 sm:flex-row sm:items-center">
+                {layoutBlueprintUrl ? (
+                  <a href={layoutBlueprintUrl} target="_blank" rel="noreferrer" className="shrink-0">
+                    <img src={layoutBlueprintUrl} alt="Field layout" className="h-24 w-36 rounded-lg border border-white/10 object-cover" />
+                  </a>
+                ) : (
+                  <div className="grid h-24 w-36 shrink-0 place-items-center rounded-lg border border-dashed border-white/15 text-xs text-muted">No layout yet</div>
+                )}
+                <div className="flex flex-1 flex-wrap items-center gap-2">
+                  <Button variant="primary" size="sm" disabled={uploadingBlueprint} onClick={() => setLayoutDesignerOpen(true)}>
+                    <FiMap /> {fieldLayoutItems.length > 0 ? 'Edit field layout' : 'Design field layout'}
+                  </Button>
+                  <label className="cursor-pointer rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm hover:bg-white/10">
+                    {uploadingBlueprint ? 'Uploading…' : 'Upload a sketch'}
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      disabled={uploadingBlueprint}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0]
+                        e.target.value = ''
+                        if (file) {
+                          void uploadBlueprint(file).then((ok) => { if (ok) setFieldLayoutItems([]) })
+                        }
+                      }}
+                    />
+                  </label>
+                  {layoutBlueprintUrl ? (
+                    <button type="button" className="text-xs text-muted hover:text-text" onClick={() => { setLayoutBlueprintUrl(''); setFieldLayoutItems([]) }}>Remove</button>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="mt-4">
+                <Input
+                  label="Layout notes (Optional)"
+                  hint="Anything the drawing doesn't show: objectives, spawn rules, special setup."
+                  value={layoutRequest}
+                  maxLength={500}
+                  onChange={(e) => setLayoutRequest(e.target.value)}
+                />
+              </div>
+            </Card>
+          </div>
+
+          <div className="space-y-4">
+            <Card className="p-4 md:p-6">
+              <div className="flex items-center gap-2 text-sm font-bold">
+                <FiTool /> <span>Briefing</span>
+              </div>
+              <p className="mt-1 text-xs text-muted">Shared with the marshals for the briefing and gear readiness.</p>
+              <div className="mt-4">
+                <Input
+                  label="Operation notes (Optional)"
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                />
+              </div>
+              <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4 text-xs text-muted">
+                <div><span className="font-semibold text-text">Mode:</span> {gameModePreference}</div>
+                <div className="mt-1"><span className="font-semibold text-text">Layout:</span> {layoutBlueprintUrl ? (fieldLayoutItems.length > 0 ? `Designed (${fieldLayoutItems.length} pieces)` : 'Sketch uploaded') : 'Marshal decides'}</div>
+              </div>
+              <div className="mt-4 flex flex-col gap-2">
+                <Button variant="ghost" onClick={() => setStep(3)}>Back</Button>
+                <Button variant="primary" disabled={uploadingBlueprint} onClick={() => setStep(5)}>
+                  Continue <FiChevronRight />
+                </Button>
+              </div>
+            </Card>
+          </div>
+
+          <FieldLayoutDesigner
+            open={layoutDesignerOpen}
+            fieldName={(availableFields.filter((f) => selectedFieldIds.includes(f.id)).map((f) => f.name).join(' + ') || 'Field')}
+            initialItems={fieldLayoutItems}
+            saving={uploadingBlueprint}
+            onClose={() => setLayoutDesignerOpen(false)}
+            onSave={async (items, image) => {
+              const ok = await uploadBlueprint(image)
+              if (!ok) return
+              setFieldLayoutItems(items)
+              setLayoutDesignerOpen(false)
+              toast.success('Field layout saved.')
+            }}
+          />
+        </div>
+      )}
+
+      {/* Step 5 - Review */}
+      {step === 5 && (
         <div className="grid gap-4 lg:grid-cols-3">
           <div className="lg:col-span-2 space-y-4">
             <Card className="p-4 md:p-6">
@@ -2713,6 +3100,21 @@ export function ReservationCalendarPage() {
                 <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Gameplay request</div>
                 <div className="mt-2 text-sm text-text">{gameModePreference}</div>
                 {layoutRequest.trim() && <div className="mt-1 text-sm text-muted">Layout: {layoutRequest.trim()}</div>}
+                {layoutBlueprintUrl ? (
+                  <a href={layoutBlueprintUrl} target="_blank" rel="noreferrer" className="mt-3 inline-block">
+                    <img src={layoutBlueprintUrl} alt="Field layout" className="h-24 w-36 rounded-lg border border-white/10 object-cover" />
+                  </a>
+                ) : null}
+              </div>
+
+              <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
+                <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Team{teamName.trim() ? ` · ${teamName.trim()}` : ''}</div>
+                <div className="mt-2 text-sm text-text">
+                  {[user?.name || 'You', ...selectedTeammates.map((member) => member.name)].join(', ')}
+                </div>
+                {extraAmmoReloads > 0 ? (
+                  <div className="mt-1 text-xs text-muted">Extra ammo: {extraAmmoReloads} reload{extraAmmoReloads === 1 ? '' : 's'}</div>
+                ) : null}
               </div>
 
               <div className="mt-4 rounded-2xl border border-accent/30 bg-accent/10 p-4">
@@ -2832,239 +3234,7 @@ export function ReservationCalendarPage() {
               </div>
 
               <div className="mt-4 flex flex-col gap-2">
-                <Button variant="ghost" onClick={() => setStep(2)}>Back</Button>
-                <Button variant="primary" disabled={!canSubmitReservation} onClick={() => setStep(4)}>
-                  Confirm Reservation <FiChevronRight />
-                </Button>
-              </div>
-            </Card>
-          </div>
-        </div>
-      )}
-
-      {/* Step 4 - Teammates (payment choices are made on the payment page) */}
-      {step === 4 && (
-        <div className="grid gap-4 lg:grid-cols-3">
-          <div className="lg:col-span-2 space-y-4">
-            <Card className="p-4 md:p-6">
-              <div className="flex items-center gap-2 text-sm font-bold">
-                <FiUsers /> <span>Select Your Teammates</span>
-              </div>
-              <p className="mt-1 text-xs text-muted">
-                Add the {maxTeammates} registered player{maxTeammates === 1 ? '' : 's'} joining this reservation. Find each one by name or by the email on their account. You are already counted. Every player needs an account with an approved waiver.
-              </p>
-
-              <div className="mt-4 space-y-4">
-                <Input
-                  label="Team name (optional)"
-                  value={teamName}
-                  onChange={(e) => setTeamName(e.target.value.slice(0, 60))}
-                  placeholder="e.g., Bravo Squad"
-                  maxLength={60}
-                />
-
-                <form
-                  className="flex flex-col gap-2 sm:flex-row sm:items-end"
-                  onSubmit={(event) => {
-                    event.preventDefault()
-                    void findTeammate()
-                  }}
-                >
-                  <div className="min-w-0 flex-1">
-                    <Input
-                      label="Teammate name or email"
-                      value={teamEmail}
-                      onChange={(e) => {
-                        setTeamEmail(e.target.value)
-                        if (teamLookup.status !== 'idle') setTeamLookup({ status: 'idle' })
-                      }}
-                      placeholder="e.g., Juan Dela Cruz or teammate@gmail.com"
-                      disabled={!hasCurrentUserWaiver || selectedTeammates.length >= maxTeammates}
-                    />
-                  </div>
-                  <Button
-                    type="submit"
-                    variant="primary"
-                    disabled={!teamEmail.trim() || teamLookup.status === 'searching' || !hasCurrentUserWaiver || selectedTeammates.length >= maxTeammates}
-                  >
-                    <FiSearch /> {teamLookup.status === 'searching' ? 'Finding…' : 'Find'}
-                  </Button>
-                </form>
-
-                {teamChildren.length > 0 ? (
-                  <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
-                    <div className="text-sm font-semibold">A minor will join this game</div>
-                    <div className="mt-1 text-xs text-muted">
-                      Children on your account or your teammates' accounts. Each one takes a player spot and pays the entrance fee.
-                    </div>
-                    <select
-                      value=""
-                      onChange={(event) => { if (event.target.value) addMinor(event.target.value) }}
-                      disabled={!hasCurrentUserWaiver}
-                      className="mt-2 w-full rounded-xl border border-white/10 bg-background px-3 py-2 text-sm text-text [&>option]:bg-background"
-                      aria-label="Add a minor to the team"
-                    >
-                      <option value="">Choose a child to add…</option>
-                      {teamChildren.filter((child) => !selectedTeammateIds.includes(child.id)).map((child) => (
-                        <option key={child.id} value={child.id} disabled={!child.canPlay}>
-                          {child.name} (age {child.age ?? '—'}, {child.guardianId === user?.id ? 'your child' : `${child.guardianName || 'a teammate'}'s child`}){child.canPlay ? '' : ' · waiver not approved yet'}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                ) : null}
-
-                {teamLookup.status === 'error' && (
-                  <div className="rounded-2xl border border-danger/30 bg-danger/10 p-3 text-sm text-danger">{teamLookup.error}</div>
-                )}
-
-                {teamLookup.status === 'found' && teamLookup.members?.map((member) => {
-                  const alreadyAdded = selectedTeammateIds.includes(member.id)
-                  return (
-                    <div key={member.id} className="flex flex-col gap-3 rounded-2xl border border-accent/30 bg-accent/5 p-3 sm:flex-row sm:items-center sm:justify-between">
-                      <div className="min-w-0">
-                        <div className="truncate text-sm font-bold">{member.name}</div>
-                        <div className="truncate text-xs text-muted">{member.email}</div>
-                        {!member.waiverSubmitted && (
-                          <div className="mt-1 text-xs font-semibold text-warning">Waiver not approved yet — they can't be added until it is.</div>
-                        )}
-                      </div>
-                      <Button
-                        type="button"
-                        variant="primary"
-                        disabled={alreadyAdded || !member.waiverSubmitted}
-                        onClick={() => addTeammate(member)}
-                      >
-                        {alreadyAdded ? <><FiCheck /> Added</> : <><FiPlus /> Add</>}
-                      </Button>
-                    </div>
-                  )
-                })}
-
-                {loadingWaiverEligibility ? (
-                  <div className="rounded-2xl border border-dashed border-white/10 bg-black/20 p-4 text-sm text-muted">
-                    Checking waiver approval...
-                  </div>
-                ) : !hasCurrentUserWaiver ? (
-                  <div className="rounded-2xl border border-warning/20 bg-warning/10 p-4 text-sm text-warning">
-                    Your waiver must be approved before you can confirm a reservation or add teammates.
-                  </div>
-                ) : null}
-
-                <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                  <div className="flex items-center justify-between gap-3 text-xs uppercase tracking-[0.18em] text-muted">
-                    <span>Your team</span>
-                    <span>{selectedTeammates.length}/{maxTeammates} teammates</span>
-                  </div>
-
-                  <div className="mt-3 space-y-2">
-                    <div className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/10 p-3">
-                      <div className="min-w-0">
-                        <div className="truncate text-sm font-bold">{user?.name || 'You'}</div>
-                        <div className="truncate text-xs text-muted">{user?.email}</div>
-                      </div>
-                      <span className="text-[10px] uppercase tracking-[0.18em] text-gold">Captain</span>
-                    </div>
-
-                    {selectedTeammates.map((member) => {
-                      const bringsOwn = teammateOwnWeaponIds.includes(member.id)
-                      return (
-                        <div key={member.id} className="flex items-start justify-between gap-3 rounded-2xl border border-accent/30 bg-accent/10 p-3">
-                          <div className="min-w-0">
-                            <div className="truncate text-sm font-bold">{member.name}</div>
-                            <div className="truncate text-xs text-muted">{member.email}</div>
-                            {ownWeaponTarget > 0 ? (
-                              <button
-                                type="button"
-                                role="checkbox"
-                                aria-checked={bringsOwn}
-                                onClick={() => toggleTeammateOwnWeapon(member)}
-                                className={[
-                                  'mt-2 inline-flex items-center gap-1.5 rounded-xl border px-2 py-1 text-[11px] font-semibold',
-                                  bringsOwn
-                                    ? member.hasApprovedWeapon
-                                      ? 'border-success/30 bg-success/10 text-success'
-                                      : 'border-warning/30 bg-warning/10 text-warning'
-                                    : 'border-white/10 bg-white/5 text-muted',
-                                ].join(' ')}
-                              >
-                                <FiCrosshair className="h-3 w-3" />
-                                {bringsOwn
-                                  ? member.hasApprovedWeapon ? 'Brings own weapon' : 'No registered weapon'
-                                  : 'Brings own weapon?'}
-                              </button>
-                            ) : null}
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSelectedTeammates((current) => current.filter((m) => m.id !== member.id))
-                              setTeammateOwnWeaponIds((current) => current.filter((id) => id !== member.id))
-                            }}
-                            className="inline-flex shrink-0 items-center gap-1 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-muted transition hover:bg-white/10"
-                            aria-label={`Remove ${member.name}`}
-                          >
-                            <FiX /> Remove
-                          </button>
-                        </div>
-                      )
-                    })}
-
-                    {selectedTeammates.length === 0 && maxTeammates > 0 && (
-                      <div className="rounded-2xl border border-dashed border-white/10 bg-black/20 p-3 text-xs text-muted">
-                        No teammates added yet. Find a teammate by email above.
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {maxTeammates > 0 && missingTeammates > 0 && (
-                  <div className="rounded-2xl border border-warning/25 bg-warning/10 p-3 text-xs text-warning">
-                    Add {missingTeammates} more teammate{missingTeammates === 1 ? '' : 's'} to continue.
-                  </div>
-                )}
-
-                {ownWeaponTarget > 0 && (
-                  <div className={[
-                    'rounded-2xl border p-3 text-xs',
-                    ownWeaponShortfall > 0 ? 'border-warning/25 bg-warning/10 text-warning' : 'border-success/25 bg-success/10 text-success',
-                  ].join(' ')}>
-                    <div className="font-bold">
-                      Own weapons: {verifiedOwnWeaponCount} of {ownWeaponTarget} verified
-                    </div>
-                    <div className="mt-1 text-muted">
-                      {captainBringsOwnWeapon ? 'You are bringing one of your approved weapons. ' : ''}
-                      {ownWeaponShortfall > 0
-                        ? `${ownWeaponShortfall} more player${ownWeaponShortfall === 1 ? '' : 's'} will rent a weapon instead — you can still continue, and the price below already includes those rentals.`
-                        : 'Every own weapon is verified, so those rental charges are removed from the total.'}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </Card>
-          </div>
-
-          <div className="space-y-4">
-            <Card className="p-4 md:p-6">
-              <div className="flex items-center gap-2 text-sm font-bold">
-                <FiTag /> <span>Summary</span>
-              </div>
-              <p className="mt-1 text-xs text-muted">You'll choose who pays and how on the payment page.</p>
-
-              <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-xs text-muted">Reservation total</span>
-                  <span className="text-xl font-bold text-gold">{formatCurrency(dynamicPricing.total)}</span>
-                </div>
-                <div className="mt-3 text-xs text-muted">
-                  {selectedTeammates.length > 0
-                    ? `Team: you, ${selectedTeammates.map((member) => member.name).join(', ')}`
-                    : maxTeammates > 0 ? 'No teammates added yet.' : 'Just you.'}
-                </div>
-              </div>
-
-              <div className="mt-4 flex flex-col gap-2">
-                <Button variant="ghost" onClick={() => setStep(3)}>Back</Button>
+                <Button variant="ghost" onClick={() => setStep(4)}>Back</Button>
                 <Button
                   variant="primary"
                   disabled={isConfirming || !canSubmitReservation || !teamSelectionComplete}
@@ -3072,6 +3242,11 @@ export function ReservationCalendarPage() {
                 >
                   {isConfirming ? 'Processing...' : 'Proceed to Payment'} <FiChevronRight />
                 </Button>
+                {!teamSelectionComplete ? (
+                  <button type="button" className="text-xs text-warning underline" onClick={() => setStep(2)}>
+                    Add {missingTeammates} more teammate{missingTeammates === 1 ? '' : 's'} first
+                  </button>
+                ) : null}
               </div>
             </Card>
           </div>

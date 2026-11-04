@@ -6,7 +6,7 @@ import { requireAuth, requireRole } from '../middleware/auth.js'
 import { ALLOWED_COLLECTIONS } from './collections.js'
 import { getActorName } from '../utils/actors.js'
 import { NICKNAME_MAX, cleanMiddleInitial, cleanNamePart, composeFullName } from '../utils/names.js'
-import { calculateBookingPrice } from '../utils/bookingPricing.js'
+import { calculateBookingPrice, getAmmoReloadPrice, normalizeExtraAmmoReloads } from '../utils/bookingPricing.js'
 import { getBookingInventoryRequirements, getHeldQuantities, holdBookingInventory, stockQuantity } from '../utils/inventoryHolds.js'
 import { canonicalEmail, normalizeEmail, sameEmailFilter } from '../utils/emails.js'
 import { submitGcashPayment } from '../utils/gcashPayments.js'
@@ -282,6 +282,7 @@ router.get('/reservation-availability', requireAuth, requireRole('user'), async 
     return res.json({
       ok: true,
       capacities: getLocationCapacities(),
+      ammoReloadPrice: getAmmoReloadPrice(),
       data: [
         ...reservations.map((reservation) => ({
           dateISO: reservation.reservationDate || reservation.dateISO || '',
@@ -1587,6 +1588,7 @@ router.post('/:collection', requireAuth, async (req, res) => {
       }
       payload.gameModePreference = gameModePreference || undefined
       payload.layoutRequest = String(payload.layoutRequest || '').trim().slice(0, 500) || undefined
+      payload.extraAmmoReloads = normalizeExtraAmmoReloads(payload.extraAmmoReloads) || undefined
       payload.teamName = String(payload.teamName || '').trim().slice(0, 60) || undefined
       payload.notes = String(payload.notes || '').trim().slice(0, 1000)
 
