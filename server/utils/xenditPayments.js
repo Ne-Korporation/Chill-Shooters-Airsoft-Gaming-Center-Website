@@ -34,7 +34,9 @@ export async function recordXenditPayment({ db, startSession, checkout, paid }) 
         reservationId: checkout.reservationId,
         userId: String(checkout.userId),
         amount: paid.amount,
-        paymentMethod: `Xendit – ${PAYMENT_CHANNEL_LABELS[paid.method.toUpperCase()] || paid.method}`,
+        paymentMethod: checkout.demo
+          ? `${PAYMENT_CHANNEL_LABELS[paid.method.toUpperCase()] || paid.method} (demo)`
+          : `Xendit – ${PAYMENT_CHANNEL_LABELS[paid.method.toUpperCase()] || paid.method}`,
         paymentStatus: needsReview ? 'review' : 'paid',
         status: needsReview ? 'review' : 'paid',
         kind: 'online',
@@ -46,7 +48,8 @@ export async function recordXenditPayment({ db, startSession, checkout, paid }) 
             ? 'Paid through Xendit after the reservation was cancelled. Refund or rebook the player.'
             : `Xendit charged ₱${paid.amount} but ₱${checkout.amount} was due.`,
         } : {}),
-        verifiedBy: 'xendit',
+        verifiedBy: checkout.demo ? 'demo' : 'xendit',
+        ...(checkout.demo ? { demo: true } : {}),
         verifiedAtISO: nowISO,
         createdAtISO: nowISO,
       }

@@ -32,6 +32,7 @@ async function findReservation(db, rawId) {
 
 // Checks the invoice with Xendit and, once paid, records the payment and updates the booking.
 async function settleCheckout(db, checkout) {
+  if (checkout.status !== 'paid' && checkout.demo) return { status: 'unpaid' }
   if (checkout.status !== 'paid') {
     const invoice = await retrieveInvoice(checkout.invoiceId)
     const paid = paidPaymentOf(invoice)
@@ -144,13 +145,13 @@ router.post('/xendit/checkout', requireAuth, requireRole('user'), async (req, re
 // POST /api/xendit/verify { ref } — called when the player comes back from Xendit. Asks
 // Xendit directly whether the invoice was paid, so it works even without the webhook.
 router.post('/xendit/verify', requireAuth, async (req, res) => {
-  if (!xenditEnabled) return res.status(503).json({ ok: false, error: 'Online payment is not set up.' })
   try {
     const db = await getDb()
     const checkout = await db.collection(XENDIT_CHECKOUTS).findOne({ _id: String(req.body?.ref || '') })
     if (!checkout || (req.user.role === 'user' && String(checkout.userId) !== String(req.user.id))) {
       return res.status(404).json({ ok: false, error: 'Payment not found.' })
     }
+    if (!checkout.demo && !xenditEnabled) return res.status(503).json({ ok: false, error: 'Online payment is not set up.' })
     return res.json({ ok: true, data: { ...(await settleCheckout(db, checkout)), amount: checkout.amount } })
   } catch (err) {
     return sendError(res, err)
@@ -172,6 +173,115 @@ router.post('/xendit/webhook', async (req, res) => {
     return res.json({ ok: true })
   } catch (err) {
     // A non-2xx answer makes Xendit retry later, which is what we want for a temporary failure.
+    return sendError(res, err)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Demo payments (capstone): GCash and QR Ph are simulated on our own page instead of Xendit.
+// The player "sends" the money on a mock screen; the server records the payment exactly like a
+// real one (same amount rules, same confirmation, receipts and emails). No money moves.
+// Turn off with DEMO_PAYMENTS=false.
+// ---------------------------------------------------------------------------
+const demoPaymentsEnabled = String(process.env.DEMO_PAYMENTS || 'true').toLowerCase() !== 'false'
+const DEMO_CHANNELS = { gcash: 'GCASH', qrph: 'QRPH' }
+
+router.get('/demo-pay/config', (_req, res) => {
+  res.json({ ok: true, data: { enabled: demoPaymentsEnabled } })
+})
+
+// POST /api/demo-pay/checkout { reservationId, channel } — what this player owes right now, as a
+// demo checkout. Returns the ref the demo payment page opens.
+router.post('/demo-pay/checkout', requireAuth, requireRole('user'), async (req, res) => {
+  if (!demoPaymentsEnabled) return res.status(503).json({ ok: false, error: 'Demo payments are turned off.' })
+  try {
+    const db = await getDb()
+    const reservation = await findReservation(db, req.body?.reservationId)
+    const userId = String(req.user.id)
+    if (!reservation || !getSplitPayerIds(reservation).includes(userId)) {
+      return res.status(404).json({ ok: false, error: 'Reservation not found.' })
+    }
+    if (reservation.pricingVerified !== true) return res.status(409).json({ ok: false, error: 'The reservation price has not been verified yet.' })
+    if (String(reservation.reservationStatus || 'pending').toLowerCase() !== 'pending') {
+      return res.status(409).json({ ok: false, error: 'This reservation is no longer waiting for payment.' })
+    }
+    const reservationId = String(reservation.id)
+    const payments = await db.collection('payments').find({ reservationId: { $in: [reservationId, String(reservation._id)] } }).toArray()
+    const amount = getGcashAmountDue(reservation, payments, userId)
+    if (amount <= 0) return res.status(409).json({ ok: false, error: 'Your payment for this reservation is already in.' })
+
+    const channel = DEMO_CHANNELS[String(req.body?.channel || '').toLowerCase()] || 'GCASH'
+    const ref = `DEMO-${randomUUID()}`
+    await db.collection(XENDIT_CHECKOUTS).insertOne({
+      _id: ref,
+      demo: true,
+      reservationId,
+      userId,
+      amount,
+      invoiceId: `demo-inv-${randomUUID()}`,
+      channel,
+      status: 'open',
+      createdAtISO: new Date().toISOString(),
+    })
+    return res.json({ ok: true, data: { ref, amount, channel } })
+  } catch (err) {
+    return sendError(res, err)
+  }
+})
+
+async function findDemoCheckout(db, req) {
+  const checkout = await db.collection(XENDIT_CHECKOUTS).findOne({ _id: String(req.params.ref || ''), demo: true })
+  if (!checkout || String(checkout.userId) !== String(req.user.id)) return null
+  return checkout
+}
+
+// GET /api/demo-pay/:ref — what the demo payment page shows.
+router.get('/demo-pay/:ref', requireAuth, requireRole('user'), async (req, res) => {
+  try {
+    const db = await getDb()
+    const checkout = await findDemoCheckout(db, req)
+    if (!checkout) return res.status(404).json({ ok: false, error: 'Payment not found.' })
+    const reservation = await db.collection('reservations').findOne({ id: checkout.reservationId })
+    return res.json({
+      ok: true,
+      data: {
+        ref: checkout._id,
+        amount: checkout.amount,
+        channel: checkout.channel,
+        status: checkout.status,
+        reservationId: checkout.reservationId,
+        reservationLabel: [reservation?.reservationDate, reservation?.reservationTime, reservation?.locationName].filter(Boolean).join(' • '),
+      },
+    })
+  } catch (err) {
+    return sendError(res, err)
+  }
+})
+
+// POST /api/demo-pay/:ref/pay { channel? } — the player "sent" the money: record it as paid.
+router.post('/demo-pay/:ref/pay', requireAuth, requireRole('user'), async (req, res) => {
+  if (!demoPaymentsEnabled) return res.status(503).json({ ok: false, error: 'Demo payments are turned off.' })
+  try {
+    const db = await getDb()
+    let checkout = await findDemoCheckout(db, req)
+    if (!checkout) return res.status(404).json({ ok: false, error: 'Payment not found.' })
+    const channel = DEMO_CHANNELS[String(req.body?.channel || '').toLowerCase()] || checkout.channel || 'GCASH'
+    if (checkout.status !== 'paid') {
+      if (channel !== checkout.channel) {
+        await db.collection(XENDIT_CHECKOUTS).updateOne({ _id: checkout._id }, { $set: { channel } })
+        checkout = { ...checkout, channel }
+      }
+      const paid = { id: `DEMO-TXN-${Date.now().toString(36).toUpperCase()}`, amount: Number(checkout.amount), method: channel }
+      const { payment, created } = await recordXenditPayment({ db, startSession: startDbSession, checkout, paid })
+      if (created) {
+        const reservation = await db.collection('reservations').findOne({ id: checkout.reservationId })
+        await syncReservationPaymentState(db, reservation)
+        void emailPaymentEvent(db, payment, payment.paymentStatus)
+      }
+      checkout = { ...checkout, status: 'paid' }
+    }
+    return res.json({ ok: true, data: { ...(await settleCheckout(db, checkout)), amount: checkout.amount } })
+  } catch (err) {
     return sendError(res, err)
   }
 })
