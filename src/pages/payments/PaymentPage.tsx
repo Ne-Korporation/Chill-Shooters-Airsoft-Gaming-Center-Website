@@ -11,9 +11,10 @@ import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { clearPackagePrefill } from '../../utils/packagePrefill'
 import { StripeCardPayment } from '../../components/payments/StripeCardPayment'
+import { openPaymentTab, sendToPaymentTab } from '../../utils/xendit'
 import { cancelBookingDraftLeft, clearBookingDraft, hasBookingDraft, markBookingDraftLeft, readBookingDraft, saveBookingDraft, scheduleBookingDraftLeft } from '../../utils/bookingDraft'
 
-// Players pay online with GCash or QR Ph (Xendit's payment page, limited to that channel) or by
+// Players pay online with GCash or QR Ph (a demo payment page for the capstone, /app/payment/demo) or by
 // card (Stripe). Both providers verify the payment themselves, so no staff check is needed and the
 // booking is confirmed automatically. With the downpayment plan the rest is paid at the field
 // (cash, GCash, or bank transfer).
@@ -70,15 +71,10 @@ function PaymentPageContent() {
   const { user } = useAuth()
 
   const [method, setMethod] = useState<PaymentMethod>('gcash')
-  // GCash and QR Ph both go through Xendit.
+  // GCash and QR Ph both go through the demo payment page (they used to go through Xendit).
   const isXendit = method !== 'stripe'
-  // Whether the server has Xendit set up; null while checking.
-  const [xenditEnabled, setXenditEnabled] = useState<boolean | null>(null)
-  useEffect(() => {
-    apiGet<{ ok: boolean; data: { enabled: boolean } }>('/api/xendit/config')
-      .then((res) => setXenditEnabled(Boolean(res?.data?.enabled)))
-      .catch(() => setXenditEnabled(false))
-  }, [])
+  // GCash and QR Ph are the demo payment page, which is always available: no provider to check.
+  const xenditEnabled: boolean | null = true
   // Stripe card payments (test mode), shown next to the other methods when configured.
   const [stripeConfig, setStripeConfig] = useState<{ enabled: boolean; publishableKey: string }>({ enabled: false, publishableKey: '' })
   const [stripeSession, setStripeSession] = useState<{ clientSecret: string; paymentIntentId: string; reservationId: string; amount: number } | null>(null)
@@ -247,6 +243,9 @@ function PaymentPageContent() {
 
   const submit = async () => {
     setSubmitting(true)
+    // GCash / QR Ph open in a new tab. It must be opened now, during the click: browsers block
+    // tabs opened after waiting on the server.
+    let payTab: Window | null = method !== 'stripe' ? openPaymentTab() : null
     try {
       if (!user?.id) throw new Error('Please login to continue')
 
@@ -263,7 +262,7 @@ function PaymentPageContent() {
       // The choices made on this page are what the reservation is created with.
       pendingReservation = { ...pendingReservation, paymentMode, paymentPlan, teamSize }
 
-      if (method === 'stripe' && paymentMode === 'split') throw new Error('Split payments are paid online through Xendit; card payment covers the whole amount.')
+      if (method === 'stripe' && paymentMode === 'split') throw new Error('Split payments are paid with GCash or QR Ph; card payment covers the whole amount.')
       if (isXendit && xenditEnabled !== true) throw new Error('Online payment is not available right now. Please try again later.')
 
       let reservationId = localStorage.getItem('pending_reservation_id') || ''
@@ -306,21 +305,23 @@ function PaymentPageContent() {
       localStorage.setItem('active_reservation_id', String(reservationId))
 
       if (isXendit) {
-        // Off to Xendit's payment page. The reservation now holds the slot, so the draft and the
+        // Off to the (demo) payment page. The reservation now holds the slot, so the draft and the
         // pending booking data are no longer needed; the payment is verified when the player returns.
-        const checkout = await apiPost<{ ok: boolean; data: { checkoutUrl: string } }>('/api/xendit/checkout', { reservationId: String(reservationId), channel: method })
+        const checkout = await apiPost<{ ok: boolean; data: { ref: string } }>('/api/demo-pay/checkout', { reservationId: String(reservationId), channel: method })
         successRef.current = true
         localStorage.removeItem('pending_reservation')
         localStorage.removeItem('pending_reservation_id')
         clearPackagePrefill()
         clearBookingDraft(user.id)
-        window.location.assign(checkout.data.checkoutUrl)
+        sendToPaymentTab(payTab, checkout.data.ref, (url) => navigate(url))
+        payTab = null
         return
       }
       // Card: the reservation now holds the slot; the card form below completes the payment.
       const intent = await apiPost<{ ok: boolean; clientSecret: string; paymentIntentId: string; amount: number }>('/api/create-payment-intent', { reservationId: String(reservationId) })
       setStripeSession({ clientSecret: intent.clientSecret, paymentIntentId: intent.paymentIntentId, reservationId: String(reservationId), amount: Number(intent.amount) })
     } catch (e: any) {
+      payTab?.close()
       toast.error(String(e?.message || e))
     } finally {
       setSubmitting(false)
@@ -430,12 +431,6 @@ function PaymentPageContent() {
             ))}
           </div>
 
-          {xenditEnabled === false && isXendit ? (
-            <div className="mt-4 flex items-start gap-2 rounded-2xl border border-danger/30 bg-danger/10 p-3 text-sm text-danger">
-              <FiAlertTriangle className="mt-0.5 shrink-0" />
-              Online payment is not available right now, so the reservation can't be paid yet. Please try again later or contact the staff.
-            </div>
-          ) : null}
 
           <div className="mt-6 rounded-2xl border border-white/10 bg-black/15 p-4">
             <div className="flex items-center gap-2 text-sm font-bold">
@@ -452,10 +447,10 @@ function PaymentPageContent() {
             ) : (
               <ul className="mt-2 space-y-1 text-xs text-muted list-disc pl-5">
                 <li>{method === 'qrph'
-                  ? "You'll be taken to a secure Xendit page with a QR Ph code. Scan it with any bank or e-wallet app."
-                  : "You'll be taken to a secure Xendit page to pay with your GCash account."}</li>
+                  ? "You'll get a QR Ph code to scan with any bank or e-wallet app, then confirm the payment."
+                  : "You'll get a GCash QR code and a GCash screen to send the payment."}</li>
                 <li>Your reservation is confirmed automatically as soon as the payment goes through. No proof to upload and no staff review.</li>
-                <li>Test mode: no real money is charged. Use Xendit's test payment options.</li>
+                <li>Demo mode: no real money is sent. Any mobile number and MPIN work on the GCash screen.</li>
               </ul>
             )}
           </div>
@@ -520,7 +515,7 @@ function PaymentPageContent() {
                 </div>
                 <div className="mt-2 flex items-center justify-between gap-3">
                   <div className="text-xs text-muted">Reference</div>
-                  <div className="text-xs font-bold">{isXendit ? 'Issued by Xendit' : 'Issued by Stripe'}</div>
+                  <div className="text-xs font-bold">{isXendit ? (method === 'qrph' ? 'Issued by QR Ph' : 'Issued by GCash') : 'Issued by Stripe'}</div>
                 </div>
                 <div className="mt-3 h-px bg-white/10" />
                 {(breakdown.itemized.length > 0 ? breakdown.itemized : [
@@ -548,7 +543,7 @@ function PaymentPageContent() {
 
           <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:items-center">
             <Button variant="primary" disabled={!canSubmit} onClick={submit}>
-              {submitting ? (isXendit ? 'Opening Xendit…' : 'Submitting…') : success ? 'Paid' : isXendit ? 'Continue to payment' : 'Continue to card payment'}
+              {submitting ? (isXendit ? 'Opening payment…' : 'Submitting…') : success ? 'Paid' : isXendit ? 'Continue to payment' : 'Continue to card payment'}
               <FiChevronRight />
             </Button>
           </div>

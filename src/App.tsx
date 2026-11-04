@@ -15,6 +15,7 @@ import { MyReservationsPage } from './pages/reservations/MyReservationsPage'
 import { WaiverPage } from './pages/waiver/WaiverPage'
 import { PaymentPage } from './pages/payments/PaymentPage'
 import { PaymentCompletePage } from './pages/payments/PaymentCompletePage'
+import { DemoPaymentPage } from './pages/payments/DemoPaymentPage'
 import { SplitPaymentPage } from './pages/payments/SplitPaymentPage'
 import { PlayerProfilePage } from './pages/players/PlayerProfilePage'
 import { MyWeaponsAndEquipmentPage } from './pages/players/MyWeaponsAndEquipmentPage'
@@ -135,6 +136,7 @@ export default function App() {
       <Route path="/otp" element={<OtpVerificationPage />} />
       <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route path="/guardian-approval/:token" element={<GuardianApprovalPage />} />
+      <Route path="/pay/demo" element={<RequireAuth><RequireRole roles={['user']}><DemoPaymentPage /></RequireRole></RequireAuth>} />
       <Route path="/guardian-confirm/:token" element={<GuardianConfirmPage />} />
 
       <Route

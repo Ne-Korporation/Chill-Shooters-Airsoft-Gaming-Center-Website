@@ -60,7 +60,7 @@ function formatDue(iso?: string) {
   return new Date(iso).toLocaleString('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short' })
 }
 
-// A teammate pays their share online through Xendit; it's verified automatically and the booking
+// A teammate pays their share online (GCash or QR Ph demo page); it's verified automatically and the booking
 // is confirmed once every share is in.
 function ShareForm({ item }: { item: SplitPaymentItem }) {
   const [submitting, setSubmitting] = useState(false)
@@ -96,12 +96,12 @@ function ShareForm({ item }: { item: SplitPaymentItem }) {
 
       <div className="space-y-2 rounded-2xl border border-white/10 bg-black/20 p-4">
         <div className="text-sm font-bold">Pay online</div>
-        <div className="text-xs text-muted">Pay with GCash, Maya, your bank, or a card on Xendit (test mode). Your share is verified automatically, and the booking is confirmed once every share is in.</div>
+        <div className="text-xs text-muted">Pay with GCash or QR Ph (demo: no real money is sent). Your share is verified automatically, and the booking is confirmed once every share is in.</div>
         {xendit === false ? (
           <div className="text-xs text-danger">Online payment is not available right now. Please try again later or contact the staff.</div>
         ) : null}
         <Button variant="primary" disabled={submitting || xendit !== true} onClick={payOnline}>
-          {submitting ? 'Opening Xendit…' : `Pay my share (${formatPHP(item.myShareDue)})`}
+          {submitting ? 'Opening payment…' : `Pay my share (${formatPHP(item.myShareDue)})`}
         </Button>
       </div>
     </div>

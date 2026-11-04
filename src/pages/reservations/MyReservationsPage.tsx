@@ -150,7 +150,7 @@ export function MyReservationsPage() {
     }
   }, [load])
 
-  // Unpaid reservations can be paid online from here (e.g. after leaving Xendit's payment page).
+  // Unpaid reservations can be paid online from here (e.g. after leaving the payment page).
   const [canPayOnline, setCanPayOnline] = useState(false)
   const [payingId, setPayingId] = useState<string | null>(null)
   useEffect(() => {
@@ -342,7 +342,7 @@ export function MyReservationsPage() {
                 {canPayOnline && status === 'pending' && reservation.paymentState !== 'finalized' &&
                   !reservationPayments.some((payment: any) => String(payment.userId) === String(user?.id) && !['failed', 'rejected'].includes(String(payment.paymentStatus || '').toLowerCase())) ? (
                   <Button variant="primary" disabled={payingId === id} onClick={() => payOnline(id)}>
-                    {payingId === id ? 'Opening Xendit…' : 'Pay now'}
+                    {payingId === id ? 'Opening payment…' : 'Pay now'}
                   </Button>
                 ) : null}
                 {hasVerifiedPayment ? (
