@@ -9,7 +9,7 @@ import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { Card } from '../../components/ui/Card'
 import { uid } from '../../utils/id'
-import { apiPost } from '../../utils/apiClient'
+import { ApiError, apiPost } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
 import { completeGoogleRedirect, signInWithGoogle, type GoogleProfile } from '../../utils/firebase'
 import { ExistingAccountDialog } from '../../components/auth/ExistingAccountDialog'
@@ -30,6 +30,8 @@ export function RegisterPage() {
   const [showPassword, setShowPassword] = useState(false)
   const [pendingGoogle, setPendingGoogle] = useState<{ profile: GoogleProfile; account: { name: string; email: string } } | null>(null)
   const [confirmingGoogle, setConfirmingGoogle] = useState(false)
+  // The form was submitted with an email that already has an account.
+  const [existingEmail, setExistingEmail] = useState<{ email: string; provider: 'password' | 'google' } | null>(null)
   const { registerWithGoogle } = useAuth()
 
   const {
@@ -79,6 +81,10 @@ export function RegisterPage() {
       toast.success('Verification code sent to your email.')
       navigate(`/otp?email=${encodeURIComponent(payload.email)}&flow=register&t=${uid('otp')}`)
     } catch (err: any) {
+      if (err instanceof ApiError && err.body?.emailExists) {
+        setExistingEmail({ email: payload.email, provider: err.body.provider === 'google' ? 'google' : 'password' })
+        return
+      }
       toast.error(err?.message || 'Registration failed')
     }
   }
@@ -97,11 +103,12 @@ export function RegisterPage() {
       return
     }
     setPendingGoogle(null)
-    toast.success(confirmExisting ? 'Signed in with Google.' : 'Account created with Google.')
+    toast.success(result.user.firstLogin ? 'Account created with Google. Welcome!' : 'Signed in with Google.')
     navigate(getRedirectRoute(result.user.role))
   }
 
   async function handleGoogleRegister() {
+    setExistingEmail(null)
     try {
       const profile = await signInWithGoogle()
       // null: the pop-up was blocked and the browser is going to Google; we finish on return.
@@ -147,6 +154,13 @@ export function RegisterPage() {
         busy={confirmingGoogle}
         onProceed={proceedWithExistingAccount}
         onCancel={() => setPendingGoogle(null)}
+      />
+      <ExistingAccountDialog
+        account={existingEmail ? { email: existingEmail.email } : null}
+        provider={existingEmail?.provider}
+        onUseGoogle={handleGoogleRegister}
+        onGoToLogin={() => navigate('/login', { state: { email: existingEmail?.email } })}
+        onCancel={() => setExistingEmail(null)}
       />
       <div className="pointer-events-none absolute inset-0 bg-camouflage opacity-20" />
       <div className="absolute right-[-120px] top-[-120px] h-[260px] w-[260px] rounded-full bg-secondary/20 blur-3xl animate-gradientShift" />

@@ -17,6 +17,7 @@ export type PrintableWaiver = {
   guardianSignatureImage?: string
   idType?: string
   idImage?: string
+  idImageBack?: string
   guardianIdType?: string
   waiverText?: WaiverText | null
   status?: string
@@ -39,6 +40,7 @@ export function buildWaiverPrintHtml(w: PrintableWaiver) {
     src ? `<div class="id"><img src="${esc(src)}" alt="${esc(label)}" /><div class="cap">${esc(label)}</div></div>` : ''
   const ids = [
     idThumb(w.idImage, `Participant ID${w.idType ? ` (${w.idType})` : ''}`),
+    idThumb(w.idImageBack, 'Participant ID (back)'),
     w.isMinor ? idThumb(w.guardianIdImage, `Guardian ID${w.guardianIdType ? ` (${w.guardianIdType})` : ''}`) : '',
   ].join('')
 

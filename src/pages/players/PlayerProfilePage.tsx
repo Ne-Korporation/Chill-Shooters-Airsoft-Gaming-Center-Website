@@ -12,6 +12,10 @@ import { useAuth } from '../../context/AuthContext'
 import { ageFromBirthDate, isValidBirthDate, maxAdultBirthDate } from '../../utils/age'
 import { composeFullName, splitFullName } from '../../utils/names'
 import { formatPhPhone } from '../../utils/phone'
+import { IDENTITY_ID_TYPES, idTypeNeedsBack } from '../../utils/idTypes'
+
+type IdSide = 'front' | 'back'
+type IdPhoto = { blob: Blob; name: string; preview: string }
 
 type PlayerProfileDoc = {
   id?: string
@@ -25,7 +29,9 @@ type PlayerProfileDoc = {
   experience?: number
   createdAtISO?: string
   identityVerificationStatus?: string
+  identityIdType?: string
   identityDocumentUrl?: string
+  identityDocumentBackUrl?: string
   profileImageUrl?: string
   emailVerified?: boolean
   equipmentIds?: string[]
@@ -64,7 +70,7 @@ type EquipmentItem = {
 export function PlayerProfilePage() {
   const { playerId } = useParams()
   const navigate = useNavigate()
-  const { user, updateUser } = useAuth()
+  const { user, updateUser, replaceToken, remember } = useAuth()
   const [player, setPlayer] = React.useState<PlayerProfileDoc | null>(null)
   const [loading, setLoading] = React.useState(true)
   // The minors on a parent's account, for switching to their profiles.
@@ -85,6 +91,11 @@ export function PlayerProfilePage() {
   const [cameraStream, setCameraStream] = React.useState<MediaStream | null>(null)
   const [mounted, setMounted] = React.useState(false)
   const [scanStatus, setScanStatus] = React.useState<'idle' | 'scanning' | 'success' | 'error'>('idle')
+  // Identity verification: the ID type decides whether a photo of the back is needed too.
+  const [idTypeChoice, setIdTypeChoice] = React.useState('')
+  const [idPhotos, setIdPhotos] = React.useState<Partial<Record<IdSide, IdPhoto>>>({})
+  const [captureSide, setCaptureSide] = React.useState<IdSide>('front')
+  const [replacingId, setReplacingId] = React.useState(false)
   const [isEditing, setIsEditing] = React.useState(false)
   const [editFirstName, setEditFirstName] = React.useState('')
   const [editMiddleInitial, setEditMiddleInitial] = React.useState('')
@@ -92,10 +103,15 @@ export function PlayerProfilePage() {
   const [editNickname, setEditNickname] = React.useState('')
   const [approvedWaiver, setApprovedWaiver] = React.useState<ProfileWaiver | null>(null)
   const [editEmail, setEditEmail] = React.useState('')
+  // Changing the email: the new address is confirmed with a code sent to it before it's saved.
+  const [emailChange, setEmailChange] = React.useState<{ open: boolean; newEmail: string; codeSent: boolean; code: string; busy: boolean; error: string }>(
+    { open: false, newEmail: '', codeSent: false, code: '', busy: false, error: '' },
+  )
   const [editBirthDate, setEditBirthDate] = React.useState('')
   const [equipmentList, setEquipmentList] = React.useState<EquipmentItem[]>([])
   const [equipmentLoading, setEquipmentLoading] = React.useState(false)
   const fileInputRef = React.useRef<HTMLInputElement | null>(null)
+  const fileSideRef = React.useRef<IdSide>('front')
   const profileImageInputRef = React.useRef<HTMLInputElement | null>(null)
   const videoRef = React.useRef<HTMLVideoElement | null>(null)
   const cameraStreamRef = React.useRef<MediaStream | null>(null)
@@ -166,7 +182,7 @@ export function PlayerProfilePage() {
       setEditMiddleInitial(parts.middleInitial)
       setEditLastName(parts.lastName)
       setEditNickname(player.nickname || '')
-      setEditEmail(player.email || '')
+      setEditEmail(player.email || (String(player.id || '') === String(user?.id || '') ? user?.email || '' : ''))
       setEditBirthDate(player.birthDate || '')
     }
   }, [player])
@@ -214,18 +230,46 @@ export function PlayerProfilePage() {
     }
   }, [cameraActive])
 
-  const uploadIdentityImage = async (file: File | Blob, filename: string): Promise<boolean> => {
+  // Previews are object URLs: release them when they are replaced or the page closes.
+  const idPhotosRef = React.useRef(idPhotos)
+  idPhotosRef.current = idPhotos
+  React.useEffect(() => () => {
+    Object.values(idPhotosRef.current).forEach((photo) => photo && URL.revokeObjectURL(photo.preview))
+  }, [])
+
+  const setIdPhoto = (side: IdSide, blob: Blob | null, name = '') => {
+    setIdPhotos((current) => {
+      const previous = current[side]
+      if (previous) URL.revokeObjectURL(previous.preview)
+      const next = { ...current }
+      if (blob) next[side] = { blob, name, preview: URL.createObjectURL(blob) }
+      else delete next[side]
+      return next
+    })
+  }
+
+  const chooseIdType = (name: string) => {
+    setIdTypeChoice(name)
+    setError(null)
+    // A front-only ID has no back photo.
+    if (!idTypeNeedsBack(name)) setIdPhoto('back', null)
+  }
+
+  const needsBack = idTypeNeedsBack(idTypeChoice)
+  const idPhotosReady = Boolean(idTypeChoice && idPhotos.front && (!needsBack || idPhotos.back))
+
+  const submitIdentity = async () => {
     const lookupId = playerId || user?.id
-    if (!lookupId) return false
+    if (!lookupId || !idPhotosReady || !idPhotos.front) return
 
     setUploading(true)
-    setScanStatus('scanning')
     setError(null)
-
     try {
       const formData = new FormData()
-      formData.append('file', file, filename)
       formData.append('userId', lookupId)
+      formData.append('idType', idTypeChoice)
+      formData.append('front', idPhotos.front.blob, idPhotos.front.name || 'id-front.jpg')
+      if (needsBack && idPhotos.back) formData.append('back', idPhotos.back.blob, idPhotos.back.name || 'id-back.jpg')
 
       const uploadRes = await fetch(`${apiBase}/api/scan-id`, {
         method: 'POST',
@@ -234,38 +278,23 @@ export function PlayerProfilePage() {
       })
       const uploadJson = await uploadRes.json().catch(() => null)
       if (!uploadRes.ok || !uploadJson?.ok) {
-        throw new Error(uploadJson?.error || 'ID scan failed')
+        throw new Error(uploadJson?.error || 'ID submission failed')
       }
 
-      const scanSummary = uploadJson?.scan?.summary || 'ID captured successfully.'
-      const cardDetected = Boolean(uploadJson?.scan?.cardDetected)
       const serverUser = uploadJson?.user as PlayerProfileDoc | null
-      setScanStatus('success')
-      setPlayer((current) => {
-        if (serverUser) {
-          return serverUser
-        }
-        return current ? {
-          ...current,
-          identityVerificationStatus: cardDetected ? 'verified' : 'pending_review',
-          identityDocumentUrl: uploadJson.url,
-          identityScanStatus: cardDetected ? 'detected' : 'not_detected',
-          identityScanProvider: uploadJson?.scan?.provider,
-          identityScanSummary: scanSummary,
-          identityScanDetected: cardDetected,
-        } : null
-      })
-
-      if (cardDetected) {
-        toast.success('Identity verified successfully.')
-        stopCamera()
-      }
-
-      return true
+      setPlayer((current) => serverUser || (current ? {
+        ...current,
+        identityVerificationStatus: 'pending_review',
+        identityIdType: idTypeChoice,
+        identityDocumentUrl: uploadJson.url,
+        identityDocumentBackUrl: uploadJson.backUrl || '',
+      } : null))
+      setIdPhoto('front', null)
+      setIdPhoto('back', null)
+      setReplacingId(false)
+      toast.success('ID submitted. Staff will verify it shortly.')
     } catch (e: any) {
-      setScanStatus('error')
       setError(String(e?.message || e))
-      return false
     } finally {
       setUploading(false)
     }
@@ -276,9 +305,19 @@ export function PlayerProfilePage() {
   const handleIdentityUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     if (isVerified) return
     const file = event.target.files?.[0]
-    if (!file) return
-    await uploadIdentityImage(file, file.name)
     event.target.value = ''
+    if (!file) return
+    if (!file.type.startsWith('image/')) {
+      setError('Only image files are allowed (PNG, JPG or WEBP).')
+      return
+    }
+    setError(null)
+    setIdPhoto(fileSideRef.current, file, file.name)
+  }
+
+  const pickIdFile = (side: IdSide) => {
+    fileSideRef.current = side
+    fileInputRef.current?.click()
   }
 
   const uploadProfileImage = async (file: File): Promise<string> => {
@@ -297,7 +336,7 @@ export function PlayerProfilePage() {
     return uploadJson.url
   }
 
-  const openIdentityCapture = async () => {
+  const openIdentityCapture = async (side: IdSide) => {
     if (isVerified) return
     if (!navigator.mediaDevices?.getUserMedia) {
       setError('Camera access is not supported in this browser.')
@@ -306,6 +345,7 @@ export function PlayerProfilePage() {
 
     try {
       stopCamera()
+      setCaptureSide(side)
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'environment' },
         audio: false,
@@ -326,7 +366,7 @@ export function PlayerProfilePage() {
     }
   }
 
-  const captureIdentityPhoto = async () => {
+  const captureIdentityPhoto = () => {
     if (!videoRef.current || !cameraStream) return
     setScanStatus('scanning')
 
@@ -338,24 +378,14 @@ export function PlayerProfilePage() {
     if (!context) return
 
     context.drawImage(video, 0, 0, canvas.width, canvas.height)
-    canvas.toBlob(async (blob) => {
-      if (!blob) return
-      const success = await uploadIdentityImage(blob, 'id-capture.jpg')
-      if (success) {
-        stopCamera()
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        setScanStatus('error')
+        return
       }
+      setIdPhoto(captureSide, blob, `id-${captureSide}.jpg`)
+      stopCamera()
     }, 'image/jpeg', 0.95)
-  }
-
-  const handleRetakeCapture = async () => {
-    if (isVerified) return
-    setError(null)
-    setScanStatus('idle')
-    setPlayer((current) => current ? {
-      ...current,
-      identityDocumentUrl: undefined,
-    } : current)
-    await openIdentityCapture()
   }
 
   const openEditProfile = () => {
@@ -395,9 +425,8 @@ export function PlayerProfilePage() {
     const lookupId = playerId || user?.id
     const nameParts = { firstName: editFirstName.trim(), middleInitial: editMiddleInitial.trim(), lastName: editLastName.trim() }
     const nextName = composeFullName(nameParts)
-    const nextEmail = editEmail.trim().toLowerCase()
-    if (!lookupId || !nameParts.firstName || !nameParts.lastName || !nextEmail) {
-      setError('First name, last name and email are required.')
+    if (!lookupId || !nameParts.firstName || !nameParts.lastName) {
+      setError('First name and last name are required.')
       return
     }
     if (editBirthDate && !isValidBirthDate(editBirthDate)) {
@@ -413,8 +442,7 @@ export function PlayerProfilePage() {
         // The legal name is locked once a waiver is approved under it.
         ...(nameLocked ? {} : nameParts),
         nickname: editNickname.trim(),
-        email: nextEmail,
-        ...(editBirthDate ? { birthDate: editBirthDate } : {}),
+        ...(editBirthDate && !birthDateLocked ? { birthDate: editBirthDate } : {}),
       })
       const updated = res?.data
       const merged = {
@@ -422,20 +450,10 @@ export function PlayerProfilePage() {
         ...updated,
         ...(nameLocked ? {} : { ...nameParts, name: nextName }),
         nickname: editNickname.trim(),
-        email: nextEmail,
         ...(editBirthDate ? { birthDate: editBirthDate } : {}),
       }
       setPlayer(merged)
-      updateUser({ name: merged.name || nextName, email: nextEmail })
-
-      if (player?.email && nextEmail !== player.email.toLowerCase()) {
-        try {
-          await apiPost('/api/auth/send-otp', { email: nextEmail })
-          toast.success('Verification code sent to your new email.')
-        } catch (otpErr: any) {
-          toast.error(String(otpErr?.message || otpErr))
-        }
-      }
+      if (viewingOwn) updateUser({ name: merged.name || nextName })
 
       toast.success('Profile updated successfully.')
       setIsEditing(false)
@@ -443,6 +461,48 @@ export function PlayerProfilePage() {
       setError(String(e?.message || e))
     } finally {
       setSavingProfile(false)
+    }
+  }
+
+  const resetEmailChange = () => setEmailChange({ open: false, newEmail: '', codeSent: false, code: '', busy: false, error: '' })
+
+  const sendEmailChangeCode = async () => {
+    const newEmail = emailChange.newEmail.trim().toLowerCase()
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail)) {
+      setEmailChange((current) => ({ ...current, error: 'Enter a valid email address.' }))
+      return
+    }
+    if (newEmail === editEmail.trim().toLowerCase()) {
+      setEmailChange((current) => ({ ...current, error: 'That is already your email.' }))
+      return
+    }
+    setEmailChange((current) => ({ ...current, busy: true, error: '' }))
+    try {
+      const res = await apiPost<{ ok: boolean; message?: string }>('/api/auth/change-email/request', { newEmail })
+      setEmailChange((current) => ({ ...current, newEmail, codeSent: true, code: '', busy: false }))
+      toast.success(res?.message || `Code sent to ${newEmail}.`)
+    } catch (e: any) {
+      setEmailChange((current) => ({ ...current, busy: false, error: String(e?.message || e) }))
+    }
+  }
+
+  const confirmEmailChange = async () => {
+    const code = emailChange.code.trim()
+    if (!/^\d{6}$/.test(code)) {
+      setEmailChange((current) => ({ ...current, error: 'Enter the 6-digit code from the email.' }))
+      return
+    }
+    setEmailChange((current) => ({ ...current, busy: true, error: '' }))
+    try {
+      const res = await apiPost<{ ok: boolean; token: string; user: { email: string } }>('/api/auth/change-email/verify', { otp: code, remember })
+      const nextEmail = res.user.email
+      replaceToken(res.token, { email: nextEmail })
+      setEditEmail(nextEmail)
+      setPlayer((current) => (current ? { ...current, email: nextEmail } : current))
+      resetEmailChange()
+      toast.success(`Your email is now ${nextEmail}.`)
+    } catch (e: any) {
+      setEmailChange((current) => ({ ...current, busy: false, error: String(e?.message || e) }))
     }
   }
 
@@ -465,11 +525,15 @@ export function PlayerProfilePage() {
   }
 
   const displayName = player?.name || user?.name || (playerId ? `Player ${playerId}` : 'Unnamed player')
-  const nameLocked = Boolean(approvedWaiver)
+  // The verified ID (and an approved waiver) carry the legal name and birthday.
+  const nameLocked = Boolean(approvedWaiver) || isVerified
+  const birthDateLocked = isVerified
   const isMinorPlayer = Boolean(approvedWaiver && (approvedWaiver.isMinor || Number(approvedWaiver.age) < 18))
     || (ageFromBirthDate(player?.birthDate) ?? 99) < 18
   const displayEmail = player?.email || user?.email || '—'
   const displayRole = player?.role || user?.role || 'user'
+  // Admin, marshal and registrar accounts don't verify an ID.
+  const isPlayerAccount = String(displayRole).toLowerCase() === 'user'
   // A parent looking at one of their children's profiles: same page, the child's own progress.
   const viewingChild = Boolean(player?.isChildProfile && String(player.guardianId) === String(user?.id))
   const viewingOwn = !playerId || String(playerId) === String(user?.id)
@@ -493,7 +557,12 @@ export function PlayerProfilePage() {
     ? 'Pending Review'
     : player?.identityVerificationStatus === 'verified'
       ? 'Verified'
-      : 'Not Submitted'
+      : player?.identityVerificationStatus === 'rejected'
+        ? 'Not Accepted'
+        : 'Not Submitted'
+  const hasBirthday = Boolean(player?.birthDate)
+  const idSubmitted = ['pending_review', 'verified'].includes(String(player?.identityVerificationStatus || ''))
+  const showIdForm = isPlayerAccount && hasBirthday && !isVerified && (!idSubmitted || replacingId)
 
   return (
     <div className="space-y-4">
@@ -503,8 +572,8 @@ export function PlayerProfilePage() {
               <div className="w-full max-w-4xl rounded-3xl border border-white/10 bg-background p-4 shadow-[0_0_0_1px_rgba(255,255,255,0.05),0_30px_80px_rgba(0,0,0,0.65)]">
                 <div className="mb-3 flex items-center justify-between">
                   <div>
-                    <div className="text-sm font-semibold">Scan Government ID</div>
-                    <div className="text-sm text-muted">Position the ID clearly in the camera view.</div>
+                    <div className="text-sm font-semibold">Capture the {captureSide} of your {idTypeChoice || 'ID'}</div>
+                    <div className="text-sm text-muted">Position the ID clearly in the camera view, with all four corners showing.</div>
                   </div>
                   <Button type="button" variant="ghost" onClick={stopCamera}>
                     Close
@@ -515,21 +584,19 @@ export function PlayerProfilePage() {
                     <video ref={videoRef} autoPlay playsInline muted className="h-[60vh] w-full rounded-2xl bg-black object-cover" />
                     <div className={`absolute inset-0 rounded-2xl border-2 transition ${scanStatus === 'success' ? 'border-success' : scanStatus === 'scanning' ? 'border-amber-400' : 'border-danger/80'}`} />
                     <div className={`absolute left-4 top-4 rounded-full px-3 py-1 text-xs font-semibold ${scanStatus === 'success' ? 'bg-success/20 text-success' : scanStatus === 'scanning' ? 'bg-amber-200 text-amber-700' : 'bg-danger/20 text-danger'}`}>
-                      {scanStatus === 'success'
-                        ? 'Card Detected'
-                        : scanStatus === 'scanning'
-                          ? 'Scanning...'
-                          : scanStatus === 'error'
-                            ? 'Scan Failed'
-                            : 'Ready to Scan'}
+                      {scanStatus === 'scanning'
+                        ? 'Capturing...'
+                        : scanStatus === 'error'
+                          ? 'Capture failed'
+                          : `Ready: ${captureSide} side`}
                     </div>
                   </div>
                   {error ? (
                     <div className="rounded-2xl border border-danger/20 bg-danger/10 p-3 text-sm text-danger">{error}</div>
                   ) : null}
                   <div className="flex flex-col gap-2 sm:flex-row">
-                    <Button type="button" className="flex-1" onClick={captureIdentityPhoto} disabled={uploading}>
-                      {uploading ? 'Scanning…' : 'Scan Now'}
+                    <Button type="button" className="flex-1" onClick={captureIdentityPhoto} disabled={scanStatus === 'scanning'}>
+                      Capture {captureSide}
                     </Button>
                     <Button type="button" variant="ghost" className="flex-1" onClick={stopCamera}>
                       Cancel
@@ -550,7 +617,7 @@ export function PlayerProfilePage() {
                 <div className="text-sm font-semibold">Edit Profile</div>
                 <div className="text-sm text-muted">Update your public details and profile photo.</div>
               </div>
-              <Button type="button" variant="ghost" onClick={() => setIsEditing(false)}>
+              <Button type="button" variant="ghost" onClick={() => { setIsEditing(false); resetEmailChange() }}>
                 Close
               </Button>
             </div>
@@ -607,7 +674,9 @@ export function PlayerProfilePage() {
                 </div>
                 <div className="mt-2 text-xs text-muted">
                   {nameLocked
-                    ? 'Your name is locked because your waiver was approved under it. Ask staff if it needs correcting.'
+                    ? isVerified
+                      ? 'Your name is locked because your ID was verified under it. Ask staff if it needs correcting.'
+                      : 'Your name is locked because your waiver was approved under it. Ask staff if it needs correcting.'
                     : `Use your name exactly as it appears on your ID. Your waiver is filled in as "${composeFullName({ firstName: editFirstName, middleInitial: editMiddleInitial, lastName: editLastName }) || 'First M. Last'}".`}
                 </div>
               </div>
@@ -621,21 +690,102 @@ export function PlayerProfilePage() {
                 hint="Shown on your profile next to your name. Waivers and receipts always use your legal name."
               />
 
-              <Input
-                label="Email"
-                type="email"
-                value={editEmail}
-                onChange={(event) => setEditEmail(event.target.value)}
-                placeholder="your@email.com"
-              />
+              <div>
+                {/* Shown as plain text, not a field: the email only changes through "Change email". */}
+                <div className="mb-2 text-sm font-semibold text-text">Email</div>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="break-all text-sm font-medium text-text">{editEmail || '—'}</div>
+                    {viewingOwn ? <div className="mt-1 text-xs text-muted">Your current sign-in email.</div> : null}
+                  </div>
+                  {viewingOwn && !emailChange.open ? (
+                    <Button type="button" variant="ghost" size="sm" onClick={() => setEmailChange((current) => ({ ...current, open: true, error: '' }))}>
+                      Change email
+                    </Button>
+                  ) : null}
+                </div>
+
+                {viewingOwn && emailChange.open ? (
+                  <div className="mt-2 space-y-3 rounded-2xl border border-white/10 bg-white/5 p-3">
+                    <div className="text-sm font-semibold">Change email</div>
+                    {!emailChange.codeSent ? (
+                      <>
+                        <Input
+                          label="New email"
+                          type="email"
+                          value={emailChange.newEmail}
+                          autoComplete="email"
+                          placeholder="new@email.com"
+                          onChange={(event) => setEmailChange((current) => ({ ...current, newEmail: event.target.value, error: '' }))}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') {
+                              event.preventDefault()
+                              void sendEmailChangeCode()
+                            }
+                          }}
+                          hint="We'll email a 6-digit code to this address. Your email only changes once you enter it."
+                        />
+                        <div className="flex gap-2">
+                          <Button type="button" className="flex-1" onClick={sendEmailChangeCode} disabled={emailChange.busy || !emailChange.newEmail.trim()}>
+                            {emailChange.busy ? 'Sending…' : 'Send code'}
+                          </Button>
+                          <Button type="button" variant="ghost" className="flex-1" onClick={resetEmailChange} disabled={emailChange.busy}>Cancel</Button>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="text-xs text-muted">
+                          Enter the code we sent to <span className="font-semibold text-text">{emailChange.newEmail}</span>. It expires in 10 minutes.
+                        </div>
+                        <Input
+                          label="Verification code"
+                          inputMode="numeric"
+                          autoComplete="one-time-code"
+                          maxLength={6}
+                          value={emailChange.code}
+                          placeholder="123456"
+                          onChange={(event) => setEmailChange((current) => ({ ...current, code: event.target.value.replace(/\D/g, '').slice(0, 6), error: '' }))}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') {
+                              event.preventDefault()
+                              void confirmEmailChange()
+                            }
+                          }}
+                        />
+                        <div className="flex flex-col gap-2 sm:flex-row">
+                          <Button type="button" className="flex-1" onClick={confirmEmailChange} disabled={emailChange.busy || emailChange.code.length !== 6}>
+                            {emailChange.busy ? 'Verifying…' : 'Verify & change email'}
+                          </Button>
+                          <Button type="button" variant="ghost" className="flex-1" onClick={sendEmailChangeCode} disabled={emailChange.busy}>Resend code</Button>
+                          <Button type="button" variant="ghost" className="flex-1" onClick={resetEmailChange} disabled={emailChange.busy}>Cancel</Button>
+                        </div>
+                        <button
+                          type="button"
+                          className="text-xs text-accent hover:text-text"
+                          onClick={() => setEmailChange((current) => ({ ...current, codeSent: false, code: '', error: '' }))}
+                        >
+                          Use a different email
+                        </button>
+                      </>
+                    )}
+                    {emailChange.error ? <div className="rounded-xl border border-danger/20 bg-danger/10 p-2 text-xs text-danger">{emailChange.error}</div> : null}
+                  </div>
+                ) : null}
+              </div>
 
               <Input
                 label="Birthday"
                 type="date"
                 value={editBirthDate}
                 max={maxAdultBirthDate()}
+                disabled={birthDateLocked}
+                readOnly={birthDateLocked}
                 onChange={(event) => setEditBirthDate(event.target.value)}
-                hint={ageFromBirthDate(editBirthDate) !== null ? `Age: ${ageFromBirthDate(editBirthDate)}` : 'Used to fill in your age on waivers.'}
+                hint={birthDateLocked
+                  ? 'Locked because your ID was verified with it. Ask staff if it needs correcting.'
+                  : ageFromBirthDate(editBirthDate) !== null
+                    ? `Age: ${ageFromBirthDate(editBirthDate)}. Needed before you can verify your ID.`
+                    : 'Needed before you can verify your ID. Also fills in your age on waivers.'}
               />
 
               {error ? <div className="rounded-2xl border border-danger/20 bg-danger/10 p-3 text-sm text-danger">{error}</div> : null}
@@ -702,11 +852,13 @@ export function PlayerProfilePage() {
                 {displayName}
                 {player?.nickname ? <span className="ml-2 text-sm font-semibold text-accent">“{player.nickname}”</span> : null}
               </div>
-              <div className="mt-1 flex flex-wrap items-center gap-2">
-                <span className={`rounded-full border px-3 py-1 text-[11px] font-semibold ${player?.identityVerificationStatus === 'verified' ? 'border-success/30 bg-success/20 text-success' : player?.identityVerificationStatus === 'pending_review' ? 'border-accent/30 bg-accent/20 text-accent' : 'border-danger/30 bg-danger/20 text-danger'}`}>
-                  {player?.identityVerificationStatus === 'verified' ? 'Verified' : player?.identityVerificationStatus === 'pending_review' ? 'Verification pending' : 'Verification required'}
-                </span>
-              </div>
+              {isPlayerAccount ? (
+                <div className="mt-1 flex flex-wrap items-center gap-2">
+                  <span className={`rounded-full border px-3 py-1 text-[11px] font-semibold ${player?.identityVerificationStatus === 'verified' ? 'border-success/30 bg-success/20 text-success' : player?.identityVerificationStatus === 'pending_review' ? 'border-accent/30 bg-accent/20 text-accent' : 'border-danger/30 bg-danger/20 text-danger'}`}>
+                    {player?.identityVerificationStatus === 'verified' ? 'Verified' : player?.identityVerificationStatus === 'pending_review' ? 'Verification pending' : 'Verification required'}
+                  </span>
+                </div>
+              ) : null}
               <div className="text-sm text-muted">Role: {displayRole}</div>
               <div className="text-sm text-muted">Email: {displayEmail}</div>
               <div className="text-sm text-muted">
@@ -786,13 +938,17 @@ export function PlayerProfilePage() {
           </div>
         </Card>
 
-        {!viewingChild ? (
+        {!viewingChild && isPlayerAccount ? (
         <Card className="p-4">
           <div className="flex items-center justify-between gap-3">
             <div>
               <div className="text-xs uppercase tracking-widest text-muted">Identity Verification</div>
               <div className="mt-1 text-sm font-semibold">{verificationLabel}</div>
-              <div className="mt-1 text-sm text-muted">Upload or scan a government-issued ID for review.</div>
+              <div className="mt-1 text-sm text-muted">
+                {isVerified
+                  ? 'Your ID is verified. Your waiver is filled in from it and approved as soon as you sign.'
+                  : 'Submit a government-issued ID for staff to verify. Your waiver opens once it is verified.'}
+              </div>
             </div>
             <span className={`rounded-full border px-3 py-1 text-[11px] font-semibold ${player?.identityVerificationStatus === 'verified' ? 'border-success/30 bg-success/20 text-success' : player?.identityVerificationStatus === 'pending_review' ? 'border-accent/30 bg-accent/20 text-accent' : 'border-white/10 bg-white/5 text-muted'}`}>
               {verificationLabel}
@@ -800,29 +956,128 @@ export function PlayerProfilePage() {
           </div>
 
           <div className="mt-4 space-y-3">
-            <div className="flex flex-col gap-2 sm:flex-row">
-              <Button type="button" className="flex-1" onClick={openIdentityCapture} disabled={isVerified}>
-                {isVerified ? 'Verified' : cameraActive ? 'Camera Open' : 'Scan ID Capture'}
-              </Button>
-              <Button type="button" variant="ghost" className="flex-1" onClick={() => fileInputRef.current?.click()} disabled={isVerified}>
-                {isVerified ? 'Verified' : player?.identityDocumentUrl ? 'Reupload Image' : 'Upload Image'}
-              </Button>
-            </div>
-
-            <input ref={fileInputRef} type="file" accept="image/*" onChange={handleIdentityUpload} className="hidden" />
-
-            {uploading ? <div className="text-sm text-muted">Uploading ID…</div> : null}
-
-            {player?.identityDocumentUrl ? (
-              <>
-                <div className="overflow-hidden rounded-2xl border border-white/10">
-                  <img src={player.identityDocumentUrl} alt="Uploaded ID" className="h-auto max-h-80 w-full object-contain" />
-                </div>
-                <Button type="button" variant="ghost" className="w-full" onClick={handleRetakeCapture} disabled={isVerified}>
-                  Retake Capture
-                </Button>
-              </>
+            {!hasBirthday ? (
+              // The ID is checked against the birthday, so it comes first.
+              <div className="rounded-2xl border border-dashed border-white/15 bg-white/5 p-4 text-sm">
+                <div className="font-semibold">Add your birthday first</div>
+                <div className="mt-1 text-xs text-muted">Your ID is checked against the birthday on your profile. Add it, then you can submit your ID.</div>
+                {!viewingChild && (viewingOwn || user?.role === 'admin') ? (
+                  <Button type="button" className="mt-3 w-full" onClick={openEditProfile}>Add birthday</Button>
+                ) : null}
+              </div>
             ) : null}
+
+            {hasBirthday && idSubmitted && !replacingId ? (
+              <div className="space-y-3">
+                <div className="rounded-2xl border border-white/10 bg-white/5 p-3 text-sm">
+                  <div className="text-xs text-muted">ID submitted</div>
+                  <div className="font-semibold">{player?.identityIdType || 'Government ID'}</div>
+                  {!isVerified ? <div className="mt-1 text-xs text-muted">Waiting for staff to verify it.</div> : null}
+                </div>
+                {player?.identityDocumentUrl || player?.identityDocumentBackUrl ? (
+                  <div className={`grid gap-2 ${player?.identityDocumentBackUrl ? 'sm:grid-cols-2' : ''}`}>
+                    {([['Front', player?.identityDocumentUrl], ['Back', player?.identityDocumentBackUrl]] as const).map(([side, url]) => url ? (
+                      <a
+                        key={side}
+                        href={url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="group block overflow-hidden rounded-2xl border border-white/10 bg-black/20 transition hover:border-accent/40"
+                        title={`Open the ${side.toLowerCase()} of your ID in full size`}
+                      >
+                        <img src={url} alt={`Your ID (${side.toLowerCase()})`} className="h-auto max-h-60 w-full object-contain" />
+                        <div className="flex items-center justify-between px-3 py-2 text-xs">
+                          <span className="font-semibold">{side}</span>
+                          <span className="text-muted group-hover:text-text">View full size</span>
+                        </div>
+                      </a>
+                    ) : null)}
+                  </div>
+                ) : (
+                  <div className="text-xs text-muted">Your ID photo isn't available to preview.</div>
+                )}
+                {!isVerified ? (
+                  <Button type="button" variant="ghost" className="w-full" onClick={() => setReplacingId(true)}>
+                    Submit a different ID
+                  </Button>
+                ) : null}
+              </div>
+            ) : null}
+
+            {showIdForm ? (
+              <div className="space-y-3">
+                {player?.identityVerificationStatus === 'rejected' ? (
+                  <div className="rounded-2xl border border-danger/20 bg-danger/10 p-3 text-xs text-danger">
+                    Your last ID was not accepted. Please submit a clear photo of a valid ID.
+                  </div>
+                ) : null}
+                <label className="block">
+                  <div className="mb-1 text-xs font-semibold text-muted">Which ID are you submitting?</div>
+                  <select
+                    value={idTypeChoice}
+                    onChange={(event) => chooseIdType(event.target.value)}
+                    className="w-full rounded-xl border border-white/10 bg-background px-4 py-3 text-sm text-text focus:outline-none focus:ring-2 focus:ring-accent/40 [&>option]:bg-background [&>optgroup]:bg-background"
+                  >
+                    <option value="">Select the ID type…</option>
+                    <optgroup label="Front side only">
+                      {IDENTITY_ID_TYPES.filter((type) => type.sides === 'front').map((type) => <option key={type.name} value={type.name}>{type.name}</option>)}
+                    </optgroup>
+                    <optgroup label="Front and back">
+                      {IDENTITY_ID_TYPES.filter((type) => type.sides === 'front_back').map((type) => <option key={type.name} value={type.name}>{type.name}</option>)}
+                    </optgroup>
+                  </select>
+                  {idTypeChoice ? (
+                    <div className="mt-1 text-xs text-muted">
+                      {needsBack ? 'Needs photos of the front and the back. ' : 'Only the front is needed. '}
+                      {IDENTITY_ID_TYPES.find((type) => type.name === idTypeChoice)?.note}
+                    </div>
+                  ) : null}
+                </label>
+
+                {idTypeChoice ? (
+                  <div className={`grid gap-3 ${needsBack ? 'sm:grid-cols-2' : ''}`}>
+                    {(needsBack ? (['front', 'back'] as const) : (['front'] as const)).map((side) => {
+                      const photo = idPhotos[side]
+                      return (
+                        <div key={side} className="rounded-2xl border border-white/10 bg-white/5 p-3">
+                          <div className="text-xs font-bold uppercase tracking-widest text-muted">{side === 'front' ? 'Front' : 'Back'}</div>
+                          {photo ? (
+                            <div className="mt-2 overflow-hidden rounded-xl border border-white/10">
+                              <img src={photo.preview} alt={`ID ${side}`} className="h-auto max-h-48 w-full object-contain" />
+                            </div>
+                          ) : (
+                            <div className="mt-2 grid h-24 place-items-center rounded-xl border border-dashed border-white/15 bg-black/20 text-xs text-muted">
+                              No photo yet
+                            </div>
+                          )}
+                          <div className="mt-2 flex gap-2">
+                            <Button type="button" size="sm" className="flex-1" onClick={() => openIdentityCapture(side)}>
+                              {photo ? 'Retake' : 'Camera'}
+                            </Button>
+                            <Button type="button" size="sm" variant="ghost" className="flex-1" onClick={() => pickIdFile(side)}>
+                              {photo ? 'Replace' : 'Upload'}
+                            </Button>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                ) : null}
+
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Button type="button" className="flex-1" onClick={submitIdentity} disabled={!idPhotosReady || uploading}>
+                    {uploading ? 'Submitting…' : 'Submit ID for verification'}
+                  </Button>
+                  {replacingId ? (
+                    <Button type="button" variant="ghost" className="flex-1" onClick={() => setReplacingId(false)} disabled={uploading}>
+                      Cancel
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+
+            <input ref={fileInputRef} type="file" accept="image/png,image/jpeg,image/webp" onChange={handleIdentityUpload} className="hidden" />
           </div>
         </Card>
         ) : null}

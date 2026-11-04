@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import toast from 'react-hot-toast'
 import {
@@ -7,6 +8,7 @@ import {
   FiCheck,
   FiCheckCircle,
   FiChevronRight,
+  FiLock,
   FiPrinter,
   FiShield,
   FiUser,
@@ -62,6 +64,8 @@ type SubmittedWaiver = {
   guardianSignatureImage?: string
   idType?: string
   idImage?: string
+  idImageBack?: string
+  autoApproved?: boolean
   guardianIdType?: string
   waiverText?: WaiverText | null
   status?: string
@@ -210,6 +214,37 @@ export function WaiverPage({
   const { user } = useAuth()
   // Whose waiver this is: the signed-in adult, or one of their children.
   const subjectId = child?.id || user?.id || ''
+
+  // A player's own waiver opens once their ID is verified on their profile; the verified name,
+  // birthday and ID are then filled in and the signed waiver is approved straight away.
+  const [identity, setIdentity] = useState<{ status: string; idType: string; nameParts: NameParts } | null>(null)
+  const [identityLoaded, setIdentityLoaded] = useState(false)
+  useEffect(() => {
+    if (child || !user?.id) {
+      setIdentityLoaded(true)
+      return
+    }
+    let alive = true
+    setIdentityLoaded(false)
+    apiGet<{ ok: boolean; data: { name?: string; firstName?: string; middleInitial?: string; lastName?: string; birthDate?: string; identityVerificationStatus?: string; identityIdType?: string } }>(`/api/user_accounts/${encodeURIComponent(user.id)}`)
+      .then((res) => {
+        const account = res?.data
+        if (!alive || !account) return
+        const status = String(account.identityVerificationStatus || 'not_submitted')
+        const parts = account.firstName || account.lastName
+          ? { firstName: account.firstName || '', middleInitial: account.middleInitial || '', lastName: account.lastName || '' }
+          : splitFullName(account.name || '')
+        setIdentity({ status, idType: account.identityIdType || '', nameParts: parts })
+        if (status === 'verified') {
+          setNameParts(parts)
+          if (account.birthDate) setState((current) => ({ ...current, birthDate: account.birthDate || current.birthDate }))
+        }
+      })
+      .catch(() => { if (alive) setIdentity(null) })
+      .finally(() => { if (alive) setIdentityLoaded(true) })
+    return () => { alive = false }
+  }, [child, user?.id])
+  const identityVerified = !child && identity?.status === 'verified'
 
   const waiverStorageKey = subjectId ? `waiver_submitted:${subjectId}` : ''
   const waiverIdKey = subjectId ? `last_waiver_id:${subjectId}` : ''
@@ -382,8 +417,11 @@ export function WaiverPage({
     if (!nameParts.lastName.trim()) e.lastName = 'Last name is required.'
     if (!state.birthDate) e.birthDate = 'Birthday is required.'
     else if (!isValidBirthDate(state.birthDate)) e.birthDate = 'Enter a valid birthday.'
-    if (!idType) e.idType = 'Choose which ID you are attaching.'
-    if (!idImage) e.idImage = 'A photo of your ID is required.'
+    // A verified profile ID is attached by the server.
+    if (!identityVerified) {
+      if (!idType) e.idType = 'Choose which ID you are attaching.'
+      if (!idImage) e.idImage = 'A photo of your ID is required.'
+    }
 
     if (isMinor) {
       if (!state.guardianName.trim()) e.guardianName = 'Guardian name is required for minors.'
@@ -406,7 +444,7 @@ export function WaiverPage({
     if (!hasSignature) e.signature = 'Signature is required.'
 
     return e
-  }, [hasSignature, isMinor, state, nameParts, guardianPhone, guardianEmail, guardianIdImage, guardianIdType, guardianSignatureImage, idType, idImage, user?.email, child])
+  }, [hasSignature, isMinor, state, nameParts, guardianPhone, guardianEmail, guardianIdImage, guardianIdType, guardianSignatureImage, idType, idImage, user?.email, child, identityVerified])
 
   // Prefill the name parts from the player's profile when the form starts empty.
   useEffect(() => {
@@ -442,7 +480,9 @@ export function WaiverPage({
     }
   }, [child, user?.id, submitted, state.birthDate])
 
-  const canSubmit = Object.keys(errors).length === 0 && !submitting
+  // Until the profile ID is verified, a player's own waiver is shown but can't be filled in.
+  const waiverLocked = !child && !submitted && !checkingSubmission && identityLoaded && !identityVerified
+  const canSubmit = Object.keys(errors).length === 0 && !submitting && !waiverLocked
   const shownErrors: Record<string, string> = showErrors ? errors : {}
 
   const scrollToPayment = () => {
@@ -725,7 +765,7 @@ export function WaiverPage({
     try {
       // Compress images first so the request body stays small (minors send an ID photo + 2 signatures)
       const [compressedPlayerId, compressedGuardianId, compressedGuardianSig, compressedPlayerSig] = await Promise.all([
-        compressImage(idImage, 1000, 0.75),
+        identityVerified ? Promise.resolve('') : compressImage(idImage, 1000, 0.75),
         isMinor ? compressImage(guardianIdImage, 1000, 0.75) : Promise.resolve(''),
         isMinor ? compressImage(guardianSignatureImage, 600, 0.85) : Promise.resolve(''),
         compressImage(signatureImage, 600, 0.85),
@@ -752,8 +792,8 @@ export function WaiverPage({
         guardianEmail: isMinor ? guardianEmail.trim().toLowerCase() : '',
         guardianIdImage: isMinor ? compressedGuardianId : '',
         guardianIdType: isMinor ? guardianIdType : '',
-        idType,
-        idImage: compressedPlayerId,
+        // A verified profile ID is copied on by the server.
+        ...(identityVerified ? {} : { idType, idImage: compressedPlayerId }),
         guardianSignatureImage: isMinor ? compressedGuardianSig : '',
         status: 'pending',
         submittedAtISO: new Date().toISOString(),
@@ -773,7 +813,8 @@ export function WaiverPage({
       }
 
       // Keep the profile's name in step with the name on the waiver staff will verify.
-      if (user?.id && !child) {
+      // (A verified ID already fixes the name on both.)
+      if (user?.id && !child && !identityVerified) {
         void apiPut(`/api/user_accounts/${encodeURIComponent(user.id)}`, {
           firstName: nameParts.firstName.trim(),
           middleInitial: nameParts.middleInitial.trim(),
@@ -781,7 +822,7 @@ export function WaiverPage({
         }).catch(() => {})
       }
 
-      toast.success('Waiver submitted')
+      toast.success(String(response.data?.status || '').toLowerCase() === 'approved' ? 'Waiver signed and approved. You can book a game now.' : 'Waiver submitted')
       onSubmitted?.()
     } catch (err: any) {
       console.error('Waiver submit failed:', err)
@@ -1081,6 +1122,37 @@ export function WaiverPage({
         document.body,
       ) : null}
 
+      {waiverLocked ? (
+        <div className="flex flex-col gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-3">
+            <FiLock className="mt-0.5 h-5 w-5 shrink-0 text-amber-600 dark:text-amber-400" />
+            <div>
+              <div className="text-sm font-bold text-amber-600 dark:text-amber-400">Complete your profile details first</div>
+              <div className="mt-1 text-xs text-muted">
+                {identity?.status === 'pending_review'
+                  ? 'Your ID is waiting for staff review. The waiver opens as soon as it is verified, with your name, birthday and ID filled in.'
+                  : identity?.status === 'rejected'
+                    ? 'Your ID was not accepted. Submit a clearer photo on your profile; the waiver opens once it is verified.'
+                    : 'Add your birthday and verify your ID on your profile. Once staff verify it, this waiver opens with your details filled in.'}
+              </div>
+            </div>
+          </div>
+          {user?.id ? (
+            <Link
+              to={`/app/players/${encodeURIComponent(user.id)}`}
+              className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-xl bg-primary px-4 text-sm font-semibold text-white transition hover:brightness-110"
+            >
+              Go to my profile <FiChevronRight />
+            </Link>
+          ) : null}
+        </div>
+      ) : null}
+
+      <fieldset
+        disabled={waiverLocked || (!child && !submitted && !identityLoaded)}
+        aria-disabled={waiverLocked}
+        className={waiverLocked ? 'pointer-events-none select-none opacity-50' : ''}
+      >
       <div className={['grid gap-4', isEmbedded ? '' : 'lg:grid-cols-3'].filter(Boolean).join(' ')}>
         <div className="lg:col-span-2 space-y-4">
           <Card className="p-4 md:p-6">
@@ -1091,6 +1163,10 @@ export function WaiverPage({
             <div className="mt-5 grid gap-4 md:grid-cols-2">
               {submitted ? (
                 <Input label="Full Name" value={submittedWaiver?.fullName || state.fullName} readOnly disabled />
+              ) : identityVerified && identity ? (
+                <div className="md:col-span-2">
+                  <Input label="Full Name" value={composeFullName(identity.nameParts)} readOnly disabled hint="From your verified ID on your profile." />
+                </div>
               ) : (
                 <div className="md:col-span-2">
                   <div className="grid gap-3 sm:grid-cols-[1fr_5.5rem_1fr]">
@@ -1143,8 +1219,8 @@ export function WaiverPage({
                 type="date"
                 max={child ? maxBirthDate() : maxAdultBirthDate()}
                 value={state.birthDate}
-                disabled={submitted || submitting || Boolean(child)}
-                hint={child ? "From the child's profile." : undefined}
+                disabled={submitted || submitting || Boolean(child) || identityVerified}
+                hint={child ? "From the child's profile." : identityVerified ? 'From your verified ID on your profile.' : undefined}
                 onChange={(e) => setState((s) => ({ ...s, birthDate: e.target.value }))}
                 error={shownErrors.birthDate}
               />
@@ -1159,6 +1235,17 @@ export function WaiverPage({
             </div>
 
             <div className="mt-4">
+              {identityVerified && !submitted ? (
+                <div className="flex items-start gap-3 rounded-2xl border border-success/25 bg-success/10 p-4">
+                  <FiCheckCircle className="mt-0.5 h-5 w-5 shrink-0 text-success" />
+                  <div>
+                    <div className="text-sm font-bold">Your ID is verified</div>
+                    <div className="mt-1 text-xs text-muted">
+                      {identity?.idType ? `${identity.idType}, ` : ''}checked by staff on your profile. It is attached to this waiver for you, so once you sign, the waiver is approved and you can book a game.
+                    </div>
+                  </div>
+                </div>
+              ) : (
               <IdUpload
                 label="Your ID"
                 value={idImage}
@@ -1170,6 +1257,7 @@ export function WaiverPage({
                 error={shownErrors.idImage}
                 helper="Photo of your valid government or school ID. Staff check it before approving your waiver."
               />
+              )}
             </div>
 
             {isMinor ? (
@@ -1397,10 +1485,12 @@ export function WaiverPage({
                 className="mt-4 rounded-2xl border border-success/25 bg-success/10 p-4"
               >
                 <div className="flex items-center gap-2 text-sm font-bold text-success">
-                  <FiCheck /> <span>Waiver accepted</span>
+                  <FiCheck /> <span>{String(waiverStatus || '').toLowerCase() === 'approved' ? 'Waiver approved' : 'Waiver accepted'}</span>
                 </div>
                 <div className="mt-2 text-xs text-muted">
-                  Reservation complete. Please wait for verification.
+                  {String(waiverStatus || '').toLowerCase() === 'approved'
+                    ? 'You are cleared to book a game.'
+                    : 'Reservation complete. Please wait for verification.'}
                 </div>
               </motion.div>
             ) : null}
@@ -1415,7 +1505,7 @@ export function WaiverPage({
               const steps = [
                 { label: "Your name", ok: Boolean(nameParts.firstName.trim() && nameParts.lastName.trim()) || submitted },
                 { label: "Your birthday", ok: !errors.birthDate },
-                { label: "Your ID", ok: !!idType && !!idImage },
+                { label: "Your ID", ok: identityVerified || (!!idType && !!idImage) },
                 ...(isMinor
                   ? [
                       { label: "Guardian details & consent", ok: state.guardianConsent && !!state.guardianName.trim() && !errors.guardianPhone && !errors.guardianEmail },
@@ -1459,6 +1549,8 @@ export function WaiverPage({
           </Card>
         </div>
       </div>
+
+      </fieldset>
 
       {/* Parents add their children once their own (adult) waiver is approved. */}
       {!isEmbedded && !child && String(waiverStatus || '').toLowerCase() === 'approved' ? <MinorsOnAccount /> : null}

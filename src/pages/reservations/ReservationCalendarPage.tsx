@@ -610,7 +610,7 @@ export function ReservationCalendarPage() {
 
   const addTeammate = (member: TeamMember) => {
     if (!member.waiverSubmitted) {
-      toast.error(`${member.name}'s waiver isn't approved yet.`)
+      toast.error(`${member.name} hasn't signed their waiver yet.`)
       return
     }
     if (selectedTeammateIds.includes(member.id)) {
@@ -1600,7 +1600,7 @@ export function ReservationCalendarPage() {
 
   const getStepTitle = () => {
     switch (step) {
-      case 1: return 'Choose Field & Slot'
+      case 1: return 'Choose Date, Time & Field'
       case 2: return 'Add Your Team'
       case 3: return 'Select Package & Gear'
       case 4: return 'Game Setup'
@@ -1716,133 +1716,6 @@ export function ReservationCalendarPage() {
       {step === 1 && (
         <div className="grid gap-4 lg:grid-cols-3">
           <div className="lg:col-span-2 space-y-4">
-            <Card className="p-4 md:p-6">
-              <div className="flex items-center gap-2 text-sm font-bold">
-                <FiMapPin /> <span>Location</span>
-              </div>
-              <p className="mt-1 text-xs text-muted">Choose the venue. Each location has different capacity and field configurations.</p>
-
-              <div className="mt-4 grid gap-3 md:grid-cols-3">
-                {locationOptions.map((loc) => {
-                  const active = loc.id === selectedLocation
-                  return (
-                    <button
-                      key={loc.id}
-                      type="button"
-                      onClick={() => setSelectedLocation(loc.id)}
-                      className={[
-                        'rounded-2xl border p-3 text-left transition',
-                        active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
-                      ].join(' ')}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="text-sm font-bold">{loc.name}</div>
-                        {active ? <FiCheck className="text-gold" /> : null}
-                      </div>
-                      <div className="mt-1 text-xs text-muted">{loc.detail}</div>
-                      <div className="mt-1 text-xs text-accent/70">{loc.capacity}</div>
-                    </button>
-                  )
-                })}
-              </div>
-            </Card>
-
-            <Card className="p-4 md:p-6">
-              <div className="flex items-center gap-2 text-sm font-bold">
-                <FiMapPin /> <span>Field</span>
-              </div>
-              <p className="mt-1 text-xs text-muted">Pick the specific field at the selected location.</p>
-
-              {loadingReservations ? (
-                <div className="mt-4 text-sm text-muted">Loading availability...</div>
-              ) : (
-                <div className="mt-4 grid gap-3 sm:grid-cols-3">
-                  {availableFields.map((f) => {
-                    const active = selectedFieldIds.includes(f.id)
-                    const isFieldBooked = isWd && !isFieldSlotAvailable(f.id, slot)
-                    const isDisabled = isFieldBooked && !active
-
-                    return (
-                      <label
-                        key={f.id}
-                        className={[
-                          'flex items-start gap-3 rounded-2xl border p-3 text-left transition',
-                          active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
-                          isDisabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer',
-                          isFieldBooked && !active ? 'bg-danger/5 border-danger/20' : '',
-                        ].join(' ')}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={active}
-                          disabled={isDisabled}
-                          onChange={() => {
-                            if (isDisabled) {
-                              if (isFieldBooked) {
-                                toast.error(`${f.name} is already booked for ${slotLabels[slot]}`)
-                              }
-                              return
-                            }
-                            setSelectedFieldIds((prev) => {
-                              if (prev.includes(f.id)) return prev.filter((id) => id !== f.id)
-                              return [...prev, f.id]
-                            })
-                          }}
-                          className="mt-1 h-4 w-4 rounded border-white/20 bg-transparent accent-accent"
-                        />
-                        <div className="flex-1">
-                          <div className="flex items-center justify-between">
-                            <div className="text-sm font-bold">{f.name}</div>
-                            {sessionType === 'private' && (
-                              <div className="text-[10px] text-muted bg-black/30 px-2 py-0.5 rounded-full">
-                                Min {getMinPlayersForSelection([f.id], slot)} players
-                              </div>
-                            )}
-                            {isFieldBooked && !active && (
-                              <div className="text-[10px] text-danger bg-danger/10 px-2 py-0.5 rounded-full">
-                                BOOKED
-                              </div>
-                            )}
-                          </div>
-                          <div className="mt-1 text-xs text-muted">{f.location}</div>
-                          {isFieldBooked && !active && (
-                            <div className="mt-1 text-xs text-danger">Already reserved for this time slot</div>
-                          )}
-                        </div>
-                      </label>
-                    )
-                  })}
-                </div>
-              )}
-
-              {sessionType === 'private' && (
-                <div className="mt-4 rounded-2xl border border-accent/20 bg-accent/5 p-4">
-                  <div className="text-xs font-bold text-accent">Field Requirements</div>
-                  <div className="mt-2 space-y-1 text-xs text-muted">
-                    <div>• Upper Ground: Minimum 10 players</div>
-                    <div>
-                      • Lower Ground: Minimum 20 players
-                      {isUpperGroundTaken(slot) && (
-                        <span className="text-accent"> (Upper Ground is taken, so minimum is 10 for this slot)</span>
-                      )}
-                    </div>
-                    <div>
-                      • Forest: Minimum 50 players
-                      {isUpperGroundTaken(slot) && isLowerGroundTaken(slot) && (
-                        <span className="text-accent"> (Upper and Lower Ground are taken, so minimum is 10 for this slot)</span>
-                      )}
-                    </div>
-                    <div className="mt-2 text-accent/80">
-                      Current selection requires at least {minPlayersForFields} players
-                      {players < minPlayersForFields && (
-                        <span className="text-danger ml-2">(Current: {players})</span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              )}
-            </Card>
-
             <Card className="p-4 md:p-6">
               <div className="flex items-center gap-2 text-sm font-bold">
                 <FiCalendar /> <span>Date & Time</span>
@@ -1994,6 +1867,133 @@ export function ReservationCalendarPage() {
                   )}
                 </div>
               </div>
+            </Card>
+
+            <Card className="p-4 md:p-6">
+              <div className="flex items-center gap-2 text-sm font-bold">
+                <FiMapPin /> <span>Location</span>
+              </div>
+              <p className="mt-1 text-xs text-muted">Choose the venue. Each location has different capacity and field configurations.</p>
+
+              <div className="mt-4 grid gap-3 md:grid-cols-3">
+                {locationOptions.map((loc) => {
+                  const active = loc.id === selectedLocation
+                  return (
+                    <button
+                      key={loc.id}
+                      type="button"
+                      onClick={() => setSelectedLocation(loc.id)}
+                      className={[
+                        'rounded-2xl border p-3 text-left transition',
+                        active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
+                      ].join(' ')}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-sm font-bold">{loc.name}</div>
+                        {active ? <FiCheck className="text-gold" /> : null}
+                      </div>
+                      <div className="mt-1 text-xs text-muted">{loc.detail}</div>
+                      <div className="mt-1 text-xs text-accent/70">{loc.capacity}</div>
+                    </button>
+                  )
+                })}
+              </div>
+            </Card>
+
+            <Card className="p-4 md:p-6">
+              <div className="flex items-center gap-2 text-sm font-bold">
+                <FiMapPin /> <span>Field</span>
+              </div>
+              <p className="mt-1 text-xs text-muted">Pick the specific field at the selected location.</p>
+
+              {loadingReservations ? (
+                <div className="mt-4 text-sm text-muted">Loading availability...</div>
+              ) : (
+                <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                  {availableFields.map((f) => {
+                    const active = selectedFieldIds.includes(f.id)
+                    const isFieldBooked = isWd && !isFieldSlotAvailable(f.id, slot)
+                    const isDisabled = isFieldBooked && !active
+
+                    return (
+                      <label
+                        key={f.id}
+                        className={[
+                          'flex items-start gap-3 rounded-2xl border p-3 text-left transition',
+                          active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
+                          isDisabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer',
+                          isFieldBooked && !active ? 'bg-danger/5 border-danger/20' : '',
+                        ].join(' ')}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={active}
+                          disabled={isDisabled}
+                          onChange={() => {
+                            if (isDisabled) {
+                              if (isFieldBooked) {
+                                toast.error(`${f.name} is already booked for ${slotLabels[slot]}`)
+                              }
+                              return
+                            }
+                            setSelectedFieldIds((prev) => {
+                              if (prev.includes(f.id)) return prev.filter((id) => id !== f.id)
+                              return [...prev, f.id]
+                            })
+                          }}
+                          className="mt-1 h-4 w-4 rounded border-white/20 bg-transparent accent-accent"
+                        />
+                        <div className="flex-1">
+                          <div className="flex items-center justify-between">
+                            <div className="text-sm font-bold">{f.name}</div>
+                            {sessionType === 'private' && (
+                              <div className="text-[10px] text-muted bg-black/30 px-2 py-0.5 rounded-full">
+                                Min {getMinPlayersForSelection([f.id], slot)} players
+                              </div>
+                            )}
+                            {isFieldBooked && !active && (
+                              <div className="text-[10px] text-danger bg-danger/10 px-2 py-0.5 rounded-full">
+                                BOOKED
+                              </div>
+                            )}
+                          </div>
+                          <div className="mt-1 text-xs text-muted">{f.location}</div>
+                          {isFieldBooked && !active && (
+                            <div className="mt-1 text-xs text-danger">Already reserved for this time slot</div>
+                          )}
+                        </div>
+                      </label>
+                    )
+                  })}
+                </div>
+              )}
+
+              {sessionType === 'private' && (
+                <div className="mt-4 rounded-2xl border border-accent/20 bg-accent/5 p-4">
+                  <div className="text-xs font-bold text-accent">Field Requirements</div>
+                  <div className="mt-2 space-y-1 text-xs text-muted">
+                    <div>• Upper Ground: Minimum 10 players</div>
+                    <div>
+                      • Lower Ground: Minimum 20 players
+                      {isUpperGroundTaken(slot) && (
+                        <span className="text-accent"> (Upper Ground is taken, so minimum is 10 for this slot)</span>
+                      )}
+                    </div>
+                    <div>
+                      • Forest: Minimum 50 players
+                      {isUpperGroundTaken(slot) && isLowerGroundTaken(slot) && (
+                        <span className="text-accent"> (Upper and Lower Ground are taken, so minimum is 10 for this slot)</span>
+                      )}
+                    </div>
+                    <div className="mt-2 text-accent/80">
+                      Current selection requires at least {minPlayersForFields} players
+                      {players < minPlayersForFields && (
+                        <span className="text-danger ml-2">(Current: {players})</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
             </Card>
           </div>
 
@@ -2265,10 +2265,13 @@ export function ReservationCalendarPage() {
                   return (
                     <div key={member.id} className="flex flex-col gap-3 rounded-2xl border border-accent/30 bg-accent/5 p-3 sm:flex-row sm:items-center sm:justify-between">
                       <div className="min-w-0">
-                        <div className="truncate text-sm font-bold">{member.name}</div>
+                        <div className="flex items-center gap-2">
+                          <span className="truncate text-sm font-bold">{member.name}</span>
+                          {member.waiverSubmitted ? <span className="shrink-0 rounded-full border border-success/30 bg-success/15 px-2 py-0.5 text-[10px] font-semibold text-success">Verified</span> : null}
+                        </div>
                         <div className="truncate text-xs text-muted">{member.email}</div>
                         {!member.waiverSubmitted && (
-                          <div className="mt-1 text-xs font-semibold text-warning">Waiver not approved yet — they can't be added until it is.</div>
+                          <div className="mt-1 text-xs font-semibold text-amber-600 dark:text-amber-400">ID verified, but they haven't signed their waiver yet. They can be added once they do.</div>
                         )}
                       </div>
                       <Button

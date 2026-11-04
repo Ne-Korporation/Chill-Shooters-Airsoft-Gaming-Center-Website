@@ -19,11 +19,11 @@ import { Card } from '../../components/ui/Card'
 import { Input } from '../../components/ui/Input'
 import { Button } from '../../components/ui/Button'
 import { apiGet, apiPost } from '../../utils/apiClient'
-import { calculatePackagePricing, packageEquipmentQty, resolvePackageDiscountConfig } from '../../utils/packagePricing'
+import { PACKAGE_ENTRANCE_FEE_PER_PLAYER, calculatePackagePricing, packageEquipmentQty, resolvePackageDiscountConfig } from '../../utils/packagePricing'
 import { savePackagePrefill, type PackageRecommendationPrefill } from '../../utils/packagePrefill'
 import { modelOf } from '../../utils/inventoryModels'
 
-const ENTRANCE_FEE_PER_PLAYER = 150
+const ENTRANCE_FEE_PER_PLAYER = PACKAGE_ENTRANCE_FEE_PER_PLAYER
 const MAX_PLAYERS = 40
 const MAX_WEAPONS = 200
 

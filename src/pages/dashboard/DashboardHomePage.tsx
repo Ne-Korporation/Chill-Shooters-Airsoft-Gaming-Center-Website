@@ -237,7 +237,7 @@ export function DashboardHomePage() {
     <div className="space-y-6">
       <DashboardHeader
         eyebrow="Dashboard"
-        title={`Welcome back, ${firstName}`}
+        title={user?.firstLogin ? `Welcome, ${firstName}` : `Welcome back, ${firstName}`}
         description="Your bookings, payments, and waiver in one place."
         actions={
           <Link

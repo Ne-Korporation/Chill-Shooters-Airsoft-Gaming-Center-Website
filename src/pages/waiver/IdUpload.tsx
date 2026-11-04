@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react'
 import { FiAlertTriangle, FiCheck, FiFileText, FiTrash2, FiUpload } from 'react-icons/fi'
-import { ACCEPTED_ID_TYPES } from '../../utils/idTypes'
+import { SELECTABLE_ID_TYPES } from '../../utils/idTypes'
 
 const ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/webp']
 const MAX_FILE_BYTES = 5 * 1024 * 1024
@@ -166,7 +166,8 @@ export function IdUpload({
             className="w-full rounded-xl border border-white/10 bg-background px-4 py-3 text-sm text-text focus:outline-none focus:ring-2 focus:ring-accent/40 disabled:opacity-60 [&>option]:bg-background"
           >
             <option value="">Select the ID type…</option>
-            {ACCEPTED_ID_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
+            {/* An older waiver may carry a type that is no longer offered: keep it selectable. */}
+            {(idType && !SELECTABLE_ID_TYPES.includes(idType) ? [idType, ...SELECTABLE_ID_TYPES] : SELECTABLE_ID_TYPES).map((type) => <option key={type} value={type}>{type}</option>)}
           </select>
           {idTypeError ? <div className="mt-1 text-xs font-semibold text-danger">{idTypeError}</div> : null}
         </label>

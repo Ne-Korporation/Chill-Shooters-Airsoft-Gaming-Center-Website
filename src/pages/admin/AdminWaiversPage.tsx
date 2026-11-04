@@ -39,7 +39,9 @@ type WaiverRecord = {
   status?: string
   idType?: string
   idImage?: string
+  idImageBack?: string
   idChecked?: boolean
+  autoApproved?: boolean
   guardianIdType?: string
   guardianIdChecked?: boolean
   waiverText?: WaiverText | null
@@ -370,13 +372,25 @@ export function AdminWaiversPage() {
               <p className="mt-2"><span className="font-semibold">Age:</span> {selectedWaiver.age ?? '-'}</p>
               <p className="mt-2"><span className="font-semibold">Reservation:</span> {selectedWaiver.reservationId || '-'}</p>
               <p className="mt-2">
-                <span className="font-semibold">ID type (as stated by the participant):</span> {selectedWaiver.idType || '-'}
+                <span className="font-semibold">ID type:</span> {selectedWaiver.idType || '-'}
                 {selectedWaiver.idChecked ? <span className="ml-2 text-xs font-semibold text-emerald-700 dark:text-emerald-400">Checked</span> : null}
               </p>
-              {selectedWaiver.idImage ? (
-                <div className="mt-1 inline-block rounded-lg border border-slate-200 bg-white p-2">
-                  <img src={selectedWaiver.idImage} alt="Participant ID" className="block h-32 object-contain" />
+              {selectedWaiver.idImage || selectedWaiver.idImageBack ? (
+                <div className="mt-1 flex flex-wrap gap-2">
+                  {selectedWaiver.idImage ? (
+                    <div className="inline-block rounded-lg border border-slate-200 bg-white p-2">
+                      <img src={selectedWaiver.idImage} alt="Participant ID (front)" className="block h-32 object-contain" />
+                    </div>
+                  ) : null}
+                  {selectedWaiver.idImageBack ? (
+                    <div className="inline-block rounded-lg border border-slate-200 bg-white p-2">
+                      <img src={selectedWaiver.idImageBack} alt="Participant ID (back)" className="block h-32 object-contain" />
+                    </div>
+                  ) : null}
                 </div>
+              ) : null}
+              {selectedWaiver.autoApproved ? (
+                <p className="mt-2 text-xs font-semibold text-emerald-700 dark:text-emerald-400">Approved automatically: the ID was verified on the player's profile.</p>
               ) : null}
               {selectedWaiver.validUntilISO ? <p className="mt-2"><span className="font-semibold">Valid until:</span> {formatDate(selectedWaiver.validUntilISO)}</p> : null}
 
