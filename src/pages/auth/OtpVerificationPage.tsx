@@ -45,6 +45,8 @@ export function OtpVerificationPage() {
       const res = await apiPost<{ message?: string }>('/api/auth/verify-otp', { email, otp: values.otp.trim() })
       toast.success(res?.message || 'OTP verified.')
       if (flow === 'reset') navigate(`/reset-password?email=${encodeURIComponent(email)}`)
+      // A brand-new account is greeted as new on the login page, with the email filled in.
+      else if (flow === 'register') navigate('/login', { state: { newAccount: true, email } })
       else navigate('/login')
     } catch (err: any) {
       toast.error(err?.message || 'OTP verification failed')

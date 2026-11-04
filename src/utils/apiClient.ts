@@ -71,6 +71,18 @@ export async function apiGetAll<T>(collection: string, query = ''): Promise<T[]>
   }
 }
 
+// A failed request, keeping the status and the response body so callers can react to flags
+// the API sends with an error (e.g. { emailExists: true }).
+export class ApiError extends Error {
+  status: number
+  body: any
+  constructor(message: string, status: number, body: any) {
+    super(message)
+    this.status = status
+    this.body = body
+  }
+}
+
 export async function apiPost<T>(path: string, body: unknown) {
   const res = await fetch(`${apiBase}${path}`, {
     method: 'POST',
@@ -80,7 +92,7 @@ export async function apiPost<T>(path: string, body: unknown) {
   const json = await res.json().catch(() => null)
   if (!res.ok) {
     endSuspendedSession(res.status, json)
-    throw new Error(json?.error || json?.message || `POST ${path} failed`)
+    throw new ApiError(json?.error || json?.message || `POST ${path} failed`, res.status, json)
   }
   return json as T
 }

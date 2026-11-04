@@ -4,7 +4,7 @@ import { useForm } from 'react-hook-form'
 import toast from 'react-hot-toast'
 import { useNavigate, useLocation, Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { FiEye, FiEyeOff } from 'react-icons/fi'
+import { FiCheck, FiEye, FiEyeOff } from 'react-icons/fi'
 import { useTheme } from '../../context/ThemeContext'
 
 import { Button } from '../../components/ui/Button'
@@ -13,6 +13,7 @@ import { Card } from '../../components/ui/Card'
 import { useAuth } from '../../context/AuthContext'
 import { completeGoogleRedirect, signInWithGoogle, type GoogleProfile } from '../../utils/firebase'
 import { ExistingAccountDialog } from '../../components/auth/ExistingAccountDialog'
+import { ApiError } from '../../utils/apiClient'
 
 type FormValues = {
   email: string
@@ -25,25 +26,31 @@ export function LoginPage() {
   const navigate = useNavigate()
   const location = useLocation()
   // Set by RequireAuth and the landing page booking bar so login returns the user where they were headed.
-  const redirectState = location.state as { from?: string; fromUserId?: string } | null
+  // newAccount/email: set by the OTP page after a new account verifies its email.
+  const redirectState = location.state as { from?: string; fromUserId?: string; newAccount?: boolean; email?: string } | null
+  const isNewAccount = redirectState?.newAccount === true
   const redirectFrom = redirectState?.from
   const [showPassword, setShowPassword] = useState(false)
   const [pendingGoogle, setPendingGoogle] = useState<{ profile: GoogleProfile; account: { name: string; email: string } } | null>(null)
   const [confirmingGoogle, setConfirmingGoogle] = useState(false)
+  // The email + password form was used for an account that was made with Google.
+  const [googleOnlyAccount, setGoogleOnlyAccount] = useState<{ name?: string; email: string } | null>(null)
 
   const {
     register,
     handleSubmit,
     getValues,
     formState: { errors, isSubmitting },
-  } = useForm<FormValues>({ defaultValues: { email: '', password: '', remember: false } })
+  } = useForm<FormValues>({ defaultValues: { email: redirectState?.email || '', password: '', remember: false } })
 
   const { theme } = useTheme()
 
   const missionCopy = useMemo(
     () => ({
-      title: 'Welcome back',
-      subtitle: 'Log in to book games, sign your waiver, and track your payments.',
+      title: isNewAccount ? 'Welcome to Chill Shooters' : 'Welcome back',
+      subtitle: isNewAccount
+        ? 'Your account is ready. Log in to finish your profile, sign your waiver, and book your first game.'
+        : 'Log in to book games, sign your waiver, and track your payments.',
       hint: 'Demo roles are inferred by email suffix:',
       suffixes: [
         { k: '@admin.local', v: 'admin' },
@@ -51,7 +58,7 @@ export function LoginPage() {
         { k: '@registrar.local', v: 'registrar' },
       ],
     }),
-    [],
+    [isNewAccount],
   )
 
   // Return to the page the session ended on only for the same account (a page left by another
@@ -67,9 +74,13 @@ export function LoginPage() {
   async function onSubmit(values: FormValues) {
     try {
       const user = await login(values)
-      toast.success('Authentication accepted.')
+      toast.success(user.firstLogin ? 'Welcome to Chill Shooters!' : 'Authentication accepted.')
       navigate(getRedirectRoute(user.role, user.id))
     } catch (err: unknown) {
+      if (err instanceof ApiError && err.body?.emailExists && err.body?.provider === 'google') {
+        setGoogleOnlyAccount(err.body.account || { email: values.email.trim() })
+        return
+      }
       toast.error(err instanceof Error ? err.message : 'Unable to sign in. Please try again.')
     }
   }
@@ -81,11 +92,12 @@ export function LoginPage() {
       return
     }
     setPendingGoogle(null)
-    toast.success('Signed in with Google.')
+    toast.success(result.user.firstLogin ? 'Account created with Google. Welcome!' : 'Signed in with Google.')
     navigate(getRedirectRoute(result.user.role, result.user.id))
   }
 
   async function handleGoogleSignIn() {
+    setGoogleOnlyAccount(null)
     try {
       const profile = await signInWithGoogle()
       // null: the pop-up was blocked and the browser is going to Google; we finish on return.
@@ -127,6 +139,12 @@ export function LoginPage() {
         busy={confirmingGoogle}
         onProceed={proceedWithExistingAccount}
         onCancel={() => setPendingGoogle(null)}
+      />
+      <ExistingAccountDialog
+        account={googleOnlyAccount}
+        provider="google"
+        onUseGoogle={handleGoogleSignIn}
+        onCancel={() => setGoogleOnlyAccount(null)}
       />
       <div className="pointer-events-none absolute inset-0 bg-camouflage opacity-20" />
       <div className="pointer-events-none absolute left-1/2 top-[-120px] h-[260px] w-[260px] -translate-x-1/2 rounded-full bg-accent/20 blur-3xl animate-gradientShift" />
@@ -205,9 +223,18 @@ export function LoginPage() {
                 )}
               </div>
 
-              <label className="flex cursor-pointer items-center gap-2 text-sm text-muted">
-                <input type="checkbox" className="h-4 w-4 accent-[var(--color-accent)]" {...register('remember')} />
-                Remember me (stay logged in)
+              <label className="group flex w-fit cursor-pointer select-none items-center gap-3 text-sm text-muted transition hover:text-text">
+                <input type="checkbox" className="peer sr-only" {...register('remember')} />
+                <span
+                  aria-hidden="true"
+                  className="grid h-5 w-5 shrink-0 place-items-center rounded-md border-2 border-white/20 bg-white/5 text-transparent shadow-inner transition group-hover:border-accent/60 peer-checked:border-accent peer-checked:bg-accent peer-checked:text-background peer-focus-visible:ring-2 peer-focus-visible:ring-accent/40 peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-background"
+                >
+                  <FiCheck className="h-3.5 w-3.5" strokeWidth={3.5} />
+                </span>
+                <span>
+                  Remember me
+                  <span className="ml-1 text-xs opacity-80">(stay logged in)</span>
+                </span>
               </label>
 
               <Button type="submit" disabled={isSubmitting} className="w-full">

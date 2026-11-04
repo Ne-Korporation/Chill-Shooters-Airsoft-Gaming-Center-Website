@@ -26,6 +26,7 @@ import { Button } from '../../components/ui/Button'
 import { useAuth } from '../../context/AuthContext'
 import { getApiBase } from '../../utils/apiClient'
 import { formatSlotRange, useSlotHours } from '../../utils/slotHours'
+import { PACKAGE_ENTRANCE_FEE_PER_PLAYER, calculatePackagePricing, packageEquipmentQty, type PackageLike } from '../../utils/packagePricing'
 
 type FAQ = {
   q: string
@@ -78,11 +79,248 @@ const howItWorks = [
 
 const navLinks = [
   { href: '#about', label: 'About' },
-  { href: '/app/packages', label: 'Packages' },
+  { href: '#packages', label: 'Packages' },
   { href: '#guidelines', label: 'Guidelines' },
   { href: '#location', label: 'Location' },
   { href: '#contact', label: 'Contact Us' },
 ]
+
+// The three fields, shown as cards and on the map. mapQuery is what the embedded Google map searches for.
+const fieldLocations = [
+  {
+    name: 'Delta Stronghold (Salawag)',
+    img: '/delta.png',
+    size: '~2 hectares',
+    capacity: 'Up to 400 players',
+    desc: 'Ideal for small to medium groups and tournaments.',
+    mapQuery: 'Delta Stronghold Airsoft, Salawag, Dasmariñas, Cavite',
+  },
+  {
+    name: 'Delta Stronghold (Langkaan)',
+    img: '/langkaanPlaceholder.png',
+    size: '~2 hectares',
+    capacity: 'Up to 400 players',
+    desc: 'Ideal for small to medium groups and tournaments.',
+    mapQuery: 'Delta Stronghold Airsoft, Langkaan, Dasmariñas, Cavite',
+  },
+  {
+    name: 'LOMA Binan Laguna',
+    img: '/loma.png',
+    size: '~4 hectares',
+    capacity: 'Up to 600 players',
+    desc: 'Ideal for large groups and tournaments.',
+    mapQuery: 'LOMA Airsoft, Biñan, Laguna',
+  },
+] as const
+
+type PublicPackage = PackageLike & {
+  id: string
+  name: string
+  description?: string
+  minPlayers?: number
+  bbReloadGrams?: number
+}
+type PublicItem = { id: string; name: string; price: number }
+
+// Active rental packages, read without signing in (GET /api/public/packages).
+function usePublicPackages() {
+  const [state, setState] = useState<{ loading: boolean; packages: PublicPackage[]; weapons: PublicItem[]; equipment: PublicItem[] }>({
+    loading: true,
+    packages: [],
+    weapons: [],
+    equipment: [],
+  })
+  useEffect(() => {
+    let alive = true
+    fetch(`${getApiBase()}/api/public/packages`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((body) => {
+        if (!alive) return
+        setState({
+          loading: false,
+          packages: Array.isArray(body?.data) ? body.data : [],
+          weapons: Array.isArray(body?.weapons) ? body.weapons : [],
+          equipment: Array.isArray(body?.equipment) ? body.equipment : [],
+        })
+      })
+      .catch(() => { if (alive) setState((current) => ({ ...current, loading: false })) })
+    return () => { alive = false }
+  }, [])
+  return state
+}
+
+function PackagesSection({ onBook }: { onBook: () => void }) {
+  const { loading, packages, weapons, equipment } = usePublicPackages()
+
+  const cards = useMemo(() => packages.map((pkg) => {
+    // Priced for the package's own headcount, or its minimum group size.
+    const players = Number(pkg.players) > 0 ? Number(pkg.players) : Math.max(1, Number(pkg.minPlayers) || 1)
+    const pricing = calculatePackagePricing({
+      pkg: { ...pkg, basePrice: Number(pkg.basePrice) || 0 },
+      players,
+      sessionMultiplier: 1,
+      weapons,
+      equipment,
+      entranceFeePerPlayer: PACKAGE_ENTRANCE_FEE_PER_PLAYER,
+    })
+    const weaponNames = [...new Set((pkg.weaponIds || []).map((id) => weapons.find((item) => item.id === id)?.name).filter(Boolean))] as string[]
+    const gear = (pkg.equipmentIds || [])
+      .map((id) => ({ name: equipment.find((item) => item.id === id)?.name, qty: packageEquipmentQty(pkg, id) }))
+      .filter((row): row is { name: string; qty: number } => Boolean(row.name))
+    return { pkg, players, pricing, weaponNames, gear }
+  }), [packages, weapons, equipment])
+
+  return (
+    <section id="packages" className="mx-auto max-w-[1200px] scroll-mt-24 px-4 pb-16 md:px-6">
+      <SectionTitle
+        eyebrow="Packages"
+        title="Rental packages for every squad"
+        subtitle={`Gear, weapons and entrance in one price. Every package includes the ₱${PACKAGE_ENTRANCE_FEE_PER_PLAYER} entrance fee per player.`}
+      />
+      {loading ? (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {[0, 1, 2].map((key) => <div key={key} className="surface h-56 animate-pulse rounded-2xl" />)}
+        </div>
+      ) : cards.length === 0 ? (
+        <div className="surface rounded-2xl p-6 text-sm text-muted">
+          Packages are being prepared. You can still book a game and pick your rentals when you reserve.
+        </div>
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {cards.map(({ pkg, players, pricing, weaponNames, gear }, idx) => (
+            <motion.div
+              key={pkg.id}
+              initial={{ opacity: 0, y: 12 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true, amount: 0.15 }}
+              transition={{ duration: 0.4, delay: idx * 0.05 }}
+              className="surface flex flex-col rounded-2xl p-5"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  <span className="chip-accent grid h-10 w-10 shrink-0 place-items-center rounded-xl">
+                    <FiBox className="h-5 w-5" />
+                  </span>
+                  <div>
+                    <div className="text-base font-bold">{pkg.name}</div>
+                    <div className="mt-0.5 flex items-center gap-1 text-xs text-muted">
+                      <FiUsers className="h-3.5 w-3.5" />
+                      {Number(pkg.players) > 0 ? `Priced for ${players} players` : `From ${players} ${players === 1 ? 'player' : 'players'}`}
+                    </div>
+                  </div>
+                </div>
+                {pricing.discountAmount > 0 ? (
+                  <span className="shrink-0 rounded-full bg-success/15 px-2.5 py-1 text-[11px] font-semibold text-success">{pricing.discountSummary}</span>
+                ) : null}
+              </div>
+
+              {pkg.description ? <p className="mt-3 text-sm leading-relaxed text-muted">{pkg.description}</p> : null}
+
+              <ul className="mt-3 space-y-1.5 text-sm">
+                {weaponNames.length > 0 ? (
+                  <li className="flex items-start gap-2">
+                    <FiTarget className="mt-0.5 h-4 w-4 shrink-0 text-accent" />
+                    <span>{weaponNames.join(' or ')}</span>
+                  </li>
+                ) : null}
+                {gear.map((row) => (
+                  <li key={row.name} className="flex items-start gap-2">
+                    <FiShield className="mt-0.5 h-4 w-4 shrink-0 text-accent" />
+                    <span>{row.qty > 1 ? `${row.qty} × ` : ''}{row.name}</span>
+                  </li>
+                ))}
+                {Number(pkg.bbReloadGrams) > 0 ? (
+                  <li className="flex items-start gap-2">
+                    <FiCheck className="mt-0.5 h-4 w-4 shrink-0 text-accent" />
+                    <span>{pkg.bbReloadGrams} g of BBs per reload</span>
+                  </li>
+                ) : null}
+              </ul>
+
+              <div className="mt-auto pt-5">
+                <div className="divider flex items-end justify-between gap-3 border-t pt-4">
+                  <div>
+                    <div className="text-2xl font-bold">₱{pricing.perPlayer.toLocaleString()}</div>
+                    <div className="text-xs text-muted">per player · ₱{pricing.total.toLocaleString()} for {players}</div>
+                  </div>
+                  <Button size="sm" variant="primary" onClick={onBook}>Book this</Button>
+                </div>
+              </div>
+            </motion.div>
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
+// Embedded Google map with arrows to move between the three fields.
+function LocationsMap() {
+  const [index, setIndex] = useState(0)
+  const count = fieldLocations.length
+  const location = fieldLocations[index]
+  const step = (delta: number) => setIndex((current) => (current + delta + count) % count)
+  const query = encodeURIComponent(location.mapQuery)
+
+  return (
+    <div className="surface flex flex-col overflow-hidden rounded-2xl">
+      <div className="relative min-h-[260px] flex-1">
+        <iframe
+          key={location.name}
+          title={`Map: ${location.name}`}
+          src={`https://www.google.com/maps?q=${query}&z=15&output=embed`}
+          className="absolute inset-0 h-full w-full border-0"
+          loading="lazy"
+        />
+        <button
+          type="button"
+          onClick={() => step(-1)}
+          aria-label="Previous location"
+          className="absolute left-3 top-1/2 grid h-10 w-10 -translate-y-1/2 place-items-center rounded-full bg-black/60 text-white shadow-lg backdrop-blur transition hover:bg-black/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(197,163,90,0.7)]"
+        >
+          <FiChevronLeft className="h-5 w-5" />
+        </button>
+        <button
+          type="button"
+          onClick={() => step(1)}
+          aria-label="Next location"
+          className="absolute right-3 top-1/2 grid h-10 w-10 -translate-y-1/2 place-items-center rounded-full bg-black/60 text-white shadow-lg backdrop-blur transition hover:bg-black/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(197,163,90,0.7)]"
+        >
+          <FiChevronRight className="h-5 w-5" />
+        </button>
+      </div>
+      <div className="flex items-center justify-between gap-3 px-5 py-3">
+        <div className="min-w-0" aria-live="polite">
+          <div className="flex items-center gap-2 text-sm font-semibold">
+            <FiMapPin className="h-4 w-4 shrink-0 text-accent" />
+            <span className="truncate">{location.name}</span>
+          </div>
+          <div className="mt-1 flex gap-1.5" role="tablist" aria-label="Choose a location">
+            {fieldLocations.map((loc, i) => (
+              <button
+                key={loc.name}
+                type="button"
+                role="tab"
+                aria-selected={i === index}
+                aria-label={loc.name}
+                onClick={() => setIndex(i)}
+                className={`h-1.5 rounded-full transition-all ${i === index ? 'w-6 bg-[rgb(197,163,90)]' : 'w-1.5 bg-[rgba(var(--text),0.25)]'}`}
+              />
+            ))}
+          </div>
+        </div>
+        <a
+          href={`https://www.google.com/maps/search/?api=1&query=${query}`}
+          target="_blank"
+          rel="noreferrer"
+          className="hover-row inline-flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-sm font-medium"
+        >
+          Open in Google Maps <FiChevronRight className="text-muted" />
+        </a>
+      </div>
+    </div>
+  )
+}
 
 function toISODate(d: Date) {
   const pad = (n: number) => String(n).padStart(2, '0')
@@ -759,6 +997,8 @@ export function LandingPage() {
         </ol>
       </section>
 
+      <PackagesSection onBook={() => navigate(isAuthenticated ? '/app/packages' : '/login', isAuthenticated ? undefined : { state: { from: '/app/packages' } })} />
+
       {/* FAQ */}
       <section id="guidelines" className="mx-auto max-w-[1200px] scroll-mt-24 px-4 pb-16 md:px-6">
         <div className="grid gap-8 lg:grid-cols-[1fr_2fr]">
@@ -802,29 +1042,7 @@ export function LandingPage() {
         />
 
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {([
-            {
-              name: 'Delta Stronghold (Salawag)',
-              img: '/delta.png',
-              size: '~2 hectares',
-              capacity: 'Up to 400 players',
-              desc: 'Ideal for small to medium groups and tournaments.',
-            },
-            {
-              name: 'Delta Stronghold (Langkaan)',
-              img: '/langkaanPlaceholder.png',
-              size: '~2 hectares',
-              capacity: 'Up to 400 players',
-              desc: 'Ideal for small to medium groups and tournaments.',
-            },
-            {
-              name: 'LOMA Binan Laguna',
-              img: '/loma.png',
-              size: '~4 hectares',
-              capacity: 'Up to 600 players',
-              desc: 'Ideal for large groups and tournaments.',
-            },
-          ] as const).map((loc, idx) => (
+          {fieldLocations.map((loc, idx) => (
             <motion.div
               key={loc.name}
               initial={{ opacity: 0, y: 12 }}
@@ -918,22 +1136,7 @@ export function LandingPage() {
             </form>
           </div>
 
-          <div className="surface flex flex-col overflow-hidden rounded-2xl">
-            <iframe
-              title="Chill Shooters locations"
-              src="https://www.google.com/maps?q=Chill%20Shooters%20Airsoft&output=embed"
-              className="min-h-[260px] w-full flex-1 border-0"
-              loading="lazy"
-            />
-            <a
-              href="https://www.google.com/maps/search/?api=1&query=Chill+Shooters+Airsoft"
-              target="_blank"
-              rel="noreferrer"
-              className="hover-row flex items-center justify-between px-5 py-3 text-sm font-medium"
-            >
-              Open in Google Maps <FiChevronRight className="text-muted" />
-            </a>
-          </div>
+          <LocationsMap />
         </div>
 
         <footer className="divider mt-10 border-t pt-6 text-center text-xs text-muted">

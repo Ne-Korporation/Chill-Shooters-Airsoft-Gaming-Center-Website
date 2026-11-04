@@ -21,6 +21,8 @@ type AuthUser = {
   name: string
   email: string
   role: Role
+  // Set on the session of an account's first sign-in, so the dashboard says "Welcome" not "Welcome back".
+  firstLogin?: boolean
 }
 
 type AuthSession = {
@@ -31,8 +33,8 @@ type AuthSession = {
 
 type GoogleAuthPayload = { name: string; email: string; idToken: string; confirmExisting?: boolean }
 
-// When the Google email already has an account, the API asks the player to confirm
-// before signing in; call again with confirmExisting: true to proceed.
+// A new Google email is signed straight in. When it matches an account made with the email +
+// password form, the API asks the player to confirm first; call again with confirmExisting: true.
 export type GoogleAuthResult =
   | { user: AuthUser; needsConfirm?: false }
   | { needsConfirm: true; account: { name: string; email: string } }
@@ -43,9 +45,12 @@ type AuthContextValue = {
   isAuthenticated: boolean
   login: (payload: { email: string; password: string; remember?: boolean }) => Promise<AuthUser>
   loginWithGoogle: (payload: GoogleAuthPayload & { remember?: boolean }) => Promise<GoogleAuthResult>
-  registerWithGoogle: (payload: GoogleAuthPayload) => Promise<GoogleAuthResult>
+  registerWithGoogle: (payload: GoogleAuthPayload & { remember?: boolean }) => Promise<GoogleAuthResult>
   register: (payload: { name: string; email: string; password: string }) => Promise<void>
   updateUser: (updates: Partial<AuthUser>) => void
+  // Swaps in a new token for the same session (e.g. after the email changes; the token carries it).
+  replaceToken: (token: string, updates?: Partial<AuthUser>) => void
+  remember: boolean
   logout: () => void
 }
 
@@ -111,6 +116,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!current) return current
       const nextUser = { ...current.user, ...updates }
       const next = { ...current, user: nextUser }
+      writeStoredSession(next, !!next.remember)
+      return next
+    })
+  }, [])
+
+  const replaceToken = React.useCallback((nextToken: string, updates: Partial<AuthUser> = {}) => {
+    setSession((current) => {
+      if (!current) return current
+      const next = { ...current, token: nextToken, user: { ...current.user, ...updates } }
       writeStoredSession(next, !!next.remember)
       return next
     })
@@ -210,13 +224,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         startSession({ user: res.user, token: res.token, remember })
         return { user: res.user }
       },
-      registerWithGoogle: async ({ name, email, idToken, confirmExisting = false }) => {
-        const res = await apiPost<any>('/api/auth/social-register', { name, email, idToken, confirmExisting })
+      registerWithGoogle: async ({ name, email, idToken, confirmExisting = false, remember = false }) => {
+        const res = await apiPost<any>('/api/auth/social-register', { name, email, idToken, confirmExisting, remember })
         if (res?.ok && res?.needsConfirm) return { needsConfirm: true, account: res.account }
         if (!res?.ok || !res?.user || !res?.token) {
           throw new Error(res?.error || 'Google registration failed')
         }
-        startSession({ user: res.user, token: res.token })
+        startSession({ user: res.user, token: res.token, remember })
         return { user: res.user }
       },
       register: async ({ name, email, password }) => {
@@ -224,9 +238,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (!res?.ok) throw new Error(res?.error || 'Registration failed')
       },
       updateUser,
+      replaceToken,
+      remember: !!session?.remember,
       logout,
     }),
-    [token, updateUser, user, startSession, logout],
+    [token, updateUser, replaceToken, session?.remember, user, startSession, logout],
   )
 
   return (

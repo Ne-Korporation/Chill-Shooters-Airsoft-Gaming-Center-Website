@@ -1,3 +1,6 @@
+// Entrance fee each player pays on top of a package (same as the booking page).
+export const PACKAGE_ENTRANCE_FEE_PER_PLAYER = 150
+
 export type PackageDiscountTarget = 'package_total' | 'weapons' | 'equipment' | 'entrance'
 export type PackageDiscountMode = 'percent' | 'amount' | 'settled'
 

@@ -1,9 +1,10 @@
 import React from 'react'
-import { FiCheck, FiEye, FiRotateCcw, FiSlash, FiX } from 'react-icons/fi'
+import { FiAlertTriangle, FiCheck, FiEye, FiRotateCcw, FiSlash, FiX } from 'react-icons/fi'
 import toast from 'react-hot-toast'
 import { ActionGroup, Button } from '../../components/ui/Button'
 import { FilterTabs } from '../../components/ui/FilterTabs'
 import { Card } from '../../components/ui/Card'
+import { Modal } from '../../components/ui/Modal'
 import { apiGet, apiGetAll, apiPost, apiPut } from '../../utils/apiClient'
 import { Paged } from '../../components/ui/Pagination'
 import { PlayerStatsCard } from '../../components/players/PlayerStatsCard'
@@ -38,6 +39,7 @@ export function PlayerManagementPage() {
   const [staffFilter, setStaffFilter] = React.useState<'all' | 'Marshal' | 'Admin' | 'Registrar'>('all')
   const [verifyingId, setVerifyingId] = React.useState<string | null>(null)
   const [selectedPlayer, setSelectedPlayer] = React.useState<any | null>(null)
+  const [partnershipRequestsOpen, setPartnershipRequestsOpen] = React.useState(false)
 
   const fetchUsers = React.useCallback(async () => {
     setLoading(true)
@@ -66,8 +68,11 @@ export function PlayerManagementPage() {
             gamesPlayed: live?.gamesPlayed ?? 0,
             status,
             verificationStatus,
-            verificationLabel: verificationStatus === 'verified' ? 'Verified' : verificationStatus === 'pending_review' ? 'Pending review' : 'Not submitted',
+            verificationLabel: verificationStatus === 'verified' ? 'Verified' : verificationStatus === 'pending_review' ? 'Pending review' : verificationStatus === 'rejected' ? 'Rejected' : 'Not submitted',
             identityDocumentUrl: doc.identityDocumentUrl || null,
+            identityDocumentBackUrl: doc.identityDocumentBackUrl || null,
+            identityIdType: doc.identityIdType || '',
+            birthDate: doc.birthDate || '',
             accountStatus: String(doc.status || '').toLowerCase() === 'suspended' ? 'suspended' : 'active',
             suspensionReason: doc.suspensionReason || '',
             partnershipInstitution: doc.partnershipInstitution || '',
@@ -351,29 +356,6 @@ export function PlayerManagementPage() {
         <p className="mt-1 text-sm text-muted">Manage players and staff accounts, including marshal, admin, and registrar access.</p>
       </div>
 
-      {pendingPartnershipRequests.length > 0 ? (
-        <Card className="p-4">
-          <div className="text-xs uppercase tracking-widest text-muted">Partnership discount requests</div>
-          <div className="mt-3 space-y-2">
-            {pendingPartnershipRequests.map((p) => (
-              <div key={p.id} className="flex flex-col gap-2 rounded-xl border border-white/10 bg-white/5 p-3 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <div className="text-sm font-semibold">{p.name} <span className="text-xs text-muted">({p.id})</span></div>
-                  <div className="text-xs text-muted">{p.partnershipInstitution}</div>
-                  {p.partnershipProofUrl ? (
-                    <a href={p.partnershipProofUrl} target="_blank" rel="noreferrer" className="text-xs text-accent underline">View school ID</a>
-                  ) : null}
-                </div>
-                <ActionGroup>
-                  <Button size="xs" variant="success-soft" disabled={verifyingId === p.id} onClick={() => reviewPartnership(p.id, 'verified')}><FiCheck /> Verify</Button>
-                  <Button size="xs" variant="danger-soft" disabled={verifyingId === p.id} onClick={() => reviewPartnership(p.id, 'rejected')}><FiX /> Reject</Button>
-                </ActionGroup>
-              </div>
-            ))}
-          </div>
-        </Card>
-      ) : null}
-
       <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
         <Card className="rounded-xl px-3 py-2 md:px-3 md:py-2">
           <div className="truncate text-[10px] uppercase tracking-wider text-muted">Players</div>
@@ -404,9 +386,23 @@ export function PlayerManagementPage() {
                 <div className="text-xs uppercase tracking-widest text-muted">Players</div>
                 <div className="mt-2 text-sm text-muted">Review current players and their account status.</div>
               </div>
-              <Button variant="ghost" size="sm" onClick={() => setShowAddForm((p) => !p)}>
-                {showAddForm ? 'Cancel' : 'Add Player'}
-              </Button>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                {/* Partnership discount requests waiting on a decision. */}
+                <button
+                  type="button"
+                  onClick={() => setPartnershipRequestsOpen(true)}
+                  className={`inline-flex h-9 items-center gap-2 rounded-xl border px-3 text-sm font-semibold transition ${pendingPartnershipRequests.length > 0 ? 'border-danger/40 bg-danger/15 text-danger hover:bg-danger/25' : 'border-white/10 bg-white/5 text-muted hover:text-text'}`}
+                >
+                  <FiAlertTriangle className="h-4 w-4" />
+                  View requests
+                  {pendingPartnershipRequests.length > 0 ? (
+                    <span className="grid h-5 min-w-5 place-items-center rounded-full bg-danger px-1.5 text-[11px] font-bold text-white">{pendingPartnershipRequests.length}</span>
+                  ) : null}
+                </button>
+                <Button variant="ghost" size="sm" onClick={() => setShowAddForm((p) => !p)}>
+                  {showAddForm ? 'Cancel' : 'Add Player'}
+                </Button>
+              </div>
             </div>
 
             {showAddForm && (
@@ -574,6 +570,31 @@ export function PlayerManagementPage() {
           </>
         )}
       </Card>
+      {partnershipRequestsOpen ? (
+        <Modal title="Partnership discount requests" eyebrow="Players" size="lg" onClose={() => setPartnershipRequestsOpen(false)}>
+          {pendingPartnershipRequests.length === 0 ? (
+            <div className="rounded-xl border border-white/10 bg-white/5 p-4 text-sm text-muted">No discount requests are waiting for review.</div>
+          ) : (
+          <div className="space-y-2">
+            {pendingPartnershipRequests.map((p) => (
+              <div key={p.id} className="flex flex-col gap-2 rounded-xl border border-white/10 bg-white/5 p-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <div className="text-sm font-semibold">{p.name} <span className="text-xs text-muted">({p.id})</span></div>
+                  <div className="text-xs text-muted">{p.partnershipInstitution}</div>
+                  {p.partnershipProofUrl ? (
+                    <a href={p.partnershipProofUrl} target="_blank" rel="noreferrer" className="text-xs text-accent underline">View school ID</a>
+                  ) : null}
+                </div>
+                <ActionGroup>
+                  <Button size="xs" variant="success-soft" disabled={verifyingId === p.id} onClick={() => reviewPartnership(p.id, 'verified')}><FiCheck /> Verify</Button>
+                  <Button size="xs" variant="danger-soft" disabled={verifyingId === p.id} onClick={() => reviewPartnership(p.id, 'rejected')}><FiX /> Reject</Button>
+                </ActionGroup>
+              </div>
+            ))}
+          </div>
+          )}
+        </Modal>
+      ) : null}
       {selectedPlayer ? (
         <div onClick={() => setSelectedPlayer(null)} className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/70 p-4">
           <div onClick={(e) => e.stopPropagation()} className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-3xl border border-white/10 bg-background p-4 shadow-[0_30px_80px_rgba(0,0,0,0.75)]">
@@ -631,6 +652,8 @@ export function PlayerManagementPage() {
               <div>
                 <div className="text-xs uppercase tracking-widest text-muted">Verification</div>
                 <div className="mt-2 text-sm">{selectedPlayer.verificationLabel}</div>
+                {selectedPlayer.identityIdType ? <div className="mt-1 text-sm">ID type: <span className="font-semibold">{selectedPlayer.identityIdType}</span></div> : null}
+                {selectedPlayer.birthDate ? <div className="mt-1 text-sm">Birthday on profile: <span className="font-semibold">{selectedPlayer.birthDate}</span></div> : null}
                 <div className="mt-3 text-xs text-muted">Status: {selectedPlayer.status}</div>
               </div>
               <div>
@@ -645,7 +668,18 @@ export function PlayerManagementPage() {
             ) : null}
             <div className="mt-4 rounded-3xl border border-white/10 bg-white/5 p-4 text-center">
               {selectedPlayer.identityDocumentUrl ? (
-                <img src={selectedPlayer.identityDocumentUrl} alt="Submitted ID" className="mx-auto max-h-[420px] w-auto rounded-3xl object-contain" />
+                <div className={`grid gap-4 ${selectedPlayer.identityDocumentBackUrl ? 'md:grid-cols-2' : ''}`}>
+                  <figure>
+                    <img src={selectedPlayer.identityDocumentUrl} alt="Submitted ID (front)" className="mx-auto max-h-[420px] w-auto rounded-3xl object-contain" />
+                    {selectedPlayer.identityDocumentBackUrl ? <figcaption className="mt-2 text-xs text-muted">Front</figcaption> : null}
+                  </figure>
+                  {selectedPlayer.identityDocumentBackUrl ? (
+                    <figure>
+                      <img src={selectedPlayer.identityDocumentBackUrl} alt="Submitted ID (back)" className="mx-auto max-h-[420px] w-auto rounded-3xl object-contain" />
+                      <figcaption className="mt-2 text-xs text-muted">Back</figcaption>
+                    </figure>
+                  ) : null}
+                </div>
               ) : (
                 <div className="text-sm text-muted">No submitted ID image is available for this player.</div>
               )}

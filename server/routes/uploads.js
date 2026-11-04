@@ -7,6 +7,7 @@ import { Binary } from 'mongodb'
 import { isCloudinaryConfigured, requireCloudinary } from './cloudinary.js'
 import { getDb, getUserAccountsCollection } from '../db/mongo.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
+import { findIdentityIdType } from '../utils/idTypes.js'
 
 const router = express.Router()
 
@@ -136,9 +137,59 @@ router.post('/upload-image', requireAuth, (req, res, next) => {
   }
 })
 
-router.post('/scan-id', requireAuth, upload.single('file'), async (req, res) => {
-  if (!req.file?.buffer) {
-    return res.status(400).json({ ok: false, error: 'file is required' })
+// Reads the text on an ID photo with Azure OCR when it is configured. The result only helps the
+// reviewer: staff still verify every ID.
+async function scanIdImage(imageUrl) {
+  const endpoint = process.env.AZURE_VISION_ENDPOINT
+  const key = process.env.AZURE_VISION_KEY
+  if (!endpoint || !key) {
+    return {
+      provider: 'not-configured',
+      extractedText: '',
+      summary: 'ID scan API not configured. Set AZURE_VISION_ENDPOINT and AZURE_VISION_KEY to enable OCR.',
+      cardDetected: false,
+    }
+  }
+  const ocrUrl = new URL(`${endpoint.replace(/\/$/, '')}/vision/v3.2/ocr`).toString()
+  try {
+    const response = await axios.post(ocrUrl, { url: imageUrl }, {
+      headers: { 'Ocp-Apim-Subscription-Key': key, 'Content-Type': 'application/json' },
+      timeout: 60000,
+    })
+    const extractedText = (response.data?.regions || [])
+      .flatMap((region) => region.lines || [])
+      .flatMap((line) => line.words || [])
+      .map((word) => word.text)
+      .filter(Boolean)
+      .join('\n')
+      .trim()
+    return {
+      provider: 'azure-vision',
+      extractedText,
+      summary: extractedText ? extractedText.slice(0, 120) : 'No readable text detected in the uploaded ID.',
+      cardDetected: Boolean(extractedText),
+    }
+  } catch (ocrErr) {
+    const message = ocrErr?.response?.data?.error?.message || ocrErr?.message || String(ocrErr)
+    return { provider: 'azure-vision', extractedText: '', summary: `Azure OCR failed: ${message}`, cardDetected: false }
+  }
+}
+
+const idScanUpload = upload.fields([{ name: 'front', maxCount: 1 }, { name: 'back', maxCount: 1 }, { name: 'file', maxCount: 1 }])
+
+// POST /api/scan-id (multipart): idType, front, and back when that ID type has one.
+// Identity verification is for player accounts, after their birthday is on the profile; the
+// submission waits for staff review (Players & staff page).
+router.post('/scan-id', requireAuth, (req, res, next) => {
+  idScanUpload(req, res, (err) => {
+    if (err) return res.status(400).json({ ok: false, error: err.message || 'Only image files are allowed.' })
+    next()
+  })
+}, async (req, res) => {
+  const front = req.files?.front?.[0] || req.files?.file?.[0]
+  const back = req.files?.back?.[0]
+  if (!front?.buffer) {
+    return res.status(400).json({ ok: false, error: 'Attach a photo of the front of your ID.' })
   }
 
   const requestedUserId = String(req.body?.userId || '').trim()
@@ -151,87 +202,54 @@ router.post('/scan-id', requireAuth, upload.single('file'), async (req, res) => 
   const userId = req.user.role === 'user' ? String(req.user.id) : requestedUserId
   if (!userId) return res.status(400).json({ ok: false, error: 'userId is required' })
 
+  const idType = findIdentityIdType(String(req.body?.idType || '').trim())
+  if (!idType) return res.status(400).json({ ok: false, error: 'Choose which ID you are submitting.' })
+  if (idType.sides === 'front_back' && !back?.buffer) {
+    return res.status(400).json({ ok: false, error: `A ${idType.name} needs photos of both the front and the back.` })
+  }
+
   try {
-    const imageUrl = await storeUpload(req, req.file.buffer, req.file.originalname || 'id-scan', req.file.mimetype)
-
-    let scanResult = null
-    const endpoint = process.env.AZURE_VISION_ENDPOINT
-    const key = process.env.AZURE_VISION_KEY
-
-    if (endpoint && key) {
-      const ocrUrl = new URL(`${endpoint.replace(/\/$/, '')}/vision/v3.2/ocr`).toString()
-      try {
-        const response = await axios.post(ocrUrl, { url: imageUrl }, {
-          headers: {
-            'Ocp-Apim-Subscription-Key': key,
-            'Content-Type': 'application/json',
-          },
-          timeout: 60000,
-        })
-
-        const lines = (response.data?.regions || [])
-          .flatMap((region) => region.lines || [])
-          .flatMap((line) => line.words || [])
-          .map((word) => word.text)
-          .filter(Boolean)
-
-        const extractedText = lines.join('\n').trim()
-        scanResult = {
-          provider: 'azure-vision',
-          extractedText,
-          summary: extractedText ? extractedText.slice(0, 120) : 'No readable text detected in the uploaded ID.',
-          cardDetected: Boolean(extractedText),
-        }
-      } catch (ocrErr) {
-        const message = ocrErr?.response?.data?.error?.message || ocrErr?.message || String(ocrErr)
-        scanResult = {
-          provider: 'azure-vision',
-          extractedText: '',
-          summary: `Azure OCR failed: ${message}`,
-          cardDetected: false,
-        }
-      }
-    } else {
-      scanResult = {
-        provider: 'not-configured',
-        extractedText: '',
-        summary: 'ID scan API not configured. Set AZURE_VISION_ENDPOINT and AZURE_VISION_KEY to enable OCR.',
-        cardDetected: false,
-      }
+    const collection = await getUserAccountsCollection()
+    const account = await collection.findOne({ id: userId })
+    if (!account) return res.status(404).json({ ok: false, error: 'Player not found' })
+    if (String(account.role || 'user').toLowerCase() !== 'user') {
+      return res.status(400).json({ ok: false, error: 'Staff accounts do not need identity verification.' })
+    }
+    if (!account.birthDate) {
+      return res.status(400).json({ ok: false, error: 'Add your birthday to your profile before verifying your ID.' })
+    }
+    if (account.identityVerificationStatus === 'verified') {
+      return res.status(409).json({ ok: false, error: 'This identity is already verified.' })
     }
 
-    if (!scanResult) {
-      scanResult = {
-        provider: 'azure-vision',
-        extractedText: '',
-        summary: 'Azure OCR returned no result.',
-        cardDetected: false,
-      }
-    }
+    const frontUrl = await storeUpload(req, front.buffer, front.originalname || 'id-front', front.mimetype)
+    const backUrl = idType.sides === 'front_back'
+      ? await storeUpload(req, back.buffer, back.originalname || 'id-back', back.mimetype)
+      : ''
+    const scanResult = await scanIdImage(frontUrl)
 
-    let updatedUser = null
-    if (userId) {
-      const collection = await getUserAccountsCollection()
-      const updateResult = await collection.findOneAndUpdate(
-        { id: userId },
-        {
-          $set: {
-            identityVerificationStatus: 'pending_review',
-            identityDocumentUrl: imageUrl,
-            identityScanStatus: scanResult.cardDetected ? 'detected' : 'not_detected',
-            identityScanProvider: scanResult.provider,
-            identityScanSummary: scanResult.summary,
-            identityScanText: scanResult.extractedText,
-            identityScanDetected: scanResult.cardDetected,
-            identityVerificationUpdatedAt: new Date().toISOString(),
-          },
+    const updateResult = await collection.findOneAndUpdate(
+      { _id: account._id },
+      {
+        $set: {
+          identityVerificationStatus: 'pending_review',
+          identityIdType: idType.name,
+          identityDocumentUrl: frontUrl,
+          identityDocumentBackUrl: backUrl,
+          identityScanStatus: scanResult.cardDetected ? 'detected' : 'not_detected',
+          identityScanProvider: scanResult.provider,
+          identityScanSummary: scanResult.summary,
+          identityScanText: scanResult.extractedText,
+          identityScanDetected: scanResult.cardDetected,
+          identityVerificationUpdatedAt: new Date().toISOString(),
         },
-        { returnDocument: 'after' },
-      )
-      updatedUser = updateResult?.value ?? updateResult ?? null
-    }
+        $unset: { identityReviewReason: '' },
+      },
+      { returnDocument: 'after', projection: { password: 0, otpCode: 0, otpExpiresAt: 0, pendingEmailOtp: 0 } },
+    )
+    const updatedUser = updateResult?.value ?? updateResult ?? null
 
-    return res.json({ ok: true, url: imageUrl, scan: scanResult, user: updatedUser })
+    return res.json({ ok: true, url: frontUrl, backUrl, scan: scanResult, user: updatedUser })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
   }

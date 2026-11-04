@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto'
 import { getDb, startDbSession, toObjectId } from '../db/mongo.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
 import { ALLOWED_COLLECTIONS } from './collections.js'
+import { ACCEPTED_ID_TYPES } from '../utils/idTypes.js'
 import { getActorName } from '../utils/actors.js'
 import { NICKNAME_MAX, cleanMiddleInitial, cleanNamePart, composeFullName } from '../utils/names.js'
 import { calculateBookingPrice, getAmmoReloadPrice, normalizeExtraAmmoReloads } from '../utils/bookingPricing.js'
@@ -98,6 +99,41 @@ router.get('/waiver-text', async (req, res) => {
   }
 })
 
+// Public: the landing page lists the active rental packages without signing in. Only what a
+// visitor needs to compare them is sent: names, what's included and the prices that set the cost.
+router.get('/public/packages', async (_req, res) => {
+  try {
+    const db = await getDb()
+    const docs = await db.collection('packages').find(
+      { $or: [{ status: 'active' }, { status: { $exists: false } }, { status: '' }, { status: null }] },
+      {
+        projection: {
+          _id: 0, id: 1, name: 1, description: 1, basePrice: 1, minPlayers: 1, players: 1, settledAmount: 1,
+          weaponCount: 1, weaponIds: 1, equipmentIds: 1, equipmentQuantities: 1, discountPct: 1, discountMode: 1,
+          discountValue: 1, discountTargets: 1, tier: 1, bbReloadGrams: 1,
+        },
+      },
+    ).sort({ name: 1 }).limit(24).toArray()
+
+    const ids = (field) => [...new Set(docs.flatMap((doc) => (Array.isArray(doc[field]) ? doc[field] : []).map(String)))]
+    const itemProjection = { projection: { _id: 0, id: 1, name: 1, model: 1, price: 1 } }
+    const [weapons, equipment] = await Promise.all([
+      db.collection('weapons').find({ id: { $in: ids('weaponIds') } }, itemProjection).toArray(),
+      db.collection('equipments').find({ id: { $in: ids('equipmentIds') } }, itemProjection).toArray(),
+    ])
+    // Packages point at one piece of a model ("Masks #3"); visitors see the model.
+    const publicItem = (item) => ({
+      id: String(item.id),
+      name: String(item.model || item.name || '').replace(/\s+#\d+$/, '') || 'Item',
+      price: Number(item.price) || 0,
+    })
+
+    return res.json({ ok: true, data: docs, weapons: weapons.map(publicItem), equipment: equipment.map(publicItem) })
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: String(err) })
+  }
+})
+
 // Admin: replace the waiver text, or { reset: true } to go back to the official text.
 // Waivers already signed keep the text they were signed with.
 router.put('/waiver-text', requireAuth, requireRole('admin'), async (req, res) => {
@@ -156,27 +192,38 @@ router.get('/team-directory/lookup', requireAuth, requireRole('user'), async (re
   try {
     const db = await getDb()
     const isPlayer = { role: { $in: ['user', null] }, isChildProfile: { $ne: true } }
-    const candidates = await db.collection('user_accounts').find(
-      byEmail
-        ? { $and: [sameEmailFilter(email), isPlayer] }
-        : { $and: [{ name: { $regex: query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' } }, isPlayer] },
-      { projection: { id: 1, name: 1, email: 1, emailVerified: 1, status: 1 } },
-    ).limit(byEmail ? 1 : 6).toArray()
+    const matchesQuery = byEmail
+      ? sameEmailFilter(email)
+      : { name: { $regex: query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' } }
+    // Only players whose ID is verified can join a team. Filtering here, before the limit, keeps an
+    // unverified account from taking the place of the verified one that matches the same name.
+    const canJoin = {
+      identityVerificationStatus: 'verified',
+      emailVerified: { $ne: false },
+      status: { $ne: 'suspended' },
+      id: { $ne: String(req.user.id) },
+    }
+    const players = await db.collection('user_accounts').find(
+      { $and: [matchesQuery, isPlayer, canJoin] },
+      { projection: { id: 1, name: 1, email: 1 } },
+    ).sort({ name: 1 }).limit(5).toArray()
 
-    const players = candidates.filter((player) =>
-      String(player.id || player._id) !== String(req.user.id) && player.emailVerified !== false && player.status !== 'suspended')
     if (!players.length) {
-      if (byEmail && candidates.length && String(candidates[0].id || candidates[0]._id) === String(req.user.id)) {
+      // Say why an exact email found nobody.
+      const account = byEmail
+        ? await db.collection('user_accounts').findOne({ $and: [matchesQuery, isPlayer] }, { projection: { id: 1, emailVerified: 1, status: 1 } })
+        : null
+      if (account && String(account.id || account._id) === String(req.user.id)) {
         return res.status(400).json({ ok: false, error: 'You are already counted as the team captain.' })
       }
-      if (byEmail && candidates.length) {
-        return res.status(409).json({ ok: false, error: 'That player has not verified their email yet.' })
+      if (account) {
+        return res.status(409).json({ ok: false, error: "That player's ID isn't verified yet. Only verified players can be added to a team." })
       }
       return res.status(404).json({
         ok: false,
         error: byEmail
           ? 'No registered player uses that email. Ask them to create an account first.'
-          : 'No registered player matches that name. Try their email, or ask them to create an account first.',
+          : 'No verified player matches that name. Try their email, or ask them to verify their ID on their profile.',
       })
     }
 
@@ -905,20 +952,8 @@ function personalizeNotification(doc, user) {
 // Staff only review a waiver; what the participant (and guardian) entered is never edited.
 // idType is accepted only for older waivers that were submitted before players chose it.
 const WAIVER_REVIEW_FIELDS = new Set(['status', 'reviewerNote', 'idType', 'idChecked', 'guardianIdChecked', 'archived'])
-// Philippine IDs a reviewer may accept when approving a waiver.
-export const ACCEPTED_ID_TYPES = [
-  'PhilSys National ID',
-  "Driver's License",
-  'Passport',
-  'UMID',
-  'SSS ID',
-  'PRC ID',
-  "Voter's ID",
-  'Postal ID',
-  'PhilHealth ID',
-  'Senior Citizen ID',
-  'School ID',
-]
+// Philippine IDs a reviewer may accept when approving a waiver (see utils/idTypes.js).
+export { ACCEPTED_ID_TYPES }
 
 // Validates a waiver review and turns it into a MongoDB update. Approving requires the
 // participant's ID (and a minor's guardian ID) to be checked, and starts the 12-month validity.
@@ -1142,12 +1177,10 @@ router.get('/:collection', requireAuth, async (req, res) => {
           { $or: [{ id: String(req.user.id) }, ...(objectId ? [{ _id: objectId }] : [])] },
           filter,
         ),
-        { projection: { password: 0, otpCode: 0, otpExpiresAt: 0 } },
+        { projection: { password: 0, otpCode: 0, otpExpiresAt: 0, pendingEmailOtp: 0 } },
       )
-      if (docs) {
-        delete docs.identityDocumentUrl
-        delete docs.email
-      }
+      // Players see their own submitted ID photos; nobody else's.
+      if (docs) delete docs.email
       return res.json({ ok: true, data: docs ? [docs] : [] })
     }
 
@@ -1181,8 +1214,11 @@ router.get('/:collection', requireAuth, async (req, res) => {
     query = query.skip(skip).limit(limit)
 
     if (collection === 'user_accounts') {
-      const projection = { password: 0, otpCode: 0, otpExpiresAt: 0 }
-      if (req.user.role !== 'admin') projection.identityDocumentUrl = 0
+      const projection = { password: 0, otpCode: 0, otpExpiresAt: 0, pendingEmailOtp: 0 }
+      if (req.user.role !== 'admin') {
+        projection.identityDocumentUrl = 0
+        projection.identityDocumentBackUrl = 0
+      }
       if (playerUser) projection.email = 0
       query = query.project(projection)
     }
@@ -1228,7 +1264,12 @@ router.get('/:collection/:id', requireAuth, async (req, res) => {
       delete doc.password
       delete doc.otpCode
       delete doc.otpExpiresAt
-      if (req.user.role !== 'admin') delete doc.identityDocumentUrl
+      delete doc.pendingEmailOtp
+      // Only admins and the account's owner see the submitted ID photos.
+      if (req.user.role !== 'admin' && String(doc.id || doc._id) !== String(req.user.id)) {
+        delete doc.identityDocumentUrl
+        delete doc.identityDocumentBackUrl
+      }
       if (req.user.role === 'user') {
         delete doc.email
       }
@@ -1441,6 +1482,9 @@ router.post('/:collection', requireAuth, async (req, res) => {
       payload.equipmentQuantities = cleanEquipmentQuantities(payload.equipmentIds, payload.equipmentQuantities)
     }
 
+    // A player's own waiver opens once their ID is verified on their profile. The verified name,
+    // birthday and ID are copied onto it, so it is approved as soon as it is signed.
+    let verifiedIdentity = null
     // A parent submits the minor waiver for a child profile on their account (routes/children.js),
     // after confirming by email that they are the guardian and once their own waiver is approved.
     if (collection === 'waivers' && req.user.role === 'user') {
@@ -1460,6 +1504,18 @@ router.post('/:collection', requireAuth, async (req, res) => {
         payload.forChild = true
         payload.guardianId = String(req.user.id)
         payload.submittedBy = String(req.user.id)
+      } else {
+        const account = await db.collection('user_accounts').findOne({ id: String(req.user.id) })
+        if (!account || account.identityVerificationStatus !== 'verified') {
+          return res.status(409).json({ ok: false, error: 'Complete your profile details first: add your birthday and get your ID verified on your profile.' })
+        }
+        verifiedIdentity = account
+        payload.userId = String(req.user.id)
+        payload.fullName = account.name || payload.fullName
+        payload.birthDate = account.birthDate || payload.birthDate
+        payload.idType = account.identityIdType || 'Government ID (verified on profile)'
+        payload.idImage = account.identityDocumentUrl || ''
+        payload.idImageBack = account.identityDocumentBackUrl || ''
       }
     }
 
@@ -1502,7 +1558,7 @@ router.post('/:collection', requireAuth, async (req, res) => {
       // The participant (and a minor's guardian) state their ID type and attach a photo of it;
       // staff check both before approving.
       if (req.user.role === 'user') {
-        if (!ACCEPTED_ID_TYPES.includes(payload.idType) || !String(payload.idImage || '').startsWith('data:image/')) {
+        if (!verifiedIdentity && (!ACCEPTED_ID_TYPES.includes(payload.idType) || !String(payload.idImage || '').startsWith('data:image/'))) {
           return res.status(400).json({ ok: false, error: 'Choose your ID type and attach a photo of your ID.' })
         }
         if (payload.isMinor && (!ACCEPTED_ID_TYPES.includes(payload.guardianIdType) || !String(payload.guardianIdImage || '').startsWith('data:image/'))) {
@@ -1510,6 +1566,24 @@ router.post('/:collection', requireAuth, async (req, res) => {
         }
         delete payload.idChecked
         delete payload.guardianIdChecked
+        delete payload.autoApproved
+        delete payload.approvedAtISO
+        delete payload.validUntilISO
+        delete payload.reviewedBy
+        if (verifiedIdentity) {
+          // Staff already checked this ID on the profile, so the signed waiver needs no second review.
+          const approvedAtISO = new Date().toISOString()
+          Object.assign(payload, {
+            status: 'approved',
+            idChecked: true,
+            autoApproved: true,
+            approvedAtISO,
+            reviewedAtISO: approvedAtISO,
+            validUntilISO: validUntilFrom(approvedAtISO),
+            reviewedBy: { id: 'system', role: 'system', name: 'Identity verification' },
+            reviewerNote: 'Approved automatically: the ID was verified on the player profile.',
+          })
+        }
       }
       // Keep the exact text this person agreed to, so later edits by the admin don't change it.
       const customText = await db.collection('site_settings').findOne({ key: WAIVER_TEXT_KEY })
@@ -1814,11 +1888,17 @@ router.post('/:collection', requireAuth, async (req, res) => {
 // Players may not post role-wide notifications themselves, so the server tells staff about
 // player submissions that wait on their review.
 const STAFF_REVIEW_NOTICES = {
-  waivers: (doc, player) => ({
-    type: 'waiver_submitted',
-    title: 'New Waiver Submitted',
-    message: `A new waiver was submitted by ${doc.fullName || player.name || player.id}.`,
-  }),
+  waivers: (doc, player) => (doc.autoApproved
+    ? {
+      type: 'waiver_submitted',
+      title: 'Waiver Signed',
+      message: `${doc.fullName || player.name || player.id} signed their waiver. It was approved automatically because their ID is verified.`,
+    }
+    : {
+      type: 'waiver_submitted',
+      title: 'New Waiver Submitted',
+      message: `A new waiver was submitted by ${doc.fullName || player.name || player.id}.`,
+    }),
   weapons: (doc) => ({
     type: 'weapon_submitted',
     title: 'New Weapon Request',
@@ -1901,7 +1981,8 @@ router.put('/:collection/:id', requireAuth, async (req, res) => {
     const usesUnsupportedOperator = Object.keys(payload).some((field) => field.startsWith('$') && field !== '$set')
     const hasMixedUpdateShape = Object.prototype.hasOwnProperty.call(payload, '$set') &&
       Object.keys(payload).some((field) => field !== '$set')
-    const allowedProfileFields = new Set(['name', 'firstName', 'middleInitial', 'lastName', 'nickname', 'email', 'profileImageUrl', 'birthDate'])
+    // The email changes through /api/auth/change-email, which confirms the new address first.
+    const allowedProfileFields = new Set(['name', 'firstName', 'middleInitial', 'lastName', 'nickname', 'profileImageUrl', 'birthDate'])
     if (
       usesUnsupportedOperator ||
       hasMixedUpdateShape ||
@@ -1963,6 +2044,11 @@ router.put('/:collection/:id', requireAuth, async (req, res) => {
 
     if (collection === 'user_accounts') {
       const changes = payload.$set || payload
+      // The verified ID carries the birthday; the waiver is filled in from it.
+      if (updateRole === 'user' && existing.identityVerificationStatus === 'verified'
+        && Object.prototype.hasOwnProperty.call(changes, 'birthDate') && String(changes.birthDate || '') !== String(existing.birthDate || '')) {
+        return res.status(409).json({ ok: false, error: 'Your birthday is locked because your ID was verified with it. Ask staff if it needs correcting.' })
+      }
       // Name parts: the full name is always rebuilt from them as "First M. Last".
       const nameFields = ['firstName', 'middleInitial', 'lastName']
       if (nameFields.some((field) => Object.prototype.hasOwnProperty.call(changes, field))) {
@@ -1974,6 +2060,9 @@ router.put('/:collection/:id', requireAuth, async (req, res) => {
         if (!parts.firstName || !parts.lastName) return res.status(400).json({ ok: false, error: 'Enter your first and last name.' })
         const nextName = composeFullName(parts)
         // Once a waiver is approved, the legal name must keep matching it; staff can still correct it.
+        if (updateRole === 'user' && nextName !== String(existing.name || '') && existing.identityVerificationStatus === 'verified') {
+          return res.status(409).json({ ok: false, error: 'Your name is locked because your ID was verified under it. Ask staff if it needs correcting.' })
+        }
         if (updateRole === 'user' && nextName !== String(existing.name || '')) {
           const approvedWaiver = await db.collection('waivers').findOne({
             userId: String(existing.id || existing._id),
@@ -2124,7 +2213,11 @@ router.put('/:collection/:id', requireAuth, async (req, res) => {
       delete updatedDoc.password
       delete updatedDoc.otpCode
       delete updatedDoc.otpExpiresAt
-      if (req.user.role !== 'admin') delete updatedDoc.identityDocumentUrl
+      delete updatedDoc.pendingEmailOtp
+      if (req.user.role !== 'admin' && String(updatedDoc.id || updatedDoc._id) !== String(req.user.id)) {
+        delete updatedDoc.identityDocumentUrl
+        delete updatedDoc.identityDocumentBackUrl
+      }
     }
 
     return res.json({ ok: true, data: updatedDoc })

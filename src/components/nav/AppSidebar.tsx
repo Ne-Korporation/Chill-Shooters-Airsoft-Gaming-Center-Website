@@ -64,7 +64,6 @@ const adminItems: Item[] = [
   { section: 'Overview', label: 'Reports', to: '/app/admin/reports', icon: FiBarChart2 },
   { section: 'Bookings', label: 'Reservations', to: '/app/admin/reservations', icon: FiCalendar },
   { section: 'Bookings', label: 'Payments', to: '/app/admin/payments', icon: FiCreditCard },
-  { section: 'Bookings', label: 'Waivers', to: '/app/admin/waivers', icon: FiShield },
   { section: 'Bookings', label: 'Games', to: '/app/games', icon: FiZap },
   { section: 'Game day', label: 'Counter (walk-ins)', to: '/app/counter', icon: FiShoppingBag },
   { section: 'Game day', label: 'Rental check-out', to: '/app/rentals', icon: FiLogOut },
@@ -76,6 +75,8 @@ const adminItems: Item[] = [
   { section: 'Inventory', label: 'Gear', to: '/app/admin/equipment', icon: FiTool },
   { section: 'Inventory', label: 'Rental packages', to: '/app/admin/rental-packages', icon: FiPackage },
   { section: 'Inventory', label: 'Repairs', to: '/app/repairs', icon: FiSettings },
+  // Waivers are mostly approved automatically from the verified profile ID, so they sit with the records kept here.
+  { section: 'Inventory', label: 'Waivers', to: '/app/admin/waivers', icon: FiShield },
   { section: 'People', label: 'Players & staff', to: '/app/admin/player-management', icon: FiUsers },
   { section: 'People', label: 'Partnerships', to: '/app/admin/partnerships', icon: FiBriefcase },
   { section: 'People', label: 'Player feedback', to: '/app/admin/feedback', icon: FiMessageSquare },
@@ -182,7 +183,6 @@ export function AppSidebar({
 
   const playerItems: Item[] = [
     { label: 'Dashboard', to: '/app', icon: FiGrid },
-    profile,
     { label: 'Book a game', to: '/app/reservations', icon: FiPlusCircle },
     { label: 'My Reservations', to: '/app/my-reservations', icon: FiList },
     { label: 'My Weapons & Gear', to: `/app/players/${encodeURIComponent(user?.id || '1')}/weapons-and-equipment`, icon: FiTarget },
@@ -192,12 +192,11 @@ export function AppSidebar({
     ...(hasOpenSplitPayment ? [{ label: 'Split Payment', to: '/app/split-payments', icon: FiDollarSign }] : []),
   ]
 
-  // Every menu opens with the dashboard, then the profile.
-  const withProfile = (list: Item[]) => [list[0], { ...profile, section: list[0].section }, ...list.slice(1)]
+  // Every menu ends with the profile, at the bottom of the sidebar.
   const items =
-    role === 'admin' ? withProfile(adminItems)
-    : role === 'marshal' ? withProfile(marshalItems)
-    : role === 'registrar' ? withProfile(registrarItems)
+    role === 'admin' ? adminItems
+    : role === 'marshal' ? marshalItems
+    : role === 'registrar' ? registrarItems
     : playerItems
 
   // Admin groups: the one holding the current page is open. Others can be opened to look around,
@@ -213,6 +212,9 @@ export function AppSidebar({
       <div className={'surface rounded-2xl p-3 ' + (className || '')}>
         <nav className="space-y-0.5">
           {items.map((item) => <SidebarLink key={item.to} item={item} onNavigate={onNavigate} />)}
+          <div className="divider mt-2 border-t pt-2">
+            <SidebarLink item={profile} onNavigate={onNavigate} />
+          </div>
         </nav>
       </div>
     )
@@ -248,6 +250,9 @@ export function AppSidebar({
             </div>
           )
         })}
+        <div className="divider mt-2 border-t pt-2">
+          <SidebarLink item={profile} onNavigate={onNavigate} />
+        </div>
       </nav>
     </div>
   )
