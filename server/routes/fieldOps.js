@@ -153,7 +153,7 @@ router.get('/players/:id/stats', requireAuth, async (req, res) => {
     const db = await getDb()
     // Players see their own progress, and parents their children's.
     if (req.user.role === 'user' && String(req.user.id) !== id) {
-      const child = await db.collection('user_accounts').findOne({ id, guardianId: String(req.user.id), isChildProfile: true }, { projection: { _id: 1 } })
+      const child = await db.collection('user_accounts').findOne({ id, guardianId: String(req.user.id), isChildProfile: true, removedByGuardianAtISO: { $exists: false } }, { projection: { _id: 1 } })
       if (!child) return res.status(404).json({ ok: false, error: 'not found' })
     }
     const profile = (await getPlayerProfiles(db, [id])).get(id)

@@ -7,7 +7,9 @@ import { ensureGameplayForReservation } from '../utils/reservationGameplay.js'
 import { emailReservationEvent } from '../services/notificationEmails.js'
 import { assertGuardianApprovalsComplete } from './guardianApprovals.js'
 import { notifyRole, notifyUser, syncReservationPaymentState } from '../utils/paymentProgress.js'
-import { buildPaymentStatusUpdate } from '../utils/paymentRules.js'
+import { buildPaymentStatusUpdate, getPaymentProgress, getSplitPayerIds } from '../utils/paymentRules.js'
+import { getReservationPayments } from '../utils/paymentProgress.js'
+import { expireInvoice } from '../utils/xendit.js'
 import { actorLabel, getActorName } from '../utils/actors.js'
 
 const router = express.Router()
@@ -193,6 +195,61 @@ async function updateReservationStatus(req, res) {
     return res.status(500).json({ ok: false, error: String(err) })
   }
 }
+
+// POST /api/reservations/:id/cancel — the captain cancels their own booking while nothing has been
+// paid yet. The slot opens for anyone again. Once any payment is in, it can't be cancelled here.
+router.post('/reservations/:id/cancel', requireAuth, requireRole('user'), async (req, res) => {
+  try {
+    const db = await getDb()
+    const id = String(req.params.id || '')
+    const objectId = toObjectId(id)
+    const reservation = await db.collection('reservations').findOne({ $or: [{ id }, ...(objectId ? [{ _id: objectId }] : [])] })
+    if (!reservation || String(reservation.userId) !== String(req.user.id)) {
+      return res.status(404).json({ ok: false, error: 'Reservation not found.' })
+    }
+    const status = String(reservation.reservationStatus || '').toLowerCase()
+    if (!['pending', 'needs review'].includes(status)) {
+      return res.status(409).json({ ok: false, error: status === 'cancelled' ? 'This reservation is already cancelled.' : 'Only bookings that are still waiting for payment can be cancelled.' })
+    }
+    const payments = await getReservationPayments(db, reservation)
+    if (getPaymentProgress(reservation, payments).submitted > 0) {
+      return res.status(409).json({ ok: false, error: 'A payment was already made for this booking, so it can no longer be cancelled. Contact the staff for help.' })
+    }
+
+    // Close any Xendit payment page still open for it, so nobody pays a cancelled booking.
+    const checkouts = await db.collection('xendit_checkouts').find({ reservationId: String(reservation.id), status: 'open' }).toArray()
+    for (const checkout of checkouts) {
+      await expireInvoice(checkout.invoiceId).catch(() => null)
+      await db.collection('xendit_checkouts').updateOne({ _id: checkout._id }, { $set: { status: 'cancelled' } })
+    }
+
+    const cancelled = await updateReservationStatusAtomically({
+      db,
+      startSession: startDbSession,
+      reservationFilter: { _id: reservation._id },
+      reservationId: String(reservation.id),
+      nextStatus: 'cancelled',
+      actor: { id: String(req.user.id), role: 'user' },
+      reason: 'cancelled_by_player_before_payment',
+    })
+    await db.collection('reservations').updateOne({ _id: reservation._id }, { $set: { cancellationReason: 'cancelled_by_player_before_payment' } })
+    void emailReservationEvent(db, cancelled, 'cancelled', 'player')
+    const label = `${reservation.reservationDate} (${reservation.reservationTime})`
+    for (const userId of getSplitPayerIds(reservation).filter((payerId) => payerId !== String(req.user.id))) {
+      await notifyUser(db, {
+        userId,
+        type: 'reservation_status_update',
+        title: 'Reservation cancelled',
+        message: `The team captain cancelled the reservation for ${label}. You don't need to pay your share.`,
+        linkedResourceId: reservation.id,
+      })
+    }
+    return res.json({ ok: true, data: { id: String(reservation.id), reservationStatus: 'cancelled' } })
+  } catch (err) {
+    if (err?.statusCode) return res.status(err.statusCode).json({ ok: false, error: err.message })
+    return res.status(500).json({ ok: false, error: String(err) })
+  }
+})
 
 router.put('/reservations/:id/status', requireAuth, requireRole('admin', 'registrar'), updateReservationStatus)
 router.put('/reservations/:id/confirm', requireAuth, requireRole('admin', 'registrar'), updateReservationStatus)

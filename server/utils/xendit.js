@@ -69,6 +69,11 @@ export async function createInvoice({ amount, externalId, description, successUr
   return { id: invoice.id, invoiceUrl: invoice.invoice_url }
 }
 
+// Closes an unpaid invoice so its payment page can't be paid any more (e.g. the booking was cancelled).
+export async function expireInvoice(id) {
+  return request('POST', `/invoices/${encodeURIComponent(id)}/expire!`)
+}
+
 export async function retrieveInvoice(id) {
   return request('GET', `/v2/invoices/${encodeURIComponent(id)}`)
 }

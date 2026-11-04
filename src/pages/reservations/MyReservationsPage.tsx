@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { FiCalendar, FiEye, FiLock, FiPrinter, FiRefreshCw } from 'react-icons/fi'
+import { FiCalendar, FiEye, FiLock, FiPrinter, FiRefreshCw, FiXCircle } from 'react-icons/fi'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { apiGet, apiPost } from '../../utils/apiClient'
@@ -25,6 +25,8 @@ type RescheduleEvent = {
 }
 
 type ReservationDoc = ReservationDetails & {
+  // The captain who booked it.
+  userId?: string
   id?: string
   _id?: string
   reservationDate?: string
@@ -149,6 +151,22 @@ export function MyReservationsPage() {
       window.removeEventListener('focus', refresh)
     }
   }, [load])
+
+  // A booking can be cancelled by its captain until any payment is made; the slot opens again.
+  const [cancellingId, setCancellingId] = useState<string | null>(null)
+  const cancelReservation = async (id: string, label: string) => {
+    if (!window.confirm(`Cancel your reservation for ${label}? The slot opens for anyone to book. This can't be undone.`)) return
+    setCancellingId(id)
+    try {
+      await apiPost(`/api/reservations/${encodeURIComponent(id)}/cancel`, {})
+      toast.success('Reservation cancelled.')
+      await load(true)
+    } catch (err: any) {
+      toast.error(err?.message || 'Could not cancel the reservation')
+    } finally {
+      setCancellingId(null)
+    }
+  }
 
   // Unpaid reservations can be paid online from here (e.g. after leaving the payment page).
   const [canPayOnline, setCanPayOnline] = useState(false)
@@ -304,6 +322,10 @@ export function MyReservationsPage() {
         const reservationPayments = payments.filter((payment) => [reservation.id, reservation._id].map(String).includes(String(payment.reservationId)))
         const hasVerifiedPayment = reservationPayments.some(isVerifiedPayment)
         const isOpen = OPEN_STATUSES.includes(status)
+        // Unpaid and still waiting for payment: the captain can cancel it.
+        const canCancel = ['pending', 'needs review'].includes(status)
+          && String(reservation.userId || '') === String(user?.id || '')
+          && !reservationPayments.some((payment: any) => !['failed', 'rejected'].includes(String(payment.paymentStatus || payment.status || '').toLowerCase()))
 
         return (
           <Card key={id} className="p-4 md:p-5">
@@ -326,7 +348,10 @@ export function MyReservationsPage() {
                   </div>
                 ) : null}
                 {status === 'cancelled' && reservation.cancellationReason === 'payment_window_expired' ? (
-                  <div className="mt-1 text-xs text-warning">The slot was released because payment wasn't completed in time.</div>
+                  <div className="mt-1 text-xs text-amber-600 dark:text-amber-400">The slot was released because payment wasn't completed in time.</div>
+                ) : null}
+                {status === 'cancelled' && reservation.cancellationReason === 'cancelled_by_player_before_payment' ? (
+                  <div className="mt-1 text-xs text-muted">You cancelled this booking before paying.</div>
                 ) : null}
                 {isOpen && reservation.paymentState !== 'finalized' && reservation.paymentDueAtISO ? (
                   <div className="mt-1 text-xs text-muted">
@@ -359,7 +384,18 @@ export function MyReservationsPage() {
                   </Button>
                 ) : null}
                 {!canReschedule && blockedReason ? <div className="max-w-xs text-xs text-warning md:text-right">{blockedReason}</div> : null}
-                {isOpen ? (
+                {canCancel ? (
+                  <Button
+                    variant="danger-soft"
+                    disabled={cancellingId === id}
+                    onClick={() => cancelReservation(id, `${reservation.reservationDate || ''} (${reservation.reservationTime || ''})`)}
+                  >
+                    <FiXCircle /> {cancellingId === id ? 'Cancelling…' : 'Cancel reservation'}
+                  </Button>
+                ) : null}
+                {canCancel ? (
+                  <div className="max-w-xs text-xs text-muted md:text-right">You can cancel until a payment is made.</div>
+                ) : isOpen ? (
                   <div className="flex max-w-xs items-start gap-1 text-xs text-muted md:text-right">
                     <FiLock className="mt-0.5 shrink-0" /> No cancellations — you can transfer to another date up to {RESCHEDULE_CUTOFF_DAYS} days before your game, and your deposit carries over.
                   </div>

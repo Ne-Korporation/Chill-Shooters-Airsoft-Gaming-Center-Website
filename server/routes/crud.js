@@ -440,10 +440,9 @@ async function assertSlotAvailable({ db, session, locationId, reservationDate, r
     { session },
   ).toArray()
 
-  const bookedFieldIds = new Set([
-    ...blockingReservations.flatMap(extractReservationFieldIds),
-    ...holds.filter((hold) => hold.sessionType === 'private').flatMap((hold) => hold.fieldIds || []),
-  ])
+  // Fields aren't exclusive: several groups can book the same location, field and time until the
+  // slot's player capacity is full. A field's minimum group size still applies.
+  const bookedFieldIds = new Set()
   const capacity = getLocationCapacities()[locationId][reservationTime]
   const usedPlayers = getSlotPlayerCount(blockingReservations) + holds.reduce((sum, hold) => sum + Number(hold.players || 0), 0)
   if (usedPlayers + playersCount > capacity) {
@@ -453,14 +452,6 @@ async function assertSlotAvailable({ db, session, locationId, reservationDate, r
   }
 
   if (sessionType === 'private') {
-    const conflictedFieldIds = fieldIds.filter((fieldId) => bookedFieldIds.has(fieldId))
-    if (conflictedFieldIds.length > 0) {
-      const conflict = new Error('One or more selected fields are already booked or being booked for this time slot.')
-      conflict.statusCode = 409
-      conflict.conflictedFieldIds = conflictedFieldIds
-      throw conflict
-    }
-
     const validation = validatePrivateFieldSelection({ locationId, fieldIds, playersCount, bookedFieldIds })
     if (!validation.ok) {
       const invalid = new Error(validation.reason)
@@ -867,8 +858,8 @@ router.post('/reservations/:id/reschedule', requireAuth, requireRole('user', 'ad
         }
 
         if (sessionType === 'private') {
-          const bookedFieldIds = new Set(blocking.flatMap(extractReservationFieldIds))
-          const validation = validatePrivateFieldSelection({ locationId, fieldIds, playersCount, bookedFieldIds })
+          // Only capacity limits a slot (see assertSlotAvailable); the field minimum still applies.
+          const validation = validatePrivateFieldSelection({ locationId, fieldIds, playersCount, bookedFieldIds: new Set() })
           if (!validation.ok) {
             const conflict = new Error(validation.reason)
             conflict.statusCode = 409
@@ -1296,7 +1287,7 @@ router.get('/:collection/:id', requireAuth, async (req, res) => {
     const doc = await findDocumentById(db, collection, id)
     if (!doc) return res.status(404).json({ ok: false, error: 'not found' })
     if (req.user.role === 'user' && collection === 'user_accounts' && String(doc.id || doc._id) !== String(req.user.id)
-      && !(doc.isChildProfile && String(doc.guardianId) === String(req.user.id))) {
+      && !(doc.isChildProfile && String(doc.guardianId) === String(req.user.id) && !doc.removedByGuardianAtISO)) {
       return res.status(404).json({ ok: false, error: 'not found' })
     }
     // An account is owned by its own id (checked above), not by a userId/playerId field.
@@ -1351,10 +1342,11 @@ async function resolveTeamAndOwnWeapons(db, doc, { requireFullTeam = false } = {
   const accounts = requestedIds.length
     ? await db.collection('user_accounts').find(
       { role: 'user', $or: [{ id: { $in: requestedIds } }, ...(objectIds.length ? [{ _id: { $in: objectIds } }] : [])] },
-      { projection: { id: 1, name: 1, email: 1, isChildProfile: 1, guardianId: 1 } },
+      { projection: { id: 1, name: 1, email: 1, isChildProfile: 1, guardianId: 1, removedByGuardianAtISO: 1 } },
     ).toArray()
     : []
-  if (accounts.length !== requestedIds.length) {
+  // A minor the guardian removed from their account can't be booked.
+  if (accounts.length !== requestedIds.length || accounts.some((account) => account.isChildProfile && account.removedByGuardianAtISO)) {
     const unknown = new Error('One or more selected teammates could not be found.')
     unknown.statusCode = 400
     throw unknown
@@ -1540,6 +1532,9 @@ router.post('/:collection', requireAuth, async (req, res) => {
       const childId = String(payload.forChildId || '').trim()
       delete payload.forChildId
       delete payload.forChild
+      // Set by the server below, never taken from the request.
+      delete payload.guardianFromAccount
+      delete payload.guardianIdVerifiedOnProfile
       if (childId) {
         const child = await findOwnChild(db, req.user.id, childId)
         if (!child) return res.status(404).json({ ok: false, error: 'Child not found on your account.' })
@@ -1553,6 +1548,24 @@ router.post('/:collection', requireAuth, async (req, res) => {
         payload.forChild = true
         payload.guardianId = String(req.user.id)
         payload.submittedBy = String(req.user.id)
+        // The parent is the guardian: their name, email, verified ID and the signature on their own
+        // approved waiver are filled in from their account, not typed again.
+        const parent = await db.collection('user_accounts').findOne({ id: String(req.user.id) })
+        const parentWaiver = await db.collection('waivers').findOne(
+          { userId: String(req.user.id), archived: { $ne: true }, status: { $regex: '^approved$', $options: 'i' } },
+          { sort: { approvedAtISO: -1 } },
+        )
+        Object.assign(payload, {
+          guardianName: parent?.name || payload.guardianName || '',
+          guardianEmail: parent?.email || req.user.email || '',
+          guardianIdType: parent?.identityIdType || parentWaiver?.idType || 'Government ID (verified on profile)',
+          guardianIdImage: parent?.identityDocumentUrl || parentWaiver?.idImage || '',
+          guardianIdImageBack: parent?.identityDocumentBackUrl || parentWaiver?.idImageBack || '',
+          guardianSignatureImage: parentWaiver?.signatureImage || payload.guardianSignatureImage || '',
+          guardianFromAccount: true,
+          guardianIdVerifiedOnProfile: hasValidIdentity(parent),
+        })
+        delete payload.guardianPhone
       } else {
         const account = await db.collection('user_accounts').findOne({ id: String(req.user.id) })
         if (!account || account.identityVerificationStatus !== 'verified' || !hasValidIdentity(account)) {
@@ -1603,8 +1616,8 @@ router.post('/:collection', requireAuth, async (req, res) => {
         return res.status(400).json({ ok: false, error: 'A guardian email is required for players under 18.' })
       }
       if (payload.isMinor) {
-        payload.guardianPhone = normalizePhPhone(payload.guardianPhone)
-        if (!payload.guardianPhone) return res.status(400).json({ ok: false, error: 'Enter the guardian phone number as 09XX XXX XXXX.' })
+        // Optional now: kept only if one was sent.
+        if (payload.guardianPhone) payload.guardianPhone = normalizePhPhone(payload.guardianPhone) || ''
       }
       // The participant (and a minor's guardian) state their ID type and attach a photo of it;
       // staff check both before approving.
@@ -1612,11 +1625,13 @@ router.post('/:collection', requireAuth, async (req, res) => {
         if (!verifiedIdentity && (!ACCEPTED_ID_TYPES.includes(payload.idType) || !String(payload.idImage || '').startsWith('data:image/'))) {
           return res.status(400).json({ ok: false, error: 'Choose your ID type and attach a photo of your ID.' })
         }
-        if (payload.isMinor && (!ACCEPTED_ID_TYPES.includes(payload.guardianIdType) || !String(payload.guardianIdImage || '').startsWith('data:image/'))) {
+        if (payload.isMinor && !payload.guardianFromAccount && (!ACCEPTED_ID_TYPES.includes(payload.guardianIdType) || !String(payload.guardianIdImage || '').startsWith('data:image/'))) {
           return res.status(400).json({ ok: false, error: "Choose the guardian's ID type and attach a photo of their ID." })
         }
         delete payload.idChecked
         delete payload.guardianIdChecked
+        // Staff already verified the guardian's ID on their profile.
+        if (payload.guardianIdVerifiedOnProfile === true) payload.guardianIdChecked = true
         delete payload.autoApproved
         delete payload.approvedAtISO
         delete payload.validUntilISO
@@ -2304,10 +2319,14 @@ router.delete('/:collection/:id', requireAuth, async (req, res) => {
     payments: [],
     reservations: [],
     user_accounts: ['admin'],
-    waivers: ['admin'],
+    // Waivers are signed records: they are archived, never deleted.
+    waivers: [],
     weapons: ['admin'],
   }
   if (!allowedDeleteRoles[collection]?.includes(deleteRole)) {
+    if (collection === 'waivers') {
+      return res.status(403).json({ ok: false, error: 'Waivers cannot be deleted. Archive the waiver instead.' })
+    }
     return res.status(403).json({ ok: false, error: 'Forbidden: insufficient role permissions' })
   }
 

@@ -7,6 +7,7 @@ import {
   FiAlertTriangle,
   FiCheck,
   FiCheckCircle,
+  FiChevronDown,
   FiChevronRight,
   FiLock,
   FiPrinter,
@@ -249,6 +250,34 @@ export function WaiverPage({
   }, [child, user?.id])
   const identityVerified = !child && identity?.status === 'verified'
 
+  // A child's waiver: the parent is the guardian. Their name, email, verified ID and the signature on
+  // their own approved waiver are filled in (the server copies the same details onto the waiver).
+  const [guardianOnFile, setGuardianOnFile] = useState<{ name: string; email: string; idType: string; idFront: string; idBack: string; signature: string } | null>(null)
+  const [guardianDetailsOpen, setGuardianDetailsOpen] = useState(false)
+  useEffect(() => {
+    if (!child || !user?.id) return
+    let alive = true
+    const parentId = encodeURIComponent(user.id)
+    const approvedQuery = encodeURIComponent(JSON.stringify({ userId: String(user.id), archived: { $ne: true }, status: 'approved' }))
+    Promise.all([
+      apiGet<{ ok: boolean; data: { name?: string; identityIdType?: string; identityDocumentUrl?: string; identityDocumentBackUrl?: string } }>(`/api/user_accounts/${parentId}`).catch(() => null),
+      apiGet<{ ok: boolean; data: Array<{ signatureImage?: string; idType?: string; idImage?: string }> }>(`/api/waivers?q=${approvedQuery}&limit=5`).catch(() => null),
+    ]).then(([accountRes, waiverRes]) => {
+      if (!alive) return
+      const account = accountRes?.data
+      const ownWaiver = Array.isArray(waiverRes?.data) ? waiverRes.data[0] : undefined
+      setGuardianOnFile({
+        name: account?.name || user?.name || '',
+        email: user?.email || '',
+        idType: account?.identityIdType || ownWaiver?.idType || '',
+        idFront: account?.identityDocumentUrl || ownWaiver?.idImage || '',
+        idBack: account?.identityDocumentBackUrl || '',
+        signature: ownWaiver?.signatureImage || '',
+      })
+    })
+    return () => { alive = false }
+  }, [child, user?.id, user?.name, user?.email])
+
   const waiverStorageKey = subjectId ? `waiver_submitted:${subjectId}` : ''
   const waiverIdKey = subjectId ? `last_waiver_id:${subjectId}` : ''
 
@@ -426,11 +455,11 @@ export function WaiverPage({
       if (!idImage) e.idImage = 'A photo of your ID is required.'
     }
 
-    if (isMinor) {
+    if (isMinor && child) {
+      if (!state.guardianConsent) e.guardianConsent = 'Your consent as the guardian is required.'
+    } else if (isMinor) {
       if (!state.guardianName.trim()) e.guardianName = 'Guardian name is required for minors.'
       if (!state.guardianConsent) e.guardianConsent = 'Guardian consent is required.'
-      if (!guardianPhone.trim()) e.guardianPhone = 'Guardian phone number is required.'
-      else if (!isValidPhPhone(guardianPhone)) e.guardianPhone = 'Enter the phone number as 09XX XXX XXXX.'
       if (!guardianEmail.trim()) e.guardianEmail = 'Guardian email is required.'
       else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(guardianEmail.trim())) e.guardianEmail = 'Enter a valid email address.'
       else if (!child && guardianEmail.trim().toLowerCase() === String(user?.email || '').toLowerCase()) e.guardianEmail = "Use your parent or guardian's own email, not yours."
@@ -769,7 +798,7 @@ export function WaiverPage({
       // Compress images first so the request body stays small (minors send an ID photo + 2 signatures)
       const [compressedPlayerId, compressedGuardianId, compressedGuardianSig, compressedPlayerSig] = await Promise.all([
         identityVerified ? Promise.resolve('') : compressImage(idImage, 1000, 0.75),
-        isMinor ? compressImage(guardianIdImage, 1000, 0.75) : Promise.resolve(''),
+        isMinor && !child ? compressImage(guardianIdImage, 1000, 0.75) : Promise.resolve(''),
         isMinor ? compressImage(guardianSignatureImage, 600, 0.85) : Promise.resolve(''),
         compressImage(signatureImage, 600, 0.85),
       ])
@@ -791,7 +820,7 @@ export function WaiverPage({
         hasSignature,
         signatureImage: compressedPlayerSig,
         signatureMethod,
-        guardianPhone: isMinor ? toStoredPhPhone(guardianPhone) : '',
+
         guardianEmail: isMinor ? guardianEmail.trim().toLowerCase() : '',
         guardianIdImage: isMinor ? compressedGuardianId : '',
         guardianIdType: isMinor ? guardianIdType : '',
@@ -1061,7 +1090,7 @@ export function WaiverPage({
                 <>
                   <p className="mt-3"><span className="font-semibold">Guardian name:</span> {submittedWaiver.guardianName || '-'}</p>
                   <p className="mt-2"><span className="font-semibold">Guardian consent:</span> {submittedWaiver.guardianConsent ? 'Yes' : 'No'}</p>
-                  <p className="mt-2"><span className="font-semibold">Guardian phone:</span> {submittedWaiver.guardianPhone ? formatPhPhone(submittedWaiver.guardianPhone) : '-'}</p>
+                  {submittedWaiver.guardianPhone ? <p className="mt-2"><span className="font-semibold">Guardian phone:</span> {formatPhPhone(submittedWaiver.guardianPhone)}</p> : null}
                   <p className="mt-2"><span className="font-semibold">Guardian ID type:</span> {submittedWaiver.guardianIdType || '-'}</p>
                   <div className="mt-2 flex flex-wrap gap-4">
                     {submittedWaiver.guardianIdImage ? (
@@ -1310,90 +1339,58 @@ export function WaiverPage({
             </div>
 
             {isMinor ? (
-              <motion.div
-                initial={{ opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.25 }}
-                className="surface mt-5 rounded-2xl p-4"
-              >
-                <div className="flex items-center gap-2 text-sm font-bold text-accent">
-                  <FiShield /> <span>Guardian consent (under 18)</span>
-                </div>
-                <div className="mt-4 grid gap-4 md:grid-cols-2">
-                  <Input
-                    label="Guardian Name"
-                    placeholder="e.g., Maria Santos"
-                    value={state.guardianName}
-                    disabled={submitted || submitting}
-                    onChange={(e) => setState((s) => ({ ...s, guardianName: e.target.value }))}
-                    error={shownErrors.guardianName}
-                  />
-
-                  <div className="flex items-end">
-                    <label className="w-full rounded-2xl border border-white/10 bg-white/5 p-4">
-                      <div className="flex items-start gap-3">
-                        <input
-                          type="checkbox"
-                          checked={state.guardianConsent}
-                          disabled={submitted || submitting}
-                          onChange={(e) => setState((s) => ({ ...s, guardianConsent: e.target.checked }))}
-                          className="mt-1 h-4 w-4"
-                        />
-                        <div>
-                          <div className="text-sm font-bold">I confirm guardian consent</div>
-                          {shownErrors.guardianConsent ? (
-                            <div className="mt-1 text-xs font-semibold text-danger">{shownErrors.guardianConsent}</div>
-                          ) : (
-                            <div className="mt-1 text-xs text-muted">Required to submit waiver.</div>
-                          )}
+              <div className="surface mt-5 rounded-2xl">
+                {/* Closed at first: the details are on file from the guardian's own account. */}
+                <button
+                  type="button"
+                  onClick={() => setGuardianDetailsOpen((open) => !open)}
+                  aria-expanded={guardianDetailsOpen}
+                  className="flex w-full items-center justify-between gap-3 p-4 text-left"
+                >
+                  <span className="flex items-center gap-2 text-sm font-bold text-accent">
+                    <FiShield /> Guardian details
+                  </span>
+                  <span className="flex items-center gap-2 text-xs text-muted">
+                    {guardianDetailsOpen ? 'Hide' : 'Show'}
+                    <FiChevronDown className={`h-4 w-4 transition ${guardianDetailsOpen ? 'rotate-180' : ''}`} />
+                  </span>
+                </button>
+                {guardianDetailsOpen ? (
+                  <div className="space-y-4 border-t border-white/10 p-4">
+                    <div className="text-xs text-muted">
+                      Filled in from your account: you sign this waiver as {child?.name || 'the child'}'s parent or guardian.
+                    </div>
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <Input label="Guardian name" value={(submitted ? submittedWaiver?.guardianName : guardianOnFile?.name) || ''} readOnly disabled />
+                      <Input label="Guardian email" value={(submitted ? submittedWaiver?.guardianEmail : guardianOnFile?.email) || ''} readOnly disabled hint="We email this address to approve each booking for the child." />
+                    </div>
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div>
+                        <div className="mb-2 text-sm font-semibold text-text">
+                          Guardian ID{(submitted ? submittedWaiver?.guardianIdType : guardianOnFile?.idType) ? ` · ${submitted ? submittedWaiver?.guardianIdType : guardianOnFile?.idType}` : ''}
                         </div>
+                        {(submitted ? submittedWaiver?.guardianIdImage : guardianOnFile?.idFront) ? (
+                          <div className="flex flex-wrap gap-2">
+                            {[submitted ? submittedWaiver?.guardianIdImage : guardianOnFile?.idFront, submitted ? '' : guardianOnFile?.idBack].filter(Boolean).map((src) => (
+                              <img key={src} src={src} alt="Guardian ID" className="h-24 rounded-lg border border-white/10 bg-white object-contain p-1" />
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="text-xs text-muted">Your verified ID from your profile is attached.</div>
+                        )}
                       </div>
-                    </label>
+                      <div>
+                        <div className="mb-2 text-sm font-semibold text-text">Guardian signature</div>
+                        {(submitted ? submittedWaiver?.guardianSignatureImage : guardianOnFile?.signature) ? (
+                          <img src={(submitted ? submittedWaiver?.guardianSignatureImage : guardianOnFile?.signature) || ''} alt="Guardian signature" className="h-24 rounded-lg border border-white/10 bg-white object-contain p-1" />
+                        ) : (
+                          <div className="text-xs text-muted">The signature on your approved waiver is used.</div>
+                        )}
+                      </div>
+                    </div>
                   </div>
-                </div>
-                <div className="mt-4 grid gap-4 md:grid-cols-2">
-                  <Input
-                    label="Guardian Phone Number"
-                    type="tel"
-                    inputMode="tel"
-                    placeholder={PH_PHONE_PLACEHOLDER}
-                    value={guardianPhone}
-                    disabled={submitted || submitting}
-                    onChange={(e) => setGuardianPhone(formatPhPhone(e.target.value))}
-                    error={shownErrors.guardianPhone}
-                  />
-                  <Input
-                    label="Guardian Email"
-                    type="email"
-                    placeholder="e.g., maria.santos@gmail.com"
-                    value={guardianEmail}
-                    disabled={submitted || submitting}
-                    onChange={(e) => setGuardianEmail(e.target.value)}
-                    hint="Every time you book, we email your guardian to approve it."
-                    error={shownErrors.guardianEmail}
-                  />
-                  <IdUpload
-                    label="Guardian ID"
-                    value={guardianIdImage}
-                    onChange={setGuardianIdImage}
-                    idType={guardianIdType}
-                    onIdTypeChange={setGuardianIdType}
-                    idTypeError={shownErrors.guardianIdType}
-                    disabled={submitted || submitting}
-                    error={shownErrors.guardianIdImage}
-                  />
-                </div>
-
-                <div className="mt-4">
-                  <SignaturePad
-                    title="Guardian Signature"
-                    value={guardianSignatureImage}
-                    onChange={setGuardianSignatureImage}
-                    disabled={submitted || submitting}
-                    error={shownErrors.guardianSignature}
-                  />
-                </div>
-              </motion.div>
+                ) : null}
+              </div>
             ) : null}
 
             <div className="mt-5 rounded-2xl border border-white/10 bg-black/20 p-4">
@@ -1442,7 +1439,7 @@ export function WaiverPage({
                 </div>
               ) : null}
 
-              <div className="mt-4 grid gap-3 md:grid-cols-2">
+              <div className={`mt-4 grid gap-3 ${isMinor ? 'md:grid-cols-3' : 'md:grid-cols-2'}`}>
                 <label className={['rounded-2xl border border-white/10 bg-white/5 p-4', checkboxesLocked ? 'cursor-not-allowed opacity-60' : ''].join(' ')}>
                   <div className="flex items-start gap-3">
                     <input
@@ -1482,6 +1479,28 @@ export function WaiverPage({
                     </div>
                   </div>
                 </label>
+
+                {isMinor ? (
+                  <label className={['rounded-2xl border border-white/10 bg-white/5 p-4', checkboxesLocked ? 'cursor-not-allowed opacity-60' : ''].join(' ')}>
+                    <div className="flex items-start gap-3">
+                      <input
+                        type="checkbox"
+                        checked={state.guardianConsent}
+                        disabled={checkboxesLocked}
+                        onChange={(e) => setState((s) => ({ ...s, guardianConsent: e.target.checked }))}
+                        className="mt-1 h-4 w-4"
+                      />
+                      <div>
+                        <div className="text-sm font-bold">I consent as a guardian to let my child play</div>
+                        {shownErrors.guardianConsent ? (
+                          <div className="mt-1 text-xs font-semibold text-danger">{shownErrors.guardianConsent}</div>
+                        ) : (
+                          <div className="mt-1 text-xs text-muted">Required.</div>
+                        )}
+                      </div>
+                    </div>
+                  </label>
+                ) : null}
               </div>
             </div>
           </Card>
@@ -1557,9 +1576,7 @@ export function WaiverPage({
                 { label: "Your ID", ok: identityVerified || (!!idType && !!idImage) },
                 ...(isMinor
                   ? [
-                      { label: "Guardian details & consent", ok: state.guardianConsent && !!state.guardianName.trim() && !errors.guardianPhone && !errors.guardianEmail },
-                      { label: "Guardian ID", ok: !!guardianIdType && !!guardianIdImage },
-                      { label: "Guardian signature", ok: !!guardianSignatureImage },
+                      { label: "Guardian consent", ok: state.guardianConsent },
                     ]
                   : []),
                 { label: "Read & accept the terms", ok: state.termsAccepted && state.consent },

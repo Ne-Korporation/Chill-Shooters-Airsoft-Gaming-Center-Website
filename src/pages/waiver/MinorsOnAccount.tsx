@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { FiAlertCircle, FiCheckCircle, FiChevronRight, FiMail, FiPlus, FiRefreshCw, FiUserPlus } from 'react-icons/fi'
+import { FiAlertCircle, FiCheckCircle, FiChevronRight, FiEye, FiMail, FiPlus, FiRefreshCw, FiTrash2, FiUserPlus } from 'react-icons/fi'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
-import { apiGet, apiPost } from '../../utils/apiClient'
+import { Modal } from '../../components/ui/Modal'
+import { apiDelete, apiGet, apiPost } from '../../utils/apiClient'
 import { ageFromBirthDate, maxBirthDate } from '../../utils/age'
 import { composeFullName } from '../../utils/names'
 import { useAuth } from '../../context/AuthContext'
@@ -74,6 +75,87 @@ function GuardianEmailActions({ child, onConfirmed }: { child: ChildSummary; onC
   )
 }
 
+const WAIVER_STATUS_TEXT: Record<string, string> = {
+  none: 'Not answered yet',
+  pending: 'Waiting for staff review',
+  approved: 'Approved',
+  denied: 'Denied: answer it again',
+  expired: 'Expired: answer it again',
+}
+
+// A minor's details from the profile, where the parent can also delete the minor's waiver.
+// Nothing is erased: the waiver is archived for staff, and the minor leaves the parent's account.
+function MinorDetailsModal({ child, onClose, onDeleted }: { child: ChildSummary; onClose: () => void; onDeleted: () => void }) {
+  const [deleting, setDeleting] = useState(false)
+  const [confirming, setConfirming] = useState(false)
+  const chip = statusChip(child)
+  const waiverToAnswer = child.guardianConfirmed && !child.waiverApproved && child.waiverStatus !== 'pending'
+
+  const remove = async () => {
+    setDeleting(true)
+    try {
+      await apiDelete(`/api/children/${encodeURIComponent(child.id)}`)
+      toast.success(`${child.name}'s waiver was deleted from your account.`)
+      onDeleted()
+    } catch (e: any) {
+      toast.error(e?.message || 'Could not delete the waiver')
+      setDeleting(false)
+    }
+  }
+
+  return (
+    <Modal title={child.name} eyebrow="Minor on your account" size="md" onClose={onClose}>
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-3 text-sm">
+          <div>
+            <div className="text-xs text-muted">Birthday</div>
+            <div className="font-semibold">{child.birthDate || '—'}</div>
+          </div>
+          <div>
+            <div className="text-xs text-muted">Age</div>
+            <div className="font-semibold">{child.age ?? '—'}</div>
+          </div>
+          <div>
+            <div className="text-xs text-muted">Guardian email</div>
+            <div className="font-semibold">{child.guardianConfirmed ? 'Confirmed' : 'Not confirmed yet'}</div>
+          </div>
+          <div>
+            <div className="text-xs text-muted">Waiver</div>
+            <div className="font-semibold">{WAIVER_STATUS_TEXT[child.waiverStatus] || child.waiverStatus}</div>
+          </div>
+        </div>
+        <span className={`inline-block rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${chip.className}`}>{chip.label}</span>
+
+        {waiverToAnswer ? (
+          <Link to="/app/waiver#minors-waivers" onClick={onClose} className="flex items-center justify-between rounded-xl border border-accent/30 bg-accent/10 px-3 py-2 text-sm font-semibold text-accent">
+            Answer {child.name.split(' ')[0]}'s waiver <FiChevronRight />
+          </Link>
+        ) : null}
+
+        <div className="rounded-2xl border border-danger/25 bg-danger/5 p-4">
+          <div className="text-sm font-bold text-danger">Delete waiver</div>
+          <p className="mt-1 text-xs text-muted">
+            Removes {child.name} and their waiver from your account and your Waivers page. They can't join games until you add them again.
+            Chill Shooters keeps an archived copy of any waiver you signed.
+          </p>
+          {confirming ? (
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Button variant="danger" size="sm" disabled={deleting} onClick={remove}>
+                <FiTrash2 /> {deleting ? 'Deleting…' : `Yes, delete ${child.name.split(' ')[0]}'s waiver`}
+              </Button>
+              <Button variant="ghost" size="sm" disabled={deleting} onClick={() => setConfirming(false)}>Keep it</Button>
+            </div>
+          ) : (
+            <Button variant="danger-soft" size="sm" className="mt-3" onClick={() => setConfirming(true)}>
+              <FiTrash2 /> Delete waiver
+            </Button>
+          )}
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
 // Profile: a parent adds each child here (minors can't have their own account). Each child gets a
 // waiver to answer on the Waivers page once the parent confirms by email that they're the guardian.
 export function MinorsOnProfile({ canAdd, blockedReason, onChanged }: { canAdd: boolean; blockedReason?: string; onChanged?: () => void }) {
@@ -83,6 +165,8 @@ export function MinorsOnProfile({ canAdd, blockedReason, onChanged }: { canAdd: 
   const [form, setForm] = useState({ firstName: '', middleInitial: '', lastName: '', birthDate: '' })
   const [saving, setSaving] = useState(false)
   const [emailedTo, setEmailedTo] = useState('')
+  const [detailsId, setDetailsId] = useState<string | null>(null)
+  const detailsChild = children.find((child) => child.id === detailsId) || null
 
   const addChild = async (event: React.FormEvent) => {
     event.preventDefault()
@@ -184,11 +268,24 @@ export function MinorsOnProfile({ canAdd, blockedReason, onChanged }: { canAdd: 
                     Answer waiver <FiChevronRight />
                   </Link>
                 ) : null}
+                <Button size="xs" variant="ghost" onClick={() => setDetailsId(child.id)}><FiEye /> View details</Button>
               </div>
             </div>
           )
         })}
       </div>
+
+      {detailsChild ? (
+        <MinorDetailsModal
+          child={detailsChild}
+          onClose={() => setDetailsId(null)}
+          onDeleted={() => {
+            setDetailsId(null)
+            void load()
+            onChanged?.()
+          }}
+        />
+      ) : null}
     </Card>
   )
 }

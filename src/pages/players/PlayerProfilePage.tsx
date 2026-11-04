@@ -77,17 +77,6 @@ export function PlayerProfilePage() {
   const { user, updateUser, replaceToken, remember } = useAuth()
   const [player, setPlayer] = React.useState<PlayerProfileDoc | null>(null)
   const [loading, setLoading] = React.useState(true)
-  // The minors on a parent's account, for switching to their profiles.
-  const [myChildren, setMyChildren] = React.useState<Array<{ id: string; name: string }>>([])
-  const [childrenVersion, setChildrenVersion] = React.useState(0)
-  React.useEffect(() => {
-    if (user?.role !== 'user') return
-    let alive = true
-    apiGet<{ ok: boolean; data: Array<{ id: string; name: string }> }>('/api/children')
-      .then((res) => { if (alive) setMyChildren(Array.isArray(res?.data) ? res.data : []) })
-      .catch(() => {})
-    return () => { alive = false }
-  }, [user?.role, user?.id, childrenVersion])
   const [uploading, setUploading] = React.useState(false)
   const [savingProfile, setSavingProfile] = React.useState(false)
   const [profileImageUploading, setProfileImageUploading] = React.useState(false)
@@ -997,25 +986,11 @@ export function PlayerProfilePage() {
           <h1 className="text-3xl font-bold">{viewingChild ? `${player?.name || 'Child'}'s Profile` : 'Player Profile'}</h1>
           <p className="text-muted text-sm">Profile details for ID: {playerId ?? '—'}</p>
         </div>
-        {/* Parents switch between their own profile and their children's. */}
+        {/* Minors don't have profiles of their own; a parent opened an old link to one. */}
         {viewingChild ? (
           <Button variant="ghost" onClick={() => navigate(`/app/players/${encodeURIComponent(String(user?.id || ''))}`)}>
             Back to my profile
           </Button>
-        ) : viewingOwn && myChildren.length === 1 ? (
-          <Button variant="ghost" onClick={() => navigate(`/app/players/${encodeURIComponent(myChildren[0].id)}`)}>
-            Switch to {myChildren[0].name}
-          </Button>
-        ) : viewingOwn && myChildren.length > 1 ? (
-          <select
-            value=""
-            onChange={(event) => event.target.value && navigate(`/app/players/${encodeURIComponent(event.target.value)}`)}
-            className="rounded-xl border border-white/10 bg-background px-3 py-2 text-sm text-text [&>option]:bg-background"
-            aria-label="Switch to a child's profile"
-          >
-            <option value="">Switch to a child's profile…</option>
-            {myChildren.map((child) => <option key={child.id} value={child.id}>{child.name}</option>)}
-          </select>
         ) : null}
       </div>
 
@@ -1136,7 +1111,6 @@ export function PlayerProfilePage() {
           <MinorsOnProfile
             canAdd={hasValidIdentity}
             blockedReason={hasValidIdentity ? undefined : 'Verify your ID first. Once staff verify it, you can add the children who play with you.'}
-            onChanged={() => setChildrenVersion((n) => n + 1)}
           />
         ) : null}
 

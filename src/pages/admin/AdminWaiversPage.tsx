@@ -357,7 +357,9 @@ export function AdminWaiversPage() {
                   <p className="mt-1 text-xs text-slate-500">
                     {selectedWaiver.archivedReason === 'resubmitted'
                       ? `Replaced by the player's resubmitted waiver ${selectedWaiver.supersededBy || ''}`
-                      : `Archived by ${staffLabel(selectedWaiver.archivedBy) || 'staff'}`}
+                      : selectedWaiver.archivedReason === 'removed_by_guardian'
+                        ? "The guardian removed this minor from their account. Unarchiving keeps the record but doesn't add the minor back to their account."
+                        : `Archived by ${staffLabel(selectedWaiver.archivedBy) || 'staff'}`}
                     {selectedWaiver.archivedAtISO ? ` · ${formatDate(selectedWaiver.archivedAtISO)}` : ''}
                   </p>
                 ) : null}
@@ -399,7 +401,7 @@ export function AdminWaiversPage() {
                 <>
                   <p className="mt-3"><span className="font-semibold">Guardian name:</span> {selectedWaiver.guardianName || '-'}</p>
                   <p className="mt-2"><span className="font-semibold">Guardian consent:</span> {selectedWaiver.guardianConsent ? 'Yes' : 'No'}</p>
-                  <p className="mt-2"><span className="font-semibold">Guardian phone:</span> {selectedWaiver.guardianPhone ? formatPhPhone(selectedWaiver.guardianPhone) : '-'}</p>
+                  {selectedWaiver.guardianPhone ? <p className="mt-2"><span className="font-semibold">Guardian phone:</span> {formatPhPhone(selectedWaiver.guardianPhone)}</p> : null}
                   <p className="mt-2"><span className="font-semibold">Guardian email:</span> {selectedWaiver.guardianEmail || '-'}</p>
                   <p className="mt-2">
                     <span className="font-semibold">Guardian ID type:</span> {selectedWaiver.guardianIdType || '-'}
