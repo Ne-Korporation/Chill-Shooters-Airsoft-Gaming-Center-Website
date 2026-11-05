@@ -1,5 +1,5 @@
 import React from 'react'
-import { FiAlertTriangle, FiCheck, FiEye, FiRotateCcw, FiSlash, FiX } from 'react-icons/fi'
+import { FiAlertTriangle, FiCheck, FiEye, FiRotateCcw, FiShield, FiSlash, FiX } from 'react-icons/fi'
 import toast from 'react-hot-toast'
 import { ActionGroup, Button } from '../../components/ui/Button'
 import { FilterTabs } from '../../components/ui/FilterTabs'
@@ -16,11 +16,6 @@ export function PlayerManagementPage() {
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
 
-  const [showAddForm, setShowAddForm] = React.useState(false)
-  const [newPlayerName, setNewPlayerName] = React.useState('')
-  const [newPlayerEmail, setNewPlayerEmail] = React.useState('')
-  const [newPlayerLevel, setNewPlayerLevel] = React.useState<'Beginner' | 'Intermediate' | 'Experienced'>('Beginner')
-  const [addingPlayer, setAddingPlayer] = React.useState(false)
 
   const [showAddStaffForm, setShowAddStaffForm] = React.useState(false)
   const [newStaffName, setNewStaffName] = React.useState('')
@@ -40,6 +35,7 @@ export function PlayerManagementPage() {
   const [verifyingId, setVerifyingId] = React.useState<string | null>(null)
   const [selectedPlayer, setSelectedPlayer] = React.useState<any | null>(null)
   const [partnershipRequestsOpen, setPartnershipRequestsOpen] = React.useState(false)
+  const [idRequestsOpen, setIdRequestsOpen] = React.useState(false)
 
   const fetchUsers = React.useCallback(async () => {
     setLoading(true)
@@ -72,6 +68,7 @@ export function PlayerManagementPage() {
             identityDocumentUrl: doc.identityDocumentUrl || null,
             identityDocumentBackUrl: doc.identityDocumentBackUrl || null,
             identityIdType: doc.identityIdType || '',
+            identitySubmittedAtISO: doc.identityVerificationUpdatedAt || '',
             birthDate: doc.birthDate || '',
             accountStatus: String(doc.status || '').toLowerCase() === 'suspended' ? 'suspended' : 'active',
             suspensionReason: doc.suspensionReason || '',
@@ -105,30 +102,6 @@ export function PlayerManagementPage() {
   }, [])
 
   React.useEffect(() => { fetchUsers() }, [fetchUsers])
-
-  const handleAddPlayer = async () => {
-    const trimmedName = newPlayerName.trim()
-    const trimmedEmail = newPlayerEmail.trim()
-    if (!trimmedName) { toast.error('Player name is required'); return }
-    if (!trimmedEmail) { toast.error('Player email is required'); return }
-    setAddingPlayer(true)
-    try {
-      const res = await apiPost<any>('/api/auth/admin/add-player', { name: trimmedName, email: trimmedEmail, skillLevel: newPlayerLevel })
-      toast.success(`Player created! Password sent to ${trimmedEmail}`)
-      if (res?.data?.defaultPassword) {
-        toast((t: any) => (
-          <div>
-            <p className="font-semibold">Default Password:</p>
-            <p className="mt-1 text-lg font-mono bg-white/10 px-2 py-1 rounded">{res.data.defaultPassword}</p>
-            <p className="mt-1 text-xs text-muted">(Also sent via email)</p>
-          </div>
-        ), { duration: 10000 })
-      }
-      setNewPlayerName(''); setNewPlayerEmail(''); setNewPlayerLevel('Beginner'); setShowAddForm(false)
-      await fetchUsers()
-    } catch (e: any) { toast.error(String(e?.message || e)) }
-    finally { setAddingPlayer(false) }
-  }
 
   const handleAddStaff = async () => {
     const trimmedName = newStaffName.trim()
@@ -330,6 +303,10 @@ export function PlayerManagementPage() {
   )
 
   const pendingPartnershipRequests = players.filter((p) => p.partnershipEligibilityStatus === 'pending')
+  // Players waiting on an ID check: once verified they can answer their waiver. Oldest first.
+  const pendingIdRequests = players
+    .filter((p) => p.verificationStatus === 'pending_review')
+    .sort((a, b) => String(a.identitySubmittedAtISO || '').localeCompare(String(b.identitySubmittedAtISO || '')))
 
   const reviewPartnership = async (playerId: string, decision: 'verified' | 'rejected') => {
     let reason = ''
@@ -387,6 +364,18 @@ export function PlayerManagementPage() {
                 <div className="mt-2 text-sm text-muted">Review current players and their account status.</div>
               </div>
               <div className="flex flex-wrap items-center justify-end gap-2">
+                {/* ID verifications waiting on staff: the player can't answer their waiver until it's checked. */}
+                <button
+                  type="button"
+                  onClick={() => setIdRequestsOpen(true)}
+                  className={`inline-flex h-9 items-center gap-2 rounded-xl border px-3 text-sm font-semibold transition ${pendingIdRequests.length > 0 ? 'border-danger/40 bg-danger/15 text-danger hover:bg-danger/25' : 'border-white/10 bg-white/5 text-muted hover:text-text'}`}
+                >
+                  <FiShield className="h-4 w-4" />
+                  View ID verifications
+                  {pendingIdRequests.length > 0 ? (
+                    <span className="grid h-5 min-w-5 place-items-center rounded-full bg-danger px-1.5 text-[11px] font-bold text-white">{pendingIdRequests.length}</span>
+                  ) : null}
+                </button>
                 {/* Partnership discount requests waiting on a decision. */}
                 <button
                   type="button"
@@ -394,56 +383,13 @@ export function PlayerManagementPage() {
                   className={`inline-flex h-9 items-center gap-2 rounded-xl border px-3 text-sm font-semibold transition ${pendingPartnershipRequests.length > 0 ? 'border-danger/40 bg-danger/15 text-danger hover:bg-danger/25' : 'border-white/10 bg-white/5 text-muted hover:text-text'}`}
                 >
                   <FiAlertTriangle className="h-4 w-4" />
-                  View requests
+                  View partnership requests
                   {pendingPartnershipRequests.length > 0 ? (
                     <span className="grid h-5 min-w-5 place-items-center rounded-full bg-danger px-1.5 text-[11px] font-bold text-white">{pendingPartnershipRequests.length}</span>
                   ) : null}
                 </button>
-                <Button variant="ghost" size="sm" onClick={() => setShowAddForm((p) => !p)}>
-                  {showAddForm ? 'Cancel' : 'Add Player'}
-                </Button>
               </div>
             </div>
-
-            {showAddForm && (
-              <div className="mt-4 rounded-2xl border border-white/5 bg-white/5 p-4">
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div>
-                    <label className="block text-xs font-semibold text-muted mb-1">Full Name</label>
-                    <input 
-                      value={newPlayerName} 
-                      onChange={(e) => setNewPlayerName(e.target.value)} 
-                      className="w-full rounded-xl border border-white/10 bg-transparent px-3 py-2 text-sm text-text" 
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-muted mb-1">Email Address</label>
-                    <input 
-                      value={newPlayerEmail} 
-                      onChange={(e) => setNewPlayerEmail(e.target.value)} 
-                      type="email" 
-                      className="w-full rounded-xl border border-white/10 bg-transparent px-3 py-2 text-sm text-text" 
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-muted mb-1">Skill Level</label>
-                    <select value={newPlayerLevel} onChange={(e) => setNewPlayerLevel(e.target.value as any)} className="w-full rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm text-text">
-                      <option>Beginner</option>
-                      <option>Intermediate</option>
-                      <option>Experienced</option>
-                    </select>
-                  </div>
-                  <div className="flex items-end gap-2">
-                    <Button variant="ghost" onClick={() => { setShowAddForm(false); setNewPlayerName(''); setNewPlayerEmail(''); setNewPlayerLevel('Beginner') }} className="flex-1">
-                      Cancel
-                    </Button>
-                    <Button onClick={handleAddPlayer} disabled={addingPlayer} className="flex-1">
-                      {addingPlayer ? 'Creating…' : 'Create player'}
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            )}
 
             <div className="mt-4 grid gap-3 md:grid-cols-[1fr_1fr] md:items-end">
               <div className="w-full md:max-w-xs">
@@ -571,6 +517,51 @@ export function PlayerManagementPage() {
           </>
         )}
       </Card>
+      {idRequestsOpen ? (
+        <Modal title="ID verification requests" eyebrow="Players" size="lg" onClose={() => setIdRequestsOpen(false)}>
+          <p className="mb-3 text-sm text-muted">
+            These players submitted an ID and are waiting to answer their waiver. Verifying an ID opens their waiver with their details filled in.
+          </p>
+          {pendingIdRequests.length === 0 ? (
+            <div className="rounded-xl border border-white/10 bg-white/5 p-4 text-sm text-muted">No IDs are waiting for verification.</div>
+          ) : (
+          <div className="space-y-3">
+            {pendingIdRequests.map((p) => (
+              <div key={p.id} className="rounded-xl border border-white/10 bg-white/5 p-3">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold">{p.name} <span className="text-xs text-muted">({p.id})</span></div>
+                    <div className="text-xs text-muted">
+                      {p.identityIdType || 'ID'}{p.birthDate ? ` · born ${p.birthDate}` : ''}
+                      {p.identitySubmittedAtISO ? ` · sent ${new Date(p.identitySubmittedAtISO).toLocaleString('en-PH', { dateStyle: 'medium', timeStyle: 'short' })}` : ''}
+                    </div>
+                  </div>
+                  <ActionGroup>
+                    <Button size="xs" variant="ghost" onClick={() => { setIdRequestsOpen(false); setSelectedPlayer(p) }}><FiEye /> Details</Button>
+                    <Button size="xs" variant="success-soft" disabled={verifyingId === p.id} onClick={() => p.id && handleVerifyPlayer(p.id)}>
+                      <FiCheck /> {verifyingId === p.id ? 'Saving…' : 'Verify ID'}
+                    </Button>
+                    <Button size="xs" variant="danger-soft" disabled={verifyingId === p.id} onClick={() => p.id && handleRejectPlayer(p.id)}><FiX /> Reject</Button>
+                  </ActionGroup>
+                </div>
+                {p.identityDocumentUrl || p.identityDocumentBackUrl ? (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {[{ label: 'Front', url: p.identityDocumentUrl }, { label: 'Back', url: p.identityDocumentBackUrl }].filter((side) => side.url).map((side) => (
+                      <a key={side.label} href={side.url} target="_blank" rel="noreferrer" className="block" title={`Open the ${side.label.toLowerCase()} in full size`}>
+                        <img src={side.url} alt={`${p.name} ID ${side.label.toLowerCase()}`} className="h-24 max-w-[12rem] rounded-lg border border-white/10 bg-white object-contain" />
+                        <div className="mt-0.5 text-[10px] uppercase tracking-wider text-muted">{side.label}</div>
+                      </a>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="mt-2 text-xs text-muted">No ID photo attached.</div>
+                )}
+              </div>
+            ))}
+          </div>
+          )}
+        </Modal>
+      ) : null}
       {partnershipRequestsOpen ? (
         <Modal title="Partnership discount requests" eyebrow="Players" size="lg" onClose={() => setPartnershipRequestsOpen(false)}>
           {pendingPartnershipRequests.length === 0 ? (

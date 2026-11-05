@@ -32,6 +32,7 @@ import {
   FiCloudRain,
   FiChevronDown,
   FiPlusCircle,
+  FiUserPlus,
 } from 'react-icons/fi'
 
 type Role = 'user' | 'admin' | 'marshal' | 'registrar'
@@ -65,7 +66,8 @@ const adminItems: Item[] = [
   { section: 'Bookings', label: 'Reservations', to: '/app/admin/reservations', icon: FiCalendar },
   { section: 'Bookings', label: 'Payments', to: '/app/admin/payments', icon: FiCreditCard },
   { section: 'Bookings', label: 'Games', to: '/app/games', icon: FiZap },
-  { section: 'Game day', label: 'Counter (walk-ins)', to: '/app/counter', icon: FiShoppingBag },
+  { section: 'Game day', label: 'Counter', to: '/app/counter', icon: FiShoppingBag },
+  { section: 'Game day', label: 'Walk-ins', to: '/app/walk-ins', icon: FiUserPlus },
   { section: 'Game day', label: 'Rental check-out', to: '/app/rentals', icon: FiLogOut },
   { section: 'Game day', label: 'Field check-in', to: '/app/check-in', icon: FiClipboard },
   { section: 'Game day', label: 'Team grouping', to: '/app/team-grouping', icon: FiShuffle },
@@ -88,6 +90,7 @@ const registrarItems: Item[] = [
   { label: 'Dashboard', to: '/app', icon: FiGrid },
   { label: 'Reservations', to: '/app/registrar/reservations', icon: FiCalendar },
   { label: 'Counter', to: '/app/counter', icon: FiShoppingBag },
+  { label: 'Walk-ins', to: '/app/walk-ins', icon: FiUserPlus },
   { label: 'Field Check-in', to: '/app/check-in', icon: FiClipboard },
   { label: 'Rental Check-out', to: '/app/rentals', icon: FiLogOut },
   { label: 'Games', to: '/app/registrar/games', icon: FiZap },

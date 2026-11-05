@@ -14,6 +14,8 @@ import { composeFullName, splitFullName } from '../../utils/names'
 import { formatPhPhone } from '../../utils/phone'
 import { IDENTITY_ID_TYPES, idTypeNeedsBack } from '../../utils/idTypes'
 import { MinorsOnProfile } from '../waiver/MinorsOnAccount'
+import { ProfilePhotoCropModal } from '../../components/profile/ProfilePhotoCropModal'
+import { FiEdit2 } from 'react-icons/fi'
 
 type IdSide = 'front' | 'back'
 type IdPhoto = { blob: Blob; name: string; preview: string }
@@ -91,6 +93,8 @@ export function PlayerProfilePage() {
   const [captureSide, setCaptureSide] = React.useState<IdSide>('front')
   const [replacingId, setReplacingId] = React.useState(false)
   const [isEditing, setIsEditing] = React.useState(false)
+  // Open crop pop-up: a newly picked file, or null file to re-crop the current photo.
+  const [photoCrop, setPhotoCrop] = React.useState<{ file: File | null } | null>(null)
   const [editFirstName, setEditFirstName] = React.useState('')
   const [editMiddleInitial, setEditMiddleInitial] = React.useState('')
   const [editLastName, setEditLastName] = React.useState('')
@@ -166,8 +170,10 @@ export function PlayerProfilePage() {
     }
   }, [playerId, user?.id])
 
+  // Fill the edit form from the saved profile, but not while it's open: saving a new photo updates
+  // the profile and must not wipe details typed but not saved yet.
   React.useEffect(() => {
-    if (player) {
+    if (player && !isEditing) {
       // Older accounts only have a full name: split it as a starting point.
       const parts = player.firstName || player.lastName
         ? { firstName: player.firstName || '', middleInitial: player.middleInitial || '', lastName: player.lastName || '' }
@@ -179,7 +185,8 @@ export function PlayerProfilePage() {
       setEditEmail(player.email || (String(player.id || '') === String(user?.id || '') ? user?.email || '' : ''))
       setEditBirthDate(player.birthDate || '')
     }
-  }, [player])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [player, isEditing])
 
   React.useEffect(() => {
     let alive = true
@@ -393,10 +400,14 @@ export function PlayerProfilePage() {
     setIsEditing(true)
   }
 
-  const handleProfileImageChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+  // Picking a photo opens the crop pop-up first; the cropped photo is what gets uploaded.
+  const handleProfileImageChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
-    if (!file) return
+    event.target.value = ''
+    if (file) setPhotoCrop({ file })
+  }
 
+  const saveCroppedPhoto = async (file: File) => {
     try {
       setProfileImageUploading(true)
       setError(null)
@@ -411,11 +422,11 @@ export function PlayerProfilePage() {
       setPlayer((current) => current ? { ...current, ...updated, profileImageUrl: imageUrl } : current)
       updateUser({ name: updated?.name || user?.name || '', email: updated?.email || user?.email || '' })
       toast.success('Profile photo updated.')
+      setPhotoCrop(null)
     } catch (e: any) {
-      setError(String(e?.message || e))
+      toast.error(String(e?.message || e))
     } finally {
       setProfileImageUploading(false)
-      event.target.value = ''
     }
   }
 
@@ -570,7 +581,7 @@ export function PlayerProfilePage() {
     : '')
 
   // Identity verification: on the profile until the ID is verified, then inside Edit Profile
-  // (where the player can update it; a new submission brings it back out).
+  // (read-only there; it comes back out when it expires after a year).
   const identitySection = (
     <>
           <div className="flex items-center justify-between gap-3">
@@ -579,7 +590,7 @@ export function PlayerProfilePage() {
               <div className="mt-1 text-sm font-semibold">{verificationLabel}</div>
               <div className="mt-1 text-sm text-muted">
                 {isVerified
-                  ? `Your ID is verified${player?.identityValidUntilISO ? ` until ${formatLongDate(player.identityValidUntilISO)}` : ''}. Update it every year to keep signing waivers.`
+                  ? `Your ID is verified${player?.identityValidUntilISO ? ` until ${formatLongDate(player.identityValidUntilISO)}` : ''}. You'll submit it again once a year to keep signing waivers.`
                   : idExpired
                     ? 'Your ID verification is over a year old. Submit your ID again to keep signing waivers and joining teams.'
                     : 'Submit a government-issued ID for staff to verify. Your waiver opens once it is verified.'}
@@ -640,14 +651,17 @@ export function PlayerProfilePage() {
                 ) : (
                   <div className="text-xs text-muted">Your ID photo isn't available to preview.</div>
                 )}
-                <Button type="button" variant="ghost" className="w-full" onClick={() => setReplacingId(true)}>
-                  {isVerified ? 'Update my ID' : 'Submit a different ID'}
-                </Button>
+                {/* A verified ID can't be changed: it is submitted again only once it expires after a year,
+                    when the waiver is renewed too. */}
                 {isVerified ? (
                   <div className="text-[11px] text-muted">
-                    A new ID goes to staff for review and this section moves back to your profile until it's verified. Your current ID keeps counting meanwhile.
+                    Your verified ID can't be changed. You'll submit it again when it expires{player?.identityValidUntilISO ? ` on ${formatLongDate(player.identityValidUntilISO)}` : ' after a year'}, together with your yearly waiver.
                   </div>
-                ) : null}
+                ) : (
+                  <Button type="button" variant="ghost" className="w-full" onClick={() => setReplacingId(true)}>
+                    Submit a different ID
+                  </Button>
+                )}
               </div>
             ) : null}
 
@@ -780,6 +794,16 @@ export function PlayerProfilePage() {
           )
         : null}
 
+      {photoCrop ? (
+        <ProfilePhotoCropModal
+          initialFile={photoCrop.file}
+          currentUrl={player?.profileImageUrl}
+          saving={profileImageUploading}
+          onClose={() => setPhotoCrop(null)}
+          onSave={(file) => { void saveCroppedPhoto(file) }}
+        />
+      ) : null}
+
       {isEditing ? createPortal(
         <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
           <div className="relative z-[100000] max-h-[90dvh] overflow-y-auto overscroll-contain w-full max-w-xl rounded-3xl border border-white/10 bg-background p-4 shadow-[0_0_0_1px_rgba(255,255,255,0.05),0_30px_80px_rgba(0,0,0,0.65)]">
@@ -795,16 +819,28 @@ export function PlayerProfilePage() {
 
             <form className="mt-4 space-y-4" onSubmit={handleSaveProfile}>
               <div className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-white/5 p-3 sm:flex-row sm:items-center">
-                <div className="h-16 w-16 overflow-hidden rounded-2xl border border-white/10 bg-background">
-                  {player?.profileImageUrl ? (
-                    <img src={player.profileImageUrl} alt="Profile" className="h-full w-full object-cover" />
-                  ) : (
-                    <div className="flex h-full w-full items-center justify-center text-xs text-muted">IMG</div>
-                  )}
+                <div className="relative h-16 w-16 shrink-0">
+                  <div className="h-16 w-16 overflow-hidden rounded-2xl border border-white/10 bg-background">
+                    {player?.profileImageUrl ? (
+                      <img src={player.profileImageUrl} alt="Profile" className="h-full w-full object-cover" />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center text-xs text-muted">IMG</div>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    aria-label="Edit profile photo"
+                    title="Edit profile photo"
+                    disabled={profileImageUploading}
+                    onClick={() => setPhotoCrop({ file: null })}
+                    className="absolute -bottom-1.5 -right-1.5 flex h-7 w-7 items-center justify-center rounded-full border border-white/20 bg-accent text-xs text-white shadow-soft transition hover:brightness-110 disabled:opacity-50"
+                  >
+                    <FiEdit2 />
+                  </button>
                 </div>
                 <div className="flex-1">
                   <div className="text-sm font-semibold">Profile photo</div>
-                  <div className="mt-1 text-xs text-muted">Upload a new profile image to replace the current photo.</div>
+                  <div className="mt-1 text-xs text-muted">Upload a new photo, or tap the pencil to crop your current one. You crop it before it's saved.</div>
                   <Button type="button" variant="ghost" className="mt-3" onClick={() => profileImageInputRef.current?.click()} disabled={profileImageUploading}>
                     {profileImageUploading ? 'Uploading…' : 'Upload profile photo'}
                   </Button>

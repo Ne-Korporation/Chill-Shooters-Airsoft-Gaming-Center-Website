@@ -308,87 +308,10 @@ router.get('/me', requireAuth, async (req, res) => {
   })
 })
 
-// --- Admin: Add Player (User) ---
-// POST /api/auth/admin/add-player
-router.post('/admin/add-player', requireAuth, requireRole('admin', 'marshal', 'registrar'), async (req, res) => {
-  const body = req.body || {}
-  const { name, email, skillLevel } = body
-
-  if (!name || typeof name !== 'string' || !name.trim()) {
-    return res.status(400).json({ ok: false, error: 'name is required' })
-  }
-
-  if (!email || typeof email !== 'string' || !email.trim()) {
-    return res.status(400).json({ ok: false, error: 'email is required' })
-  }
-
-  const normalizedEmail = normalizeEmail(email)
-  const defaultPassword = generateDefaultPassword(name)
-
-  try {
-    const db = await getDb()
-    const userAccounts = await getUserAccountsCollection()
-
-    const existing = await userAccounts.findOne(sameEmailFilter(normalizedEmail))
-    if (existing) {
-      return res.status(409).json({ ok: false, error: 'email already registered' })
-    }
-
-    const hashedPassword = await bcrypt.hash(defaultPassword, 10)
-    const nextId = await nextShortId(db, 'user_accounts', 'P')
-
-    const newDoc = {
-      id: nextId,
-      name: name.trim(),
-      ...splitFullName(name),
-      email: normalizedEmail,
-      emailCanonical: canonicalEmail(normalizedEmail),
-      password: hashedPassword,
-      role: 'user',
-      experience: 0,
-      // Counted as games from before the system, so games completed at the field add to it.
-      experienceAdjustment: STARTING_GAMES_PLAYED[skillLevel] || 0,
-      emailVerified: true,
-      identityVerificationStatus: 'not_submitted',
-      createdAtISO: new Date().toISOString(),
-    }
-
-    const result = await userAccounts.insertOne(newDoc)
-
-    // Send email with password
-    try {
-      const from = process.env.EMAIL_USER ? `Chill Shooters <${process.env.EMAIL_USER}>` : 'Chill Shooters <no-reply@chillshooters.local>'
-      await transporter.sendMail({
-        from,
-        to: normalizedEmail,
-        subject: 'Your Chill Shooters player account has been created',
-        html: `
-          <div style="font-family: Arial, sans-serif; line-height: 1.5; color: #111827;">
-            <h2 style="margin-bottom: 8px;">Welcome to Chill Shooters!</h2>
-            <p>Hello ${name.trim()},</p>
-            <p>Your player account has been created by an administrator.</p>
-            <p><strong>Your login credentials:</strong></p>
-            <div style="margin: 20px 0; padding: 16px 20px; border-radius: 8px; background: #f3f4f6;">
-              <p style="margin: 4px 0;"><strong>Email:</strong> ${normalizedEmail}</p>
-              <p style="margin: 4px 0;"><strong>Password:</strong> ${defaultPassword}</p>
-            </div>
-            <p>Please log in and change your password as soon as possible.</p>
-          </div>
-        `,
-      })
-    } catch (mailErr) {
-      console.error('Failed to send welcome email', mailErr)
-      // Don't rollback - account was created, just log the error
-    }
-
-    return res.status(201).json({
-      ok: true,
-      insertedId: result.insertedId,
-      data: { ...newDoc, defaultPassword },
-    })
-  } catch (err) {
-    return res.status(500).json({ ok: false, error: String(err) })
-  }
+// Players make their own accounts (sign-up or Google). Staff can't create player accounts;
+// they only add staff, from Players & staff.
+router.post('/admin/add-player', requireAuth, (_req, res) => {
+  return res.status(403).json({ ok: false, error: 'Staff cannot add players. Players create their own accounts.' })
 })
 
 // --- Admin: Add Staff ---

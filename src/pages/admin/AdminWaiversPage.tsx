@@ -323,9 +323,9 @@ export function AdminWaiversPage() {
 
       {selectedWaiver && portalTarget ? createPortal(
         <div className="fixed inset-0 z-[9999] grid place-items-center bg-black/60 p-4" role="dialog" aria-modal="true" aria-labelledby="waiver-details-title">
-          <article className="max-h-[90dvh] w-full max-w-5xl overflow-y-auto bg-white text-slate-950 dark:bg-slate-950 dark:text-white p-6 shadow-none">
-            {/* Pinned so the close button stays reachable while scrolling the waiver. */}
-            <div className="sticky -top-6 z-10 -mx-6 -mt-6 flex items-start justify-between gap-4 border-b border-slate-200/70 bg-white px-6 pb-4 pt-6 dark:bg-slate-950">
+          <article className="flex max-h-[90dvh] w-full max-w-5xl flex-col overflow-hidden bg-white text-slate-950 dark:bg-slate-950 dark:text-white shadow-none">
+            {/* The title row sits above the scrolling area, so the close button stays in reach and no text slides under it. */}
+            <div className="flex shrink-0 items-start justify-between gap-4 border-b border-slate-200/70 bg-white px-6 pb-4 pt-6 dark:bg-slate-950">
               <div>
                 <div className="text-xs uppercase tracking-widest text-slate-500">Waiver document</div>
                 <h2 id="waiver-details-title" className="mt-1 text-2xl font-semibold">{selectedWaiver.fullName || 'Unnamed player'}</h2>
@@ -334,6 +334,7 @@ export function AdminWaiversPage() {
               <button type="button" aria-label="Close waiver details" onClick={() => setSelectedWaiver(null)} className="rounded-lg p-2 text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"><FiX /></button>
             </div>
 
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 pb-6">
             <div className="grid gap-4 sm:grid-cols-2 pt-5 text-sm leading-relaxed text-slate-700 dark:text-slate-300">
               <div>
                 <div className="text-[11px] uppercase tracking-widest text-slate-500">Waiver ID</div>
@@ -531,6 +532,7 @@ export function AdminWaiversPage() {
                   </button>
                 </div>
               </div>
+            </div>
             </div>
           </article>
         </div>,

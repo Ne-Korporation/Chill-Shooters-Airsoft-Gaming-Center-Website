@@ -253,7 +253,8 @@ export function emailSplitShareRequest(db, reservation, userId, share, captainNa
     subject: 'Your share of a Chill Shooters reservation is due',
     title: 'Split payment requested',
     lines: [
-      `${escapeHtml(captainName)} added you to a reservation and split the payment with the team.`,
+      `${escapeHtml(captainName)} added you to their team and split the payment. Here is how much you need to pay:`,
+      `<div style="margin:12px 0;padding:14px 18px;border-radius:10px;background:#f3f4f6;"><div style="color:#6b7280;font-size:12px;">Your share to pay</div><div style="font-size:24px;font-weight:bold;">${formatPHP(share)}</div><div style="color:#6b7280;font-size:12px;">Pay before ${escapeHtml(dueLabel)}</div></div>`,
       `<table style="border-collapse:collapse;">${details.map(([label, value]) => `<tr><td style="padding:2px 12px 2px 0;color:#6b7280;">${label}</td><td style="padding:2px 0;">${value}</td></tr>`).join('')}</table>`,
       payLink
         ? button(payLink, 'Pay my share')
@@ -261,6 +262,55 @@ export function emailSplitShareRequest(db, reservation, userId, share, captainNa
       "If the team doesn't finish paying by the deadline, the slot is released.",
       `Reservation ID: ${escapeHtml(id)}`,
     ],
+  })
+}
+
+// Staff verified (or rejected) a player's ID. A verified ID opens their waiver.
+export function emailIdentityDecision(db, account, verified, baseUrl = '') {
+  if (!account) return Promise.resolve({ skipped: 'missing data' })
+  const id = String(account.id || account._id)
+  const root = String(baseUrl || appUrl()).replace(/\/+$/, '')
+  const link = verified ? `${root}/app/waiver` : `${root}/app/players/${encodeURIComponent(id)}`
+  return sendLogged(db, {
+    key: `identity:${id}:${verified ? 'verified' : 'rejected'}:${account.identityVerificationUpdatedAt || ''}`,
+    userId: id,
+    subject: verified ? 'Your ID is verified: answer your waiver' : 'Your ID was not accepted',
+    title: verified ? 'ID verified' : 'ID not accepted',
+    lines: verified
+      ? [
+          'Staff verified your ID. You can now answer your waiver; your name, birthday and ID are filled in for you, and it is approved as soon as you sign.',
+          button(link, 'Answer my waiver'),
+        ]
+      : [
+          'Staff could not accept the ID you submitted. Please submit a clear photo of a valid ID on your profile.',
+          button(link, 'Open my profile'),
+        ],
+  })
+}
+
+// A teammate added to a booking the captain pays for: the game details and nothing to pay online.
+export function emailTeamAdded(db, reservation, userId, captainName, viewLink = '') {
+  if (!reservation || !userId) return Promise.resolve({ skipped: 'missing data' })
+  const id = String(reservation.id || reservation._id)
+  const details = [
+    ['Date', reservationLabel(reservation)],
+    ['Players', escapeHtml(reservation.numberOfPlayers || '')],
+    ['Package', escapeHtml(reservation.packageName || 'Custom selection')],
+    ...(reservation.teamName ? [['Team name', escapeHtml(reservation.teamName)]] : []),
+    ['Your payment', `<b>Nothing to pay online</b>: ${escapeHtml(captainName)} is paying for the team.`],
+  ]
+  return sendLogged(db, {
+    key: `team-added:${id}:${userId}`,
+    userId,
+    subject: `${captainName} added you to a Chill Shooters game`,
+    title: 'You were added to a team',
+    lines: [
+      `${escapeHtml(captainName)} added you to their team for a game at Chill Shooters.`,
+      `<table style="border-collapse:collapse;">${details.map(([label, value]) => `<tr><td style="padding:2px 12px 2px 0;color:#6b7280;">${label}</td><td style="padding:2px 0;">${value}</td></tr>`).join('')}</table>`,
+      'Make sure your waiver is approved before the game, and arrive 30 minutes early for the safety briefing.',
+      viewLink ? button(viewLink, 'View the reservation') : '',
+      `Reservation ID: ${escapeHtml(id)}`,
+    ].filter(Boolean),
   })
 }
 

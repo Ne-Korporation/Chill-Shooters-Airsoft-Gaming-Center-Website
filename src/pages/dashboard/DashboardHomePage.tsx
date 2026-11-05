@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
 import { DashboardPostsPanel } from '../../components/dashboard/DashboardPostsPanel'
 import { WeekendCapacity } from '../../components/booking/WeekendCapacity'
+import { SplitShareDueCard } from '../../components/dashboard/SplitShareDueCard'
 import { Link } from 'react-router-dom'
 import { FiCalendar, FiPlus, FiShield } from 'react-icons/fi'
 import { ActivityList, DashboardHeader, Panel, StatTile, type ActivityTone } from '../../components/dashboard/DashboardParts'
@@ -266,6 +267,8 @@ export function DashboardHomePage() {
         />
 
         <aside className="space-y-3">
+          {/* Shown only while the player owes a split payment share. */}
+          <SplitShareDueCard />
           <div className="grid grid-cols-3 gap-2">
             <StatTile compact label="Bookings" value={dashboard.totalReservations} hint="All time" loading={loading} />
             <StatTile compact label="Upcoming" value={dashboard.upcomingReservations} hint="Confirmed" loading={loading} />

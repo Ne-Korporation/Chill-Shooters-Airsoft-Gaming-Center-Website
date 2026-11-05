@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { FiCalendar, FiEye, FiLock, FiPrinter, FiRefreshCw, FiXCircle } from 'react-icons/fi'
+import { FiCalendar, FiCheck, FiCopy, FiEye, FiLock, FiPrinter, FiRefreshCw, FiXCircle } from 'react-icons/fi'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { apiGet, apiPost } from '../../utils/apiClient'
@@ -338,7 +338,11 @@ export function MyReservationsPage() {
                   {reservation.locationName || reservation.locationId || 'Location'} · <span className="capitalize">{reservation.sessionType || 'public'}</span> · {reservation.numberOfPlayers || 0} players · {reservation.packageName || 'Custom selection'}
                 </div>
                 <div className="mt-1 text-xs text-muted">
-                  Total {formatPHP(reservation.totalAmount)} · Deposit {formatPHP(reservation.depositAmount)} · ID {id}
+                  Total {formatPHP(reservation.totalAmount)} · Deposit {formatPHP(reservation.depositAmount)}
+                </div>
+                <div className="mt-1 flex items-center gap-1.5 text-xs text-muted">
+                  Reservation no. <span className="font-mono font-semibold text-text">{id}</span>
+                  <CopyReservationNumber value={id} />
                 </div>
                 {sentBack ? (
                   <div className="mt-2 rounded-xl border border-danger/30 bg-danger/10 p-3 text-sm text-danger">
@@ -475,5 +479,49 @@ export function MyReservationsPage() {
         )
       })() : null}
     </div>
+  )
+}
+
+// Copies a reservation number so it can be pasted into search (here, in payments or for staff).
+function CopyReservationNumber({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false)
+  useEffect(() => {
+    if (!copied) return
+    const timer = window.setTimeout(() => setCopied(false), 1500)
+    return () => window.clearTimeout(timer)
+  }, [copied])
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(value)
+    } catch {
+      // Older browsers or non-secure pages: fall back to a hidden text field.
+      const field = document.createElement('textarea')
+      field.value = value
+      field.style.position = 'fixed'
+      field.style.opacity = '0'
+      document.body.appendChild(field)
+      field.select()
+      const ok = document.execCommand('copy')
+      field.remove()
+      if (!ok) {
+        toast.error('Could not copy. Select the number and copy it instead.')
+        return
+      }
+    }
+    setCopied(true)
+    toast.success('Reservation number copied')
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      aria-label={copied ? 'Reservation number copied' : `Copy reservation number ${value}`}
+      title="Copy reservation number"
+      className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-white/5 px-2 py-0.5 text-[11px] font-semibold text-muted transition hover:border-accent/40 hover:text-text"
+    >
+      {copied ? <FiCheck className="text-success" /> : <FiCopy />} {copied ? 'Copied' : 'Copy'}
+    </button>
   )
 }

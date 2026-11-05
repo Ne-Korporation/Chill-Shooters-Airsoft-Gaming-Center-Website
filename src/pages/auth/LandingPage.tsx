@@ -23,7 +23,7 @@ import {
 import toast from 'react-hot-toast'
 
 import { Button } from '../../components/ui/Button'
-import { WeekendCapacity } from '../../components/booking/WeekendCapacity'
+import { CapacityCalendar } from '../../components/booking/CapacityCalendar'
 import { useAuth } from '../../context/AuthContext'
 import { getApiBase } from '../../utils/apiClient'
 import { formatSlotRange, useSlotHours } from '../../utils/slotHours'
@@ -972,9 +972,9 @@ export function LandingPage() {
         </div>
       </section>
 
-      {/* How full the coming weekend's public games are */}
+      {/* How full the coming public games are, and which days are games for a cause */}
       <section className="mx-auto max-w-[1200px] px-4 pt-14 md:px-6 md:pt-10">
-        <WeekendCapacity
+        <CapacityCalendar
           action={<Button size="sm" variant="primary" onClick={handleReserve}>Reserve a spot</Button>}
         />
       </section>

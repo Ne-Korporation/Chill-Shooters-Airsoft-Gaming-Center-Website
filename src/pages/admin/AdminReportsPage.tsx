@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { FiDownload, FiPrinter } from 'react-icons/fi'
+import { FiDownload, FiHeart, FiPrinter } from 'react-icons/fi'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { FilterTabs } from '../../components/ui/FilterTabs'
@@ -7,6 +7,7 @@ import { apiGet } from '../../utils/apiClient'
 import { equipmentAlerts } from '../../utils/inventoryModels'
 import { ReportTrendCharts } from './ReportTrendCharts'
 import { useAuth } from '../../context/AuthContext'
+import { useCauseDays } from '../../utils/causeDays'
 
 type Metric = { label: string; value: string; tone: 'accent' | 'success' | 'danger' }
 
@@ -48,6 +49,8 @@ type ReservationDoc = {
   damageCharges?: Array<{ itemName?: string; amount?: number; atISO?: string }>
   locationName?: string
   locationId?: string
+  // Set on bookings made on a game for a cause.
+  causeDay?: { title?: string; donationPercent?: number }
 }
 
 type RentalDoc = {
@@ -261,6 +264,7 @@ export function AdminReportsPage() {
 
   const range = useMemo(() => rangeFor(period, anchor, customStart, customEnd), [period, anchor, customStart, customEnd])
   const inRange = (day: string) => !!day && day >= range.start && day <= range.end
+  const causeDays = useCauseDays(range.start, range.end)
 
   const report = useMemo(() => {
     const periodReservations = reservations.filter((reservation) => inRange(reservationDay(reservation)))
@@ -356,6 +360,43 @@ export function AdminReportsPage() {
       { label: 'Outstanding balances on these bookings', amount: outstanding },
     ]
 
+    // Games for a cause: the share of each cause day's bookings reserved for the donation. The
+    // share is taken from what was collected for those bookings (any payment date), and from the
+    // booking value for what is still expected. A booking keeps the share it was made under.
+    const donations = Object.values(causeDays)
+      .sort((a, b) => a.dateISO.localeCompare(b.dateISO))
+      .map((cause) => {
+        const dayBookings = periodReservations.filter((r) => reservationDay(r) === cause.dateISO && !CANCELLED_STATUSES.includes(statusOf(r)))
+        const percentOf = (r: ReservationDoc) => Number(r.causeDay?.donationPercent ?? cause.donationPercent) || 0
+        const ids = new Map(dayBookings.map((r) => [String(r.id || ''), r]))
+        const dayCollectedPayments = payments.filter((p) => ids.has(String(p.reservationId || '')) && COLLECTED_STATUSES.includes(paymentStatusOf(p)))
+        const bookingValue = dayBookings.reduce((sum, r) => sum + (Number(r.totalAmount) || 0), 0)
+        const collectedForDay = dayCollectedPayments.reduce((sum, p) => sum + paymentAmount(p), 0)
+        const reserved = dayCollectedPayments.reduce((sum, p) => {
+          const booking = ids.get(String(p.reservationId || ''))
+          return sum + (booking ? (paymentAmount(p) * percentOf(booking)) / 100 : 0)
+        }, 0)
+        const pledged = dayBookings.reduce((sum, r) => sum + ((Number(r.totalAmount) || 0) * percentOf(r)) / 100, 0)
+        return {
+          dateISO: cause.dateISO,
+          title: cause.title,
+          beneficiary: cause.beneficiary,
+          donationPercent: cause.donationPercent,
+          bookings: dayBookings.length,
+          players: dayBookings.reduce((sum, r) => sum + (Number(r.numberOfPlayers) || 0), 0),
+          bookingValue,
+          collected: collectedForDay,
+          reserved: Math.round(reserved * 100) / 100,
+          pledged: Math.round(pledged * 100) / 100,
+        }
+      })
+    const donationReserved = donations.reduce((sum, row) => sum + row.reserved, 0)
+    const donationPledged = donations.reduce((sum, row) => sum + row.pledged, 0)
+    statement.push(
+      { label: 'Reserved for donations (games for a cause, collected)', amount: donationReserved },
+      { label: 'Donations still expected (games for a cause, unpaid)', amount: Math.max(0, donationPledged - donationReserved) },
+    )
+
     const metrics: Metric[] = [
       { label: 'Reservations', value: String(periodReservations.length), tone: 'accent' },
       { label: 'Confirmed / completed', value: String(confirmed), tone: 'success' },
@@ -370,10 +411,12 @@ export function AdminReportsPage() {
       { label: 'Penalties & extra charges', value: `${penalties.length} · ${formatCurrency(penaltyTotal)}`, tone: 'danger' },
       { label: 'Damage / repair penalties', value: formatCurrency(damageTotal), tone: 'danger' },
       { label: 'Gear alerts (current)', value: String(equipmentAlertCount), tone: 'danger' },
+      { label: 'Games for a cause', value: String(donations.length), tone: 'accent' },
+      { label: 'Reserved for donations', value: formatCurrency(donationReserved), tone: 'success' },
     ]
 
-    return { metrics, breakdown, periodPayments, collected, players, statement, penalties, topRentals, periodRentals }
-  }, [reservations, payments, waivers, equipment, accounts, rentals, range, period, transactionType])
+    return { metrics, breakdown, periodPayments, collected, players, statement, penalties, topRentals, periodRentals, donations, donationReserved, donationPledged }
+  }, [reservations, payments, waivers, equipment, accounts, rentals, range, period, transactionType, causeDays])
 
   const rangeLabel = range.start === range.end ? range.start : `${range.start} to ${range.end}`
   const transactionLabel = TRANSACTION_TYPES.find((type) => type.key === transactionType)?.label || 'All transactions'
@@ -389,7 +432,7 @@ export function AdminReportsPage() {
     statement: report.statement.filter((row) => Math.round(row.amount) !== 0),
     breakdown: report.breakdown.filter((row) => row.reservations || row.players || row.collected),
   }), [report])
-  const hasActivity = shown.metrics.length > 0 || report.periodPayments.length > 0 || report.penalties.length > 0 || report.periodRentals.length > 0
+  const hasActivity = shown.metrics.length > 0 || report.donations.length > 0 || report.periodPayments.length > 0 || report.penalties.length > 0 || report.periodRentals.length > 0
 
   const exportCsv = () => {
     const lines: string[] = []
@@ -415,6 +458,9 @@ export function AdminReportsPage() {
       payment.paymentMethod,
       paymentStatusOf(payment),
       paymentAmount(payment),
+    ].map(csvCell).join(',')))
+    section('Game for a cause date,Cause,Beneficiary,Donation share (%),Bookings,Players,Booking value (PHP),Collected (PHP),Reserved for donation (PHP),Expected donation (PHP)', report.donations.map((row) => [
+      row.dateISO, row.title, row.beneficiary, row.donationPercent, row.bookings, row.players, row.bookingValue, row.collected, row.reserved, row.pledged,
     ].map(csvCell).join(',')))
     section('Penalty date,Reservation ID,Charge,Amount (PHP)', report.penalties.map((row) => [row.day, row.reservationId, row.label, row.amount].map(csvCell).join(',')))
     section('Rental ID,Issued,Reservation ID,Player,Item,Category,Status', report.periodRentals.map((rental) =>
@@ -548,6 +594,52 @@ export function AdminReportsPage() {
             </tbody>
           </table>
           <div className="mt-2 text-xs text-muted">Booking values cover reservations dated in this period; collections count verified payments received in it.</div>
+        </Card>
+        ) : null}
+
+        {report.donations.length ? (
+        <Card className="p-4">
+          <div className="flex items-center gap-2 text-xs uppercase tracking-widest text-muted"><FiHeart className="text-rose-500" /> Donations · games for a cause</div>
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="text-left text-xs uppercase tracking-widest text-muted">
+                <tr>
+                  <th className="py-2 pr-4">Date</th>
+                  <th className="py-2 pr-4">Cause</th>
+                  <th className="py-2 pr-4 text-right">Share</th>
+                  <th className="py-2 pr-4 text-right">Bookings</th>
+                  <th className="py-2 pr-4 text-right">Players</th>
+                  <th className="py-2 pr-4 text-right">Collected</th>
+                  <th className="py-2 text-right">Reserved for donation</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {report.donations.map((row) => (
+                  <tr key={row.dateISO}>
+                    <td className="py-2 pr-4 whitespace-nowrap">{row.dateISO}</td>
+                    <td className="py-2 pr-4">{row.title}{row.beneficiary ? <div className="text-xs text-muted">For {row.beneficiary}</div> : null}</td>
+                    <td className="py-2 pr-4 text-right">{row.donationPercent}%</td>
+                    <td className="py-2 pr-4 text-right">{row.bookings}</td>
+                    <td className="py-2 pr-4 text-right">{row.players}</td>
+                    <td className="py-2 pr-4 text-right">{formatCurrency(row.collected)}</td>
+                    <td className="py-2 text-right font-semibold">
+                      {formatCurrency(row.reserved)}
+                      {row.pledged > row.reserved ? <div className="text-xs font-normal text-muted">{formatCurrency(row.pledged - row.reserved)} more expected</div> : null}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot className="font-semibold">
+                <tr className="border-t border-white/10">
+                  <td className="py-2 pr-4" colSpan={6}>Total reserved for donations</td>
+                  <td className="py-2 text-right">{formatCurrency(report.donationReserved)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+          <div className="mt-2 text-xs text-muted">
+            Reserved = the day's donation share of payments collected for bookings on that day. Expected = the share of bookings not yet paid.
+          </div>
         </Card>
         ) : null}
 

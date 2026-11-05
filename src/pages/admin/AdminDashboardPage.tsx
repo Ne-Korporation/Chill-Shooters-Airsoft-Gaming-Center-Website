@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { FiBarChart2, FiCalendar, FiClock, FiCreditCard, FiLogOut, FiShield, FiShoppingBag, FiTool, FiUsers } from 'react-icons/fi'
 import { Link } from 'react-router-dom'
 import { DashboardPostsPanel } from '../../components/dashboard/DashboardPostsPanel'
-import { WeekendCapacity } from '../../components/booking/WeekendCapacity'
+import { CapacityCalendar } from '../../components/booking/CapacityCalendar'
 import { useAuth } from '../../context/AuthContext'
 import { PaymentCompletePanel } from '../../components/dashboard/PaymentCompletePanel'
 import { ActionRow, ActivityList, DashboardHeader, Panel, StatTile, type ActivityTone } from '../../components/dashboard/DashboardParts'
@@ -185,10 +185,11 @@ export function AdminDashboardPage() {
           title="Announcements"
           subtitle="Posts here appear on every dashboard: players, marshals, and registrars."
           beforePosts={
-            <WeekendCapacity
+            <CapacityCalendar
               compact
-              title="This week's public game capacity"
-              subtitle="How many players have booked this weekend's open games."
+              editable
+              title="Public game capacity"
+              subtitle="Spots booked for each weekend's open games. Click a day to make it a game for a cause."
             />
           }
         />
@@ -241,7 +242,8 @@ export function AdminDashboardPage() {
 
           <Panel compact title="Shortcuts">
             <div className="space-y-0.5">
-              <ActionRow to="/app/counter" icon={FiShoppingBag} title="Counter" description="Walk-ins and payments at the field" />
+              <ActionRow to="/app/counter" icon={FiShoppingBag} title="Counter" description="Balances and extra charges at the field" />
+              <ActionRow to="/app/walk-ins" icon={FiShoppingBag} title="Walk-ins" description="Register walk-ins for weekend public games" />
               <ActionRow to="/app/rentals" icon={FiLogOut} title="Rental check-out" description="Issue and return gear for today's games" />
               <ActionRow to="/app/admin/player-management" icon={FiUsers} title="Players & staff" description="Accounts, ID checks, and staff access" />
               <ActionRow to="/app/admin/reports" icon={FiBarChart2} title="Reports" description="Sales, bookings, rentals, and penalties" />
