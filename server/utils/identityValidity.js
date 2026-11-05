@@ -17,6 +17,25 @@ export function hasValidIdentity(account, now = Date.now()) {
   return Number.isFinite(previous) && previous > now
 }
 
+// The ID that currently counts: the verified one, or while a newer ID waits for review, the
+// previously verified one (its photos are kept aside when the newer ID is submitted).
+// Returns null when there is no valid verified ID.
+export function verifiedIdDocument(account, now = Date.now()) {
+  if (!hasValidIdentity(account, now)) return null
+  if (account.identityVerificationStatus === 'verified') {
+    return {
+      idType: account.identityIdType || '',
+      front: account.identityDocumentUrl || '',
+      back: account.identityDocumentBackUrl || '',
+    }
+  }
+  return {
+    idType: account.identityPreviousIdType || '',
+    front: account.identityPreviousDocumentUrl || '',
+    back: account.identityPreviousDocumentBackUrl || '',
+  }
+}
+
 // MongoDB filter for accounts with a valid identity (same rule as hasValidIdentity).
 export function validIdentityFilter(now = new Date()) {
   const nowISO = now.toISOString()
@@ -75,7 +94,7 @@ export async function expireOldIdentities(db, { force = false } = {}) {
   // A newer ID still waiting for review once the previous one has run out: nothing left to count.
   await accounts.updateMany(
     { identityPreviousValidUntilISO: { $lte: nowISO } },
-    { $unset: { identityPreviousValidUntilISO: '' } },
+    { $unset: { identityPreviousValidUntilISO: '', identityPreviousIdType: '', identityPreviousDocumentUrl: '', identityPreviousDocumentBackUrl: '' } },
   )
   return due.length
 }

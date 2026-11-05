@@ -41,6 +41,7 @@ import { FieldCheckInPage } from './pages/operations/FieldCheckInPage'
 import { GuardianApprovalPage } from './pages/guardian/GuardianApprovalPage'
 import { GuardianConfirmPage } from './pages/guardian/GuardianConfirmPage'
 import { CounterPage } from './pages/operations/CounterPage'
+import { WalkInsPage } from './pages/operations/WalkInsPage'
 import { RentalsPage } from './pages/operations/RentalsPage'
 import { RepairsPage } from './pages/operations/RepairsPage'
 
@@ -228,6 +229,7 @@ export default function App() {
         <Route path="team-grouping" element={<RequireRole roles={['marshal', 'admin']}><TeamGroupingPage /></RequireRole>} />
         <Route path="check-in" element={<RequireRole roles={['registrar', 'marshal', 'admin']}><FieldCheckInPage /></RequireRole>} />
         <Route path="counter" element={<RequireRole roles={['registrar', 'admin']}><CounterPage /></RequireRole>} />
+        <Route path="walk-ins" element={<RequireRole roles={['registrar', 'admin']}><WalkInsPage /></RequireRole>} />
         <Route path="rentals" element={<RequireRole roles={['marshal', 'registrar', 'admin']}><RentalsPage /></RequireRole>} />
         <Route path="repairs" element={<RequireRole roles={['marshal', 'admin']}><RepairsPage /></RequireRole>} />
         <Route path="weather" element={<RequireRole roles={['registrar', 'marshal', 'admin']}><AdminWeatherPage /></RequireRole>} />

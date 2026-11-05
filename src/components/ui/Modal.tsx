@@ -14,6 +14,7 @@ export function Modal({
   children,
   footer,
   size = 'lg',
+  zIndex,
 }: {
   title: React.ReactNode
   eyebrow?: string
@@ -21,6 +22,8 @@ export function Modal({
   children: React.ReactNode
   footer?: React.ReactNode
   size?: 'md' | 'lg' | 'xl'
+  // Raise above other full-screen layers (e.g. the Edit Profile sheet).
+  zIndex?: number
 }) {
   const titleId = useId()
 
@@ -43,7 +46,7 @@ export function Modal({
   const width = size === 'md' ? 'max-w-lg' : size === 'xl' ? 'max-w-5xl' : 'max-w-2xl'
 
   return createPortal(
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true" aria-labelledby={titleId} onClick={onClose}>
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/70 p-4" style={zIndex ? { zIndex } : undefined} role="dialog" aria-modal="true" aria-labelledby={titleId} onClick={onClose}>
       <div className={`flex max-h-[90dvh] w-full ${width} flex-col overflow-hidden rounded-3xl border border-white/10 bg-background shadow-soft`} onClick={(event) => event.stopPropagation()}>
         {/* The title row sits above the scrolling area (not over it), so the X is always in reach
             and no content slides underneath it. */}

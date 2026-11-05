@@ -219,11 +219,24 @@ router.post('/scan-id', requireAuth, (req, res, next) => {
     if (!account.birthDate) {
       return res.status(400).json({ ok: false, error: 'Add your birthday to your profile before verifying your ID.' })
     }
+    // A verified ID stays until it expires after a year (with the yearly waiver); it can't be swapped before then.
+    if (account.identityVerificationStatus === 'verified' && hasValidIdentity(account)) {
+      return res.status(409).json({ ok: false, error: 'Your ID is already verified. You can submit it again once it expires after a year.' })
+    }
     // Updating a still-valid ID: the current verification keeps counting until it would expire,
     // so the player can keep booking and joining teams while the new one is reviewed.
-    const keepPrevious = account.identityVerificationStatus === 'verified' && hasValidIdentity(account)
+    const replacingVerified = account.identityVerificationStatus === 'verified' && hasValidIdentity(account)
+    const keepPrevious = replacingVerified
       ? account.identityValidUntilISO || null
       : account.identityPreviousValidUntilISO || null
+    // Keep the verified ID's photos: waivers signed meanwhile show the ID that was actually checked.
+    const previousDocument = replacingVerified
+      ? {
+          identityPreviousIdType: account.identityIdType || '',
+          identityPreviousDocumentUrl: account.identityDocumentUrl || '',
+          identityPreviousDocumentBackUrl: account.identityDocumentBackUrl || '',
+        }
+      : {}
 
     const frontUrl = await storeUpload(req, front.buffer, front.originalname || 'id-front', front.mimetype)
     const backUrl = idType.sides === 'front_back'
@@ -246,6 +259,7 @@ router.post('/scan-id', requireAuth, (req, res, next) => {
           identityScanDetected: scanResult.cardDetected,
           identityVerificationUpdatedAt: new Date().toISOString(),
           ...(keepPrevious ? { identityPreviousValidUntilISO: keepPrevious } : {}),
+          ...(keepPrevious ? previousDocument : {}),
         },
         $unset: { identityReviewReason: '' },
       },

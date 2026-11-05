@@ -22,6 +22,7 @@ import {
   FiTool,
   FiUsers,
   FiX,
+  FiHeart,
 } from 'react-icons/fi'
 
 import { apiBase, apiDelete, apiGet, apiPost, getApiAuthHeaders } from '../../utils/apiClient'
@@ -30,6 +31,7 @@ import { LANDING_PREFILL_KEY, type LandingReservationPrefill } from '../auth/Lan
 import { Card } from '../../components/ui/Card'
 import { Input } from '../../components/ui/Input'
 import { Button } from '../../components/ui/Button'
+import { Modal } from '../../components/ui/Modal'
 import { calculatePackagePricing, packageEquipmentQty } from '../../utils/packagePricing'
 import { formatDiscountTargetLabel, resolvePackageDiscountConfig } from '../../utils/packagePricing'
 import { loadPackagePrefill } from '../../utils/packagePrefill'
@@ -39,6 +41,7 @@ import type { PickerGroup } from '../../components/inventory/PiecePicker'
 import { ModelQuantityPicker } from '../../components/inventory/ModelQuantityPicker'
 import { FieldLayoutDesigner, type LayoutItem } from '../../components/reservations/FieldLayoutDesigner'
 import { formatSlotRange, useSlotHours } from '../../utils/slotHours'
+import { causeDayMessage, useCauseDays } from '../../utils/causeDays'
 
 // Slot holds last 15 minutes on the server; refresh well before that while the player is booking.
 const SLOT_HOLD_REFRESH_MS = 4 * 60 * 1000
@@ -331,6 +334,8 @@ export function ReservationCalendarPage() {
     return (saved >= 1 && saved <= 5 ? saved : 1) as BookingStep
   })
   const [isConfirming, setIsConfirming] = useState(false)
+  // Last check before payment: the player confirms every detail is right, or goes back to fix it.
+  const [finalCheckOpen, setFinalCheckOpen] = useState(false)
   const [packages, setPackages] = useState<RentalPackage[]>([])
   const [weapons, setWeapons] = useState<WeaponItem[]>([])
   const [equipment, setEquipment] = useState<EquipmentItemDetails[]>([])
@@ -403,6 +408,11 @@ export function ReservationCalendarPage() {
       }
     })
   }, [today])
+  // Games for a cause in the months shown: marked on the date and explained on hover.
+  const causeDays = useCauseDays(
+    monthCalendars[0] ? `${monthCalendars[0].key}-01` : '',
+    monthCalendars[monthCalendars.length - 1] ? `${monthCalendars[monthCalendars.length - 1].key}-31` : '',
+  )
 
   const [selectedLocation, setSelectedLocation] = useState<LocationOption>(() => draftState.selectedLocation ?? landingPrefill?.location ?? 'salawag')
 
@@ -1329,8 +1339,25 @@ export function ReservationCalendarPage() {
   const payerShareAmount = paymentMode === 'split'
     ? Number((dynamicPricing.total / splitPartySize).toFixed(2))
     : dynamicPricing.total
-  const canSubmitReservation = canProceed && hasCurrentUserWaiver
-  // true only once we KNOW the user has no waiver (avoids flashing the warning while loading)
+  // Public games allow one booking per player for each time slot and location (other slots that
+  // day stay open). The server enforces it; this shows it on step 1 before the player continues.
+  const [myActiveBookings, setMyActiveBookings] = useState<Array<{ id?: string; sessionType?: string; locationId?: string; reservationDate?: string; reservationTime?: string; reservationStatus?: string }>>([])
+  useEffect(() => {
+    if (!user?.id) return
+    let alive = true
+    apiGet<{ ok: boolean; data: typeof myActiveBookings }>('/api/reservations?limit=200')
+      .then((res) => { if (alive) setMyActiveBookings(Array.isArray(res?.data) ? res.data : []) })
+      .catch(() => {})
+    return () => { alive = false }
+  }, [user?.id])
+  const publicSlotClash = publicGame
+    ? myActiveBookings.find((booking) => String(booking.sessionType || 'public').toLowerCase() === 'public'
+      && booking.locationId === selectedLocation
+      && booking.reservationDate === dateISO
+      && String(booking.reservationTime || '').toLowerCase() === slot
+      && !['cancelled', 'rejected', 'declined', 'expired'].includes(String(booking.reservationStatus || '').toLowerCase())) || null
+    : null
+  const canSubmitReservation = canProceed && hasCurrentUserWaiver && !publicSlotClash  // true only once we KNOW the user has no waiver (avoids flashing the warning while loading)
   const waiverBlocked = !!user?.id && !loadingWaiverEligibility && !hasCurrentUserWaiver
 
   // If the user has no waiver, they can't be past step 1
@@ -1800,24 +1827,40 @@ export function ReservationCalendarPage() {
                                 const active = iso === dateISO
                                 const isPastOrToday = iso <= todayDateISO
                                 const isWd = isWeekday(iso)
+                                const cause = causeDays[iso]
 
                                 return (
                                   <button
                                     key={iso}
                                     type="button"
+                                    title={cause ? causeDayMessage(cause) : undefined}
+                                    aria-label={cause ? `${iso}: ${causeDayMessage(cause)}` : undefined}
                                     disabled={isPastOrToday}
                                     onClick={() => {
                                       if (isPastOrToday) return
                                       setDateISO(iso)
                                     }}
                                     className={[
-                                      'h-12 rounded-xl border px-1 text-center text-[11px] transition',
-                                      active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
+                                      'group relative h-12 rounded-xl border px-1 text-center text-[11px] transition',
+                                      active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : cause ? 'border-rose-500/40 bg-rose-500/10 hover:bg-rose-500/15' : 'border-white/10 bg-white/5 hover:bg-white/8',
                                       isPastOrToday ? 'cursor-not-allowed opacity-40 hover:bg-white/5' : 'cursor-pointer',
                                     ].join(' ')}
                                   >
                                     <div className="font-bold leading-tight">{d.getDate()}</div>
                                     <div className="text-[9px] leading-tight text-muted/70">{isWd ? 'PRIV' : 'PUB'}</div>
+                                    {cause ? (
+                                      <>
+                                        <FiHeart className="absolute right-1 top-1 h-2.5 w-2.5 text-rose-500" aria-hidden="true" />
+                                        {/* Hover message, above the date (below it on the first row so it isn't cut off). */}
+                                        <span
+                                          role="tooltip"
+                                          className={`pointer-events-none absolute ${weekIndex === 0 ? 'top-full mt-1' : 'bottom-full mb-1'} left-1/2 z-20 hidden w-44 -translate-x-1/2 rounded-lg border border-rose-500/30 bg-background px-2 py-1.5 text-left text-[10px] font-semibold normal-case leading-snug text-text shadow-soft group-hover:block group-focus-visible:block`}
+                                        >
+                                          <span className="flex items-center gap-1 text-rose-500"><FiHeart /> Game for a cause</span>
+                                          <span className="mt-0.5 block">{cause.title}</span>
+                                        </span>
+                                      </>
+                                    ) : null}
                                   </button>
                                 )
                               })}
@@ -2217,6 +2260,12 @@ export function ReservationCalendarPage() {
                 </div>
               </div>
 
+              {publicSlotClash ? (
+                <div className="mt-4 rounded-2xl border border-danger/25 bg-danger/10 p-3 text-xs font-semibold text-danger">
+                  You already booked this public game ({publicSlotClash.id}). Only one booking per player is allowed for each time slot and location. Pick another time slot or location.
+                </div>
+              ) : null}
+
               {sessionType === 'private' && browsingHoldError ? (
                 <div className="mt-4 rounded-2xl border border-danger/25 bg-danger/10 p-3 text-xs font-semibold text-danger">
                   {browsingHoldError}
@@ -2228,7 +2277,7 @@ export function ReservationCalendarPage() {
               ) : null}
 
               <div className="mt-4 flex flex-col gap-2 sm:flex-row">
-                <Button variant="primary" disabled={!canProceed || !hasCurrentUserWaiver || placingHold || (sessionType === 'private' && Boolean(browsingHoldError))} onClick={goToStep2}>
+                <Button variant="primary" disabled={!canProceed || !hasCurrentUserWaiver || placingHold || Boolean(publicSlotClash) || (sessionType === 'private' && Boolean(browsingHoldError))} onClick={goToStep2}>
                   {placingHold ? 'Locking slot…' : 'Continue'} <FiChevronRight />
                 </Button>
                 <Button variant="ghost" onClick={() => {
@@ -3289,7 +3338,7 @@ export function ReservationCalendarPage() {
                 <Button
                   variant="primary"
                   disabled={isConfirming || !canSubmitReservation || !teamSelectionComplete}
-                  onClick={handleConfirm}
+                  onClick={() => setFinalCheckOpen(true)}
                 >
                   {isConfirming ? 'Processing...' : 'Proceed to Payment'} <FiChevronRight />
                 </Button>
@@ -3303,6 +3352,56 @@ export function ReservationCalendarPage() {
           </div>
         </div>
       )}
+
+      {finalCheckOpen ? (
+        <Modal
+          title="Are all details correct?"
+          eyebrow="Before you pay"
+          size="md"
+          onClose={() => { if (!isConfirming) setFinalCheckOpen(false) }}
+          footer={(
+            <>
+              <Button variant="ghost" disabled={isConfirming} onClick={() => setFinalCheckOpen(false)}>No, go back and edit</Button>
+              <Button
+                variant="primary"
+                disabled={isConfirming}
+                onClick={async () => {
+                  await handleConfirm()
+                  setFinalCheckOpen(false)
+                }}
+              >
+                {isConfirming ? 'Processing…' : 'Yes, proceed to payment'} <FiChevronRight />
+              </Button>
+            </>
+          )}
+        >
+          <p className="text-sm text-muted">
+            This is your last chance to make changes. Check your booking below; if something is wrong, go back and edit it before paying.
+          </p>
+          <dl className="mt-4 divide-y divide-white/10 rounded-2xl border border-white/10 bg-white/5 text-sm">
+            {[
+              { label: 'Date', value: reservationSummary.dateISO },
+              { label: 'Time slot', value: reservationSummary.slotLabel },
+              { label: 'Location', value: reservationSummary.locationLabel },
+              { label: 'Session', value: reservationSummary.sessionTypeLabel },
+              ...(publicGame ? [] : [{ label: 'Field', value: reservationSummary.fields.map((field) => field.name).join(', ') || '—' }]),
+              { label: 'Players', value: String(reservationSummary.players) },
+              { label: 'Team', value: [user?.name || 'You', ...selectedTeammates.map((member) => member.name)].join(', ') },
+              { label: 'Package', value: reservationSummary.packageName },
+              ...(extraAmmoReloads > 0 ? [{ label: 'Extra ammo', value: `${extraAmmoReloads} reload${extraAmmoReloads === 1 ? '' : 's'}` }] : []),
+            ].map((row) => (
+              <div key={row.label} className="flex items-start justify-between gap-4 px-4 py-2.5">
+                <dt className="shrink-0 text-muted">{row.label}</dt>
+                <dd className="min-w-0 break-words text-right font-semibold">{row.value || '—'}</dd>
+              </div>
+            ))}
+            <div className="flex items-center justify-between gap-4 px-4 py-3">
+              <dt className="text-muted">Total</dt>
+              <dd className="text-lg font-bold text-gold">{formatCurrency(dynamicPricing.total)}</dd>
+            </div>
+          </dl>
+        </Modal>
+      ) : null}
 
       {noWeaponWarning ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4" role="dialog" aria-modal="true" aria-labelledby="no-weapon-title">

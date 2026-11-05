@@ -26,6 +26,14 @@ function minChildBirthDate() {
   return date.toISOString().slice(0, 10)
 }
 
+// Youngest a minor can be to play: 7 years old today.
+export const MIN_MINOR_AGE = 7
+function maxChildBirthDate() {
+  const [year, month, day] = maxBirthDate().split('-').map(Number)
+  const date = new Date(Date.UTC(year - MIN_MINOR_AGE, month - 1, day))
+  return date.toISOString().slice(0, 10)
+}
+
 const statusChip = (child: ChildSummary) => {
   if (!child.guardianConfirmed) return { label: 'Confirm by email', className: 'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400' }
   if (child.waiverApproved) return { label: 'Ready to play', className: 'border-success/30 bg-success/10 text-success' }
@@ -83,11 +91,11 @@ const WAIVER_STATUS_TEXT: Record<string, string> = {
   expired: 'Expired: answer it again',
 }
 
-// A minor's details from the profile, where the parent can also delete the minor's waiver.
+// A minor's details from the profile, where the parent can also remove the minor from their account.
 // Nothing is erased: the waiver is archived for staff, and the minor leaves the parent's account.
-function MinorDetailsModal({ child, onClose, onDeleted }: { child: ChildSummary; onClose: () => void; onDeleted: () => void }) {
+function MinorDetailsModal({ child, startConfirming = false, onClose, onDeleted }: { child: ChildSummary; startConfirming?: boolean; onClose: () => void; onDeleted: () => void }) {
   const [deleting, setDeleting] = useState(false)
-  const [confirming, setConfirming] = useState(false)
+  const [confirming, setConfirming] = useState(startConfirming)
   const chip = statusChip(child)
   const waiverToAnswer = child.guardianConfirmed && !child.waiverApproved && child.waiverStatus !== 'pending'
 
@@ -95,10 +103,10 @@ function MinorDetailsModal({ child, onClose, onDeleted }: { child: ChildSummary;
     setDeleting(true)
     try {
       await apiDelete(`/api/children/${encodeURIComponent(child.id)}`)
-      toast.success(`${child.name}'s waiver was deleted from your account.`)
+      toast.success(`${child.name} was removed from your account.`)
       onDeleted()
     } catch (e: any) {
-      toast.error(e?.message || 'Could not delete the waiver')
+      toast.error(e?.message || 'Could not remove the minor')
       setDeleting(false)
     }
   }
@@ -133,21 +141,21 @@ function MinorDetailsModal({ child, onClose, onDeleted }: { child: ChildSummary;
         ) : null}
 
         <div className="rounded-2xl border border-danger/25 bg-danger/5 p-4">
-          <div className="text-sm font-bold text-danger">Delete waiver</div>
+          <div className="text-sm font-bold text-danger">Remove minor</div>
           <p className="mt-1 text-xs text-muted">
             Removes {child.name} and their waiver from your account and your Waivers page. They can't join games until you add them again.
-            Chill Shooters keeps an archived copy of any waiver you signed.
+            Chill Shooters keeps an archived copy of their record and any waiver you signed.
           </p>
           {confirming ? (
             <div className="mt-3 flex flex-wrap gap-2">
               <Button variant="danger" size="sm" disabled={deleting} onClick={remove}>
-                <FiTrash2 /> {deleting ? 'Deleting…' : `Yes, delete ${child.name.split(' ')[0]}'s waiver`}
+                <FiTrash2 /> {deleting ? 'Removing…' : `Yes, remove ${child.name.split(' ')[0]}`}
               </Button>
               <Button variant="ghost" size="sm" disabled={deleting} onClick={() => setConfirming(false)}>Keep it</Button>
             </div>
           ) : (
             <Button variant="danger-soft" size="sm" className="mt-3" onClick={() => setConfirming(true)}>
-              <FiTrash2 /> Delete waiver
+              <FiTrash2 /> Remove minor
             </Button>
           )}
         </div>
@@ -166,6 +174,7 @@ export function MinorsOnProfile({ canAdd, blockedReason, onChanged }: { canAdd: 
   const [saving, setSaving] = useState(false)
   const [emailedTo, setEmailedTo] = useState('')
   const [detailsId, setDetailsId] = useState<string | null>(null)
+  const [removeFirst, setRemoveFirst] = useState(false)
   const detailsChild = children.find((child) => child.id === detailsId) || null
 
   const addChild = async (event: React.FormEvent) => {
@@ -196,7 +205,7 @@ export function MinorsOnProfile({ canAdd, blockedReason, onChanged }: { canAdd: 
         <div>
           <div className="text-xs uppercase tracking-widest text-muted">Minors on your account</div>
           <p className="mt-1 max-w-xl text-sm text-muted">
-            Players under 18 play under your account. Add each child, confirm by email that you're their guardian, then answer their waiver on the Waivers page.
+            Players 7 to 17 years old play under your account. Add each child, confirm by email that you're their guardian, then answer their waiver on the Waivers page.
           </p>
         </div>
         {!adding ? (
@@ -229,17 +238,17 @@ export function MinorsOnProfile({ canAdd, blockedReason, onChanged }: { canAdd: 
             type="date"
             required
             min={minChildBirthDate()}
-            max={maxBirthDate()}
+            max={maxChildBirthDate()}
             value={form.birthDate}
             onChange={(e) => setForm((f) => ({ ...f, birthDate: e.target.value }))}
-            hint={childAge !== null ? `Age: ${childAge}${childAge >= 18 ? ' — 18 and older need their own account.' : ''}` : 'Required. Must be under 18.'}
+            hint={childAge !== null ? `Age: ${childAge}${childAge >= 18 ? ' — 18 and older need their own account.' : childAge < MIN_MINOR_AGE ? `. Players must be at least ${MIN_MINOR_AGE} years old.` : ''}` : `Required. Must be ${MIN_MINOR_AGE} to 17 years old.`}
           />
           <div className="text-xs text-muted">
             Use the child's name exactly as on their ID or birth certificate. Their waiver is filled in as{' '}
             <span className="font-semibold text-text">{composeFullName(form) || 'First M. Last'}</span>.
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button type="submit" disabled={saving || !form.firstName.trim() || !form.lastName.trim() || childAge === null || childAge >= 18}>
+            <Button type="submit" disabled={saving || !form.firstName.trim() || !form.lastName.trim() || childAge === null || childAge >= 18 || childAge < MIN_MINOR_AGE}>
               <FiPlus /> {saving ? 'Adding…' : 'Add and send confirmation email'}
             </Button>
             <Button type="button" variant="ghost" onClick={() => setAdding(false)}>Cancel</Button>
@@ -268,7 +277,8 @@ export function MinorsOnProfile({ canAdd, blockedReason, onChanged }: { canAdd: 
                     Answer waiver <FiChevronRight />
                   </Link>
                 ) : null}
-                <Button size="xs" variant="ghost" onClick={() => setDetailsId(child.id)}><FiEye /> View details</Button>
+                <Button size="xs" variant="ghost" onClick={() => { setRemoveFirst(false); setDetailsId(child.id) }}><FiEye /> View details</Button>
+                <Button size="xs" variant="danger-soft" aria-label={`Remove ${child.name}`} onClick={() => { setRemoveFirst(true); setDetailsId(child.id) }}><FiTrash2 /> Remove</Button>
               </div>
             </div>
           )
@@ -277,7 +287,9 @@ export function MinorsOnProfile({ canAdd, blockedReason, onChanged }: { canAdd: 
 
       {detailsChild ? (
         <MinorDetailsModal
+          key={`${detailsChild.id}-${removeFirst}`}
           child={detailsChild}
+          startConfirming={removeFirst}
           onClose={() => setDetailsId(null)}
           onDeleted={() => {
             setDetailsId(null)

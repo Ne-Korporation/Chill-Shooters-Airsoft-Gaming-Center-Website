@@ -215,10 +215,13 @@ export function WaiverPage({
   const { user } = useAuth()
   // Whose waiver this is: the signed-in adult, or one of their children.
   const subjectId = child?.id || user?.id || ''
+  // The minors list reloads (a new child object) whenever the window regains focus, e.g. after the
+  // file picker closes. Effects key on the child's id so that doesn't wipe what was just filled in.
+  const childId = child?.id || ''
 
   // A player's own waiver opens once their ID is verified on their profile; the verified name,
   // birthday and ID are then filled in and the signed waiver is approved straight away.
-  const [identity, setIdentity] = useState<{ status: string; idType: string; nameParts: NameParts; photoUrl: string } | null>(null)
+  const [identity, setIdentity] = useState<{ status: string; idType: string; nameParts: NameParts; photoUrl: string; idFront: string; idBack: string } | null>(null)
   const [identityLoaded, setIdentityLoaded] = useState(false)
   useEffect(() => {
     if (child || !user?.id) {
@@ -227,18 +230,28 @@ export function WaiverPage({
     }
     let alive = true
     setIdentityLoaded(false)
-    apiGet<{ ok: boolean; data: { name?: string; firstName?: string; middleInitial?: string; lastName?: string; birthDate?: string; identityVerificationStatus?: string; identityIdType?: string; identityValidUntilISO?: string; profileImageUrl?: string } }>(`/api/user_accounts/${encodeURIComponent(user.id)}`)
+    apiGet<{ ok: boolean; data: { name?: string; firstName?: string; middleInitial?: string; lastName?: string; birthDate?: string; identityVerificationStatus?: string; identityIdType?: string; identityValidUntilISO?: string; profileImageUrl?: string; identityDocumentUrl?: string; identityDocumentBackUrl?: string; identityPreviousValidUntilISO?: string; identityPreviousIdType?: string; identityPreviousDocumentUrl?: string; identityPreviousDocumentBackUrl?: string } }>(`/api/user_accounts/${encodeURIComponent(user.id)}`)
       .then((res) => {
         const account = res?.data
         if (!alive || !account) return
         // A verification older than a year counts as expired even before the server marks it.
         const expiredByDate = Boolean(account.identityValidUntilISO && Date.parse(account.identityValidUntilISO) <= Date.now())
         const rawStatus = String(account.identityVerificationStatus || 'not_submitted')
-        const status = rawStatus === 'verified' && expiredByDate ? 'expired' : rawStatus
+        // While a newer ID waits for review, the previously verified one still counts, so the
+        // waiver stays open with that ID.
+        const previousCounts = rawStatus !== 'verified' && Date.parse(account.identityPreviousValidUntilISO || '') > Date.now()
+        const status = rawStatus === 'verified' && expiredByDate ? 'expired' : previousCounts ? 'verified' : rawStatus
         const parts = account.firstName || account.lastName
           ? { firstName: account.firstName || '', middleInitial: account.middleInitial || '', lastName: account.lastName || '' }
           : splitFullName(account.name || '')
-        setIdentity({ status, idType: account.identityIdType || '', nameParts: parts, photoUrl: account.profileImageUrl || '' })
+        setIdentity({
+          status,
+          idType: (previousCounts ? account.identityPreviousIdType : account.identityIdType) || '',
+          nameParts: parts,
+          photoUrl: account.profileImageUrl || '',
+          idFront: (previousCounts ? account.identityPreviousDocumentUrl : account.identityDocumentUrl) || '',
+          idBack: (previousCounts ? account.identityPreviousDocumentBackUrl : account.identityDocumentBackUrl) || '',
+        })
         if (status === 'verified') {
           setNameParts(parts)
           if (account.birthDate) setState((current) => ({ ...current, birthDate: account.birthDate || current.birthDate }))
@@ -247,7 +260,8 @@ export function WaiverPage({
       .catch(() => { if (alive) setIdentity(null) })
       .finally(() => { if (alive) setIdentityLoaded(true) })
     return () => { alive = false }
-  }, [child, user?.id])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [childId, user?.id])
   const identityVerified = !child && identity?.status === 'verified'
 
   // A child's waiver: the parent is the guardian. Their name, email, verified ID and the signature on
@@ -276,7 +290,8 @@ export function WaiverPage({
       })
     })
     return () => { alive = false }
-  }, [child, user?.id, user?.name, user?.email])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [childId, user?.id, user?.name, user?.email])
 
   const waiverStorageKey = subjectId ? `waiver_submitted:${subjectId}` : ''
   const waiverIdKey = subjectId ? `last_waiver_id:${subjectId}` : ''
@@ -425,7 +440,8 @@ export function WaiverPage({
     return () => {
       cancelled = true
     }
-  }, [user?.id, subjectId, child, waiverIdKey, waiverStorageKey])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, subjectId, childId, waiverIdKey, waiverStorageKey])
 
   // A child's waiver starts from the child's profile, with the parent as the guardian.
   useEffect(() => {
@@ -437,7 +453,8 @@ export function WaiverPage({
       guardianName: current.guardianName || user?.name || '',
     }))
     setGuardianEmail((current) => current || user?.email || '')
-  }, [child, submitted, checkingSubmission, user?.name, user?.email])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [childId, submitted, checkingSubmission, user?.name, user?.email])
 
   // Age always comes from the birthday, so it can't drift from what the player entered.
   const age = ageFromBirthDate(state.birthDate)
@@ -451,8 +468,8 @@ export function WaiverPage({
     else if (!isValidBirthDate(state.birthDate)) e.birthDate = 'Enter a valid birthday.'
     // A verified profile ID is attached by the server.
     if (!identityVerified) {
-      if (!idType) e.idType = 'Choose which ID you are attaching.'
-      if (!idImage) e.idImage = 'A photo of your ID is required.'
+      if (!child && !idType) e.idType = 'Choose which ID you are attaching.'
+      if (!idImage) e.idImage = child ? "A photo of the child's ID is required." : 'A photo of your ID is required.'
     }
 
     if (isMinor && child) {
@@ -517,12 +534,6 @@ export function WaiverPage({
   const canSubmit = Object.keys(errors).length === 0 && !submitting && !waiverLocked
   const shownErrors: Record<string, string> = showErrors ? errors : {}
 
-  const scrollToPayment = () => {
-    const paymentSection = document.getElementById('payment-section')
-    if (paymentSection) {
-      paymentSection.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    }
-  }
 
   // ---------------------------------------------------------------------
   // Signature: multi-stroke drawing OR uploaded image. Both end up as an image (data URL).
@@ -825,7 +836,7 @@ export function WaiverPage({
         guardianIdImage: isMinor ? compressedGuardianId : '',
         guardianIdType: isMinor ? guardianIdType : '',
         // A verified profile ID is copied on by the server.
-        ...(identityVerified ? {} : { idType, idImage: compressedPlayerId }),
+        ...(identityVerified ? {} : { ...(child ? {} : { idType }), idImage: compressedPlayerId }),
         guardianSignatureImage: isMinor ? compressedGuardianSig : '',
         status: 'pending',
         submittedAtISO: new Date().toISOString(),
@@ -1323,19 +1334,32 @@ export function WaiverPage({
                     <div className="mt-1 text-xs text-muted">
                       {identity?.idType ? `${identity.idType}, ` : ''}checked by staff on your profile. It is attached to this waiver for you, so once you sign, the waiver is approved and you can book a game.
                     </div>
+                    {identity?.idFront || identity?.idBack ? (
+                      <div className="mt-3 flex flex-wrap gap-3">
+                        {[{ label: 'Front', url: identity.idFront }, { label: 'Back', url: identity.idBack }].filter((side) => side.url).map((side) => (
+                          <a key={side.label} href={side.url} target="_blank" rel="noreferrer" className="group block">
+                            <div className="text-[11px] uppercase tracking-widest text-muted">{side.label}</div>
+                            <img
+                              src={side.url}
+                              alt={`Your verified ID (${side.label.toLowerCase()})`}
+                              className="mt-1 h-28 max-w-[14rem] rounded-xl border border-white/10 bg-white object-contain transition group-hover:brightness-95"
+                            />
+                          </a>
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
                 </div>
               ) : (
               <IdUpload
-                label="Your ID"
+                label={child ? "Child's ID" : 'Your ID'}
                 value={idImage}
                 onChange={setIdImage}
-                idType={idType}
-                onIdTypeChange={setIdType}
-                idTypeError={shownErrors.idType}
+                // A child picks no ID type: any valid ID or school ID is accepted.
+                {...(child ? {} : { idType, onIdTypeChange: setIdType, idTypeError: shownErrors.idType })}
                 disabled={submitted || submitting}
                 error={shownErrors.idImage}
-                helper="Photo of your valid government or school ID. Staff check it before approving your waiver."
+                helper={child ? "Valid IDs or school IDs are accepted. Staff check the child's ID before approving the waiver." : 'Photo of your valid government or school ID. Staff check it before approving your waiver.'}
               />
               )}
             </div>
@@ -1539,12 +1563,7 @@ export function WaiverPage({
                 <FiChevronRight />
               </Button>
 
-              {isEmbedded ? (
-                <Button variant="ghost" disabled={!submitted} onClick={scrollToPayment}>
-                  Proceed to Payment
-                  <FiChevronRight />
-                </Button>
-              ) : null}
+
             </div>
 
             {submitted ? (
@@ -1575,7 +1594,7 @@ export function WaiverPage({
               const steps = [
                 { label: "Your name", ok: Boolean(nameParts.firstName.trim() && nameParts.lastName.trim()) || submitted },
                 { label: "Your birthday", ok: !errors.birthDate },
-                { label: "Your ID", ok: identityVerified || (!!idType && !!idImage) },
+                { label: child ? "Child's ID" : "Your ID", ok: identityVerified || ((child || !!idType) && !!idImage) },
                 ...(isMinor
                   ? [
                       { label: "Guardian consent", ok: state.guardianConsent },

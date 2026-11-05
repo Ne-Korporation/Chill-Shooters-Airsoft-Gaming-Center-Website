@@ -31,6 +31,9 @@ const cleanName = (value) => String(value || '').replace(/\s+/g, ' ').trim().sli
 // longer on the parent's account, even if staff unarchive the waiver later.
 const ON_ACCOUNT = { removedByGuardianAtISO: { $exists: false } }
 
+// Youngest a minor can be to be added and play.
+const MIN_MINOR_AGE = 7
+
 async function latestWaivers(db, userIds) {
   const waivers = await db.collection('waivers').find(
     { userId: { $in: userIds }, archived: { $ne: true } },
@@ -115,6 +118,7 @@ router.post('/children', requireAuth, requireRole('user'), async (req, res) => {
     const age = ageFromBirthDate(birthDate)
     if (age === null || age < 1) throw fail(400, "Enter the child's birthday.")
     if (age >= 18) throw fail(400, 'Players 18 and older make their own account.')
+    if (age < MIN_MINOR_AGE) throw fail(400, `Players must be at least ${MIN_MINOR_AGE} years old.`)
 
     const name = [firstName, middleInitial ? `${middleInitial.replace(/\.$/, '')}.` : '', lastName].filter(Boolean).join(' ')
     const duplicate = await db.collection(ACCOUNTS).findOne({ guardianId: String(parent.id), isChildProfile: true, ...ON_ACCOUNT, name: { $regex: `^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, $options: 'i' } })

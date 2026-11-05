@@ -16,13 +16,17 @@ import { ageFromBirthDate } from '../utils/age.js'
 import { ACTIVE_WAIVER_STATUSES, expireOldWaivers, validUntilFrom } from '../utils/waiverValidity.js'
 import { manilaDateISO } from '../utils/reminders.js'
 import { summarizeWeekendCapacity, weekendDatesOf } from '../utils/weekendCapacity.js'
-import { hasValidIdentity, identityVerifiedFields, validIdentityFilter } from '../utils/identityValidity.js'
+import { listActiveCauseDays, weekendDatesInMonth } from '../utils/causeDays.js'
+import { hasValidIdentity, identityVerifiedFields, validIdentityFilter, verifiedIdDocument } from '../utils/identityValidity.js'
+
+// ID type recorded on a child's waiver: the parent attaches any valid ID or school ID.
+const CHILD_ID_TYPE = 'Valid ID or school ID'
 import { normalizePhPhone } from '../utils/phone.js'
 import { cleanEquipmentQuantities } from '../utils/packageQuantities.js'
 import { appUrlFrom } from './guardianApprovals.js'
 import { findOwnChild, hasApprovedWaiver } from './children.js'
 import { evaluateFpsReading, weaponFpsClass } from './operations.js'
-import { emailGearReviewEvent, emailGuardianWaiverSubmitted, emailReservationEvent, emailSplitShareRequest } from '../services/notificationEmails.js'
+import { emailGearReviewEvent, emailGuardianWaiverSubmitted, emailIdentityDecision, emailReservationEvent, emailSplitShareRequest, emailTeamAdded } from '../services/notificationEmails.js'
 import {
   paymentWindowMsFor,
   expireOverdueReservations,
@@ -107,6 +111,51 @@ const LOCATION_NAMES = {
   binan: 'LOMA Binan Laguna',
 }
 
+// Player counts per location and slot for the given public-game dates (no player details).
+async function capacityForDates(db, dates, todayISO) {
+  const [reservations, holds] = await Promise.all([
+    db.collection('reservations').find(
+      {
+        reservationStatus: { $in: BLOCKING_RESERVATION_STATUSES },
+        $or: [{ reservationDate: { $in: dates } }, { dateISO: { $in: dates } }],
+      },
+      { projection: { _id: 0, reservationDate: 1, dateISO: 1, reservationTime: 1, slot: 1, numberOfPlayers: 1, players: 1, locationId: 1, location: 1, locationName: 1, reservationStatus: 1 } },
+    ).toArray(),
+    db.collection('slot_holds').find(
+      { reservationDate: { $in: dates }, expiresAt: { $gt: new Date() } },
+      { projection: { _id: 0, reservationDate: 1, reservationTime: 1, locationId: 1, players: 1 } },
+    ).toArray(),
+  ])
+  return summarizeWeekendCapacity({
+    dates,
+    todayISO,
+    capacities: getLocationCapacities(),
+    locationNames: LOCATION_NAMES,
+    reservations,
+    holds,
+    normalizeLocationId,
+  })
+}
+
+// Public: a month of public-game capacity (weekends) plus the month's games for a cause, for the
+// capacity calendar on the admin dashboard and the landing page.
+router.get('/public/capacity-calendar', async (req, res) => {
+  try {
+    const todayISO = manilaDateISO()
+    const month = /^\d{4}-(0[1-9]|1[0-2])$/.test(String(req.query.month || '')) ? String(req.query.month) : todayISO.slice(0, 7)
+    const db = await getDb()
+    const dates = weekendDatesInMonth(month)
+    const lastDay = new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).toISOString().slice(0, 10)
+    const [days, causeDays] = await Promise.all([
+      capacityForDates(db, dates, todayISO),
+      listActiveCauseDays(db, { from: `${month}-01`, to: lastDay }),
+    ])
+    return res.json({ ok: true, todayISO, month, data: days, causeDays })
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: String(err) })
+  }
+})
+
 // Public: how full this week's weekend games are (weekends are public games), for the landing
 // page and the player dashboard. Only player counts per location and slot are sent.
 router.get('/public/weekend-capacity', async (_req, res) => {
@@ -114,29 +163,11 @@ router.get('/public/weekend-capacity', async (_req, res) => {
     const db = await getDb()
     const todayISO = manilaDateISO()
     const dates = weekendDatesOf(todayISO)
-    const [reservations, holds] = await Promise.all([
-      db.collection('reservations').find(
-        {
-          reservationStatus: { $in: BLOCKING_RESERVATION_STATUSES },
-          $or: [{ reservationDate: { $in: dates } }, { dateISO: { $in: dates } }],
-        },
-        { projection: { _id: 0, reservationDate: 1, dateISO: 1, reservationTime: 1, slot: 1, numberOfPlayers: 1, players: 1, locationId: 1, location: 1, locationName: 1, reservationStatus: 1 } },
-      ).toArray(),
-      db.collection('slot_holds').find(
-        { reservationDate: { $in: dates }, expiresAt: { $gt: new Date() } },
-        { projection: { _id: 0, reservationDate: 1, reservationTime: 1, locationId: 1, players: 1 } },
-      ).toArray(),
+    const [days, causeDays] = await Promise.all([
+      capacityForDates(db, dates, todayISO),
+      listActiveCauseDays(db, { from: dates[0], to: dates[dates.length - 1] }),
     ])
-    const days = summarizeWeekendCapacity({
-      dates,
-      todayISO,
-      capacities: getLocationCapacities(),
-      locationNames: LOCATION_NAMES,
-      reservations,
-      holds,
-      normalizeLocationId,
-    })
-    return res.json({ ok: true, todayISO, data: days })
+    return res.json({ ok: true, todayISO, data: days, causeDays })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
   }
@@ -1040,7 +1071,8 @@ function prepareWaiverUpdate(existing, payload, req) {
   if (nextStatus === 'approved' && String(existing.status || '').toLowerCase() !== 'approved') {
     const idType = existing.idType || changes.idType
     const idChecked = changes.idChecked ?? existing.idChecked
-    if (!ACCEPTED_ID_TYPES.includes(idType) || idChecked !== true) {
+    const idTypeOk = ACCEPTED_ID_TYPES.includes(idType) || (existing.forChild === true && idType === CHILD_ID_TYPE)
+    if (!idTypeOk || idChecked !== true) {
       return { error: "Check the participant's ID before approving." }
     }
     const isMinor = existing.isMinor === true || Number(existing.age) < 18
@@ -1396,23 +1428,74 @@ async function resolveTeamAndOwnWeapons(db, doc, { requireFullTeam = false } = {
   }
 }
 
-// Tells each teammate in a split payment what they owe and by when.
-async function notifySplitPayers(db, reservation, appUrl) {
-  if (reservation.paymentMode !== 'split') return
-  const payLink = `${appUrl}/app/split-payments`
-  const share = Math.round((Number(reservation.depositAmount || 0) / reservation.teamSize) * 100) / 100
+// Bookings that no longer hold a place in a game.
+const RELEASED_RESERVATION_STATUSES = ['cancelled', 'rejected', 'declined', 'expired']
+
+// A public-game booking clashes when the captain or any teammate is already on another active
+// public booking for the same date, time slot and location.
+async function findPublicSlotClash(db, doc) {
+  const playerIds = Array.from(new Set([String(doc.userId || ''), ...(doc.teamMembers || []).map((member) => String(member.id))].filter(Boolean)))
+  if (playerIds.length === 0) return null
+  const existing = await db.collection('reservations').findOne({
+    sessionType: 'public',
+    locationId: doc.locationId,
+    reservationDate: doc.reservationDate,
+    reservationTime: doc.reservationTime,
+    reservationStatus: { $nin: RELEASED_RESERVATION_STATUSES },
+    $or: [{ userId: { $in: playerIds } }, { selectedTeammateIds: { $in: playerIds } }, { 'teamMembers.id': { $in: playerIds } }],
+  }, { projection: { id: 1, userId: 1, selectedTeammateIds: 1, teamMembers: 1 } })
+  if (!existing) return null
+  const onIt = new Set([String(existing.userId || ''), ...(existing.selectedTeammateIds || []).map(String), ...(existing.teamMembers || []).map((member) => String(member.id))])
+  const captainClash = onIt.has(String(doc.userId))
+  const teammate = (doc.teamMembers || []).find((member) => onIt.has(String(member.id)))
+  return {
+    reservationId: String(existing.id || ''),
+    message: captainClash
+      ? `You already have a booking for this public game (${existing.id}). Pick another time slot or location.`
+      : `${teammate?.name || 'A teammate'} is already booked in this public game. Remove them or pick another time slot.`,
+  }
+}
+
+// Tells every teammate the captain added to a booking, in the app and by email. In a split
+// payment each paying teammate also gets their share, the deadline and a link to pay it on the
+// Split Payment page; otherwise the captain is paying, so there is nothing for them to pay online.
+// Minors play under their guardian's account and have no email, so they aren't notified.
+async function notifyAddedTeammates(db, reservation, appUrl) {
+  const members = (reservation.teamMembers || []).filter((member) => !member.isMinor && String(member.id) !== String(reservation.userId))
+  if (members.length === 0) return
   const captain = await findDocumentById(db, 'user_accounts', reservation.userId)
   const captainName = captain?.name || 'Your team captain'
+  const when = `${reservation.reservationDate} (${reservation.reservationTime})`
+  const split = reservation.paymentMode === 'split'
+  const splitPayers = new Set((reservation.splitPayerIds || []).map(String))
+  const share = split ? Math.round((Number(reservation.depositAmount || 0) / Math.max(1, reservation.teamSize)) * 100) / 100 : 0
   const dueLabel = new Date(reservation.paymentDueAtISO).toLocaleString('en-PH', { timeZone: 'Asia/Manila' })
-  for (const userId of reservation.splitPayerIds) {
-    await notifyUser(db, {
-      userId,
-      type: 'split_payment_requested',
-      title: 'Your split payment share is due',
-      message: `${captainName} added you to a reservation on ${reservation.reservationDate} (${reservation.reservationTime}). Your share is ₱${share.toLocaleString()}; pay it from Split Payment before ${dueLabel}.`,
-      linkedResourceId: reservation.id,
-    })
-    void emailSplitShareRequest(db, reservation, userId, share, captainName, dueLabel, payLink)
+  for (const member of members) {
+    const userId = String(member.id)
+    try {
+      if (split && splitPayers.has(userId)) {
+        await notifyUser(db, {
+          userId,
+          type: 'split_payment_requested',
+          title: `You were added to ${captainName}'s team: pay your share`,
+          message: `${captainName} added you to a reservation on ${when}. Your share is ₱${share.toLocaleString()}; pay it from Split Payment before ${dueLabel}.`,
+          linkedResourceId: reservation.id,
+        })
+        void emailSplitShareRequest(db, reservation, userId, share, captainName, dueLabel, `${appUrl}/app/split-payments`)
+      } else {
+        await notifyUser(db, {
+          userId,
+          // Not a reservation_ type: the booking is the captain's, so it isn't in the teammate's My Reservations.
+          type: 'team_added',
+          title: `You were added to ${captainName}'s team`,
+          message: `${captainName} added you to a reservation on ${when}. ${captainName} is paying for the team, so you have nothing to pay online.`,
+          linkedResourceId: reservation.id,
+        })
+        void emailTeamAdded(db, reservation, userId, captainName)
+      }
+    } catch (err) {
+      console.error('Teammate notification failed', reservation.id, userId, err?.message || err)
+    }
   }
 }
 
@@ -1548,6 +1631,8 @@ router.post('/:collection', requireAuth, async (req, res) => {
         payload.forChild = true
         payload.guardianId = String(req.user.id)
         payload.submittedBy = String(req.user.id)
+        // A child's ID has no type to choose: any valid ID or school ID is accepted.
+        payload.idType = CHILD_ID_TYPE
         // The parent is the guardian: their name, email, verified ID and the signature on their own
         // approved waiver are filled in from their account, not typed again.
         const parent = await db.collection('user_accounts').findOne({ id: String(req.user.id) })
@@ -1555,12 +1640,13 @@ router.post('/:collection', requireAuth, async (req, res) => {
           { userId: String(req.user.id), archived: { $ne: true }, status: { $regex: '^approved$', $options: 'i' } },
           { sort: { approvedAtISO: -1 } },
         )
+        const parentDoc = verifiedIdDocument(parent)
         Object.assign(payload, {
           guardianName: parent?.name || payload.guardianName || '',
           guardianEmail: parent?.email || req.user.email || '',
-          guardianIdType: parent?.identityIdType || parentWaiver?.idType || 'Government ID (verified on profile)',
-          guardianIdImage: parent?.identityDocumentUrl || parentWaiver?.idImage || '',
-          guardianIdImageBack: parent?.identityDocumentBackUrl || parentWaiver?.idImageBack || '',
+          guardianIdType: parentDoc?.idType || parentWaiver?.idType || 'Government ID (verified on profile)',
+          guardianIdImage: parentDoc?.front || parentWaiver?.idImage || '',
+          guardianIdImageBack: parentDoc?.back || parentWaiver?.idImageBack || '',
           guardianSignatureImage: parentWaiver?.signatureImage || payload.guardianSignatureImage || '',
           guardianFromAccount: true,
           guardianIdVerifiedOnProfile: hasValidIdentity(parent),
@@ -1568,7 +1654,9 @@ router.post('/:collection', requireAuth, async (req, res) => {
         delete payload.guardianPhone
       } else {
         const account = await db.collection('user_accounts').findOne({ id: String(req.user.id) })
-        if (!account || account.identityVerificationStatus !== 'verified' || !hasValidIdentity(account)) {
+        // A newer ID waiting for review doesn't block the waiver while the previous one still counts.
+        const verifiedDoc = verifiedIdDocument(account)
+        if (!account || !verifiedDoc) {
           return res.status(409).json({ ok: false, error: account?.identityVerificationStatus === 'expired'
             ? 'Your ID verification expired. Submit your ID again on your profile.'
             : 'Complete your profile details first: add your birthday and get your ID verified on your profile.' })
@@ -1577,9 +1665,9 @@ router.post('/:collection', requireAuth, async (req, res) => {
         payload.userId = String(req.user.id)
         payload.fullName = account.name || payload.fullName
         payload.birthDate = account.birthDate || payload.birthDate
-        payload.idType = account.identityIdType || 'Government ID (verified on profile)'
-        payload.idImage = account.identityDocumentUrl || ''
-        payload.idImageBack = account.identityDocumentBackUrl || ''
+        payload.idType = verifiedDoc.idType || 'Government ID (verified on profile)'
+        payload.idImage = verifiedDoc.front
+        payload.idImageBack = verifiedDoc.back
       }
     }
 
@@ -1622,7 +1710,10 @@ router.post('/:collection', requireAuth, async (req, res) => {
       // The participant (and a minor's guardian) state their ID type and attach a photo of it;
       // staff check both before approving.
       if (req.user.role === 'user') {
-        if (!verifiedIdentity && (!ACCEPTED_ID_TYPES.includes(payload.idType) || !String(payload.idImage || '').startsWith('data:image/'))) {
+        if (payload.forChild && !String(payload.idImage || '').startsWith('data:image/')) {
+          return res.status(400).json({ ok: false, error: "Attach a photo of the child's ID (a valid ID or school ID)." })
+        }
+        if (!verifiedIdentity && !payload.forChild && (!ACCEPTED_ID_TYPES.includes(payload.idType) || !String(payload.idImage || '').startsWith('data:image/'))) {
           return res.status(400).json({ ok: false, error: 'Choose your ID type and attach a photo of your ID.' })
         }
         if (payload.isMinor && !payload.guardianFromAccount && (!ACCEPTED_ID_TYPES.includes(payload.guardianIdType) || !String(payload.guardianIdImage || '').startsWith('data:image/'))) {
@@ -1791,6 +1882,15 @@ router.post('/:collection', requireAuth, async (req, res) => {
       } catch (err) {
         return res.status(err?.statusCode || 400).json({ ok: false, error: err.message || 'Invalid team selection' })
       }
+      // Public games: one booking per player for each time slot and location. Other slots that
+      // day (or other locations) are still open to them.
+      if (doc.sessionType === 'public') {
+        const clash = await findPublicSlotClash(db, doc)
+        if (clash) return res.status(409).json({ ok: false, error: clash.message, code: 'public_slot_already_booked' })
+      }
+      // A game for a cause: the booking records the cause and the donation share it was made under.
+      const [causeDay] = await listActiveCauseDays(db, { from: doc.reservationDate, to: doc.reservationDate })
+      if (causeDay) doc.causeDay = { title: causeDay.title, donationPercent: causeDay.donationPercent }
       // 30 minutes when the captain pays alone, 24 hours when the team splits the payment.
       doc.paymentDueAtISO = new Date(Date.now() + paymentWindowMsFor(doc)).toISOString()
       try {
@@ -1868,7 +1968,7 @@ router.post('/:collection', requireAuth, async (req, res) => {
           await db.collection('slot_holds').deleteOne({ _id: `user:${doc.userId}` }, { session })
         })
         void emailReservationEvent(db, doc, 'received')
-        void notifySplitPayers(db, doc, appUrlFrom(req))
+        void notifyAddedTeammates(db, doc, appUrlFrom(req))
         return res.status(201).json({ ok: true, insertedId, data: doc })
       } catch (err) {
         if (err?.statusCode) {
@@ -2114,8 +2214,11 @@ router.put('/:collection/:id', requireAuth, async (req, res) => {
       if (updateRole === 'admin' && changes.identityVerificationStatus === 'verified' && existing.identityVerificationStatus !== 'verified') {
         Object.assign(changes, identityVerifiedFields())
         // The newer ID replaces the one that was still counting.
-        if (payload.$unset) payload.$unset.identityPreviousValidUntilISO = ''
-        else changes.identityPreviousValidUntilISO = null
+        const previousFields = ['identityPreviousValidUntilISO', 'identityPreviousIdType', 'identityPreviousDocumentUrl', 'identityPreviousDocumentBackUrl']
+        for (const field of previousFields) {
+          if (payload.$unset) payload.$unset[field] = ''
+          else changes[field] = null
+        }
       }
       // The verified ID carries the birthday; the waiver is filled in from it.
       if (updateRole === 'user' && existing.identityVerificationStatus === 'verified'
@@ -2279,6 +2382,22 @@ router.put('/:collection/:id', requireAuth, async (req, res) => {
 
     if (['equipment', 'equipments', 'weapons'].includes(collection)) {
       await notifyGearReview(db, collection, existing, updatedDoc)
+    }
+
+    // Staff checked a player's ID: tell them, so a verified player knows their waiver is open.
+    if (collection === 'user_accounts' && ['verified', 'rejected'].includes(updatedDoc.identityVerificationStatus)
+      && updatedDoc.identityVerificationStatus !== existing.identityVerificationStatus && req.user.role !== 'user') {
+      const verified = updatedDoc.identityVerificationStatus === 'verified'
+      const playerId = String(updatedDoc.id || updatedDoc._id)
+      await notifyUser(db, {
+        userId: playerId,
+        type: verified ? 'waiver_id_verified' : 'player_id_rejected',
+        title: verified ? 'Your ID is verified' : 'Your ID was not accepted',
+        message: verified
+          ? 'Staff verified your ID. You can now answer your waiver; your name, birthday and ID are filled in for you.'
+          : 'Staff could not accept your ID. Submit a clear photo of a valid ID on your profile.',
+      }).catch(() => null)
+      void emailIdentityDecision(db, updatedDoc, verified, appUrlFrom(req))
     }
 
     // Same rules as reading an account: never send the password hash or OTP back.
