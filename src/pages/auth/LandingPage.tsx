@@ -974,9 +974,7 @@ export function LandingPage() {
 
       {/* How full the coming public games are, and which days are games for a cause */}
       <section className="mx-auto max-w-[1200px] px-4 pt-14 md:px-6 md:pt-10">
-        <CapacityCalendar
-          action={<Button size="sm" variant="primary" onClick={handleReserve}>Reserve a spot</Button>}
-        />
+        <CapacityCalendar />
       </section>
 
       {/* How it works */}

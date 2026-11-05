@@ -1,3 +1,4 @@
+import { CapacityCalendar } from '../booking/CapacityCalendar'
 import React, { useEffect, useState } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import type { IconType } from 'react-icons'
@@ -201,6 +202,11 @@ export function AppSidebar({
             <SidebarLink item={profile} onNavigate={onNavigate} />
           </div>
         </nav>
+        {role === 'user' ? (
+          <div className="divider mt-3 border-t pt-3">
+            <CapacityCalendar mini />
+          </div>
+        ) : null}
       </div>
     )
   }

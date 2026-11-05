@@ -120,12 +120,27 @@ export function hasSettledAmount(pkg: PackageLike): boolean {
 
 /**
  * Whether the package's settled price is valid for this headcount.
- * A package set for N players only applies to exactly N players.
+ * A price set for 1 player is a per-player price and works for any group size.
+ * A price set for a group of N (2 or more) only applies to exactly N players.
+ * Mirrors server/utils/bookingPricing.js.
  */
 export function settledAmountApplies(pkg: PackageLike, players: number): boolean {
   if (!hasSettledAmount(pkg)) return false
   const fixedPlayers = Math.round(Number(pkg.players ?? 0))
-  return fixedPlayers > 0 ? fixedPlayers === players : true
+  return fixedPlayers > 1 ? fixedPlayers === players : true
+}
+
+/** How many times the settled price is charged: once per player when it is set for 1 player. */
+function settledMultiplier(pkg: PackageLike, players: number): number {
+  const fixedPlayers = Math.round(Number(pkg.players ?? 0))
+  return fixedPlayers > 1 ? 1 : Math.max(1, players)
+}
+
+/** A group package (set price for N players) that doesn't fit this headcount: it can't be booked. */
+export function packageNotForGroup(pkg: PackageLike, players: number): number | null {
+  if (!hasSettledAmount(pkg)) return null
+  const fixedPlayers = Math.round(Number(pkg.players ?? 0))
+  return fixedPlayers > 1 && fixedPlayers !== players ? fixedPlayers : null
 }
 
 function buildDiscountTexts(discountRule: PackageDiscountConfig) {
@@ -168,9 +183,9 @@ export function calculatePackagePricing({
   // session multiplier is not applied so the price stays fixed.
   // ---------------------------------------------------------------------
   if (settledAmountApplies(pkg, players)) {
-    const settled = discountRule.mode === 'settled'
+    const settled = (discountRule.mode === 'settled'
       ? Math.max(0, Math.round(discountRule.value))
-      : Math.max(0, Math.round(Number(pkg.settledAmount || 0)))
+      : Math.max(0, Math.round(Number(pkg.settledAmount || 0)))) * settledMultiplier(pkg, players)
     const isSettledPrice = discountRule.mode === 'settled'
     const rawDiscount = discountRule.mode === 'amount'
       ? Math.round(discountRule.value)
@@ -233,9 +248,13 @@ export function calculatePackagePricing({
   }
 
   const targetedSubtotal = discountRule.targets.reduce((sum, target) => sum + (componentTotals[target] || 0), 0)
-  const discountAmount = discountRule.mode === 'amount'
-    ? Math.min(Math.round(discountRule.value), targetedSubtotal)
-    : Math.round(targetedSubtotal * clampPct(discountRule.value) / 100)
+  // A 'settled' rule is a set price, not a discount; when it doesn't apply it must not be read as
+  // a percentage (a set price of 750 would otherwise become 100% off and price the package at ₱0).
+  const discountAmount = discountRule.mode === 'settled'
+    ? 0
+    : discountRule.mode === 'amount'
+      ? Math.min(Math.round(discountRule.value), targetedSubtotal)
+      : Math.round(targetedSubtotal * clampPct(discountRule.value) / 100)
 
   const total = Math.max(0, preDiscountTotal - discountAmount)
   const perPlayer = Math.round(total / Math.max(1, players))

@@ -30,6 +30,7 @@ import { AdminRentalPackagesPage } from './pages/admin/AdminRentalPackagesPage'
 import { AdminPaymentsPage } from './pages/admin/AdminPaymentsPage'
 import { AdminReportsPage } from './pages/admin/AdminReportsPage'
 import { AdminNotificationsPage } from './pages/admin/AdminNotificationsPage'
+import { MyNotificationsPage } from './pages/dashboard/MyNotificationsPage'
 import { AdminAuditLogsPage } from './pages/admin/AdminAuditLogsPage'
 import { AdminPartnershipsPage } from './pages/admin/AdminPartnershipsPage'
 import { AdminFeedbackPage } from './pages/admin/AdminFeedbackPage'
@@ -58,6 +59,12 @@ import { PlayerFeedbackPage } from './pages/players/PlayerFeedbackPage'
 import { RequireRole } from './routes/RequireRole'
 import { NotificationProvider } from './context/NotificationContext'
 import { useAuth } from './context/AuthContext'
+
+// Admins compose and review notifications; everyone else gets their own inbox.
+function NotificationsPageForRole() {
+  const { user } = useAuth()
+  return user?.role === 'admin' ? <AdminNotificationsPage /> : <MyNotificationsPage />
+}
 
 function AppHomePage() {
   const { user } = useAuth()
@@ -158,7 +165,7 @@ export default function App() {
         <Route path="payment/complete" element={<RequireRole roles={['user']}><PaymentCompletePage /></RequireRole>} />
         <Route path="split-payments" element={<RequireRole roles={['user']}><SplitPaymentPage /></RequireRole>} />
         <Route path="feedback" element={<RequireRole roles={['user']}><PlayerFeedbackPage /></RequireRole>} />
-        <Route path="notifications" element={<RequireRole roles={['user', 'admin', 'registrar', 'marshal']}>{<AdminNotificationsPage />}</RequireRole>} />
+        <Route path="notifications" element={<RequireRole roles={['user', 'admin', 'registrar', 'marshal']}><NotificationsPageForRole /></RequireRole>} />
         <Route path="players/:playerId" element={<PlayerProfilePage />} />
         <Route path="players/:playerId/weapons-and-equipment" element={<MyWeaponsAndEquipmentPage />} />
         <Route

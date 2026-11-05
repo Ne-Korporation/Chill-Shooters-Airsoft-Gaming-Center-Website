@@ -32,8 +32,9 @@ assert.equal(sunday.past, false)
 assert.equal(sunday.capacity, 390)
 assert.equal(sunday.booked, 19)
 assert.deepEqual(sunday.locations[0].slots, [
-  { slot: 'morning', capacity: 200, booked: 15, remaining: 185 },
-  { slot: 'afternoon', capacity: 190, booked: 4, remaining: 186 },
+  { slot: 'morning', capacity: 200, booked: 15, remaining: 185, groups: 2 },
+  { slot: 'afternoon', capacity: 190, booked: 4, remaining: 186, groups: 0 },
 ])
+assert.equal(sunday.groups, 2)
 
 console.log('weekend capacity checks passed')

@@ -49,16 +49,61 @@ async function settleCheckout(db, checkout) {
       void emailPaymentEvent(db, payment, payment.paymentStatus)
     }
   }
-  const reservation = await db.collection('reservations').findOne({ id: checkout.reservationId })
-  const guardianPending = await db.collection('guardian_approvals').countDocuments({ reservationId: checkout.reservationId, status: { $ne: 'approved' } })
+  // A full-day checkout pays several bookings; report them together.
+  const ids = checkoutReservationIds(checkout)
+  const reservations = await db.collection('reservations').find({ id: { $in: ids } }).toArray()
+  const reservation = reservations.find((item) => item.id === checkout.reservationId) || reservations[0]
+  const guardianPending = await db.collection('guardian_approvals').countDocuments({ reservationId: { $in: ids }, status: { $ne: 'approved' } })
+  const stillPending = reservations.find((item) => String(item.reservationStatus || 'pending').toLowerCase() !== 'confirmed')
   return {
     status: 'paid',
     reservationId: checkout.reservationId,
-    reservationStatus: reservation?.reservationStatus || 'pending',
-    paymentState: reservation?.paymentState || '',
+    ...(ids.length > 1 ? { reservationIds: ids } : {}),
+    reservationStatus: (stillPending || reservation)?.reservationStatus || 'pending',
+    paymentState: (stillPending || reservation)?.paymentState || '',
     waitingForGuardian: guardianPending > 0,
-    balanceDue: Math.max(0, Number(reservation?.totalAmount || 0) - Number(reservation?.depositAmount || 0)),
+    balanceDue: reservations.reduce((sum, item) => sum + Math.max(0, Number(item?.totalAmount || 0) - Number(item?.depositAmount || 0)), 0),
   }
+}
+
+function checkoutReservationIds(checkout) {
+  return Array.isArray(checkout.reservationIds) && checkout.reservationIds.length ? checkout.reservationIds.map(String) : [String(checkout.reservationId)]
+}
+
+// What this player owes right now on one booking they may pay for, or an error with a status code.
+async function payableAmount(db, reservation, userId) {
+  const fail = (statusCode, message) => Object.assign(new Error(message), { statusCode })
+  if (!reservation || !getSplitPayerIds(reservation).includes(userId)) throw fail(404, 'Reservation not found.')
+  if (reservation.pricingVerified !== true) throw fail(409, 'The reservation price has not been verified yet.')
+  if (String(reservation.reservationStatus || 'pending').toLowerCase() !== 'pending') {
+    throw fail(409, 'This reservation is no longer waiting for payment.')
+  }
+  const reservationId = String(reservation.id)
+  const payments = await db.collection('payments').find({ reservationId: { $in: [reservationId, String(reservation._id)] } }).toArray()
+  const amount = getGcashAmountDue(reservation, payments, userId)
+  if (amount <= 0) throw fail(409, 'Your payment for this reservation is already in.')
+  return amount
+}
+
+// A full day: the captain's morning, afternoon and evening bookings (same bookingGroupId), paid
+// together. Returns each booking's own amount so the payment can be recorded against each one.
+async function fullDayParts(db, rawIds, userId) {
+  const fail = (statusCode, message) => Object.assign(new Error(message), { statusCode })
+  const ids = [...new Set(rawIds.map((id) => String(id || '').trim()).filter(Boolean))]
+  if (ids.length < 2 || ids.length > 3) throw fail(400, 'A full-day payment covers two or three bookings.')
+  const reservations = await Promise.all(ids.map((id) => findReservation(db, id)))
+  const groupId = reservations[0]?.bookingGroupId
+  if (!groupId || reservations.some((item) => !item || item.bookingGroupId !== groupId || String(item.userId) !== userId)) {
+    throw fail(404, 'Reservation not found.')
+  }
+  if (reservations.some((item) => String(item.paymentMode || 'self').toLowerCase() === 'split')) {
+    throw fail(409, 'A full-day booking is paid by the captain.')
+  }
+  const parts = []
+  for (const reservation of reservations) {
+    parts.push({ reservationId: String(reservation.id), amount: await payableAmount(db, reservation, userId) })
+  }
+  return { parts, reservations }
 }
 
 router.get('/xendit/config', (_req, res) => {
@@ -192,23 +237,24 @@ router.get('/demo-pay/config', (_req, res) => {
 
 // POST /api/demo-pay/checkout { reservationId, channel } — what this player owes right now, as a
 // demo checkout. Returns the ref the demo payment page opens.
+// A full day sends { reservationIds: [...] } instead, for one checkout covering those bookings.
 router.post('/demo-pay/checkout', requireAuth, requireRole('user'), async (req, res) => {
   if (!demoPaymentsEnabled) return res.status(503).json({ ok: false, error: 'Demo payments are turned off.' })
   try {
     const db = await getDb()
-    const reservation = await findReservation(db, req.body?.reservationId)
     const userId = String(req.user.id)
-    if (!reservation || !getSplitPayerIds(reservation).includes(userId)) {
-      return res.status(404).json({ ok: false, error: 'Reservation not found.' })
+    let reservationId
+    let amount
+    let parts
+    if (Array.isArray(req.body?.reservationIds)) {
+      ;({ parts } = await fullDayParts(db, req.body.reservationIds, userId))
+      reservationId = parts[0].reservationId
+      amount = Math.round(parts.reduce((sum, part) => sum + part.amount, 0) * 100) / 100
+    } else {
+      const reservation = await findReservation(db, req.body?.reservationId)
+      amount = await payableAmount(db, reservation, userId)
+      reservationId = String(reservation.id)
     }
-    if (reservation.pricingVerified !== true) return res.status(409).json({ ok: false, error: 'The reservation price has not been verified yet.' })
-    if (String(reservation.reservationStatus || 'pending').toLowerCase() !== 'pending') {
-      return res.status(409).json({ ok: false, error: 'This reservation is no longer waiting for payment.' })
-    }
-    const reservationId = String(reservation.id)
-    const payments = await db.collection('payments').find({ reservationId: { $in: [reservationId, String(reservation._id)] } }).toArray()
-    const amount = getGcashAmountDue(reservation, payments, userId)
-    if (amount <= 0) return res.status(409).json({ ok: false, error: 'Your payment for this reservation is already in.' })
 
     const channel = DEMO_CHANNELS[String(req.body?.channel || '').toLowerCase()] || 'GCASH'
     const ref = `DEMO-${randomUUID()}`
@@ -216,6 +262,7 @@ router.post('/demo-pay/checkout', requireAuth, requireRole('user'), async (req, 
       _id: ref,
       demo: true,
       reservationId,
+      ...(parts ? { reservationIds: parts.map((part) => part.reservationId), parts } : {}),
       userId,
       amount,
       invoiceId: `demo-inv-${randomUUID()}`,
@@ -242,6 +289,7 @@ router.get('/demo-pay/:ref', requireAuth, requireRole('user'), async (req, res) 
     const checkout = await findDemoCheckout(db, req)
     if (!checkout) return res.status(404).json({ ok: false, error: 'Payment not found.' })
     const reservation = await db.collection('reservations').findOne({ id: checkout.reservationId })
+    const fullDay = checkoutReservationIds(checkout).length > 1
     return res.json({
       ok: true,
       data: {
@@ -250,7 +298,7 @@ router.get('/demo-pay/:ref', requireAuth, requireRole('user'), async (req, res) 
         channel: checkout.channel,
         status: checkout.status,
         reservationId: checkout.reservationId,
-        reservationLabel: [reservation?.reservationDate, reservation?.reservationTime, reservation?.locationName].filter(Boolean).join(' • '),
+        reservationLabel: [reservation?.reservationDate, fullDay ? 'Full day' : reservation?.reservationTime, reservation?.locationName].filter(Boolean).join(' • '),
       },
     })
   } catch (err) {
@@ -271,12 +319,26 @@ router.post('/demo-pay/:ref/pay', requireAuth, requireRole('user'), async (req, 
         await db.collection(XENDIT_CHECKOUTS).updateOne({ _id: checkout._id }, { $set: { channel } })
         checkout = { ...checkout, channel }
       }
-      const paid = { id: `DEMO-TXN-${Date.now().toString(36).toUpperCase()}`, amount: Number(checkout.amount), method: channel }
-      const { payment, created } = await recordXenditPayment({ db, startSession: startDbSession, checkout, paid })
-      if (created) {
-        const reservation = await db.collection('reservations').findOne({ id: checkout.reservationId })
-        await syncReservationPaymentState(db, reservation)
-        void emailPaymentEvent(db, payment, payment.paymentStatus)
+      const txnId = `DEMO-TXN-${Date.now().toString(36).toUpperCase()}`
+      // A full day records one payment per booking, each for that booking's own amount, so every
+      // booking's payment state, receipt and confirmation work exactly as for a single booking.
+      // Each part has its own invoice id, so a retry never records a part twice.
+      const parts = Array.isArray(checkout.parts) && checkout.parts.length
+        ? checkout.parts.map((part, index) => ({
+          checkout: { ...checkout, _id: `${checkout._id}:${index + 1}`, reservationId: part.reservationId, amount: part.amount, invoiceId: `${checkout.invoiceId}:${index + 1}` },
+          paid: { id: `${txnId}-${index + 1}`, amount: Number(part.amount), method: channel },
+        }))
+        : [{ checkout, paid: { id: txnId, amount: Number(checkout.amount), method: channel } }]
+      for (const part of parts) {
+        const { payment, created } = await recordXenditPayment({ db, startSession: startDbSession, checkout: part.checkout, paid: part.paid })
+        if (created) {
+          const reservation = await db.collection('reservations').findOne({ id: part.checkout.reservationId })
+          await syncReservationPaymentState(db, reservation)
+          void emailPaymentEvent(db, payment, payment.paymentStatus)
+        }
+      }
+      if (parts.length > 1) {
+        await db.collection(XENDIT_CHECKOUTS).updateOne({ _id: checkout._id }, { $set: { status: 'paid', paidAtISO: new Date().toISOString() } })
       }
       checkout = { ...checkout, status: 'paid' }
     }

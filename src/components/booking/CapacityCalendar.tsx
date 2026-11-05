@@ -6,7 +6,7 @@ import { causeDayMessage, type CauseDay } from '../../utils/causeDays'
 import { Modal } from '../ui/Modal'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
-import { Bar, DayLocations, fillTone, type WeekendDay } from './WeekendCapacity'
+import { Bar, DaySlotsTable, fillTone, isPublicDay, type WeekendDay } from './WeekendCapacity'
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
@@ -66,16 +66,19 @@ function useCapacityMonth(month: string) {
 // Month calendar of public-game capacity (weekends) and games for a cause. Admins (`editable`)
 // click any upcoming day to make it a game for a cause, edit it, or turn it back into a regular day.
 export function CapacityCalendar({
-  title = 'Public game calendar',
-  subtitle = 'Weekends are open games anyone can join. Days marked with a heart are games for a cause.',
+  title = 'Games calendar',
+  subtitle = 'Weekends are public games anyone can join. Weekdays are private games for your group.',
   editable = false,
   compact = false,
+  mini = false,
   action,
 }: {
   title?: string
   subtitle?: string
   editable?: boolean
   compact?: boolean
+  // Small version for the sidebar: dates with a status dot; tap a day for details.
+  mini?: boolean
   action?: React.ReactNode
 }) {
   const [month, setMonth] = useState(() => manilaToday().slice(0, 7))
@@ -87,7 +90,10 @@ export function CapacityCalendar({
   const currentMonth = todayISO.slice(0, 7)
 
   return (
-    <div className={compact ? '' : 'surface rounded-2xl p-5 md:p-6'}>
+    <div className={compact || mini ? '' : 'surface rounded-2xl p-5 md:p-6'}>
+      {mini ? (
+        <h3 className="flex items-center gap-2 px-1 text-sm font-bold"><FiCalendar className="text-accent" /> {title}</h3>
+      ) : (
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h3 className={`${compact ? 'text-sm' : 'text-lg'} flex items-center gap-2 font-bold`}>
@@ -97,33 +103,55 @@ export function CapacityCalendar({
         </div>
         {action}
       </div>
+      )}
 
-      <div className="mt-4 flex items-center justify-between gap-2">
+      <div className={`${mini ? 'mt-2' : 'mt-4'} flex items-center justify-between gap-2 rounded-xl bg-[rgba(var(--text),0.04)] p-1`}>
         <Button size="sm" variant="ghost" aria-label="Previous month" disabled={month <= currentMonth} onClick={() => setMonth((m) => shiftMonth(m, -1))}>
-          <FiChevronLeft />
+          <FiChevronLeft /> <span className={mini ? 'hidden' : 'hidden sm:inline'}>{monthLabel(shiftMonth(month, -1)).split(' ')[0]}</span>
         </Button>
-        <div className="text-sm font-bold">{monthLabel(month)}</div>
+        <div className="flex flex-col items-center">
+          <div className={`${mini ? 'text-sm' : 'text-base'} font-bold`}>{monthLabel(month)}</div>
+          {month !== currentMonth ? (
+            <button type="button" className="text-[11px] font-semibold text-accent hover:underline" onClick={() => setMonth(currentMonth)}>
+              Back to this month
+            </button>
+          ) : null}
+        </div>
         <Button size="sm" variant="ghost" aria-label="Next month" onClick={() => setMonth((m) => shiftMonth(m, 1))}>
-          <FiChevronRight />
+          <span className={mini ? 'hidden' : 'hidden sm:inline'}>{monthLabel(shiftMonth(month, 1)).split(' ')[0]}</span> <FiChevronRight />
         </Button>
       </div>
 
-      <div className="mt-2 grid grid-cols-7 gap-1 text-center text-[10px] uppercase tracking-wider text-muted">
-        {WEEKDAYS.map((weekday) => <div key={weekday} className="py-1">{weekday}</div>)}
+      <div className={`${mini ? 'mt-1' : 'mt-2'} grid grid-cols-7 ${mini ? 'gap-0.5' : 'gap-1'} text-center text-[10px] uppercase tracking-wider text-muted`}>
+        {WEEKDAYS.map((weekday) => <div key={weekday} className="py-1">{mini ? weekday[0] : weekday}</div>)}
       </div>
-      <div className={`space-y-1 ${loading ? 'animate-pulse' : ''}`}>
+      <div className={`${mini ? 'space-y-0.5' : 'space-y-1'} ${loading ? 'animate-pulse' : ''}`}>
         {weeks.map((week, index) => (
-          <div key={index} className="grid grid-cols-7 gap-1">
+          <div key={index} className={`grid grid-cols-7 ${mini ? 'gap-0.5' : 'gap-1'}`}>
             {week.map((dateISO, dayIndex) => {
-              if (!dateISO) return <div key={`blank-${dayIndex}`} className={compact ? 'h-14' : 'h-16'} />
-              const capacity = capacityByDate[dateISO]
+              const cellHeight = mini ? 'h-7' : compact ? 'h-14' : 'h-16'
+              if (!dateISO) return <div key={`blank-${dayIndex}`} className={cellHeight} />
+              const day = capacityByDate[dateISO]
+              const capacity = day && isPublicDay(day) ? day : undefined
+              // Weekdays are private days, even when the server sent no data for them.
+              const weekday = new Date(`${dateISO}T12:00:00Z`).getUTCDay() % 6 !== 0
+              const privateDay = weekday && !capacity
+              const privateGroups = privateDay ? day?.groups || 0 : 0
+              const privateFull = Boolean(privateDay && day && day.capacity > 0 && day.booked >= day.capacity)
               const cause = causeByDate[dateISO]
               const past = dateISO < todayISO
               const tone = capacity ? fillTone(capacity.booked, capacity.capacity) : null
-              const clickable = Boolean(capacity || cause || (editable && !past))
+              // Private days open for info unless fully booked (past ones only if something was booked).
+              const clickable = Boolean(
+                capacity || cause || (editable && !past)
+                || (privateDay && !privateFull && (!past || privateGroups)),
+              )
               const hint = [
                 cause ? causeDayMessage(cause) : '',
-                capacity ? `${capacity.booked} of ${capacity.capacity} spots booked` : 'Private bookings only',
+                capacity
+                  ? `Public game · ${capacity.booked} of ${capacity.capacity} spots booked`
+                  : privateFull ? 'Private games · fully booked'
+                  : privateGroups ? `Private games · ${privateGroups} booked` : 'Private games · open to book',
               ].filter(Boolean).join(' · ')
               return (
                 <button
@@ -133,13 +161,28 @@ export function CapacityCalendar({
                   disabled={!clickable}
                   onClick={() => setOpenDate(dateISO)}
                   className={[
-                    `${compact ? 'h-14' : 'h-16'} relative flex flex-col rounded-xl border px-1 py-1 text-left text-[11px] transition`,
-                    cause ? 'border-rose-500/40 bg-rose-500/10' : capacity ? 'border-[rgba(var(--text),0.12)] bg-[rgba(var(--text),0.04)]' : 'border-transparent bg-[rgba(var(--text),0.02)]',
-                    dateISO === todayISO ? 'ring-2 ring-accent/40' : '',
+                    mini
+                      ? `${cellHeight} relative flex flex-col items-center justify-center rounded-lg border text-[11px] transition`
+                      : `${cellHeight} relative flex flex-col rounded-xl border px-1 py-1 text-left text-[11px] transition`,
+                    cause ? 'border-rose-500/40 bg-rose-500/10'
+                      : capacity ? 'border-[rgba(var(--text),0.12)] bg-[rgba(var(--text),0.04)]'
+                      : privateFull ? 'border-transparent bg-[rgba(var(--text),0.04)] text-muted'
+                      : privateGroups ? 'border-accent/30 bg-accent/10'
+                      : 'border-[rgba(var(--text),0.06)] text-muted',
+                    dateISO === todayISO ? 'ring-2 ring-accent/60' : '',
                     past ? 'opacity-50' : '',
-                    clickable ? 'cursor-pointer hover:border-accent/40' : 'cursor-default',
+                    clickable ? 'cursor-pointer hover:border-accent/50' : 'cursor-default',
                   ].join(' ')}
                 >
+                  {mini ? (
+                    <>
+                      <span className="font-bold leading-none">{Number(dateISO.slice(8))}</span>
+                      {(() => {
+                        const dot = past ? '' : cause ? 'bg-rose-500' : capacity ? tone?.bar : privateFull ? 'bg-danger' : privateGroups ? 'bg-accent' : ''
+                        return dot ? <span className={`mt-1 h-1.5 w-1.5 rounded-full ${dot}`} /> : null
+                      })()}
+                    </>
+                  ) : <>
                   <span className="flex items-center justify-between font-bold">
                     {Number(dateISO.slice(8))}
                     {cause ? <FiHeart className="h-3 w-3 text-rose-500" aria-label="Game for a cause" /> : null}
@@ -151,20 +194,41 @@ export function CapacityCalendar({
                       </span>
                       <Bar booked={capacity.booked} capacity={capacity.capacity} className="mt-0.5 h-1" />
                     </span>
-                  ) : (
-                    <span className="mt-auto truncate text-[9px] text-muted/70">{cause ? 'Cause' : 'Private'}</span>
-                  )}
+                  ) : cause ? (
+                    <span className="mt-auto truncate text-[9px] font-semibold text-rose-500">Cause</span>
+                  ) : privateFull ? (
+                    <span className="mt-auto truncate text-[10px] font-semibold text-danger">Full</span>
+                  ) : privateGroups ? (
+                    <span className="mt-auto truncate text-[10px] font-semibold text-accent">
+                      {privateGroups} private
+                    </span>
+                  ) : null}
+                  </>}
                 </button>
               )
             })}
           </div>
         ))}
       </div>
-      <div className="mt-3 flex flex-wrap gap-3 text-[11px] text-muted">
-        <span className="flex items-center gap-1"><FiHeart className="text-rose-500" /> Game for a cause</span>
-        <span>Weekends: public games · Weekdays: private bookings</span>
-        {editable ? <span>Click a day to make it a game for a cause.</span> : null}
+      {mini ? (
+        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[10px] text-muted">
+          <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-success" /> Open</span>
+          <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-amber-500" /> Filling</span>
+          <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-danger" /> Full</span>
+          <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-accent" /> Private</span>
+          <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-rose-500" /> Cause</span>
+        </div>
+      ) : (
+      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted">
+        <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-success" /> Open</span>
+        <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-amber-500" /> Filling up</span>
+        <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-danger" /> Full</span>
+        <span className="flex items-center gap-1"><FiHeart className="text-rose-500" /> For a cause</span>
+        <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-accent" /> Private game booked</span>
+        <span>Tap a day for details.</span>
+        {editable ? <span>Tap any upcoming day to make it a game for a cause.</span> : null}
       </div>
+      )}
 
       {openDate ? (
         <DayDialog
@@ -231,7 +295,7 @@ function DayDialog({ dateISO, todayISO, capacity, cause, editable, onClose, onCh
   return (
     <Modal
       title={longDate(dateISO)}
-      eyebrow={cause ? 'Game for a cause' : capacity ? 'Public game day' : 'Private booking day'}
+      eyebrow={cause ? 'Game for a cause' : capacity && isPublicDay(capacity) ? 'Public game day' : 'Private game day'}
       size="md"
       onClose={saving ? () => {} : onClose}
       footer={canEdit ? (
@@ -268,7 +332,7 @@ function DayDialog({ dateISO, todayISO, capacity, cause, editable, onClose, onCh
                 maxLength={500}
                 value={form.description}
                 onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
-                className="w-full rounded-xl border border-white/10 bg-background px-4 py-3 text-sm text-text focus:outline-none focus:ring-2 focus:ring-accent/40"
+                className="w-full rounded-xl border border-white/10 bg-background px-4 py-3 text-sm text-text focus:outline-none focus:ring-2 focus:ring-accent/60"
               />
             </label>
             <Input
@@ -295,17 +359,8 @@ function DayDialog({ dateISO, todayISO, capacity, cause, editable, onClose, onCh
           <div className="text-xs text-muted">Past days can't be made a game for a cause.</div>
         ) : null}
 
-        {capacity ? (
-          <div>
-            <div className="text-xs uppercase tracking-widest text-muted">Capacity</div>
-            <div className="mt-1 text-sm">
-              <span className="font-semibold">{capacity.booked.toLocaleString()}</span> of {capacity.capacity.toLocaleString()} spots booked
-            </div>
-            <Bar booked={capacity.booked} capacity={capacity.capacity} className="mt-2 h-2" />
-            <DayLocations day={capacity} />
-          </div>
-        ) : (
-          <div className="text-xs text-muted">Weekdays are private bookings, so there's no public capacity to show.</div>
+        {capacity ? <DaySlotsTable day={capacity} past={past} /> : (
+          <div className="text-xs text-muted">Weekdays are private games for your own group.</div>
         )}
       </div>
     </Modal>

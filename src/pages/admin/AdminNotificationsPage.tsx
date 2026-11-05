@@ -64,7 +64,7 @@ export function AdminNotificationsPage() {
     }
     addNotification({
       userId: targetUserId.trim(),
-      type: 'payment_submitted',
+      type: 'announcement',
       title: title.trim() || 'Admin notification',
       message: body.trim() || 'No message.',
       linkedResourceId: undefined,
@@ -94,7 +94,7 @@ export function AdminNotificationsPage() {
       addNotification({
         userId: 'broadcast',
         targetRole: audienceToTargetRole[audience as Audience] || 'all',
-        type: 'payment_submitted',
+        type: 'announcement',
         title: title.trim() || 'Broadcast notification',
         message: body.trim() || 'No message.',
         linkedResourceId: undefined,

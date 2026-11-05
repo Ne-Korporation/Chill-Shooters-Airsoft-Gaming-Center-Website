@@ -156,11 +156,13 @@ export async function calculateBookingPrice({ db, payload, players, findDocument
 
     const settledPrice = numberOrZero(pkg.settledAmount, 'Package')
     if (settledPrice > 0) {
+      // A set price for 1 player is charged per player; a set price for a group of N (2 or more)
+      // only fits exactly N players. Mirrors src/utils/packagePricing.ts.
       const fixedPlayers = Math.round(Number(pkg.players || 0))
-      if (fixedPlayers > 0 && fixedPlayers !== players) {
-        throw new Error('The selected package is not priced for this group size.')
+      if (fixedPlayers > 1 && fixedPlayers !== players) {
+        throw new Error(`The selected package is priced for a group of ${fixedPlayers} players.`)
       }
-      subtotal = Math.round(settledPrice)
+      subtotal = Math.round(settledPrice) * (fixedPlayers > 1 ? 1 : Math.max(1, players))
       const discountedTotal = applyDiscount(subtotal, {
         ...pkg,
         discountMode: pkg.discountMode === 'settled' ? 'none' : pkg.discountMode,

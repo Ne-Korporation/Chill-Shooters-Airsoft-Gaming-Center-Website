@@ -23,6 +23,8 @@ type Props = {
   canManage?: boolean
   // Shown under the panel title, above the list of posts.
   beforePosts?: React.ReactNode
+  // Show only the newest few posts until the reader asks for more. Omit to show them all.
+  initialCount?: number
 }
 
 function formatPostedDate(value?: string) {
@@ -49,8 +51,10 @@ export function DashboardPostsPanel({
   subtitle = 'Admin updates and field notices visible across every dashboard.',
   canManage = false,
   beforePosts,
+  initialCount,
 }: Props) {
   const [posts, setPosts] = useState<DashboardPost[]>([])
+  const [showAll, setShowAll] = useState(false)
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [uploading, setUploading] = useState(false)
@@ -254,7 +258,7 @@ useEffect(() => {
         ) : posts.length === 0 ? (
           <p className="py-6 text-center text-sm text-muted">No announcements yet.</p>
         ) : (
-          posts.map((post) => (
+          (showAll || !initialCount ? posts : posts.slice(0, initialCount)).map((post) => (
             <div key={post.id || `${post.postedAtISO || post.createdAtISO || post.updatedAtISO || post.message}-${post.imageUrl || 'no-image'}`} className="divider py-4 first:pt-0 last:pb-0">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
@@ -301,6 +305,13 @@ useEffect(() => {
           ))
         )}
       </div>
+      {!loading && initialCount && posts.length > initialCount ? (
+        <div className="mt-3 text-center">
+          <Button type="button" variant="ghost" size="sm" onClick={() => setShowAll((value) => !value)}>
+            {showAll ? 'Show fewer' : `Show ${posts.length - initialCount} more`}
+          </Button>
+        </div>
+      ) : null}
 
       {canManage && isComposerOpen ? (
         <div className="fixed inset-0 z-[99999] grid place-items-center bg-black/70 px-4 py-6 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="dashboard-post-composer-title">

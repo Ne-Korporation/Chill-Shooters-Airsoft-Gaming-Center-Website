@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
 import { DashboardPostsPanel } from '../../components/dashboard/DashboardPostsPanel'
-import { WeekendCapacity } from '../../components/booking/WeekendCapacity'
+import { CapacityCalendar } from '../../components/booking/CapacityCalendar'
 import { SplitShareDueCard } from '../../components/dashboard/SplitShareDueCard'
 import { Link } from 'react-router-dom'
 import { FiCalendar, FiPlus, FiShield } from 'react-icons/fi'
@@ -25,7 +25,8 @@ type DashboardState = {
   waiverStatus: string
   statusLabel: string
   statusTone: ActivityTone
-  nextReservation: string
+  // Up to three soonest confirmed bookings: a "date · slot" label and the location.
+  upcoming: Array<{ id: string; label: string; location: string }>
   recentActivity: ActivityItem[]
 }
 
@@ -36,7 +37,7 @@ const defaultState: DashboardState = {
   waiverStatus: 'Not submitted',
   statusLabel: 'Loading your dashboard…',
   statusTone: 'muted',
-  nextReservation: 'No bookings yet',
+  upcoming: [],
   recentActivity: [],
 }
 
@@ -149,12 +150,20 @@ export function DashboardHomePage() {
           .sort((a, b) => parseDate(b.submittedAtISO || b.createdAtISO) - parseDate(a.submittedAtISO || a.createdAtISO))[0]
         const waiverStatus = waiverEntry ? formatStatus(waiverEntry.status) : 'Not submitted'
 
-        const nextReservation = myReservations
+        // The soonest confirmed booking from today on (game dates are YYYY-MM-DD, Manila time).
+        const todayISO = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(new Date())
+        const slotOrder = ['morning', 'afternoon', 'evening']
+        const upcomingBookings = myReservations
           .filter((reservation) => {
             const status = normalize(reservation?.reservationStatus)
-            return status === 'confirmed' || status === 'approved'
+            const date = String(reservation?.reservationDate || reservation?.date || '')
+            return (status === 'confirmed' || status === 'approved') && date >= todayISO
           })
-          .sort((a, b) => (b.reservationDate || b.createdAtISO || '').localeCompare(a.reservationDate || a.createdAtISO || ''))[0]
+          .sort((a, b) => (
+            String(a.reservationDate || a.date || '').localeCompare(String(b.reservationDate || b.date || ''))
+            || slotOrder.indexOf(normalize(a.reservationTime)) - slotOrder.indexOf(normalize(b.reservationTime))
+          ))
+          .slice(0, 3)
 
         const activityRows: ActivityItem[] = []
         myReservations
@@ -207,9 +216,16 @@ export function DashboardHomePage() {
           waiverStatus,
           statusLabel: pendingPayments > 0 ? 'You have payments to follow up on' : 'You are all set for your next session',
           statusTone: pendingPayments > 0 ? 'danger' : 'success',
-          nextReservation: nextReservation
-            ? `${formatReservationDate(nextReservation.reservationDate || nextReservation.date || nextReservation.createdAtISO)} • ${nextReservation.reservationTime || 'Time pending'}`
-            : 'No confirmed bookings yet',
+          upcoming: upcomingBookings.map((reservation, index) => ({
+            id: String(reservation.id || reservation._id || index),
+            label: [
+              formatReservationDate(reservation.reservationDate || reservation.date || reservation.createdAtISO),
+              reservation.reservationTime
+                ? String(reservation.reservationTime).charAt(0).toUpperCase() + String(reservation.reservationTime).slice(1)
+                : 'Time pending',
+            ].join(' · '),
+            location: String(reservation.locationName || reservation.location || ''),
+          })),
           recentActivity: activityRows
             .sort((a, b) => b.dateValue - a.dateValue)
             .slice(0, 4),
@@ -251,22 +267,20 @@ export function DashboardHomePage() {
         }
       />
 
-      {/* Announcements get the main column; the player's own summary sits small on the right. */}
-      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
-        <DashboardPostsPanel
-          title="Announcements"
-          subtitle="Updates and reminders from the Chill Shooters team."
-          beforePosts={
-            <WeekendCapacity
-              compact
-              title="This week's public game capacity"
-              subtitle="How many players have booked this weekend's open games."
-              action={<Link to="/app/reservations" className="text-xs font-semibold text-accent hover:text-text">Book a spot</Link>}
-            />
-          }
-        />
+      {/* Desktop: announcements and the calendar in the main column, the player's summary on the right.
+          Phones: the summary (payments due, waiver) comes first, then announcements, then recent activity. */}
+      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_320px] lg:grid-rows-[auto_1fr]">
+        <div className="min-w-0 space-y-4 lg:col-start-1 lg:row-span-2 lg:row-start-1">
+          <DashboardPostsPanel
+            title="Announcements"
+            subtitle="Updates and reminders from the Chill Shooters team."
+            initialCount={3}
+          />
+          {/* On desktop the calendar sits under the sidebar menu instead. */}
+          <div className="lg:hidden"><CapacityCalendar /></div>
+        </div>
 
-        <aside className="space-y-3">
+        <aside className="order-first space-y-3 lg:order-none lg:col-start-2 lg:row-start-1">
           {/* Shown only while the player owes a split payment share. */}
           <SplitShareDueCard />
           <div className="grid grid-cols-3 gap-2">
@@ -282,38 +296,52 @@ export function DashboardHomePage() {
             />
           </div>
 
-          <Panel compact title="Next up" description={loading ? undefined : dashboard.statusLabel}>
+          <Panel compact title="Upcoming reservations">
             <div className="divider divide-y">
-              <div className="divider flex items-center gap-2 pb-2">
-                <span className="chip-accent grid h-7 w-7 shrink-0 place-items-center rounded-lg">
-                  <FiCalendar className="h-3.5 w-3.5" />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <div className="text-[11px] text-muted">Next booking</div>
-                  <div className="truncate text-xs font-medium">
-                    {loading ? <span className="skeleton inline-block h-3 w-32" /> : dashboard.nextReservation}
-                  </div>
+              {loading ? (
+                <div className="space-y-2 py-1">
+                  <span className="skeleton block h-3 w-40" />
+                  <span className="skeleton block h-3 w-32" />
                 </div>
-              </div>
-              <div className="divider flex items-center gap-2 pt-2">
+              ) : dashboard.upcoming.length === 0 ? (
+                <div className="py-1 text-xs text-muted">
+                  No upcoming bookings. <Link to="/app/reservations" className="font-medium text-accent hover:underline">Book a game</Link>
+                </div>
+              ) : (
+                <div className="space-y-0.5">
+                  {dashboard.upcoming.map((booking) => (
+                    <Link key={booking.id} to="/app/my-reservations" className="hover-row -mx-1 flex items-center gap-2 rounded-lg px-1 py-1">
+                      <span className="chip-accent grid h-7 w-7 shrink-0 place-items-center rounded-lg">
+                        <FiCalendar className="h-3.5 w-3.5" />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-semibold">{booking.label}</div>
+                        {booking.location ? <div className="truncate text-[11px] text-muted">{booking.location}</div> : null}
+                      </div>
+                    </Link>
+                  ))}
+                </div>
+              )}
+              {/* Only shown while the waiver still needs the player's attention. */}
+              {!loading && !waiverApproved ? (
+              <div className="divider mt-2 flex items-center gap-2 pt-2">
                 <span className="chip-accent grid h-7 w-7 shrink-0 place-items-center rounded-lg">
                   <FiShield className="h-3.5 w-3.5" />
                 </span>
                 <div className="min-w-0 flex-1">
                   <div className="text-[11px] text-muted">Waiver</div>
-                  <div className="text-xs font-medium">
-                    {loading ? <span className="skeleton inline-block h-3 w-20" /> : dashboard.waiverStatus}
-                  </div>
+                  <div className="text-xs font-medium">{dashboard.waiverStatus}</div>
                 </div>
-                {!loading && !waiverApproved ? (
-                  <Link to="/app/waiver" className="text-xs font-medium text-accent hover:underline">
-                    {dashboard.waiverStatus === 'Not submitted' ? 'Sign now' : 'View'}
-                  </Link>
-                ) : null}
+                <Link to="/app/waiver" className="text-xs font-medium text-accent hover:underline">
+                  {dashboard.waiverStatus === 'Not submitted' ? 'Sign now' : 'View'}
+                </Link>
               </div>
+              ) : null}
             </div>
           </Panel>
+        </aside>
 
+        <div className="lg:col-start-2 lg:row-start-2">
           <Panel compact title="Recent activity">
             <ActivityList
               compact
@@ -322,7 +350,7 @@ export function DashboardHomePage() {
               emptyText="No activity yet. Book your first game to get started."
             />
           </Panel>
-        </aside>
+        </div>
       </div>
     </div>
   )

@@ -180,19 +180,18 @@ export function AdminDashboardPage() {
 
       {/* Same layout as the player dashboard: announcements in the main column, a compact summary on the right. */}
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
-        <DashboardPostsPanel
-          canManage
-          title="Announcements"
-          subtitle="Posts here appear on every dashboard: players, marshals, and registrars."
-          beforePosts={
-            <CapacityCalendar
-              compact
-              editable
-              title="Public game capacity"
-              subtitle="Spots booked for each weekend's open games. Click a day to make it a game for a cause."
-            />
-          }
-        />
+        <div className="min-w-0 space-y-4">
+          <CapacityCalendar
+            editable
+            title="Game Capacity"
+            subtitle="Spots booked for each weekend's open games. Click a day to make it a game for a cause."
+          />
+          <DashboardPostsPanel
+            canManage
+            title="Announcements"
+            subtitle="Posts here appear on every dashboard: players, marshals, and registrars."
+          />
+        </div>
 
         <aside className="space-y-3">
           <div className="grid grid-cols-3 gap-2">

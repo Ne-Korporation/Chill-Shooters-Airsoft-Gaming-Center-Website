@@ -1,6 +1,7 @@
 import { getGcashAmountDue, getPaymentProgress, getSplitPayerIds } from './paymentRules.js'
 import { updateReservationStatusAtomically } from './reservationStatus.js'
 import { nextShortId } from './shortIds.js'
+import { publicAppUrl } from './appUrl.js'
 
 // How long a pending reservation keeps its slot while it is paid. After this the booking is
 // released and the slot opens for anyone again. A captain paying alone has 30 minutes; a team
@@ -257,7 +258,7 @@ export async function sendSplitPaymentWarnings(db, { force = false } = {}) {
   }).limit(200).toArray()
 
   const { emailSplitShareWarning } = await import('../services/notificationEmails.js')
-  const appUrl = String(process.env.PUBLIC_APP_URL || '').trim().replace(/\/+$/, '')
+  const appUrl = publicAppUrl()
   let warned = 0
   for (const reservation of reservations) {
     const timeLeftMs = new Date(reservation.paymentDueAtISO).getTime() - now

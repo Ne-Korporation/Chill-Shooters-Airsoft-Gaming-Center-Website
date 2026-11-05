@@ -19,20 +19,23 @@ export function summarizeWeekendCapacity({ dates, todayISO, capacities, location
     const dayHolds = holds.filter((hold) => hold.reservationDate === dateISO)
     const locations = Object.entries(capacities).map(([locationId, slotCapacities]) => {
       const slots = Object.entries(slotCapacities).map(([slot, capacity]) => {
-        const booked = getSlotPlayerCount(getBlockingSlotReservations({
+        const blocking = getBlockingSlotReservations({
           reservations: dayReservations.filter((reservation) => slotOf(reservation) === slot),
           locationId,
           normalizeLocationId,
-        })) + dayHolds
+        })
+        const booked = getSlotPlayerCount(blocking) + dayHolds
           .filter((hold) => hold.locationId === locationId && hold.reservationTime === slot)
           .reduce((sum, hold) => sum + Number(hold.players || 0), 0)
-        return { slot, capacity, booked: Math.min(booked, capacity), remaining: Math.max(0, capacity - booked) }
+        // `groups`: how many bookings (not players) are in this slot.
+        return { slot, capacity, booked: Math.min(booked, capacity), remaining: Math.max(0, capacity - booked), groups: blocking.length }
       })
       return {
         id: locationId,
         name: locationNames[locationId] || locationId,
         capacity: slots.reduce((sum, slot) => sum + slot.capacity, 0),
         booked: slots.reduce((sum, slot) => sum + slot.booked, 0),
+        groups: slots.reduce((sum, slot) => sum + slot.groups, 0),
         slots,
       }
     })
@@ -41,6 +44,7 @@ export function summarizeWeekendCapacity({ dates, todayISO, capacities, location
       past: dateISO < todayISO,
       capacity: locations.reduce((sum, location) => sum + location.capacity, 0),
       booked: locations.reduce((sum, location) => sum + location.booked, 0),
+      groups: locations.reduce((sum, location) => sum + location.groups, 0),
       locations,
     }
   })

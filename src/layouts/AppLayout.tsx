@@ -33,7 +33,7 @@ export function AppLayout() {
       <div className="mx-auto max-w-[1400px] px-3 py-6 lg:px-6">
         <div className="relative flex gap-6">
           {/* Desktop Sidebar */}
-          <aside className="hidden w-[248px] shrink-0 lg:block"><div className="sticky top-[96px] max-h-[calc(100vh-112px)] overflow-y-auto overscroll-contain">{sidebar}</div></aside>
+          <aside className="hidden w-[248px] shrink-0 lg:block">{sidebar}</aside>
 
           {/* Mobile Drawer */}
           <AnimatePresence>
