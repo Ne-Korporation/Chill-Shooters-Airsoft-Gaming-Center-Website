@@ -1977,7 +1977,8 @@ router.post('/:collection', requireAuth, async (req, res) => {
           // The booking now holds the slot itself.
           await db.collection('slot_holds').deleteOne({ _id: `user:${doc.userId}` }, { session })
         })
-        void emailReservationEvent(db, doc, 'received')
+        // No email yet: a booking paid straight away gets only the confirmation email; one left
+        // unpaid gets a "waiting for payment" email a few minutes later (sendUnpaidReservationEmails).
         void notifyAddedTeammates(db, doc, appUrlFrom(req))
         return res.status(201).json({ ok: true, insertedId, data: doc })
       } catch (err) {

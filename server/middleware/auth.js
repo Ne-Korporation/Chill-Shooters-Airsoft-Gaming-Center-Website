@@ -1,12 +1,19 @@
 import crypto from 'crypto'
 import { getUserAccountsCollection } from '../db/mongo.js'
 
-const AUTH_SECRET =
-  process.env.AUTH_SECRET ||
-  (process.env.NODE_ENV === 'production' ? '' : crypto.randomBytes(32).toString('hex'))
-
-if (!AUTH_SECRET) {
-  throw new Error('AUTH_SECRET must be configured in production')
+// Read on first use, not when this module loads: server/index.js imports this file before it
+// loads server/.env, so reading it at load time always missed AUTH_SECRET and signed everyone
+// out on every restart (a new random secret each time).
+let authSecret = ''
+function getAuthSecret() {
+  if (authSecret) return authSecret
+  authSecret = process.env.AUTH_SECRET || ''
+  if (!authSecret) {
+    if (process.env.NODE_ENV === 'production') throw new Error('AUTH_SECRET must be configured in production')
+    console.warn('AUTH_SECRET is not set: using a temporary secret, so everyone is signed out when the server restarts.')
+    authSecret = crypto.randomBytes(32).toString('hex')
+  }
+  return authSecret
 }
 
 // "Remember me" sessions stay valid for 30 days; regular sessions expire after 12 hours.
@@ -22,7 +29,7 @@ export function createAuthToken(user, { remember = false } = {}) {
   }
 
   const body = Buffer.from(JSON.stringify(payload)).toString('base64url')
-  const signature = crypto.createHmac('sha256', AUTH_SECRET).update(body).digest('base64url')
+  const signature = crypto.createHmac('sha256', getAuthSecret()).update(body).digest('base64url')
   return `${body}.${signature}`
 }
 
@@ -32,7 +39,7 @@ export function verifyAuthToken(token) {
   const [body, signature] = token.split('.')
   if (!body || !signature) return null
 
-  const expected = crypto.createHmac('sha256', AUTH_SECRET).update(body).digest('base64url')
+  const expected = crypto.createHmac('sha256', getAuthSecret()).update(body).digest('base64url')
   const providedSignature = Buffer.from(signature)
   const expectedSignature = Buffer.from(expected)
   if (providedSignature.length !== expectedSignature.length) return null

@@ -24,6 +24,24 @@ type UserEquipmentItem = {
   source?: 'business' | 'player'
 }
 
+// Weapon categories a player can submit, and the name each submitted weapon gets.
+const WEAPON_CATEGORY_LABELS: Record<string, string> = {
+  rifles: 'Rifles',
+  gel_blasters: 'Gel blasters',
+  pistols: 'Pistols',
+  snipers: 'Snipers',
+  mg: 'MG',
+  shotguns: 'Shotguns',
+}
+const WEAPON_CATEGORY_NAMES: Record<string, string> = {
+  rifles: 'Rifle',
+  gel_blasters: 'Gel blaster',
+  pistols: 'Pistol',
+  snipers: 'Sniper',
+  mg: 'Machine gun',
+  shotguns: 'Shotgun',
+}
+
 export function MyWeaponsAndEquipmentPage() {
   const { playerId } = useParams()
   const { user } = useAuth()
@@ -144,10 +162,8 @@ export function MyWeaponsAndEquipmentPage() {
 
   const handleSubmitWeapon = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (!weaponForm.name.trim()) {
-      setFormError('Weapon name is required.')
-      return
-    }
+    // Players only pick the category; the weapon is named after it (staff see the notes too).
+    const weaponName = WEAPON_CATEGORY_NAMES[weaponForm.category] || 'Weapon'
 
     try {
       setSubmitting(true)
@@ -155,7 +171,7 @@ export function MyWeaponsAndEquipmentPage() {
       const created = await apiPost<{ ok: boolean; data: UserEquipmentItem }>('/api/weapons', {
         id: `W-PLAYER-${Date.now()}`,
         kind: 'weapon',
-        name: weaponForm.name.trim(),
+        name: weaponName,
         category: weaponForm.category,
         status: 'available',
         description: weaponForm.description.trim(),
@@ -170,7 +186,7 @@ export function MyWeaponsAndEquipmentPage() {
         roles: ['admin', 'registrar', 'marshal'],
         type: 'weapon_submitted',
         title: 'New Weapon Request',
-        message: `A player submitted weapon request "${weaponForm.name.trim()}" for review.`,
+        message: `A player submitted weapon request "${weaponName}" for review.`,
         linkedResourceId: created?.data?.id,
       })
 
@@ -306,12 +322,6 @@ export function MyWeaponsAndEquipmentPage() {
         <Modal eyebrow={`Weapons · ${ownedWeapons.length} saved`} title="Add your weapon" onClose={() => setAdding(null)} size="md">
             {formError ? <div className="mb-3 text-sm text-danger">{formError}</div> : null}
             <form className="space-y-3" onSubmit={handleSubmitWeapon}>
-              <Input
-                label="Weapon name"
-                value={weaponForm.name}
-                onChange={(event) => setWeaponForm((current) => ({ ...current, name: event.target.value }))}
-                placeholder="e.g. AK Replica"
-              />
               <label className="block">
                 <div className="mb-2 text-sm font-semibold text-text">Category</div>
                 <select
@@ -319,12 +329,9 @@ export function MyWeaponsAndEquipmentPage() {
                   onChange={(event) => setWeaponForm((current) => ({ ...current, category: event.target.value }))}
                   className="w-full rounded-xl bg-background border border-white/10 px-4 py-3 text-sm text-text focus:outline-none focus:ring-2 focus:ring-accent/40 [&>option]:bg-background [&>option]:text-text"
                 >
-                  <option value="rifles">Rifles</option>
-                  <option value="gel_blasters">Gel blasters</option>
-                  <option value="pistols">Pistols</option>
-                  <option value="snipers">Snipers</option>
-                  <option value="mg">MG</option>
-                  <option value="shotguns">Shotguns</option>
+                  {Object.entries(WEAPON_CATEGORY_LABELS).map(([value, label]) => (
+                    <option key={value} value={value}>{label}</option>
+                  ))}
                 </select>
               </label>
               <Input

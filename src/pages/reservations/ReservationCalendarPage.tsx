@@ -3006,18 +3006,36 @@ export function ReservationCalendarPage() {
                 )}
 
                 <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                  <div className="text-sm font-bold">Dynamic price</div>
-                  <div className="mt-1 text-xs text-muted">
-                    {selectionMode === 'custom' ? 'Custom items × players (no discount)' : 'Calculated for your group and session type.'}
-                  </div>
-                  <div className="mt-3 flex items-end justify-between">
+                  <div className="text-sm font-bold">What you're getting</div>
+                  {/* The same lines the receipt shows, so the player sees what they availed. */}
+                  {paymentBreakdown.itemizedBreakdown.length > 0 ? (
+                    <ul className="mt-2 space-y-1 text-xs">
+                      {paymentBreakdown.itemizedBreakdown.map((item, index) => (
+                        <li key={`${item.label}-${index}`} className="flex items-baseline justify-between gap-3">
+                          <span className="min-w-0 text-muted">{item.label}</span>
+                          <span className={`shrink-0 font-semibold ${item.amount < 0 ? 'text-success' : item.amount === 0 ? 'text-muted' : ''}`}>
+                            {item.amount === 0 ? 'Free' : formatCurrency(item.amount)}
+                          </span>
+                        </li>
+                      ))}
+                      {fullDay ? (
+                        <li className="flex items-baseline justify-between gap-3 border-t border-white/10 pt-1">
+                          <span className="text-muted">Full day: morning, afternoon &amp; evening</span>
+                          <span className="shrink-0 font-semibold">× 3</span>
+                        </li>
+                      ) : null}
+                    </ul>
+                  ) : (
+                    <div className="mt-1 text-xs text-muted">Pick a package or items to see what's included.</div>
+                  )}
+                  <div className="mt-3 flex items-end justify-between border-t border-white/10 pt-3">
                     <div>
                       <div className="text-xs text-muted">Total</div>
                       <div className="text-2xl font-bold text-gold">{formatCurrency(bookingTotal)}</div>
                     </div>
                     <div className="text-right">
                       <div className="text-xs text-muted">Per player</div>
-                      <div className="text-sm font-bold">{formatCurrency(dynamicPricing.perPlayer)}</div>
+                      <div className="text-sm font-bold">{formatCurrency(Math.round(bookingTotal / Math.max(1, players)))}</div>
                     </div>
                   </div>
 

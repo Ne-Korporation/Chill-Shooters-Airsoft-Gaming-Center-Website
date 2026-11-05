@@ -79,11 +79,25 @@ function reservationLabel(reservation) {
   return `${escapeHtml(date)} (${escapeHtml(slot)})${location ? ` at ${escapeHtml(location)}` : ''}`
 }
 
+function manilaTime(iso) {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toLocaleString('en-PH', { timeZone: 'Asia/Manila', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+}
+
 const RESERVATION_MESSAGES = {
+  // Sent only when a booking is left unpaid (see sendUnpaidReservationEmails). A booking paid
+  // straight away gets the confirmation email only.
   received: {
-    subject: 'We received your Chill Shooters reservation',
-    title: 'Reservation received',
-    line: (r) => `Your reservation for ${reservationLabel(r)} for ${Number(r.numberOfPlayers || 0)} players was received and is waiting for staff review. Total: ${formatPHP(r.totalAmount)}, deposit: ${formatPHP(r.depositAmount)}.`,
+    subject: 'Your Chill Shooters reservation is waiting for payment',
+    title: 'Reservation received: waiting for payment',
+    line: (r) => {
+      const due = manilaTime(r.paymentDueAtISO)
+      const split = String(r.paymentMode || '').toLowerCase() === 'split'
+      const what = split ? `Your team's ${formatPHP(r.depositAmount)} (split between you)` : `${formatPHP(r.depositAmount)}`
+      return `We received your reservation for ${reservationLabel(r)} for ${Number(r.numberOfPlayers || 0)} players, but it isn't paid yet. `
+        + `Pay ${what} online${due ? ` by <b>${escapeHtml(due)}</b>` : ''} to confirm it; after that the slot is released for others. Total: ${formatPHP(r.totalAmount)}.`
+    },
   },
   confirmed: {
     subject: 'Your Chill Shooters reservation is confirmed',
@@ -113,20 +127,96 @@ const RESERVATION_MESSAGES = {
 export async function emailReservationEvent(db, reservation, event, keySuffix = '') {
   const message = RESERVATION_MESSAGES[event]
   if (!message || !reservation) return { skipped: 'unknown event' }
-  const id = String(reservation.id || reservation._id)
+  let id = String(reservation.id || reservation._id)
+  let key = `reservation:${id}:${event}${keySuffix ? `:${keySuffix}` : ''}`
+  // A full day is three bookings; it gets one email for the whole day, sent once all of them
+  // reach this state (confirmed, or still unpaid).
+  if (reservation.bookingGroupId && (event === 'confirmed' || event === 'received')) {
+    const group = await db.collection('reservations').find({ bookingGroupId: reservation.bookingGroupId }).toArray()
+    if (event === 'confirmed' && group.some((item) => String(item.reservationStatus || '').toLowerCase() !== 'confirmed')) {
+      return { skipped: 'full day not fully confirmed yet' }
+    }
+    reservation = fullDayReservation(group.length ? group : [reservation])
+    id = String(reservation.id)
+    key = `reservation-group:${reservation.bookingGroupId}:${event}`
+  }
   const lines = event === 'confirmed'
     ? await confirmedReservationLines(db, reservation).catch((err) => {
       console.error('Confirmation details failed', id, err?.message || err)
       return [message.line(reservation)]
     })
-    : [message.line(reservation)]
+    : event === 'received'
+      ? [message.line(reservation), button(`${appUrl()}/app/my-reservations?view=${encodeURIComponent(id)}`, 'Pay now')]
+      : [message.line(reservation)]
   return sendLogged(db, {
-    key: `reservation:${id}:${event}${keySuffix ? `:${keySuffix}` : ''}`,
+    key,
     userId: reservation.userId,
     subject: message.subject,
     title: message.title,
     lines: [...lines, `Reservation ID: ${escapeHtml(id)}`],
   })
+}
+
+// A full day's three bookings shown as one: the first booking's details, with the day's totals.
+function fullDayReservation(group) {
+  const order = ['morning', 'afternoon', 'evening']
+  const sorted = [...group].sort((a, b) => order.indexOf(a.reservationTime) - order.indexOf(b.reservationTime))
+  const sum = (field) => sorted.reduce((total, item) => total + Number(item[field] || 0), 0)
+  const dueTimes = sorted.map((item) => item.paymentDueAtISO).filter(Boolean).sort()
+  return {
+    ...sorted[0],
+    reservationTime: 'full day (morning, afternoon & evening)',
+    totalAmount: sum('totalAmount'),
+    depositAmount: sum('depositAmount'),
+    paymentDueAtISO: dueTimes[0] || sorted[0].paymentDueAtISO,
+  }
+}
+
+// The payment receipt email, except for the captain's own payment when it confirmed the
+// booking: the confirmation email already says it is paid, so the player gets one email.
+// Teammates paying a split share, and payments that didn't confirm the booking yet (waiting for a
+// guardian, or a balance paid later), still get the receipt.
+export async function emailPaymentReceipt(db, payment, status) {
+  if (!payment) return { skipped: 'no payment' }
+  const reservation = await db.collection('reservations').findOne({ id: String(payment.reservationId) }, { projection: { userId: 1, reservationStatus: 1 } })
+  const confirmedByThisPayment = reservation
+    && String(reservation.userId) === String(payment.userId)
+    && String(reservation.reservationStatus || '').toLowerCase() === 'confirmed'
+    && ['paid', 'confirmed', 'verified', 'approved'].includes(String(status || '').toLowerCase())
+  if (confirmedByThisPayment) return { skipped: 'covered by the confirmation email' }
+  return emailPaymentEvent(db, payment, status)
+}
+
+// How long a booking can sit unpaid before the "waiting for payment" email goes out. A player who
+// pays within this time only ever gets the confirmation email.
+export const UNPAID_EMAIL_AFTER_MS = 5 * 60_000
+
+// Sweep: one "waiting for payment" email per booking still unpaid a few minutes after it was made,
+// while its payment window is open. A full day gets one email for the day.
+export async function sendUnpaidReservationEmails(db, now = Date.now()) {
+  const candidates = await db.collection('reservations').find({
+    reservationStatus: 'pending',
+    unpaidEmailSentAtISO: { $exists: false },
+    createdAtISO: { $lte: new Date(now - UNPAID_EMAIL_AFTER_MS).toISOString() },
+    paymentDueAtISO: { $gt: new Date(now).toISOString() },
+  }).limit(100).toArray()
+  let sent = 0
+  for (const reservation of candidates) {
+    const id = String(reservation.id)
+    const paid = await db.collection('payments').countDocuments({
+      reservationId: { $in: [id, String(reservation._id)] },
+      paymentStatus: { $nin: ['failed', 'rejected'] },
+    })
+    const nowISO = new Date(now).toISOString()
+    if (paid === 0) {
+      const result = await emailReservationEvent(db, reservation, 'received')
+      if (result?.sent) sent += 1
+    }
+    // Marked either way: a booking with a payment in never needs this email.
+    const filter = reservation.bookingGroupId ? { bookingGroupId: reservation.bookingGroupId } : { _id: reservation._id }
+    await db.collection('reservations').updateMany(filter, { $set: { unpaidEmailSentAtISO: nowISO } })
+  }
+  return sent
 }
 
 // The website's address for emailed links; see utils/appUrl.js.
