@@ -93,8 +93,19 @@ function PaymentPageContent() {
   // Set once the server amount is known after submitting.
   const [amountDue, setAmountDue] = useState(0)
   // Who pays and how can change until the reservation is created; then the server has fixed them.
-  const [choicesLocked, setChoicesLocked] = useState(() => Boolean(localStorage.getItem('pending_reservation_id')))
-  const canSplit = teamMembers.length > 0
+  // Full day (see ReservationCalendarPage): one booking per slot, all created here and paid at one
+  // checkout. The captain pays (no split) with GCash or QR Ph.
+  const [fullDaySlots] = useState<string[]>(() => {
+    try {
+      const pending = JSON.parse(localStorage.getItem('pending_reservation') || 'null')
+      return pending?.fullDay && Array.isArray(pending.fullDaySlots) ? pending.fullDaySlots.map(String) : []
+    } catch {
+      return []
+    }
+  })
+  const fullDay = fullDaySlots.length > 1
+  const [choicesLocked, setChoicesLocked] = useState(() => Boolean(localStorage.getItem('pending_reservation_id') || localStorage.getItem('pending_reservation_ids')))
+  const canSplit = teamMembers.length > 0 && !fullDay
   const showWhoPays = canSplit || paymentMode === 'split'
   const teamSize = paymentMode === 'split' ? teamMembers.length + 1 : 1
   const paysInFull = paymentPlan === 'full'
@@ -163,9 +174,12 @@ function PaymentPageContent() {
             { label: `Player entrance fee (${Number(pendingReservation?.numberOfPlayers || 1)} × ₱150)`, amount: entranceFee },
             { label: 'Service fee', amount: service },
           ]
-      setBreakdown({ field, equipment, entranceFee, service, total, itemized })
-      // Splitting needs at least one registered teammate.
-      setPaymentMode(nextTeamMembers.length > 0 ? nextPaymentMode : 'self')
+      // A full day costs the same as booking each slot: the charges above are for one slot.
+      const slotCount = pendingReservation?.fullDay && Array.isArray(pendingReservation?.fullDaySlots) ? pendingReservation.fullDaySlots.length : 1
+      const fullDayItems = slotCount > 1 ? [...itemized, { label: `Afternoon & evening (same as above, × ${slotCount - 1})`, amount: total * (slotCount - 1) }] : itemized
+      setBreakdown({ field, equipment, entranceFee, service, total: total * slotCount, itemized: fullDayItems })
+      // Splitting needs at least one registered teammate, and isn't offered for a full day.
+      setPaymentMode(nextTeamMembers.length > 0 && slotCount === 1 ? nextPaymentMode : 'self')
       setTeamMembers(nextTeamMembers)
     } catch {
       setBreakdown({ field: 0, equipment: 0, entranceFee: 0, service: 0, total: 0, itemized: [] })
@@ -186,7 +200,7 @@ function PaymentPageContent() {
   useEffect(() => {
     if (!draftExpired) return
     localStorage.removeItem('pending_reservation')
-    localStorage.removeItem('pending_reservation_id')
+    localStorage.removeItem('pending_reservation_id'); localStorage.removeItem('pending_reservation_ids')
     toast.error('You were away for more than a minute, so the slot was released. Please book again.')
     navigate('/app/reservations', { replace: true })
   }, [draftExpired, navigate])
@@ -209,7 +223,7 @@ function PaymentPageContent() {
   useEffect(() => {
     if (success || draftExpired) return
     const refreshHold = () => {
-      if (localStorage.getItem('pending_reservation_id')) return
+      if (localStorage.getItem('pending_reservation_id') || localStorage.getItem('pending_reservation_ids')) return
       try {
         const pending = JSON.parse(localStorage.getItem('pending_reservation') || 'null')
         if (!pending) return
@@ -232,8 +246,8 @@ function PaymentPageContent() {
 
   // Card can't cover a split payment (or may not be set up): fall back to GCash.
   useEffect(() => {
-    if (method === 'stripe' && !stripeSession && (paymentMode === 'split' || !stripeConfig.enabled)) setMethod('gcash')
-  }, [method, paymentMode, stripeConfig.enabled, stripeSession])
+    if (method === 'stripe' && !stripeSession && (paymentMode === 'split' || fullDay || !stripeConfig.enabled)) setMethod('gcash')
+  }, [method, paymentMode, fullDay, stripeConfig.enabled, stripeSession])
 
   const canSubmit = useMemo(() => {
     if (submitting) return false
@@ -264,6 +278,64 @@ function PaymentPageContent() {
 
       if (method === 'stripe' && paymentMode === 'split') throw new Error('Split payments are paid with GCash or QR Ph; card payment covers the whole amount.')
       if (isXendit && xenditEnabled !== true) throw new Error('Online payment is not available right now. Please try again later.')
+
+      if (fullDay) {
+        if (!isXendit) throw new Error('A full day is paid with GCash or QR Ph.')
+        let ids: string[] = []
+        try {
+          ids = JSON.parse(localStorage.getItem('pending_reservation_ids') || '[]')
+        } catch {
+          ids = []
+        }
+        let created: any[] = []
+        if (!Array.isArray(ids) || ids.length !== fullDaySlots.length) {
+          // Book every slot or none: if one can't be booked, release the ones already booked.
+          ids = []
+          const random = typeof crypto !== 'undefined' && 'randomUUID' in crypto
+            ? crypto.randomUUID()
+            : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`
+          const bookingGroupId = `FD-${random}`
+          const { fullDay: _fullDay, fullDaySlots: _fullDaySlots, ...base } = pendingReservation
+          for (const slotName of fullDaySlots) {
+            try {
+              const result = await apiPost<{ ok: boolean; insertedId?: string; data?: any }>('/api/reservations', {
+                ...base, reservationTime: slotName, bookingGroupId, paymentMode: 'self', teamSize: 1,
+              })
+              const id = String(result?.data?.id ?? result?.insertedId ?? '')
+              if (!id) throw new Error('Reservation ID missing from API response')
+              ids.push(id)
+              created.push(result.data)
+            } catch (err: any) {
+              await Promise.all(ids.map((id) => apiPost(`/api/reservations/${encodeURIComponent(id)}/cancel`, {}).catch(() => null)))
+              const label = slotName.charAt(0).toUpperCase() + slotName.slice(1)
+              throw new Error(`${label} couldn't be booked (${err?.message || err}). Nothing was booked for the full day.`)
+            }
+          }
+          localStorage.setItem('pending_reservation_ids', JSON.stringify(ids))
+        } else {
+          created = await Promise.all(ids.map((id) => apiGet<{ ok: boolean; data: any }>(`/api/reservations/${encodeURIComponent(id)}`).then((res) => res.data)))
+        }
+        setChoicesLocked(true)
+        const serverTotal = created.reduce((sum, item) => sum + Number(item?.totalAmount || 0), 0)
+        const serverDeposit = created.reduce((sum, item) => sum + Number(item?.depositAmount || 0), 0)
+        if (!(serverTotal > 0) || !(serverDeposit > 0)) throw new Error('The server could not verify a valid reservation price and deposit.')
+        setPaymentMode('self')
+        setBalanceDue(created.reduce((sum, item) => sum + (Number(item?.balanceAmount) || 0), 0))
+        setBreakdown((current) => ({ ...current, total: serverTotal }))
+        setAmountDue(serverDeposit)
+        localStorage.setItem('active_reservation_id', ids[0])
+
+        const checkout = await apiPost<{ ok: boolean; data: { ref: string } }>('/api/demo-pay/checkout', { reservationIds: ids, channel: method })
+        successRef.current = true
+        localStorage.removeItem('pending_reservation')
+        localStorage.removeItem('pending_reservation_id')
+        localStorage.removeItem('pending_reservation_ids')
+        clearPackagePrefill()
+        clearBookingDraft(user.id)
+        sendToPaymentTab(payTab, checkout.data.ref, (url) => navigate(url))
+        payTab = null
+        return
+      }
 
       let reservationId = localStorage.getItem('pending_reservation_id') || ''
       let serverReservation: any
@@ -310,7 +382,7 @@ function PaymentPageContent() {
         const checkout = await apiPost<{ ok: boolean; data: { ref: string } }>('/api/demo-pay/checkout', { reservationId: String(reservationId), channel: method })
         successRef.current = true
         localStorage.removeItem('pending_reservation')
-        localStorage.removeItem('pending_reservation_id')
+        localStorage.removeItem('pending_reservation_id'); localStorage.removeItem('pending_reservation_ids')
         clearPackagePrefill()
         clearBookingDraft(user.id)
         sendToPaymentTab(payTab, checkout.data.ref, (url) => navigate(url))
@@ -410,7 +482,7 @@ function PaymentPageContent() {
                 key: 'stripe',
                 title: 'Card',
                 hint: 'Visa or Mastercard via Stripe',
-                unavailable: !stripeConfig.enabled ? 'Not available right now' : paymentMode === 'split' ? 'Not for split payments' : '',
+                unavailable: !stripeConfig.enabled ? 'Not available right now' : paymentMode === 'split' ? 'Not for split payments' : fullDay ? 'Not for full-day bookings' : '',
               },
             ] as Array<{ key: PaymentMethod; title: string; hint: string; unavailable: string }>).map((option) => (
               <button
@@ -490,7 +562,7 @@ function PaymentPageContent() {
                         setReceiptReference(payment.id || stripeSession.paymentIntentId)
                         setAmountPaid(stripeSession.amount)
                         localStorage.removeItem('pending_reservation')
-                        localStorage.removeItem('pending_reservation_id')
+                        localStorage.removeItem('pending_reservation_id'); localStorage.removeItem('pending_reservation_ids')
                         clearPackagePrefill()
                         if (user?.id) clearBookingDraft(user.id)
                         setSuccess(true)

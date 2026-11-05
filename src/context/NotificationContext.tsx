@@ -27,6 +27,8 @@ export type NotificationType =
   | 'reservation_payment_finalized'
   | 'reservation_reminder'
   | 'waiver_reminder'
+  // Sent by an admin from the notifications page to an audience or one account.
+  | 'announcement'
 
 export type NotificationTargetRole = 'user' | 'registrar' | 'marshal' | 'admin' | 'all'
 
@@ -76,6 +78,8 @@ export function sendRoleNotifications(
 
 type NotificationContextValue = {
   notifications: NotificationItem[]
+  // True until the first load for the signed-in account finishes.
+  loading: boolean
   addNotification: (item: Omit<NotificationItem, 'id' | 'read' | 'createdAtISO'>) => void
   markAsRead: (id: string) => void
   markAllAsRead: (userId: string, role?: string) => void
@@ -107,18 +111,24 @@ const NotificationContext = createContext<NotificationContextValue | null>(null)
 export function NotificationProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth()
   const [notifications, setNotifications] = useState<NotificationItem[]>([])
+  const [loading, setLoading] = useState(true)
 
   // Reload whenever the signed-in account changes, so one account never sees
-  // another account's list left over from the same browser tab.
+  // another account's list left over from the same browser tab. While signed in, the list
+  // refreshes every minute and when the tab comes back into view, so new ones show up.
   useEffect(() => {
     let active = true
     setNotifications([])
+    setLoading(true)
     try {
       localStorage.removeItem(LEGACY_STORAGE_KEY)
     } catch {
       // ignore storage errors
     }
-    if (!user?.id) return
+    if (!user?.id) {
+      setLoading(false)
+      return
+    }
 
     const load = async () => {
       try {
@@ -126,12 +136,19 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         if (active) setNotifications(sortNotifications(Array.isArray(response?.data) ? response.data : []))
       } catch (error) {
         console.warn('Failed to load notifications', error)
+      } finally {
+        if (active) setLoading(false)
       }
     }
     void load()
+    const timer = window.setInterval(() => { void load() }, 60_000)
+    const onVisible = () => { if (document.visibilityState === 'visible') void load() }
+    document.addEventListener('visibilitychange', onVisible)
 
     return () => {
       active = false
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisible)
     }
   }, [user?.id])
 
@@ -253,6 +270,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   const value = useMemo<NotificationContextValue>(
     () => ({
       notifications,
+      loading,
       addNotification,
       markAsRead,
       markAllAsRead,
@@ -264,7 +282,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       deleteNotification,
       getAllNotifications,
     }),
-    [notifications, addNotification, markAsRead, markAllAsRead, clearAllNotifications, clearNotificationsByIds, unreadCount, getNotificationsForUser, getNotificationsForRole, deleteNotification, getAllNotifications],
+    [notifications, loading, addNotification, markAsRead, markAllAsRead, clearAllNotifications, clearNotificationsByIds, unreadCount, getNotificationsForUser, getNotificationsForRole, deleteNotification, getAllNotifications],
   )
 
   return <NotificationContext.Provider value={value}>{children}</NotificationContext.Provider>

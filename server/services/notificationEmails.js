@@ -1,5 +1,6 @@
 import { ObjectId } from 'mongodb'
 import transporter from './mailService.js'
+import { publicAppUrl } from '../utils/appUrl.js'
 
 // Event emails for reservations and payments. Each send is called only after
 // the database change it describes has succeeded, is recorded in `email_log`
@@ -128,8 +129,9 @@ export async function emailReservationEvent(db, reservation, event, keySuffix = 
   })
 }
 
+// The website's address for emailed links; see utils/appUrl.js.
 function appUrl() {
-  return String(process.env.PUBLIC_APP_URL || 'http://localhost:5173').trim().replace(/\/+$/, '')
+  return publicAppUrl()
 }
 
 function detailRow(label, value) {

@@ -7,6 +7,7 @@ import { useTheme } from '../../context/ThemeContext'
 import { useAuth } from '../../context/AuthContext'
 import { useNotifications } from '../../context/NotificationContext'
 import { resolveNotificationRoute } from '../../utils/notificationRoutes'
+import { kindOf, timeLabel } from '../../utils/notificationDisplay'
 import { Modal } from '../ui/Modal'
 import { WeatherPanel } from '../../pages/admin/AdminWeatherPage'
 
@@ -18,8 +19,9 @@ function NotificationBell({ userId, role }: { userId: string; role?: string }) {
   const navigate = useNavigate()
   const dropdownRef = React.useRef<HTMLDivElement>(null)
 
-  // The bell is the only way into notifications: it previews the latest three, then "View all".
-  const userNotifications = roleNotifs.slice(0, 3)
+  // The bell is the only way into notifications: a short scrolling list of the latest, then "View all".
+  const userNotifications = roleNotifs.slice(0, 20)
+  const now = new Date()
 
   // Close on click outside
   React.useEffect(() => {
@@ -76,37 +78,37 @@ function NotificationBell({ userId, role }: { userId: string; role?: string }) {
             {userNotifications.length === 0 ? (
               <div className="py-6 text-center text-xs text-muted">No notifications yet</div>
             ) : (
-              <div className="space-y-1">
-                {userNotifications.map((n) => (
-                  <button
-                    key={n.id}
-                    type="button"
-                    onClick={() => {
-                      markAsRead(n.id)
-                      const destination = resolveNotificationRoute(n, role, userId)
-                      if (destination) navigate(destination)
-                      else navigate('/app/notifications')
-                      setOpen(false)
-                    }}
-                    className={`hover-row w-full rounded-xl px-3 py-3 text-left ${
-                      !n.read ? 'bg-[rgba(197,163,90,0.08)]' : ''
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="text-sm font-semibold text-text">{n.title}</div>
-                      {!n.read && <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-accent" />}
-                    </div>
-                    <div className="mt-1 text-xs text-muted line-clamp-2">{n.message}</div>
-                    <div className="mt-2 text-[10px] text-muted">
-                      {new Date(n.createdAtISO).toLocaleDateString(undefined, {
-                        month: 'short',
-                        day: 'numeric',
-                        hour: '2-digit',
-                        minute: '2-digit',
-                      })}
-                    </div>
-                  </button>
-                ))}
+              <div className="-mx-1 max-h-[min(360px,60vh)] space-y-0.5 overflow-y-auto overscroll-contain px-1">
+                {userNotifications.map((n) => {
+                  const Icon = kindOf(n).icon
+                  return (
+                    <button
+                      key={n.id}
+                      type="button"
+                      title={`${n.title}\n${n.message}`}
+                      onClick={() => {
+                        markAsRead(n.id)
+                        const destination = resolveNotificationRoute(n, role, userId)
+                        if (destination) navigate(destination)
+                        else navigate('/app/notifications')
+                        setOpen(false)
+                      }}
+                      className={`hover-row flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2 text-left ${!n.read ? 'bg-accent/10' : ''}`}
+                    >
+                      <span className={`mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-lg ${n.read ? 'bg-[rgba(var(--text),0.06)] text-muted' : 'bg-accent/15 text-accent'}`}>
+                        <Icon className="h-3.5 w-3.5" />
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-center gap-2">
+                          <span className={`truncate text-[13px] text-text ${n.read ? 'font-medium' : 'font-semibold'}`}>{n.title}</span>
+                          <span className="ml-auto shrink-0 text-[10px] text-muted">{timeLabel(n.createdAtISO, now)}</span>
+                        </span>
+                        <span className="block truncate text-xs text-muted">{n.message}</span>
+                      </span>
+                      {!n.read && <span className="mt-2 h-2 w-2 shrink-0 rounded-full bg-accent" aria-label="Unread" />}
+                    </button>
+                  )
+                })}
               </div>
             )}
 

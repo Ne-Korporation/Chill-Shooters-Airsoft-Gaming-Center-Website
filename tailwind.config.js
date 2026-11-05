@@ -8,7 +8,8 @@ export default {
         // Theme-aware colors (resolved from src/styles/theme.css variables)
         primary: "rgb(var(--primary, 47,79,47))",
         secondary: "rgb(var(--secondary, 85,107,47))",
-        accent: "rgb(var(--accent, 197,163,90))",
+        // Literal (like gold) so opacity modifiers (ring-accent/40, border-accent/30) work
+        accent: "rgb(197,163,90)",
         // Brand gold; literal so opacity modifiers (bg-gold/10) work
         gold: "rgb(197,163,90)",
 

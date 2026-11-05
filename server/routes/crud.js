@@ -137,20 +137,22 @@ async function capacityForDates(db, dates, todayISO) {
   })
 }
 
-// Public: a month of public-game capacity (weekends) plus the month's games for a cause, for the
-// capacity calendar on the admin dashboard and the landing page.
+// Public: a month of bookings per day (weekends are public games, weekdays private games) plus the
+// month's games for a cause, for the capacity calendar on the admin dashboard and the landing page.
 router.get('/public/capacity-calendar', async (req, res) => {
   try {
     const todayISO = manilaDateISO()
     const month = /^\d{4}-(0[1-9]|1[0-2])$/.test(String(req.query.month || '')) ? String(req.query.month) : todayISO.slice(0, 7)
     const db = await getDb()
-    const dates = weekendDatesInMonth(month)
-    const lastDay = new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).toISOString().slice(0, 10)
+    const dayCount = new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).getUTCDate()
+    const dates = Array.from({ length: dayCount }, (_, i) => `${month}-${String(i + 1).padStart(2, '0')}`)
+    const weekends = new Set(weekendDatesInMonth(month))
     const [days, causeDays] = await Promise.all([
       capacityForDates(db, dates, todayISO),
-      listActiveCauseDays(db, { from: `${month}-01`, to: lastDay }),
+      listActiveCauseDays(db, { from: dates[0], to: dates[dates.length - 1] }),
     ])
-    return res.json({ ok: true, todayISO, month, data: days, causeDays })
+    const data = days.map((day) => ({ ...day, kind: weekends.has(day.dateISO) ? 'public' : 'private' }))
+    return res.json({ ok: true, todayISO, month, data, causeDays })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
   }
@@ -1822,6 +1824,14 @@ router.post('/:collection', requireAuth, async (req, res) => {
       payload.extraAmmoReloads = normalizeExtraAmmoReloads(payload.extraAmmoReloads) || undefined
       payload.teamName = String(payload.teamName || '').trim().slice(0, 60) || undefined
       payload.notes = String(payload.notes || '').trim().slice(0, 1000)
+      // Full day: the morning, afternoon and evening bookings share this id and are paid together
+      // at one checkout. Each one is still an ordinary one-slot booking with all the usual checks.
+      const bookingGroupId = String(payload.bookingGroupId || '').trim()
+      if (/^FD-[A-Za-z0-9-]{8,64}$/.test(bookingGroupId)) payload.bookingGroupId = bookingGroupId
+      else delete payload.bookingGroupId
+      if (payload.bookingGroupId && String(payload.paymentMode || 'self').toLowerCase() === 'split') {
+        return res.status(400).json({ ok: false, error: 'A full-day booking is paid by the captain; split payment is not available for it.' })
+      }
 
       const knownFieldIds = new Set((LOCATION_FIELD_DEFS[locationId] || []).map((f) => f.id))
       const hasUnknownField = fieldIds.some((id) => !knownFieldIds.has(id))

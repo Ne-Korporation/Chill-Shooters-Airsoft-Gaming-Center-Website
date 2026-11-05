@@ -32,7 +32,7 @@ import { Card } from '../../components/ui/Card'
 import { Input } from '../../components/ui/Input'
 import { Button } from '../../components/ui/Button'
 import { Modal } from '../../components/ui/Modal'
-import { calculatePackagePricing, packageEquipmentQty } from '../../utils/packagePricing'
+import { calculatePackagePricing, packageEquipmentQty, packageNotForGroup } from '../../utils/packagePricing'
 import { formatDiscountTargetLabel, resolvePackageDiscountConfig } from '../../utils/packagePricing'
 import { loadPackagePrefill } from '../../utils/packagePrefill'
 import { isAmmo, modelOf } from '../../utils/inventoryModels'
@@ -435,8 +435,17 @@ export function ReservationCalendarPage() {
     landingPrefill?.dateISO && landingPrefill.dateISO >= initialDateISO ? landingPrefill.dateISO : initialDateISO
   const [dateISO, setDateISO] = useState<string>(() => (draftState.dateISO > todayDateISO ? draftState.dateISO : startDateISO))
   const [slot, setSlot] = useState<TimeSlot>(() => draftState.slot ?? landingPrefill?.slot ?? 'morning')
-  const [selectedSlots, setSelectedSlots] = useState<TimeSlot[]>(() => draftState.selectedSlots ?? [])
+  // One slot per booking. Drafts saved before this could hold several; keep the one being booked.
+  const [selectedSlots, setSelectedSlots] = useState<TimeSlot[]>(() => {
+    const saved = draftState.selectedSlots ?? []
+    if (saved.length <= 1) return saved
+    return draftState.slot && saved.includes(draftState.slot) ? [draftState.slot] : saved.slice(-1)
+  })
   const [slotTouched, setSlotTouched] = useState(Boolean(restoredDraft))
+  // Full day: morning, afternoon and evening booked together (three linked bookings, paid at one
+  // checkout). `slot` stays 'morning' then; the checks below look at all three slots.
+  const [fullDay, setFullDay] = useState<boolean>(() => Boolean(draftState.fullDay))
+  const bookedSlots: TimeSlot[] = fullDay ? timeSlots : [slot]
   const [sessionType, setSessionType] = useState<SessionType>(() => (isWeekend(dateISO) ? 'public' : 'private'))
 
   // Update selected fields when location changes
@@ -919,12 +928,20 @@ export function ReservationCalendarPage() {
     return { needed, available, ok: available >= needed }
   }, [modelsOfIds, rentalWeapons, players, verifiedOwnWeaponCount, slotStock, freeOfModel, weaponGroups])
 
+  // Only packages that fit the headcount can be picked (a group package fits exactly its size).
   const cheapestPackage = useMemo(() => {
-    if (packages.length === 0) return undefined
-    return packages.reduce((cheapest, pkg) =>
+    const fitting = packages.filter((pkg) => packageNotForGroup(pkg, players) === null)
+    if (fitting.length === 0) return undefined
+    return fitting.reduce((cheapest, pkg) =>
       pkg.basePrice < cheapest.basePrice ? pkg : cheapest
     )
-  }, [packages])
+  }, [packages, players])
+
+  // Changing the headcount can rule out the picked group package: move to one that fits.
+  useEffect(() => {
+    const picked = packages.find((pkg) => pkg.id === selectedPackageId)
+    if (picked && packageNotForGroup(picked, players) !== null) setSelectedPackageId(cheapestPackage?.id ?? '')
+  }, [packages, selectedPackageId, players, cheapestPackage])
 
   // With no packages from the admin, custom selection is the only way to book.
   const noPackages = !loadingPackages && packages.length === 0
@@ -1077,17 +1094,25 @@ export function ReservationCalendarPage() {
 
   // Used players from reservations. Capacity is per location and slot (all fields),
   // matching the server's check, so the counter never shows room the server will refuse.
+  // For a full day, the slot with the fewest spots left decides how many players can book.
+  const capacitySlot = useMemo<TimeSlot>(() => {
+    if (!fullDay) return slot
+    const left = (s: TimeSlot) => (serverCapacities?.[selectedLocation]?.[s] ?? capacityFor(selectedLocation, s))
+      - reservations.filter((r) => r.dateISO === dateISO && r.slot === s && r.locationId === selectedLocation).reduce((sum, r) => sum + r.players, 0)
+    return [...timeSlots].sort((a, b) => left(a) - left(b))[0]
+  }, [fullDay, slot, serverCapacities, selectedLocation, reservations, dateISO])
+
   const usedPlayers = useMemo(() => {
     return reservations
       .filter((r) => r.dateISO === dateISO &&
-                     r.slot === slot &&
+                     r.slot === capacitySlot &&
                      r.locationId === selectedLocation)
       .reduce((sum, r) => sum + r.players, 0)
-  }, [dateISO, slot, reservations, selectedLocation])
+  }, [dateISO, capacitySlot, reservations, selectedLocation])
 
   const maxCapacity = useMemo(() => {
-    return serverCapacities?.[selectedLocation]?.[slot] ?? capacityFor(selectedLocation, slot)
-  }, [selectedLocation, serverCapacities, slot])
+    return serverCapacities?.[selectedLocation]?.[capacitySlot] ?? capacityFor(selectedLocation, capacitySlot)
+  }, [selectedLocation, serverCapacities, capacitySlot])
 
   const remainingSlots = maxCapacity - usedPlayers
   const hasRequiredSlotSelection = isWd ? slotTouched : selectedSlots.length > 0
@@ -1234,6 +1259,9 @@ export function ReservationCalendarPage() {
     return { ...basePricing, total, perPlayer: Math.round(total / Math.max(1, players)) }
   }, [basePricing, extraAmmoTotal, players])
 
+  // Each slot of a full day is priced like a one-slot booking; the player pays for all of them.
+  const bookingTotal = dynamicPricing.total * bookedSlots.length
+
   const paymentBreakdown = useMemo(() => {
     const entranceFee = ENTRANCE_FEE_PER_PLAYER * players
     const itemizedBreakdown: Array<{ label: string; amount: number }> = []
@@ -1243,7 +1271,12 @@ export function ReservationCalendarPage() {
     if (selectionMode === 'package' && selectedPackage && dynamicPricing.details) {
       const details = dynamicPricing.details
       if (details.isSettled) {
-        itemizedBreakdown.push({ label: `${selectedPackage.name} (set price for ${players} players)`, amount: details.basePriceTotal })
+        // A set price for 1 player is per player ("Normal (₱750 × 2 players)"); a group price is one amount.
+        const groupSize = Math.round(Number(selectedPackage.players || 0))
+        const label = groupSize > 1
+          ? `${selectedPackage.name} (set price for ${groupSize} players)`
+          : `${selectedPackage.name} (₱${Math.round(details.basePriceTotal / Math.max(1, players)).toLocaleString('en-PH')} × ${players} player${players === 1 ? '' : 's'})`
+        itemizedBreakdown.push({ label, amount: details.basePriceTotal })
         fieldPrice = details.basePriceTotal
       } else {
         fieldPrice = details.basePriceTotal
@@ -1294,7 +1327,7 @@ export function ReservationCalendarPage() {
       locationLabel: locationOptions.find((loc) => loc.id === selectedLocation)?.name ?? 'Location',
       fields: selectedFields,
       dateISO,
-      slotLabel: slotLabels[slot],
+      slotLabel: fullDay ? 'Full day (Morning, Afternoon & Evening)' : slotLabels[slot],
       sessionTypeLabel: sessionType === 'private' ? 'Private Session' : 'Public Session',
       players,
       packageName: pkgName,
@@ -1334,7 +1367,7 @@ export function ReservationCalendarPage() {
     }
     setTeammateOwnWeaponIds((current) => [...current, member.id])
   }
-  const canSplitPayment = players > 1 && selectedTeammateIds.length > 0
+  const canSplitPayment = players > 1 && selectedTeammateIds.length > 0 && !fullDay
   const splitPartySize = Math.max(1, selectedTeammateIds.length + 1)
   const payerShareAmount = paymentMode === 'split'
     ? Number((dynamicPricing.total / splitPartySize).toFixed(2))
@@ -1354,7 +1387,7 @@ export function ReservationCalendarPage() {
     ? myActiveBookings.find((booking) => String(booking.sessionType || 'public').toLowerCase() === 'public'
       && booking.locationId === selectedLocation
       && booking.reservationDate === dateISO
-      && String(booking.reservationTime || '').toLowerCase() === slot
+      && (bookedSlots as string[]).includes(String(booking.reservationTime || '').toLowerCase())
       && !['cancelled', 'rejected', 'declined', 'expired'].includes(String(booking.reservationStatus || '').toLowerCase())) || null
     : null
   const canSubmitReservation = canProceed && hasCurrentUserWaiver && !publicSlotClash  // true only once we KNOW the user has no waiver (avoids flashing the warning while loading)
@@ -1469,21 +1502,21 @@ export function ReservationCalendarPage() {
 
   // Once the slot is held, every choice is saved as a draft so a player who leaves can come back
   // to it within a minute (see utils/bookingDraft).
-  const draftLabel = `${dateISO} • ${slot} • ${locationOptions.find((l) => l.id === selectedLocation)?.name || selectedLocation}`
+  const draftLabel = `${dateISO} • ${fullDay ? 'full day' : slot} • ${locationOptions.find((l) => l.id === selectedLocation)?.name || selectedLocation}`
   useEffect(() => {
     if (!user?.id || step === 1) return
     saveBookingDraft(user.id, {
       path: '/app/reservations',
       label: draftLabel,
       state: {
-        step, selectedLocation, selectedFieldIds, dateISO, slot, selectedSlots, players, notes, teamName, gameModePreference,
+        step, selectedLocation, selectedFieldIds, dateISO, slot, selectedSlots, fullDay, players, notes, teamName, gameModePreference,
         layoutRequest, layoutBlueprintUrl, selectedPackageId, selectionMode, customWeaponIds, customEquipmentIds,
         ownWeapons, ownEquipment, selectedOwnWeaponIds, selectedOwnEquipmentIds, ownWeaponTarget, teammateOwnWeaponIds,
         selectedTeammates, paymentMode, paymentPlan, extraAmmoReloads, fieldLayoutItems,
       },
     })
   }, [
-    user?.id, step, draftLabel, selectedLocation, selectedFieldIds, dateISO, slot, selectedSlots, players, notes, teamName,
+    user?.id, step, draftLabel, selectedLocation, selectedFieldIds, dateISO, slot, selectedSlots, fullDay, players, notes, teamName,
     gameModePreference, layoutRequest, layoutBlueprintUrl, selectedPackageId, selectionMode, customWeaponIds,
     customEquipmentIds, ownWeapons, ownEquipment, selectedOwnWeaponIds, selectedOwnEquipmentIds, ownWeaponTarget,
     teammateOwnWeaponIds, selectedTeammates, paymentMode, paymentPlan, extraAmmoReloads, fieldLayoutItems,
@@ -1609,6 +1642,7 @@ export function ReservationCalendarPage() {
         locationName: selectedLocationName,
         reservationDate: dateISO,
         reservationTime: slot,
+        ...(fullDay ? { fullDay: true, fullDaySlots: timeSlots } : {}),
         sessionType,
         numberOfPlayers: players,
         totalAmount: dynamicPricing.total,
@@ -1660,6 +1694,7 @@ export function ReservationCalendarPage() {
       // A reservation id left over from an earlier, unfinished payment belongs to
       // different booking details; drop it so the payment page creates this one.
       localStorage.removeItem('pending_reservation_id')
+      localStorage.removeItem('pending_reservation_ids')
 
       // Flag to refresh reservations when user returns
       localStorage.setItem('refresh_reservations', 'true')
@@ -1750,7 +1785,7 @@ export function ReservationCalendarPage() {
         <div className="flex items-center gap-2 rounded-2xl border border-success/25 bg-success/10 px-4 py-2 text-xs text-success">
           <FiClock className="h-4 w-4 flex-shrink-0" />
           <span>
-            {slotLabels[slot]} on {dateISO} is locked for you while you finish booking. It's released if you leave without paying.
+            {fullDay ? 'Your full day' : slotLabels[slot]} on {dateISO} is locked for you while you finish booking. It's released if you leave without paying.
           </span>
         </div>
       ) : null}
@@ -1874,27 +1909,30 @@ export function ReservationCalendarPage() {
 
                 <div>
                   <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Time Window</div>
-                  <div className="mt-2 grid grid-cols-1 gap-2">
+                  <div className="mt-2 grid grid-cols-1 gap-2" role="radiogroup" aria-label="Time window">
                     {loadingReservations ? (
                       <div className="py-4 text-center text-sm text-muted">Loading slots...</div>
                     ) : (
                       [...timeSlots].sort(slotSort).map((s) => {
                         const isSlotFull = isSlotFullyBooked(s)
                         const slotFields = getAvailableFieldsForSlot(s)
-                        const active = isWd ? slotTouched && s === slot : selectedSlots.includes(s)
+                        const unavailableFields = isWd
+                          ? getFieldsForLocation(selectedLocation).filter((f) => !slotFields.some((open) => open.id === f.id))
+                          : []
+                        const active = !fullDay && (isWd ? slotTouched && s === slot : selectedSlots.includes(s))
 
                         const handleSlotClick = () => {
                           if (isSlotFull) {
                             toast.error(`All fields are booked for ${slotLabels[s]}`)
                             return
                           }
+                          setFullDay(false)
                           if (isWd) {
                             setSlot(s)
                             setSlotTouched(true)
                           } else {
-                            setSelectedSlots((prev) =>
-                              prev.includes(s) ? prev.filter((sl) => sl !== s) : [...prev, s]
-                            )
+                            // One time slot per booking: picking a slot replaces the previous one.
+                            setSelectedSlots([s])
                             setSlot(s)
                             setSlotTouched(true)
                           }
@@ -1904,6 +1942,8 @@ export function ReservationCalendarPage() {
                           <button
                             key={s}
                             type="button"
+                            role="radio"
+                            aria-checked={active}
                             onClick={handleSlotClick}
                             disabled={isSlotFull}
                             className={[
@@ -1913,27 +1953,24 @@ export function ReservationCalendarPage() {
                             ].join(' ')}
                           >
                             <div className="flex items-center justify-between gap-3">
-                              <div>
+                              <span
+                                aria-hidden
+                                className={`grid h-5 w-5 shrink-0 place-items-center rounded-full border-2 ${active ? 'border-accent' : 'border-[rgba(var(--text),0.3)]'}`}
+                              >
+                                {active ? <span className="h-2.5 w-2.5 rounded-full bg-accent" /> : null}
+                              </span>
+                              <div className="min-w-0 flex-1">
                                 <div className="text-sm font-bold">{slotLabels[s]} <span className="text-xs font-semibold text-muted">{formatSlotRange(slotHours, s)}</span></div>
-                                <div className="mt-1 text-xs text-muted flex items-center gap-2">
-                                  <FiClock />
-                                  {isSlotFull ? (
-                                    <span className="text-danger">Fully booked</span>
-                                  ) : isWd ? (
-                                    <span className="text-accent">
-                                      Available: {slotFields.map(f => f.name).join(', ')}
-                                    </span>
-                                  ) : (
-                                    <span>Available fields</span>
-                                  )}
-                                </div>
+                                {/* Only what's not available is listed; nothing when every field is open. */}
+                                {isSlotFull || unavailableFields.length > 0 ? (
+                                  <div className="mt-1 text-xs flex items-center gap-2 text-danger">
+                                    <FiClock />
+                                    <span>{isSlotFull ? 'Fully booked' : `Unavailable: ${unavailableFields.map((f) => f.name).join(', ')}`}</span>
+                                  </div>
+                                ) : null}
                               </div>
                               {isSlotFull ? (
                                 <div className="rounded-2xl px-3 py-1 text-xs font-bold bg-danger/15 text-danger">FULL</div>
-                              ) : isWd ? (
-                                <div className="rounded-2xl px-3 py-1 text-xs font-bold bg-success/15 text-success">
-                                  {slotFields.length} field{slotFields.length > 1 ? 's' : ''} available
-                                </div>
                               ) : (
                                 <div className="rounded-2xl px-3 py-1 text-xs font-bold bg-success/15 text-success">AVAILABLE</div>
                               )}
@@ -1942,12 +1979,53 @@ export function ReservationCalendarPage() {
                         )
                       })
                     )}
+                    {!loadingReservations ? (() => {
+                      // Full day: all three slots, priced and booked as three slots, paid at one checkout.
+                      const fullSlot = timeSlots.find((s) => isSlotFullyBooked(s))
+                      const dayStart = formatSlotRange(slotHours, 'morning').split(/\s[–-]\s/)[0]
+                      const dayEnd = formatSlotRange(slotHours, 'evening').split(/\s[–-]\s/).pop()
+                      return (
+                        <button
+                          type="button"
+                          role="radio"
+                          aria-checked={fullDay}
+                          disabled={Boolean(fullSlot)}
+                          onClick={() => {
+                            if (fullSlot) {
+                              toast.error(`${slotLabels[fullSlot]} is fully booked, so a full day isn't available.`)
+                              return
+                            }
+                            setFullDay(true)
+                            setSlot('morning')
+                            setSelectedSlots([...timeSlots])
+                            setSlotTouched(true)
+                          }}
+                          className={[
+                            'rounded-2xl border p-3 text-left transition',
+                            fullDay ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
+                            fullSlot ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer',
+                          ].join(' ')}
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <span aria-hidden className={`grid h-5 w-5 shrink-0 place-items-center rounded-full border-2 ${fullDay ? 'border-accent' : 'border-[rgba(var(--text),0.3)]'}`}>
+                              {fullDay ? <span className="h-2.5 w-2.5 rounded-full bg-accent" /> : null}
+                            </span>
+                            <div className="min-w-0 flex-1">
+                              <div className="text-sm font-bold">Full day <span className="text-xs font-semibold text-muted">{dayStart} – {dayEnd}</span></div>
+                              {fullSlot ? (
+                                <div className="mt-1 text-xs text-danger">{slotLabels[fullSlot]} is fully booked</div>
+                              ) : null}
+                            </div>
+                            {fullSlot ? (
+                              <div className="rounded-2xl px-3 py-1 text-xs font-bold bg-danger/15 text-danger">FULL</div>
+                            ) : (
+                              <div className="rounded-2xl px-3 py-1 text-xs font-bold bg-success/15 text-success">AVAILABLE</div>
+                            )}
+                          </div>
+                        </button>
+                      )
+                    })() : null}
                   </div>
-                  {isWeekend(dateISO) && selectedSlots.length > 0 && (
-                    <div className="mt-3 text-xs text-muted">
-                      Selected slots: {[...selectedSlots].sort(slotSort).map((s) => slotLabels[s]).join(', ')}
-                    </div>
-                  )}
                   {!hasRequiredSlotSelection && (
                     <div className="mt-3 text-xs text-danger">
                       Please select a time slot to continue.
@@ -2570,13 +2648,17 @@ export function ReservationCalendarPage() {
                     <div className="mt-4 grid gap-3 lg:grid-cols-2">
                       {packages.map((pkg) => {
                         const active = pkg.id === selectedPackageId
+                        // A group package (set price for N players) only fits exactly N players.
+                        const groupSize = packageNotForGroup(pkg, players)
                         return (
                           <button
                             key={pkg.id}
                             type="button"
+                            disabled={groupSize !== null}
+                            title={groupSize !== null ? `This package is priced for a group of ${groupSize} players.` : undefined}
                             onClick={() => setSelectedPackageId(pkg.id)}
                             className={[
-                              'rounded-2xl border p-4 text-left transition',
+                              'rounded-2xl border p-4 text-left transition disabled:cursor-not-allowed disabled:opacity-50',
                               active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
                             ].join(' ')}
                           >
@@ -2613,8 +2695,14 @@ export function ReservationCalendarPage() {
                                       ) : null}
                                     </div>
                                     <div className="shrink-0 text-right">
-                                      <div className="text-base font-bold text-accent">{formatCurrency(price.perPlayer)}</div>
-                                      <div className="text-[11px] text-muted">per player</div>
+                                      {groupSize !== null ? (
+                                        <div className="text-xs font-semibold text-muted">For {groupSize} players only</div>
+                                      ) : (
+                                        <>
+                                          <div className="text-base font-bold text-accent">{formatCurrency(price.perPlayer)}</div>
+                                          <div className="text-[11px] text-muted">per player</div>
+                                        </>
+                                      )}
                                     </div>
                                   </div>
 
@@ -2925,7 +3013,7 @@ export function ReservationCalendarPage() {
                   <div className="mt-3 flex items-end justify-between">
                     <div>
                       <div className="text-xs text-muted">Total</div>
-                      <div className="text-2xl font-bold text-gold">{formatCurrency(dynamicPricing.total)}</div>
+                      <div className="text-2xl font-bold text-gold">{formatCurrency(bookingTotal)}</div>
                     </div>
                     <div className="text-right">
                       <div className="text-xs text-muted">Per player</div>
@@ -3223,7 +3311,7 @@ export function ReservationCalendarPage() {
                   <div className="h-px bg-white/10" />
                   <div className="flex items-center justify-between gap-3">
                     <span className="text-muted">Total</span>
-                    <span className="text-base font-bold text-gold">{formatCurrency(dynamicPricing.total)}</span>
+                    <span className="text-base font-bold text-gold">{formatCurrency(bookingTotal)}</span>
                   </div>
                 </div>
               </div>
@@ -3299,7 +3387,7 @@ export function ReservationCalendarPage() {
                 <div className="flex items-end justify-between gap-3">
                   <div>
                     <div className="text-xs text-muted">Total reservation</div>
-                    <div className="mt-1 text-3xl font-black text-gold">{formatCurrency(dynamicPricing.total)}</div>
+                    <div className="mt-1 text-3xl font-black text-gold">{formatCurrency(bookingTotal)}</div>
                   </div>
                   <div className="text-right">
                     <div className="text-xs text-muted">Per player</div>
@@ -3320,7 +3408,7 @@ export function ReservationCalendarPage() {
               <div className="mt-4 space-y-3">
                 <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
                   <div className="text-xs text-muted">Total</div>
-                  <div className="text-2xl font-bold text-gold">{formatCurrency(dynamicPricing.total)}</div>
+                  <div className="text-2xl font-bold text-gold">{formatCurrency(bookingTotal)}</div>
                   <div className="mt-1 text-xs text-muted">
                     {dynamicPricing.savings > 0 ? 'Including all fees and discounts' : 'Before optional discounts'}
                   </div>
@@ -3397,7 +3485,7 @@ export function ReservationCalendarPage() {
             ))}
             <div className="flex items-center justify-between gap-4 px-4 py-3">
               <dt className="text-muted">Total</dt>
-              <dd className="text-lg font-bold text-gold">{formatCurrency(dynamicPricing.total)}</dd>
+              <dd className="text-lg font-bold text-gold">{formatCurrency(bookingTotal)}</dd>
             </div>
           </dl>
         </Modal>

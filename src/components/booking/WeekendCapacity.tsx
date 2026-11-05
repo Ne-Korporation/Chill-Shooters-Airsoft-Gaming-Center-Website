@@ -1,14 +1,13 @@
 import React, { useEffect, useState } from 'react'
-import { FiHeart, FiMapPin, FiUsers } from 'react-icons/fi'
+import { FiHeart, FiUsers } from 'react-icons/fi'
 import { getApiBase } from '../../utils/apiClient'
 import { formatSlotRange, useSlotHours } from '../../utils/slotHours'
 import { causeDayMessage, type CauseDay } from '../../utils/causeDays'
 
-export type SlotCapacity = { slot: string; capacity: number; booked: number; remaining: number }
-export type LocationCapacity = { id: string; name: string; capacity: number; booked: number; slots: SlotCapacity[] }
-export type WeekendDay = { dateISO: string; past: boolean; capacity: number; booked: number; locations: LocationCapacity[] }
+export type SlotCapacity = { slot: string; capacity: number; booked: number; remaining: number; groups?: number }
+export type LocationCapacity = { id: string; name: string; capacity: number; booked: number; groups?: number; slots: SlotCapacity[] }
+export type WeekendDay = { dateISO: string; past: boolean; capacity: number; booked: number; groups?: number; kind?: 'public' | 'private'; locations: LocationCapacity[] }
 
-const SLOT_LABELS: Record<string, string> = { morning: 'Morning', afternoon: 'Afternoon', evening: 'Evening' }
 
 // How full this week's weekend (public) games are, from GET /api/public/weekend-capacity.
 // Readable without signing in, so the landing page can show it too.
@@ -57,8 +56,8 @@ function formatDay(dateISO: string) {
 }
 
 export function WeekendCapacity({
-  title = "This weekend's public games",
-  subtitle = 'Weekends are open games anyone can join. See how many players have booked so far.',
+  title = 'This weekend',
+  subtitle = 'Spots left in the public games. Anyone can join.',
   compact = false,
   action,
 }: {
@@ -108,57 +107,92 @@ export function WeekendCapacity({
                     <FiHeart className="mt-0.5 shrink-0" /> Game for a cause: {causeByDate[day.dateISO].title}
                   </div>
                 ) : null}
-                <div className="mt-1 text-xs text-muted">
-                  <span className="font-semibold text-text">{day.booked.toLocaleString()}</span> of {day.capacity.toLocaleString()} spots booked
+                <div className="mt-2">
+                  <DaySlotsTable day={day} past={day.past} note={false} />
                 </div>
-                <Bar booked={day.booked} capacity={day.capacity} className="mt-2 h-2" />
-
-                <DayLocations day={day} compact={compact} />
               </div>
             )
           })}
         </div>
       )}
+      {!loading ? <div className="mt-2 text-[11px] text-muted">Numbers are spots left. Anyone can join a public game.</div> : null}
     </div>
   )
 }
 
-// Each location's slots for one public-game day: spots left per time slot.
-export function DayLocations({ day, compact = false }: { day: WeekendDay; compact?: boolean }) {
+// Weekends are public games. Older servers only sent weekends and no `kind`.
+export function isPublicDay(day: WeekendDay) {
+  return (day.kind ?? 'public') === 'public'
+}
+
+const SLOT_NAMES: Record<string, string> = { morning: 'Morning', afternoon: 'Afternoon', evening: 'Evening' }
+const SHORT_LOCATION: Record<string, string> = { salawag: 'Salawag', langkaan: 'Langkaan', binan: 'Biñan' }
+
+// One day at a glance: a row per location, a column per time slot. Public days show spots left;
+// private days show how many groups have booked each slot.
+export function DaySlotsTable({ day, past, note = true }: { day: WeekendDay; past: boolean; note?: boolean }) {
   const slotHours = useSlotHours()
+  const isPublic = isPublicDay(day)
+  const slots = day.locations[0]?.slots.map((slot) => slot.slot) || []
+  const groups = day.groups || 0
+  const left = Math.max(0, day.capacity - day.booked)
+
   return (
-      <ul className="mt-3 space-y-3">
-        {day.locations.map((location) => (
-          <li key={location.id}>
-            <div className="flex items-center justify-between gap-2 text-xs">
-              <span className="flex min-w-0 items-center gap-1.5 font-semibold">
-                <FiMapPin className="h-3.5 w-3.5 shrink-0 text-accent" />
-                <span className="truncate">{location.name}</span>
-              </span>
-              <span className="shrink-0 text-muted">{location.booked}/{location.capacity}</span>
-            </div>
-            {!compact ? <Bar booked={location.booked} capacity={location.capacity} className="mt-1.5 h-1.5" /> : null}
-            <div className="mt-1.5 grid grid-cols-3 gap-1.5">
-              {location.slots.map((slot) => {
-                const slotTone = fillTone(slot.booked, slot.capacity)
-                return (
-                  <div
-                    key={slot.slot}
-                    className="rounded-lg bg-[rgba(var(--text),0.04)] px-2 py-1.5"
-                    title={`${SLOT_LABELS[slot.slot] || slot.slot} ${formatSlotRange(slotHours, slot.slot)}: ${slot.booked} of ${slot.capacity} booked, ${slot.remaining} left`}
-                  >
-                    <div className="text-[10px] uppercase tracking-wider text-muted">{SLOT_LABELS[slot.slot] || slot.slot}</div>
-                    <div className={`text-xs font-semibold ${slot.remaining === 0 ? 'text-danger' : ''}`}>
-                      {slot.remaining === 0 ? 'Full' : `${slot.remaining} left`}
-                    </div>
-                    <Bar booked={slot.booked} capacity={slot.capacity} className="mt-1 h-1" />
-                    <span className="sr-only">{slotTone.label}</span>
-                  </div>
-                )
-              })}
-            </div>
-          </li>
-        ))}
-      </ul>
+    <div>
+      <div className="text-sm">
+        {isPublic ? (
+          past ? <><span className="font-semibold">{day.booked.toLocaleString()}</span> players played</>
+            : <><span className="font-semibold">{left.toLocaleString()}</span> spots left · {day.booked.toLocaleString()} booked</>
+        ) : groups ? (
+          <><span className="font-semibold">{groups}</span> private game{groups === 1 ? '' : 's'} booked</>
+        ) : 'No private games booked yet. Every slot is open.'}
+      </div>
+
+      <div className="mt-3 overflow-x-auto rounded-xl border border-[rgba(var(--text),0.1)]">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="bg-[rgba(var(--text),0.04)] text-[11px] text-muted">
+              <th className="px-3 py-2 text-left font-semibold">Location</th>
+              {slots.map((slot) => (
+                <th key={slot} className="px-2 py-2 text-center font-semibold">
+                  <div>{SLOT_NAMES[slot] || slot}</div>
+                  <div className="font-normal">{formatSlotRange(slotHours, slot)}</div>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {day.locations.map((location) => (
+              <tr key={location.id} className="border-t border-[rgba(var(--text),0.08)]">
+                <td className="px-3 py-2 font-semibold" title={location.name}>{SHORT_LOCATION[location.id] || location.name}</td>
+                {location.slots.map((slot) => {
+                  if (!isPublic) {
+                    const booked = slot.groups || 0
+                    const full = slot.remaining === 0
+                    return (
+                      <td key={slot.slot} className={`px-2 py-2 text-center ${full ? 'font-semibold text-danger' : booked ? 'font-semibold text-accent' : 'text-muted'}`}>
+                        {full ? 'Full' : booked ? `${booked} booked` : 'Free'}
+                      </td>
+                    )
+                  }
+                  const tone = fillTone(slot.booked, slot.capacity)
+                  return (
+                    <td key={slot.slot} className={`px-2 py-2 text-center font-semibold ${past ? 'text-muted' : tone.text}`} title={`${slot.booked} of ${slot.capacity} booked`}>
+                      {past ? slot.booked : slot.remaining === 0 ? 'Full' : slot.remaining}
+                    </td>
+                  )
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {note ? <div className="mt-2 text-[11px] text-muted">
+        {isPublic
+          ? past ? 'Numbers are players who booked.' : 'Numbers are spots left. Anyone can join a public game.'
+          : 'Private games are for your own group of 10 or more.'}
+      </div> : null}
+    </div>
   )
 }

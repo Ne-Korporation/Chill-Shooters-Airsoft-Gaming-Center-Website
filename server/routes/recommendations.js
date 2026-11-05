@@ -32,15 +32,17 @@ function wholeNumber(value, fallback = 0) {
 export function packageGroupFit(pkg, { players, ownWeapons, weaponsWanted }) {
   const fixedPlayers = wholeNumber(pkg.players)
   const minPlayers = Math.max(1, wholeNumber(pkg.minPlayers, 1))
-  if (fixedPlayers > 0 && fixedPlayers !== players) {
+  // A set price for 1 player is per player and fits any group; a group price fits exactly N.
+  if (fixedPlayers > 1 && fixedPlayers !== players) {
     return { ok: false, reason: `Priced for exactly ${fixedPlayers} players.` }
   }
-  if (fixedPlayers <= 0 && players < minPlayers) {
+  if (fixedPlayers <= 1 && players < minPlayers) {
     return { ok: false, reason: `Needs at least ${minPlayers} players.` }
   }
   const weaponCount = Math.max(0, wholeNumber(pkg.weaponCount, (pkg.weaponIds || []).length))
-  // Settled packages give a fixed number of weapons for the whole group; others are per player.
-  const totalWeapons = Number(pkg.settledAmount) > 0 ? weaponCount : weaponCount * players
+  // Group-priced packages (set for N > 1 players) give a fixed number of weapons for the whole
+  // group; everything else, including a per-player set price, is per player.
+  const totalWeapons = Number(pkg.settledAmount) > 0 && fixedPlayers > 1 ? weaponCount : weaponCount * players
   const rentalNeeded = Math.max(0, players - ownWeapons)
   if (totalWeapons < rentalNeeded) {
     return { ok: false, reason: `Includes ${totalWeapons} weapon(s); your group needs ${rentalNeeded}.` }
@@ -48,7 +50,7 @@ export function packageGroupFit(pkg, { players, ownWeapons, weaponsWanted }) {
   if (weaponsWanted > 0 && totalWeapons < weaponsWanted) {
     return { ok: false, reason: `Includes ${totalWeapons} weapon(s); you asked for ${weaponsWanted}.` }
   }
-  const sizeReason = fixedPlayers > 0 ? `made for groups of ${fixedPlayers}` : `fits groups of ${minPlayers}+`
+  const sizeReason = fixedPlayers > 1 ? `made for groups of ${fixedPlayers}` : `fits groups of ${minPlayers}+`
   return { ok: true, reason: `${totalWeapons} weapon(s) for ${players} player(s); ${sizeReason}.` }
 }
 

@@ -8,6 +8,7 @@ import { fileURLToPath } from 'url'
 import { getDb, startDbSession } from './db/mongo.js'
 import { ensureDatabaseSetup } from './db/setup.js'
 import { requireAuth, requireRole } from './middleware/auth.js'
+import { configuredAppUrl, rememberAppOrigin } from './utils/appUrl.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -39,6 +40,11 @@ const { parseAddress } = await import('./services/mailService.js')
 
 const app = express()
 app.use(cors())
+// Email links need the website's address; remember it from the site calling the API.
+app.use(rememberAppOrigin)
+if (!configuredAppUrl()) {
+  console.warn('PUBLIC_APP_URL is not set: email links use the address of the site calling the API, or http://localhost:5173 until one does. Set it to the website address (for example https://your-site.vercel.app).')
+}
 app.use(express.json({ limit: '10mb' }))
 
 const PORT = Number(process.env.PORT) || 3001

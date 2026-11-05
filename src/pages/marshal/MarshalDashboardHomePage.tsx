@@ -128,8 +128,8 @@ export function MarshalDashboardHomePage() {
           beforePosts={
             <WeekendCapacity
               compact
-              title="This week's public game capacity"
-              subtitle="How many players have booked this weekend's open games."
+              title="This weekend"
+              subtitle="Spots left in the public games."
             />
           }
         />

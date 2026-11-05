@@ -217,7 +217,11 @@ router.post('/reservations/:id/cancel', requireAuth, requireRole('user'), async 
     }
 
     // Close any Xendit payment page still open for it, so nobody pays a cancelled booking.
-    const checkouts = await db.collection('xendit_checkouts').find({ reservationId: String(reservation.id), status: 'open' }).toArray()
+    // A full-day checkout covers several bookings (reservationIds); cancelling one closes it too.
+    const checkouts = await db.collection('xendit_checkouts').find({
+      $or: [{ reservationId: String(reservation.id) }, { reservationIds: String(reservation.id) }],
+      status: 'open',
+    }).toArray()
     for (const checkout of checkouts) {
       await expireInvoice(checkout.invoiceId).catch(() => null)
       await db.collection('xendit_checkouts').updateOne({ _id: checkout._id }, { $set: { status: 'cancelled' } })

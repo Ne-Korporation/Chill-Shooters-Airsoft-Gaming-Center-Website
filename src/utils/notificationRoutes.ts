@@ -8,6 +8,12 @@ export function resolveNotificationRoute(notification: NotificationItem, role?: 
   const notificationType = String(notification.type || '').toLowerCase()
   const currentRole = String(role || '').toLowerCase()
 
+  // Announcements have no page of their own; they're read in full in the notifications list.
+  // Older admin broadcasts were saved as 'payment_submitted', so a broadcast reaching a player is
+  // treated as an announcement too (the server never broadcasts anything else to players).
+  if (notificationType === 'announcement') return null
+  if (notification.userId === 'broadcast' && !isStaffRole(currentRole)) return null
+
   if (notificationType.startsWith('split_payment_')) return '/app/split-payments'
 
   if (notificationType === 'weather_advisory') return isStaffRole(currentRole) ? '/app/weather' : '/app/my-reservations'

@@ -4,6 +4,7 @@ import { getDb } from '../db/mongo.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
 import { autoConfirmIfVerified, notifyRole, notifyUser } from '../utils/paymentProgress.js'
 import { emailGuardianApprovalRequest, emailGuardianDecision } from '../services/notificationEmails.js'
+import { publicAppUrl } from '../utils/appUrl.js'
 
 // Players under 18 need their guardian to approve every booking they are part of. Each booking
 // creates one approval per minor; the guardian answers through an emailed link (no account),
@@ -28,12 +29,9 @@ function playerIdsOf(reservation) {
     .filter((id) => id && id !== 'walk-in'))]
 }
 
-// Where guardian links point: the deployed site, or the origin the booking came from.
+// Where emailed links point: the deployed site, or the site the request came from (utils/appUrl.js).
 export function appUrlFrom(req) {
-  const configured = String(process.env.PUBLIC_APP_URL || '').trim().replace(/\/+$/, '')
-  if (configured) return configured
-  const origin = String(req?.get?.('origin') || '').trim().replace(/\/+$/, '')
-  return /^https?:\/\//.test(origin) ? origin : 'http://localhost:5173'
+  return publicAppUrl(req)
 }
 
 // Rolls the approvals up onto the reservation so booking lists can show them without a lookup.
