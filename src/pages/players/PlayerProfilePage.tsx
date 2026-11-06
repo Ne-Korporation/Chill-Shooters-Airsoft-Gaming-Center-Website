@@ -526,8 +526,8 @@ export function PlayerProfilePage() {
 
     try {
       setError(null)
-      await apiPost('/api/auth/send-otp', { email: emailToUse })
-      toast.success('Verification code sent for password reset.')
+      await apiPost('/api/auth/forgot-password', { email: emailToUse })
+      toast.success('We emailed you a 6-digit code to reset your password.')
       setIsEditing(false)
       navigate(`/otp?email=${encodeURIComponent(emailToUse)}&flow=reset`)
     } catch (e: any) {

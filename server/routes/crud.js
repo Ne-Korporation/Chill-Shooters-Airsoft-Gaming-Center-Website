@@ -26,6 +26,7 @@ import { normalizePhPhone } from '../utils/phone.js'
 import { cleanEquipmentQuantities } from '../utils/packageQuantities.js'
 import { appUrlFrom } from './guardianApprovals.js'
 import { findOwnChild, hasApprovedWaiver } from './children.js'
+import { createWalkInAccount } from './auth.js'
 import { evaluateFpsReading, weaponFpsClass } from './operations.js'
 import { emailGearReviewEvent, emailGuardianWaiverSubmitted, emailIdentityDecision, emailReservationEvent, emailSplitShareRequest, emailTeamAdded } from '../services/notificationEmails.js'
 import {
@@ -619,6 +620,13 @@ router.post('/walk-ins', requireAuth, requireRole('admin', 'registrar'), async (
 
   if (!walkInName) return res.status(400).json({ ok: false, error: 'Enter the walk-in name.' })
   if (walkInContact === null) return res.status(400).json({ ok: false, error: 'Enter the contact number as 09XX XXX XXXX.' })
+  // Optional: with an email, a player account is made and a welcome email sent (adults only;
+  // a minor is added by a parent on their own account).
+  const walkInEmail = String(body.email || '').trim() ? normalizeEmail(body.email) : ''
+  if (walkInEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(walkInEmail)) return res.status(400).json({ ok: false, error: 'Enter a valid email address, or leave it blank.' })
+  if (walkInEmail && body.adultConfirmed !== true) {
+    return res.status(400).json({ ok: false, error: 'Confirm the player is 18 or older to make their account. A minor is added by a parent on their account.' })
+  }
   if (!LOCATION_FIELD_DEFS[locationId]) return res.status(400).json({ ok: false, error: 'Choose a location.' })
   if (!SLOT_NAMES.includes(reservationTime)) return res.status(400).json({ ok: false, error: 'Choose a time slot.' })
   if (!Number.isInteger(playersCount) || playersCount < 1 || playersCount > 100) {
@@ -640,6 +648,7 @@ router.post('/walk-ins', requireAuth, requireRole('admin', 'registrar'), async (
     walkIn: true,
     walkInName,
     walkInContact,
+    ...(walkInEmail ? { walkInEmail } : {}),
     locationId,
     locationName: WALK_IN_LOCATION_NAMES[locationId],
     reservationDate,
@@ -740,7 +749,20 @@ router.post('/walk-ins', requireAuth, requireRole('admin', 'registrar'), async (
       await db.collection('payments').insertOne(payment)
       await syncReservationPaymentState(db, doc)
     }
-    return res.status(201).json({ ok: true, data: doc, payment })
+
+    // A player account for the walk-in, made after the booking is saved so a refused booking
+    // never leaves an account behind. A problem here doesn't undo the booking: staff are told.
+    let account = null
+    if (walkInEmail) {
+      try {
+        account = await createWalkInAccount(req, { name: walkInName, email: walkInEmail })
+        await db.collection('reservations').updateOne({ id: doc.id }, { $set: { walkInAccountId: account.account.id } })
+      } catch (err) {
+        console.error('Walk-in account creation failed', err?.message || err)
+        account = { status: 'failed', error: 'The booking was saved, but the player account could not be created.' }
+      }
+    }
+    return res.status(201).json({ ok: true, data: doc, payment, account })
   } catch (err) {
     if (err?.statusCode) return res.status(err.statusCode).json({ ok: false, error: err.message })
     return res.status(500).json({ ok: false, error: String(err) })

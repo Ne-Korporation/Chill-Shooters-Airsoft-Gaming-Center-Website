@@ -1,5 +1,6 @@
 import React from 'react'
-import { FiCheck, FiEdit2, FiPlus, FiTrash2, FiX } from 'react-icons/fi'
+import { FiAlertTriangle, FiCheck, FiCrosshair, FiEdit2, FiPlus, FiTool, FiTrash2, FiX } from 'react-icons/fi'
+import { useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { ActionGroup, Button } from '../../components/ui/Button'
 import { FilterTabs } from '../../components/ui/FilterTabs'
@@ -10,6 +11,8 @@ import { Pagination, usePagination } from '../../components/ui/Pagination'
 import { ModelSummaryStrip } from '../../components/inventory/ModelSummaryStrip'
 import { BulkUpdateModal, InventoryToolbar, SelectBox, forEachPiece, type BulkChange } from '../../components/inventory/BulkActionBar'
 import { modelOf, summarizeModels } from '../../utils/inventoryModels'
+import { SafetyLogPage } from '../marshal/SafetyLogPage'
+import { RepairsPage } from '../operations/RepairsPage'
 import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
 
 type WeaponCategory = 'rifles' | 'gel_blasters' | 'pistols' | 'snipers' | 'mg' | 'shotguns' | 'grenades' | 'photoshoot'
@@ -82,7 +85,7 @@ function fpsFields(form: { fpsClass: string; fpsLimit: string }) {
   return { fpsClass: form.fpsClass, fpsLimit: Number(form.fpsLimit) > 0 ? Number(form.fpsLimit) : 0 }
 }
 
-export function AdminWeaponsPage() {
+function WeaponInventory() {
   const [category, setCategory] = React.useState<WeaponCategory | 'all'>('all')
   const [status, setStatus] = React.useState<WeaponStatus | 'all'>('all')
   const [sourceFilter, setSourceFilter] = React.useState<'business' | 'player'>('business')
@@ -444,12 +447,6 @@ export function AdminWeaponsPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="text-3xl font-bold">Weapons</h1>
-          <p className="mt-1 text-sm text-muted">Manage the weapon catalog, inspect conditions, and keep the maintenance queue current.</p>
-        </div>
-      </div>
 
       <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
         <Card className="rounded-xl px-3 py-2 md:px-3 md:py-2">
@@ -918,3 +915,45 @@ export function AdminWeaponsPage() {
   )
 }
 
+
+type WeaponsView = 'inventory' | 'fps' | 'damage' | 'repairs'
+const WEAPON_VIEWS: WeaponsView[] = ['inventory', 'fps', 'damage', 'repairs']
+
+// Weapons: the catalog and maintenance queue, plus the safety records kept on the weapons
+// (chronograph checks and damage reports with penalty billing, once the Safety Logs page) and the
+// gunsmith repair log (once the Repairs page).
+// ?view=fps|damage|repairs opens a tab directly.
+export function AdminWeaponsPage() {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const fromLink = searchParams.get('view') as WeaponsView | null
+  const [view, setView] = React.useState<WeaponsView>(fromLink && WEAPON_VIEWS.includes(fromLink) ? fromLink : 'inventory')
+
+  const changeView = (next: WeaponsView) => {
+    setView(next)
+    setSearchParams(next === 'inventory' ? {} : { view: next }, { replace: true })
+  }
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h1 className="text-3xl font-bold">Weapons</h1>
+        {/* The other tabs write their own subtitle (the FPS limits are read from the server). */}
+        {view === 'inventory' ? (
+          <p className="mt-1 text-sm text-muted">Manage the weapon catalog, inspect conditions, and keep the maintenance queue current.</p>
+        ) : null}
+      </div>
+      <FilterTabs
+        ariaLabel="Weapons section"
+        value={view}
+        onChange={changeView}
+        options={[
+          { value: 'inventory', label: 'Inventory' },
+          { value: 'fps', label: <><FiCrosshair /> FPS safety log</> },
+          { value: 'damage', label: <><FiAlertTriangle /> Damage reports</> },
+          { value: 'repairs', label: <><FiTool /> Repairs</> },
+        ]}
+      />
+      {view === 'inventory' ? <WeaponInventory /> : view === 'repairs' ? <RepairsPage embedded /> : <SafetyLogPage embedded tab={view} />}
+    </div>
+  )
+}

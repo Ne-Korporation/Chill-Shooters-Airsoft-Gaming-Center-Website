@@ -545,3 +545,35 @@ export function emailWeatherAdvisory(db, reservation, userId, { key, title, mess
     ],
   })
 }
+
+// Welcome email for a new player account: sent once a self-registered player verifies their
+// email, on a first "Sign up with Google", and when the counter makes an account for a walk-in.
+// A walk-in account has no password yet, so its email carries a one-time "set your password"
+// link (`setPasswordUrl`); `sendKey` lets a new link be sent later without being de-duplicated.
+export async function emailWelcome(db, { account, req, setPasswordUrl = '', sendKey = '' }) {
+  if (!account?.email) return { skipped: 'no recipient' }
+  const appUrl = publicAppUrl(req)
+  const button = (href, label) =>
+    `<a href="${escapeHtml(href)}" style="display:inline-block;padding:10px 18px;border-radius:10px;background:#c5a35a;color:#111827;font-weight:700;text-decoration:none;">${escapeHtml(label)}</a>`
+  const lines = [
+    'Welcome to Chill Shooters Airsoft Gaming Center! Your player account is ready.',
+    ...(setPasswordUrl
+      ? [
+        'Our counter staff made this account for you when you played as a walk-in. Set a password to sign in:',
+        button(setPasswordUrl, 'Set your password'),
+        '<span style="color:#6b7280;font-size:13px;">This link works once and expires in 14 days. If it expires, ask the counter on your next visit to send a new one.</span>',
+      ]
+      : []),
+    'With your account you can:',
+    '<ul style="margin:0;padding-left:18px;"><li>Book public weekend games or private games for your group</li><li>Sign your waiver once and skip the paperwork at the field</li><li>Track your games played and move up from Beginner to Experienced</li></ul>',
+    ...(setPasswordUrl ? [] : [button(`${appUrl}/login`, 'Go to Chill Shooters')]),
+    'See you on the field!',
+  ]
+  return sendLogged(db, {
+    key: sendKey || `welcome:${account.id}`,
+    recipient: { email: account.email, name: account.firstName || account.name },
+    subject: 'Welcome to Chill Shooters!',
+    title: 'Welcome to Chill Shooters',
+    lines,
+  })
+}

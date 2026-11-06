@@ -44,6 +44,8 @@ type AuthContextValue = {
   token: string
   isAuthenticated: boolean
   login: (payload: { email: string; password: string; remember?: boolean }) => Promise<AuthUser>
+  // The one-time link emailed after many wrong-password attempts: signs the owner straight in.
+  loginWithUnlockLink: (token: string) => Promise<AuthUser>
   loginWithGoogle: (payload: GoogleAuthPayload & { remember?: boolean }) => Promise<GoogleAuthResult>
   registerWithGoogle: (payload: GoogleAuthPayload & { remember?: boolean }) => Promise<GoogleAuthResult>
   register: (payload: { name: string; email: string; password: string }) => Promise<void>
@@ -213,6 +215,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           throw new Error('Login failed')
         }
         startSession({ user: res.user, token: res.token, remember })
+        return res.user
+      },
+      loginWithUnlockLink: async (unlockToken) => {
+        const res = await apiPost<any>('/api/auth/unlock', { token: unlockToken })
+        if (!res?.ok || !res?.user || !res?.token) throw new Error(res?.error || 'This sign-in link did not work')
+        startSession({ user: res.user, token: res.token, remember: false })
         return res.user
       },
       loginWithGoogle: async ({ name, email, idToken, confirmExisting = false, remember = false }) => {

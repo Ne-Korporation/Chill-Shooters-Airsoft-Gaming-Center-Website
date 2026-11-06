@@ -7,6 +7,7 @@ import { motion } from 'framer-motion'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { Card } from '../../components/ui/Card'
+import { apiPost } from '../../utils/apiClient'
 
 type FormValues = { email: string }
 
@@ -20,8 +21,14 @@ export function ForgotPasswordPage() {
   } = useForm<FormValues>({ defaultValues: { email: '' } })
 
   async function onSubmit(values: FormValues) {
-    toast.success('Reset code sent. Verify OTP to continue.')
-    navigate(`/otp?email=${encodeURIComponent(values.email)}&flow=reset`)
+    const email = values.email.trim()
+    try {
+      const res = await apiPost<{ message?: string }>('/api/auth/forgot-password', { email })
+      toast.success(res?.message || 'Check your email for a 6-digit code.')
+      navigate(`/otp?email=${encodeURIComponent(email)}&flow=reset`)
+    } catch (err: any) {
+      toast.error(err?.message || 'Could not send the code. Please try again.')
+    }
   }
 
   return (

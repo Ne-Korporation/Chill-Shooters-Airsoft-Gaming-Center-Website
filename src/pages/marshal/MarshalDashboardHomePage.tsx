@@ -2,11 +2,12 @@ import React, { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { DashboardPostsPanel } from '../../components/dashboard/DashboardPostsPanel'
-import { WeekendCapacity } from '../../components/booking/WeekendCapacity'
+import { CapacityCalendar } from '../../components/booking/CapacityCalendar'
 import { useAuth } from '../../context/AuthContext'
 import { ActionRow, DashboardHeader, Panel, StatTile } from '../../components/dashboard/DashboardParts'
 import { apiGet } from '../../utils/apiClient'
-import { FiCheckCircle, FiClipboard, FiTool, FiTruck, FiUsers, FiZap } from 'react-icons/fi'
+import { FiCheckCircle, FiTool, FiZap } from 'react-icons/fi'
+import { GiAk47 } from 'react-icons/gi'
 
 type DashboardState = {
   activeGames: number
@@ -49,7 +50,8 @@ export function MarshalDashboardHomePage() {
         const gameplay = Array.isArray(gameplayRes?.data) ? gameplayRes.data : []
 
         const activeGames = gameplay.filter((item) => {
-          const status = String(item?.status || '').trim().toLowerCase()
+          // Games store their status as "Status".
+          const status = String(item?.Status || item?.status || '').trim().toLowerCase()
           return status === 'active' || status === 'ongoing' || status === 'in_progress'
         }).length
 
@@ -120,21 +122,24 @@ export function MarshalDashboardHomePage() {
         }
       />
 
-      {/* Same layout as the player dashboard: announcements in the main column, a compact summary on the right. */}
-      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
-        <DashboardPostsPanel
-          title="Announcements"
-          subtitle="Updates and reminders from the admin team."
-          beforePosts={
-            <WeekendCapacity
-              compact
-              title="This weekend"
-              subtitle="Spots left in the public games."
-            />
-          }
-        />
+      {/* Same layout as the admin and registrar dashboards: the capacity calendar in the main
+          column (view only; games for a cause are set by the admin) and one column beside it:
+          announcements first, then the counts and what needs attention. */}
+      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
+        <div className="min-w-0">
+          <CapacityCalendar
+            title="Game Capacity"
+            subtitle="Spots booked for each weekend's open games. Click a day for details."
+          />
+        </div>
 
         <aside className="space-y-3">
+          <DashboardPostsPanel
+            title="Announcements"
+            subtitle="Updates and reminders from the admin team."
+            initialCount={3}
+          />
+
           <div className="grid grid-cols-3 gap-2">
             <StatTile compact label="Active" value={stats.activeGames} hint="In progress" loading={loading} />
             <StatTile compact label="Reserved" value={stats.reservedGames} hint="Approved/paid" loading={loading} />
@@ -162,26 +167,27 @@ export function MarshalDashboardHomePage() {
               />
               <ActionRow
                 to="/app/admin/weapons"
-                icon={FiTruck}
+                icon={GiAk47}
                 title="Weapon inspections"
                 description="Flag or clear weapons before play"
                 badge={loading ? undefined : stats.weaponAlerts}
               />
             </div>
-          </Panel>
-
-          <Panel compact title="Before each session">
-            <ul className="space-y-2.5">
-              {checklist.map((item) => (
-                <li key={item.title} className="flex gap-2">
-                  <FiCheckCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-success" />
-                  <div>
-                    <div className="text-xs font-medium">{item.title}</div>
-                    <div className="text-[11px] text-muted">{item.detail}</div>
-                  </div>
-                </li>
-              ))}
-            </ul>
+            {/* The session checklist, under the alerts so the side column stays about as tall as the calendar. */}
+            <div className="divider mt-2 border-t pt-3">
+              <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted">Before each session</div>
+              <ul className="space-y-2.5">
+                {checklist.map((item) => (
+                  <li key={item.title} className="flex gap-2">
+                    <FiCheckCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-success" />
+                    <div>
+                      <div className="text-xs font-medium">{item.title}</div>
+                      <div className="text-[11px] text-muted">{item.detail}</div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
           </Panel>
         </aside>
       </div>

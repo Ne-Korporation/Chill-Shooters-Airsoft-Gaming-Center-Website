@@ -137,3 +137,28 @@ select:disabled{ cursor: not-allowed; opacity: .6; }
   font-size: .875rem;
 }
 :root:not([data-theme='dark']) .select-field{ border-color: rgb(var(--border)); }
+
+/* -------------------------------------------------------------------
+   Toast notifications (react-hot-toast): styled like the app's cards,
+   with the gold accent strip used on pop-up headers. The library sets
+   inline colours, so these override them.
+------------------------------------------------------------------- */
+.app-toast{
+  background: linear-gradient(90deg, rgba(197,163,90,0.14), rgba(197,163,90,0) 70%), rgb(var(--card)) !important;
+  color: rgb(var(--text)) !important;
+  border: 1px solid rgb(var(--border));
+  border-left: 3px solid rgb(197,163,90);
+  border-radius: 16px !important;
+  box-shadow: var(--shadow) !important;
+  padding: 10px 14px !important;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  max-width: 380px;
+}
+[data-theme='dark'] .app-toast{
+  border-color: rgba(255,255,255,0.10);
+  border-left-color: rgb(197,163,90);
+}
+.app-toast-success{ border-left-color: rgb(63,163,77) !important; }
+.app-toast-error{ border-left-color: rgb(214,69,69) !important; }

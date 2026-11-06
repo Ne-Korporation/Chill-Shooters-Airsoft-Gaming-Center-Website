@@ -13,6 +13,13 @@ import { PAYMENT_METHODS } from './CounterPage'
 
 type PackageOption = { id: string; name: string }
 
+// What happened to the optional player account (see createWalkInAccount on the server).
+type WalkInAccountResult = {
+  status: 'created' | 'exists' | 'resent' | 'failed'
+  account?: { id: string; name: string; email: string }
+  error?: string
+}
+
 // Public games run on weekends only (weekdays are private bookings), so walk-ins are too.
 function isPublicGameDay(dateISO: string) {
   const day = new Date(`${dateISO}T12:00:00Z`).getUTCDay()
@@ -21,7 +28,7 @@ function isPublicGameDay(dateISO: string) {
 
 function WalkInForm({ disabled, onCreated }: { disabled: boolean; onCreated: (reservationId: string) => void }) {
   const [form, setForm] = useState({
-    name: '', contact: '', locationId: LOCATIONS[0].id as string, reservationTime: 'morning', players: '1',
+    name: '', contact: '', email: '', adultConfirmed: false, locationId: LOCATIONS[0].id as string, reservationTime: 'morning', players: '1',
     mode: 'own_gear', selectedPackageId: '', paymentMethod: 'cash', reference: '', notes: '',
   })
   const [packages, setPackages] = useState<PackageOption[]>([])
@@ -53,8 +60,11 @@ function WalkInForm({ disabled, onCreated }: { disabled: boolean; onCreated: (re
     }
     setSaving(true)
     try {
-      const res = await apiPost<{ ok: boolean; data: { id: string; totalAmount: number } }>('/api/walk-ins', {
+      const email = form.email.trim()
+      const res = await apiPost<{ ok: boolean; data: { id: string; totalAmount: number }; account: WalkInAccountResult | null }>('/api/walk-ins', {
         ...form,
+        email,
+        adultConfirmed: Boolean(email) && form.adultConfirmed,
         contact: toStoredPhPhone(form.contact),
         players: Number(form.players),
         customWeaponIds: picked.filter((id) => inventory.find((i) => i.id === id)?.collection === 'weapons'),
@@ -62,7 +72,12 @@ function WalkInForm({ disabled, onCreated }: { disabled: boolean; onCreated: (re
         paymentMethod: form.paymentMethod === 'later' ? '' : form.paymentMethod,
       })
       toast.success(`Walk-in registered: ${formatPHP(res.data.totalAmount)}${form.paymentMethod === 'later' ? ' due' : ' paid'}.`)
-      setForm((f) => ({ ...f, name: '', contact: '', players: '1', reference: '', notes: '' }))
+      const account = res.account
+      if (account?.status === 'created') toast.success(`Account made for ${account.account?.email}. Welcome email sent.`, { duration: 5000 })
+      if (account?.status === 'resent') toast.success(`${account.account?.email} already had an account waiting for a password. A new link was emailed.`, { duration: 6000 })
+      if (account?.status === 'exists') toast(`${account.account?.email} already has an account, so no new one was made.`, { duration: 6000 })
+      if (account?.status === 'failed') toast.error(account.error || 'The player account could not be created.', { duration: 6000 })
+      setForm((f) => ({ ...f, name: '', contact: '', email: '', adultConfirmed: false, players: '1', reference: '', notes: '' }))
       setPicked([])
       onCreated(res.data.id)
     } catch (e: any) {
@@ -81,6 +96,31 @@ function WalkInForm({ disabled, onCreated }: { disabled: boolean; onCreated: (re
         <div className="grid gap-3 sm:grid-cols-2">
           <Input label="Name" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
           <Input label="Contact number (optional)" inputMode="tel" placeholder={PH_PHONE_PLACEHOLDER} value={form.contact} onChange={(e) => setForm((f) => ({ ...f, contact: formatPhPhone(e.target.value) }))} />
+        </div>
+        <div>
+          <Input
+            label="Email (optional)"
+            type="email"
+            inputMode="email"
+            autoComplete="off"
+            placeholder="player@email.com"
+            value={form.email}
+            onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
+          />
+          <p className="mt-1 text-xs text-muted">
+            With an email we make their player account and send a welcome email with a link to set their password.
+          </p>
+          {form.email.trim() ? (
+            <label className="mt-2 flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={form.adultConfirmed}
+                onChange={(e) => setForm((f) => ({ ...f, adultConfirmed: e.target.checked }))}
+                className="mt-0.5 h-4 w-4 accent-[var(--color-accent)]"
+              />
+              <span>The player is 18 or older. <span className="text-muted">(A minor is added by a parent on their own account.)</span></span>
+            </label>
+          ) : null}
         </div>
         <div className="grid gap-3 sm:grid-cols-3">
           <label className="block">
@@ -141,7 +181,7 @@ function WalkInForm({ disabled, onCreated }: { disabled: boolean; onCreated: (re
             <Input label="Reference number" value={form.reference} onChange={(e) => setForm((f) => ({ ...f, reference: e.target.value }))} />
           ) : null}
         </div>
-        <Button type="submit" className="w-full" disabled={disabled || saving || !form.name.trim()}>
+        <Button type="submit" className="w-full" disabled={disabled || saving || !form.name.trim() || (Boolean(form.email.trim()) && !form.adultConfirmed)}>
           {saving ? 'Registering…' : 'Register walk-in'}
         </Button>
         </fieldset>
