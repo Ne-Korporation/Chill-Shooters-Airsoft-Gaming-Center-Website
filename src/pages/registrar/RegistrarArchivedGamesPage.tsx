@@ -53,7 +53,8 @@ function rowId(doc: GameplayDoc) {
   return String(doc.reservationId || '')
 }
 
-export function RegistrarArchivedGamesPage() {
+// `embedded`: shown as a tab inside the admin Bookings page, which supplies the title and tabs.
+export function RegistrarArchivedGamesPage({ embedded = false }: { embedded?: boolean } = {}) {
   const navigate = useNavigate()
   const [items, setItems] = useState<GameplayDoc[]>([])
   const [loading, setLoading] = useState(true)
@@ -118,6 +119,7 @@ export function RegistrarArchivedGamesPage() {
 
   return (
     <div className="space-y-4">
+      {!embedded ? (
       <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
         <div className="space-y-2">
           <div className="text-sm font-medium text-accent">Games</div>
@@ -129,6 +131,7 @@ export function RegistrarArchivedGamesPage() {
           Ongoing Games
         </Button>
       </div>
+      ) : null}
 
       <Card className="p-4 md:p-6">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">

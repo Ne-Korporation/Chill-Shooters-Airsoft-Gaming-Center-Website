@@ -51,3 +51,20 @@ export function formatSlotRange(hours: SlotHours, slot: string) {
   const range = hours[slot as SlotName]
   return range ? `${formatClock(range.start)} – ${formatClock(range.end)}` : ''
 }
+
+// Today's date on the Manila clock, as YYYY-MM-DD.
+export function manilaTodayISO(now = new Date()) {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(now)
+}
+
+// Same-day bookings are allowed until the slot starts (Manila time). Matches the server's slotHasStarted.
+export function slotHasStarted(hours: SlotHours, slot: string, dateISO: string, now = new Date()) {
+  const todayISO = manilaTodayISO(now)
+  if (dateISO !== todayISO) return dateISO < todayISO
+  const range = hours[slot as SlotName]
+  if (!range) return false
+  const [h, m] = range.start.split(':').map(Number)
+  const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Manila', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(now)
+  const get = (type: string) => Number(parts.find((part) => part.type === type)?.value || 0)
+  return get('hour') * 60 + get('minute') >= h * 60 + m
+}

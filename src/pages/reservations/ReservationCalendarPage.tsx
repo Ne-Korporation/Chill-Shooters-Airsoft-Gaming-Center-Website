@@ -5,6 +5,7 @@ import toast from 'react-hot-toast'
 import {
   FiAlertTriangle,
   FiCalendar,
+  FiAlertCircle,
   FiCheck,
   FiChevronRight,
   FiClock,
@@ -40,7 +41,7 @@ import { cancelBookingDraftLeft, markBookingDraftLeft, readBookingDraft, saveBoo
 import type { PickerGroup } from '../../components/inventory/PiecePicker'
 import { ModelQuantityPicker } from '../../components/inventory/ModelQuantityPicker'
 import { FieldLayoutDesigner, type LayoutItem } from '../../components/reservations/FieldLayoutDesigner'
-import { formatSlotRange, useSlotHours } from '../../utils/slotHours'
+import { DEFAULT_SLOT_HOURS, formatSlotRange, manilaTodayISO, slotHasStarted, useSlotHours } from '../../utils/slotHours'
 import { causeDayMessage, useCauseDays } from '../../utils/causeDays'
 
 // Slot holds last 15 minutes on the server; refresh well before that while the player is booking.
@@ -59,7 +60,6 @@ type Field = {
   id: string
   name: string
   location: string
-  minPlayersPrivate: number
   locationId: LocationOption
 }
 
@@ -171,33 +171,33 @@ type WaiverRecord = {
 
 const locationFields: Record<LocationOption, Field[]> = {
   salawag: [
-    { id: 'salawag-field-1', name: 'Upper Ground', location: 'Delta Stronghold Salawag', minPlayersPrivate: 10, locationId: 'salawag' },
-    { id: 'salawag-field-2', name: 'Lower Ground', location: 'Delta Stronghold Salawag', minPlayersPrivate: 20, locationId: 'salawag' },
-    { id: 'salawag-field-3', name: 'Forest', location: 'Delta Stronghold Salawag', minPlayersPrivate: 50, locationId: 'salawag' },
+    { id: 'salawag-field-1', name: 'Upper Ground', location: 'Delta Stronghold Salawag', locationId: 'salawag' },
+    { id: 'salawag-field-2', name: 'Lower Ground', location: 'Delta Stronghold Salawag', locationId: 'salawag' },
+    { id: 'salawag-field-3', name: 'Forest', location: 'Delta Stronghold Salawag', locationId: 'salawag' },
   ],
   langkaan: [
-    { id: 'langkaan-field-1', name: 'Upper Ground', location: 'Delta Stronghold Langkaan', minPlayersPrivate: 10, locationId: 'langkaan' },
-    { id: 'langkaan-field-2', name: 'Lower Ground', location: 'Delta Stronghold Langkaan', minPlayersPrivate: 20, locationId: 'langkaan' },
-    { id: 'langkaan-field-3', name: 'Forest', location: 'Delta Stronghold Langkaan', minPlayersPrivate: 50, locationId: 'langkaan' },
+    { id: 'langkaan-field-1', name: 'Upper Ground', location: 'Delta Stronghold Langkaan', locationId: 'langkaan' },
+    { id: 'langkaan-field-2', name: 'Lower Ground', location: 'Delta Stronghold Langkaan', locationId: 'langkaan' },
+    { id: 'langkaan-field-3', name: 'Forest', location: 'Delta Stronghold Langkaan', locationId: 'langkaan' },
   ],
   binan: [
-    { id: 'binan-field-1', name: 'Upper Ground', location: 'LOMA Binan Laguna', minPlayersPrivate: 10, locationId: 'binan' },
-    { id: 'binan-field-2', name: 'Lower Ground', location: 'LOMA Binan Laguna', minPlayersPrivate: 20, locationId: 'binan' },
-    { id: 'binan-field-3', name: 'Forest', location: 'LOMA Binan Laguna', minPlayersPrivate: 50, locationId: 'binan' },
+    { id: 'binan-field-1', name: 'Upper Ground', location: 'LOMA Binan Laguna', locationId: 'binan' },
+    { id: 'binan-field-2', name: 'Lower Ground', location: 'LOMA Binan Laguna', locationId: 'binan' },
+    { id: 'binan-field-3', name: 'Forest', location: 'LOMA Binan Laguna', locationId: 'binan' },
   ],
 }
 
-const locationHectares: Record<LocationOption, number> = {
-  salawag: 2,
-  langkaan: 2,
-  binan: 4,
+// Most players a location takes in one slot. Matches the landing page and the server's
+// DEFAULT_LOCATION_CAPACITIES (server/routes/crud.js); later slots take slightly fewer.
+const locationMaxPlayers: Record<LocationOption, number> = {
+  salawag: 400,
+  langkaan: 400,
+  binan: 600,
 }
 
 function locationCapacityPerSlot(location: LocationOption, slot: TimeSlot): number {
-  const basePerHectare = 100
-  const hectares = locationHectares[location]
   const mult = slot === 'morning' ? 1.0 : slot === 'afternoon' ? 0.95 : 0.9
-  return Math.floor(hectares * basePerHectare * mult)
+  return Math.floor(locationMaxPlayers[location] * mult)
 }
 
 type SlotCapacities = Record<LocationOption, Record<TimeSlot, number>>
@@ -215,9 +215,9 @@ function getFieldById(fieldId: string): Field | undefined {
 }
 
 const locationOptions: { id: LocationOption; name: string; detail: string; capacity: string }[] = [
-  { id: 'salawag', name: 'Delta Stronghold (Salawag)', detail: 'Approximately 2 hectares.', capacity: '~200 players per slot' },
-  { id: 'langkaan', name: 'Delta Stronghold (Langkaan)', detail: 'Approximately 2 hectares.', capacity: '~200 players per slot' },
-  { id: 'binan', name: 'LOMA Binan Laguna', detail: 'Approximately 4 hectares.', capacity: '~400 players per slot' },
+  { id: 'salawag', name: 'Delta Stronghold (Salawag)', detail: 'Approximately 2 hectares.', capacity: 'Up to 400 players per slot' },
+  { id: 'langkaan', name: 'Delta Stronghold (Langkaan)', detail: 'Approximately 2 hectares.', capacity: 'Up to 400 players per slot' },
+  { id: 'binan', name: 'LOMA Binan Laguna', detail: 'Approximately 4 hectares.', capacity: 'Up to 600 players per slot' },
 ]
 
 const slotLabels: Record<TimeSlot, string> = {
@@ -227,6 +227,16 @@ const slotLabels: Record<TimeSlot, string> = {
 }
 
 const timeSlots: TimeSlot[] = ['morning', 'afternoon', 'evening']
+
+// Errors are shown as a label next to what they're about, not as a pop-up.
+function InlineError({ message, className = '' }: { message?: string | null; className?: string }) {
+  if (!message) return null
+  return (
+    <div role="alert" className={`flex items-start gap-2 rounded-2xl border border-danger/25 bg-danger/10 p-3 text-xs font-semibold text-danger ${className}`}>
+      <FiAlertCircle className="mt-0.5 shrink-0" aria-hidden /> <span>{message}</span>
+    </div>
+  )
+}
 
 function toISODate(d: Date) {
   const pad = (n: number) => String(n).padStart(2, '0')
@@ -290,6 +300,31 @@ const STEP_LABELS: Record<BookingStep, string> = {
 }
 // Public (weekend) games take bookings from a single player upward.
 const MIN_PLAYERS = 1
+
+const FIELD_COUNT_MINIMUMS = [0, 10, 20, 50]
+function fieldCountMinimum(fieldCount: number) {
+  return FIELD_COUNT_MINIMUMS[Math.min(Math.max(0, fieldCount), FIELD_COUNT_MINIMUMS.length - 1)]
+}
+
+// Upper Ground is the main field: a private booking is Upper Ground, Upper + Lower Ground, or all
+// three (fields are listed in that order). Matches the server's isAllowedFieldCombination.
+const FIELD_CHOICES = [
+  { count: 1, label: 'Upper Ground' },
+  { count: 2, label: 'Upper + Lower Ground' },
+  { count: 3, label: 'All 3 fields' },
+] as const
+
+function fieldChoiceIds(location: LocationOption, count: number): string[] {
+  return getFieldsForLocation(location).slice(0, Math.max(1, count)).map((field) => field.id)
+}
+
+// Fields are assigned from the group size: 10-19 players get Upper Ground, 20-49 get Upper + Lower
+// Ground, 50+ get all three.
+function fieldCountForPlayers(players: number): number {
+  if (players >= FIELD_COUNT_MINIMUMS[3]) return 3
+  if (players >= FIELD_COUNT_MINIMUMS[2]) return 2
+  return 1
+}
 
 export function ReservationCalendarPage() {
   const slotHours = useSlotHours()
@@ -421,19 +456,23 @@ export function ReservationCalendarPage() {
   }, [selectedLocation])
 
   const [selectedFieldIds, setSelectedFieldIds] = useState<string[]>(() => {
-    if (Array.isArray(draftState.selectedFieldIds)) return draftState.selectedFieldIds
-    const fields = getFieldsForLocation(landingPrefill?.location ?? 'salawag')
-    const prefilled = fields.find((f) => f.name === landingPrefill?.fieldArea)
-    if (prefilled) return [prefilled.id]
-    return fields.length > 0 ? [fields[0].id] : []
+    // Always one of the allowed choices; older drafts keep their number of fields.
+    if (Array.isArray(draftState.selectedFieldIds) && draftState.selectedFieldIds.length > 0) {
+      return fieldChoiceIds(draftState.selectedLocation ?? 'salawag', draftState.selectedFieldIds.length)
+    }
+    const location = landingPrefill?.location ?? 'salawag'
+    const prefilled = FIELD_CHOICES.find((choice) => choice.label === landingPrefill?.fieldArea)
+    return fieldChoiceIds(location, prefilled?.count ?? 1)
   })
 
-  const initialDateISO = toISODate(addDays(today, 1))
-  const todayDateISO = toISODate(today)
+  // Today is bookable until its last slot starts (Manila time); after that, start from tomorrow.
+  const todayDateISO = manilaTodayISO()
+  const todayStillOpen = timeSlots.some((s) => !slotHasStarted(DEFAULT_SLOT_HOURS, s, todayDateISO))
+  const initialDateISO = todayStillOpen ? todayDateISO : toISODate(addDays(new Date(`${todayDateISO}T12:00:00`), 1))
   // ISO dates compare correctly as strings; ignore a prefilled date that has already passed.
   const startDateISO =
     landingPrefill?.dateISO && landingPrefill.dateISO >= initialDateISO ? landingPrefill.dateISO : initialDateISO
-  const [dateISO, setDateISO] = useState<string>(() => (draftState.dateISO > todayDateISO ? draftState.dateISO : startDateISO))
+  const [dateISO, setDateISO] = useState<string>(() => (draftState.dateISO >= initialDateISO ? draftState.dateISO : startDateISO))
   const [slot, setSlot] = useState<TimeSlot>(() => draftState.slot ?? landingPrefill?.slot ?? 'morning')
   // One slot per booking. Drafts saved before this could hold several; keep the one being booked.
   const [selectedSlots, setSelectedSlots] = useState<TimeSlot[]>(() => {
@@ -446,18 +485,19 @@ export function ReservationCalendarPage() {
   // checkout). `slot` stays 'morning' then; the checks below look at all three slots.
   const [fullDay, setFullDay] = useState<boolean>(() => Boolean(draftState.fullDay))
   const bookedSlots: TimeSlot[] = fullDay ? timeSlots : [slot]
-  const [sessionType, setSessionType] = useState<SessionType>(() => (isWeekend(dateISO) ? 'public' : 'private'))
-
-  // Update selected fields when location changes
+  // Picking today (or still sitting on it as slots start) drops any choice that has already started
+  // and moves to the first slot still open.
   useEffect(() => {
-    const fields = getFieldsForLocation(selectedLocation)
-    if (fields.length > 0) {
-      setSelectedFieldIds(prev => {
-        const validIds = prev.filter(id => fields.some(f => f.id === id))
-        return validIds.length > 0 ? validIds : [fields[0].id]
-      })
-    }
-  }, [selectedLocation])
+    if (dateISO !== todayDateISO) return
+    const picked: TimeSlot[] = fullDay ? timeSlots : [slot]
+    if (!picked.some((s) => slotHasStarted(slotHours, s, dateISO))) return
+    const firstOpen = timeSlots.find((s) => !slotHasStarted(slotHours, s, dateISO))
+    setFullDay(false)
+    setSlotTouched(false)
+    setSelectedSlots([])
+    if (firstOpen) setSlot(firstOpen)
+  }, [dateISO, todayDateISO, fullDay, slot, slotHours])
+  const [sessionType, setSessionType] = useState<SessionType>(() => (isWeekend(dateISO) ? 'public' : 'private'))
 
   // Fetch only the minimal future slot data used for availability indicators.
   const fetchReservations = useCallback(async (silent = false) => {
@@ -565,9 +605,16 @@ export function ReservationCalendarPage() {
   // Extra BB reloads bought with the booking, on top of what the package gives.
   const [extraAmmoReloads, setExtraAmmoReloads] = useState<number>(() => Number(draftState.extraAmmoReloads) || 0)
   const [ammoReloadPrice, setAmmoReloadPrice] = useState(DEFAULT_AMMO_RELOAD_PRICE)
+  // Inline error labels, one per area of the page.
+  const [slotError, setSlotError] = useState<string | null>(null)
+  const [teamError, setTeamError] = useState<string | null>(null)
+  const [blueprintError, setBlueprintError] = useState<string | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [confirmError, setConfirmError] = useState<string | null>(null)
   const uploadBlueprint = async (file: File): Promise<boolean> => {
-    if (!file.type.startsWith('image/')) { toast.error('Upload an image file (PNG or JPG).'); return false }
-    if (file.size > 5 * 1024 * 1024) { toast.error('The image must be 5 MB or smaller.'); return false }
+    setBlueprintError(null)
+    if (!file.type.startsWith('image/')) { setBlueprintError('Upload an image file (PNG or JPG).'); return false }
+    if (file.size > 5 * 1024 * 1024) { setBlueprintError('The image must be 5 MB or smaller.'); return false }
     setUploadingBlueprint(true)
     try {
       const formData = new FormData()
@@ -578,7 +625,7 @@ export function ReservationCalendarPage() {
       setLayoutBlueprintUrl(json.url)
       return true
     } catch (e: any) {
-      toast.error(e?.message || 'Could not upload the blueprint')
+      setBlueprintError(e?.message || 'Could not upload the blueprint')
       return false
     } finally {
       setUploadingBlueprint(false)
@@ -642,17 +689,18 @@ export function ReservationCalendarPage() {
 
   const addTeammate = (member: TeamMember) => {
     if (!member.waiverSubmitted) {
-      toast.error(`${member.name} hasn't signed their waiver yet.`)
+      setTeamError(`${member.name} hasn't signed their waiver yet.`)
       return
     }
     if (selectedTeammateIds.includes(member.id)) {
-      toast.error(`${member.name} is already on your team.`)
+      setTeamError(`${member.name} is already on your team.`)
       return
     }
     if (selectedTeammates.length >= Math.max(0, players - 1)) {
-      toast.error('Your team is full for this many players. Increase the player count to add more.')
+      setTeamError('Your team is full for this many players. Increase the player count to add more.')
       return
     }
+    setTeamError(null)
     setSelectedTeammates((current) => [...current, member])
     setTeamEmail('')
     setTeamLookup({ status: 'idle' })
@@ -665,13 +713,14 @@ export function ReservationCalendarPage() {
     const kid = teamChildren.find((child) => child.id === childId)
     if (!kid || selectedTeammateIds.includes(kid.id)) return
     if (!kid.canPlay) {
-      toast.error(`${kid.name} needs a confirmed guardian and an approved waiver first.`)
+      setTeamError(`${kid.name} needs a confirmed guardian and an approved waiver first.`)
       return
     }
     if (selectedTeammates.length >= Math.max(0, players - 1)) {
-      toast.error('Every player spot is filled. Go back and raise the number of players to add a minor (each player pays the entrance fee).')
+      setTeamError('Every player spot is filled. Go back and raise the number of players to add a minor (each player pays the entrance fee).')
       return
     }
+    setTeamError(null)
     setSelectedTeammates((current) => [...current, {
       id: kid.id,
       name: kid.name,
@@ -814,7 +863,7 @@ export function ReservationCalendarPage() {
           price: typeof d.price === 'number' ? d.price : 0,
         })))
       } catch (e: any) {
-        if (!cancelled) toast.error(String(e?.message || e))
+        if (!cancelled) setLoadError(`Couldn't load packages and gear: ${String(e?.message || e)}`)
       } finally {
         if (!cancelled) setLoadingPackages(false)
       }
@@ -837,10 +886,10 @@ export function ReservationCalendarPage() {
         const wepDocs = Array.isArray(wepRes?.data) ? wepRes.data : []
         const eqDocs = Array.isArray(eqRes?.data) ? eqRes.data : []
         const approvedWeapons = wepDocs.filter(
-          (d: any) => String(d.submittedBy) === String(user.id) && d.approvalStatus === 'approved'
+          (d: any) => String(d.submittedBy) === String(user.id) && d.approvalStatus !== 'rejected'
         )
         const approvedEquipment = eqDocs.filter(
-          (d: any) => String(d.submittedBy) === String(user.id) && d.approvalStatus === 'approved'
+          (d: any) => String(d.submittedBy) === String(user.id) && d.approvalStatus !== 'rejected'
         )
         setPlayerApprovedWeapons(approvedWeapons)
         setPlayerApprovedEquipment(approvedEquipment)
@@ -992,36 +1041,11 @@ export function ReservationCalendarPage() {
       r.locationId === selectedLocation)
   ), [isWd, reservations, dateISO, selectedLocation])
 
-  const isUpperGroundTaken = useCallback((slotToCheck: TimeSlot): boolean => {
-    const upper = getFieldsForLocation(selectedLocation).find((f) =>
-      f.name.toLowerCase().includes('upper'),
-    )
-    return upper ? !isFieldSlotAvailable(upper.id, slotToCheck) : false
-  }, [selectedLocation, isFieldSlotAvailable])
-
-  const isLowerGroundTaken = useCallback((slotToCheck: TimeSlot): boolean => {
-    const lower = getFieldsForLocation(selectedLocation).find((f) =>
-      f.name.toLowerCase().includes('lower'),
-    )
-    return lower ? !isFieldSlotAvailable(lower.id, slotToCheck) : false
-  }, [selectedLocation, isFieldSlotAvailable])
-
-  // Single source of truth for the minimum players of a field selection (matches the server's
-  // effectiveFieldMinimum): each field's own minimum for this slot, and the largest one wins.
-  const getMinPlayersForSelection = useCallback((ids: string[], slotToCheck: TimeSlot): number => {
-    if (ids.length === 0) return 0
-    return ids.reduce((max, id) => {
-      const field = getFieldById(id)
-      if (!field) return max
-      const name = field.name.toLowerCase()
-      let min = field.minPlayersPrivate
-      // Lower Ground opens to 10 when Upper Ground is taken
-      if (name.includes('lower') && isUpperGroundTaken(slotToCheck)) min = 10
-      // Forest opens to 10 when BOTH Upper and Lower Ground are taken
-      if (name.includes('forest') && isUpperGroundTaken(slotToCheck) && isLowerGroundTaken(slotToCheck)) min = 10
-      return Math.max(max, min)
-    }, 0)
-  }, [isUpperGroundTaken, isLowerGroundTaken])
+  // Private games: the minimum depends on how many fields are picked (matches the server's
+  // fieldCountMinimum): 1 field needs 10 players, 2 fields 20, all 3 fields 50.
+  const getMinPlayersForSelection = useCallback((ids: string[], _slotToCheck?: TimeSlot): number => {
+    return fieldCountMinimum(ids.filter((id) => getFieldById(id)).length)
+  }, [])
 
   const getFieldSelectionValidity = useCallback(
     (candidateIds: string[], playersCount: number, slotToCheck: TimeSlot) => {
@@ -1053,23 +1077,22 @@ export function ReservationCalendarPage() {
     return getFieldSelectionValidity(selectedFieldIds, players, slot)
   }, [getFieldSelectionValidity, players, selectedFieldIds, sessionType, slot])
 
-  // On weekdays, drop selected fields that are no longer available for the slot
+  // Fields are assigned automatically from the group size. If a needed field is already booked for
+  // the slot, the group gets the largest set that is still free (every set includes Upper Ground,
+  // so nothing is left once Upper Ground is booked).
+  const wantedFieldCount = fieldCountForPlayers(players)
+  const autoFieldIds = useMemo(() => {
+    let count = wantedFieldCount
+    while (count > 0 && isWd && !fieldChoiceIds(selectedLocation, count).every((id) => isFieldSlotAvailable(id, slot))) count -= 1
+    return count > 0 ? fieldChoiceIds(selectedLocation, count) : []
+  }, [wantedFieldCount, isWd, isFieldSlotAvailable, selectedLocation, slot])
+
   useEffect(() => {
-    if (!isWd) return
-
     setSelectedFieldIds((prev) => {
-      const stillAvailable = prev.filter((fieldId) => isFieldSlotAvailable(fieldId, slot))
-      if (stillAvailable.length > 0) {
-        const unchanged = stillAvailable.length === prev.length && stillAvailable.every((id, idx) => id === prev[idx])
-        return unchanged ? prev : stillAvailable
-      }
-
-      const firstAvailable = availableFields.find((field) => isFieldSlotAvailable(field.id, slot))
-      const fallback = firstAvailable ? [firstAvailable.id] : []
-      const unchanged = fallback.length === prev.length && fallback.every((id, idx) => id === prev[idx])
-      return unchanged ? prev : fallback
+      const unchanged = autoFieldIds.length === prev.length && autoFieldIds.every((id, idx) => id === prev[idx])
+      return unchanged ? prev : autoFieldIds
     })
-  }, [availableFields, dateISO, isWd, isFieldSlotAvailable, reservations, selectedLocation, slot])
+  }, [autoFieldIds])
 
   // Check if a specific slot is fully booked for ALL fields at this location
   const isSlotFullyBooked = (slotToCheck: TimeSlot): boolean => {
@@ -1116,7 +1139,8 @@ export function ReservationCalendarPage() {
 
   const remainingSlots = maxCapacity - usedPlayers
   const hasRequiredSlotSelection = isWd ? slotTouched : selectedSlots.length > 0
-  const canProceed = hasRequiredSlotSelection && remainingSlots >= players && meetsFieldRequirements
+  const pickedSlotStarted = bookedSlots.some((s) => slotHasStarted(slotHours, s, dateISO))
+  const canProceed = hasRequiredSlotSelection && !pickedSlotStarted && remainingSlots >= players && meetsFieldRequirements
 
   const slotOverview = useMemo(() => {
     const cap = maxCapacity
@@ -1430,7 +1454,7 @@ export function ReservationCalendarPage() {
       return true
     } catch (e: any) {
       setSlotHoldExpiresAt(null)
-      toast.error(e?.message || 'That slot was just taken. Please choose another one.')
+      setSlotError(e?.message || 'That slot was just taken. Please choose another one.')
       fetchReservations(true)
       if (silent) setStep(1)
       return false
@@ -1493,8 +1517,16 @@ export function ReservationCalendarPage() {
     return () => window.clearInterval(timer)
   }, [canHoldWhileBrowsing, slotHoldExpiresAt, placeBrowsingHold])
 
+  useEffect(() => {
+    setTeamError(null)
+    setBlueprintError(null)
+    setConfirmError(null)
+  }, [step])
+  useEffect(() => { setSlotError(null) }, [dateISO, slot, fullDay, selectedLocation])
+
   const goToStep2 = async () => {
     setPlacingHold(true)
+    setSlotError(null)
     const held = await placeSlotHold()
     setPlacingHold(false)
     if (held) setStep(soloBooking ? 3 : 2)
@@ -1563,23 +1595,24 @@ export function ReservationCalendarPage() {
   )
 
   const handleConfirm = async () => {
+    setConfirmError(null)
     if (!user?.id) {
-      toast.error('Please login to continue.')
+      setConfirmError('Please login to continue.')
       return
     }
 
     if (!hasCurrentUserWaiver) {
-      toast.error('Your waiver must be approved before you can make a reservation.')
+      setConfirmError('Your waiver must be approved before you can make a reservation.')
       return
     }
 
     if (!hasRequiredSlotSelection) {
-      toast.error('Please select a time slot before proceeding.')
+      setConfirmError('Please select a time slot before proceeding.')
       return
     }
 
     if (sessionType === 'private' && !meetsFieldRequirements) {
-      toast.error('The selected field combination is not valid for the current group size.')
+      setConfirmError('The selected field combination is not valid for the current group size.')
       return
     }
 
@@ -1588,7 +1621,7 @@ export function ReservationCalendarPage() {
         isFieldSlotAvailable(fieldId, slot)
       )
       if (!isAvailable) {
-        toast.error('One or more selected fields are no longer available for this time slot.')
+        setConfirmError('One or more selected fields are no longer available for this time slot.')
         return
       }
     }
@@ -1596,33 +1629,33 @@ export function ReservationCalendarPage() {
     const currentRemaining = maxCapacity - usedPlayers
 
     if (players > currentRemaining) {
-      toast.error(`Only ${currentRemaining} slots remaining. Please reduce players.`)
+      setConfirmError(`Only ${currentRemaining} slots remaining. Please reduce players.`)
       return
     }
 
     if (!canProceed || players < effectiveMinPlayers) {
-      toast.error('Invalid reservation details. Please check your selections.')
+      setConfirmError('Invalid reservation details. Please check your selections.')
       return
     }
 
     if (selectionMode === 'package' && !selectedPackage) {
-      toast.error('Please select a package.')
+      setConfirmError('Please select a package.')
       return
     }
 
     if (selectedTeammateIds.length > maxTeammates) {
-      toast.error(`You can add at most ${maxTeammates} teammate${maxTeammates === 1 ? '' : 's'} for ${players} players.`)
+      setConfirmError(`You can add at most ${maxTeammates} teammate${maxTeammates === 1 ? '' : 's'} for ${players} players.`)
       return
     }
     if (!teamSelectionComplete) {
-      toast.error(`Add ${missingTeammates} more registered teammate${missingTeammates === 1 ? '' : 's'}. Every player needs an account.`)
+      setConfirmError(`Add ${missingTeammates} more registered teammate${missingTeammates === 1 ? '' : 's'}. Every player needs an account.`)
       return
     }
 
     // Every selected teammate must have a waiver too
     const teammateWithoutWaiver = selectedTeammates.find((member) => !member.waiverSubmitted)
     if (teammateWithoutWaiver) {
-      toast.error(`${teammateWithoutWaiver.name}'s waiver isn't approved yet.`)
+      setConfirmError(`${teammateWithoutWaiver.name}'s waiver isn't approved yet.`)
       return
     }
 
@@ -1705,7 +1738,7 @@ export function ReservationCalendarPage() {
       toast.success('Proceed to payment to complete your reservation.')
       navigate('/app/payment')
     } catch (e: any) {
-      toast.error(e instanceof Error ? e.message : 'Failed to process reservation')
+      setConfirmError(e instanceof Error ? e.message : 'Failed to process reservation')
     } finally {
       setIsConfirming(false)
     }
@@ -1834,7 +1867,7 @@ export function ReservationCalendarPage() {
               </div>
               <p className="mt-1 text-xs text-muted">
                 {isWd
-                  ? 'Weekdays: Private sessions only. Fields can be shared until the time slot is full. Minimum 10 players.'
+                  ? 'Weekdays: Private sessions only. Fields can be shared until the time slot is full. Minimum players: 10 for 1 field, 20 for 2, 50 for all 3.'
                   : 'Weekends: Public sessions only. Multiple time slots available.'}
               </p>
 
@@ -1860,7 +1893,8 @@ export function ReservationCalendarPage() {
 
                                 const d = new Date(iso + 'T12:00:00')
                                 const active = iso === dateISO
-                                const isPastOrToday = iso <= todayDateISO
+                                // Today stays open while it still has a slot that hasn't started.
+                                const isPastOrToday = iso < todayDateISO || (iso === todayDateISO && timeSlots.every((ts) => slotHasStarted(slotHours, ts, iso)))
                                 const isWd = isWeekday(iso)
                                 const cause = causeDays[iso]
 
@@ -1914,6 +1948,7 @@ export function ReservationCalendarPage() {
                       <div className="py-4 text-center text-sm text-muted">Loading slots...</div>
                     ) : (
                       [...timeSlots].sort(slotSort).map((s) => {
+                        const started = slotHasStarted(slotHours, s, dateISO)
                         const isSlotFull = isSlotFullyBooked(s)
                         const slotFields = getAvailableFieldsForSlot(s)
                         const unavailableFields = isWd
@@ -1922,8 +1957,12 @@ export function ReservationCalendarPage() {
                         const active = !fullDay && (isWd ? slotTouched && s === slot : selectedSlots.includes(s))
 
                         const handleSlotClick = () => {
+                          if (started) {
+                            setSlotError(`Today's ${slotLabels[s]} slot has already started. Pick a later slot or another day.`)
+                            return
+                          }
                           if (isSlotFull) {
-                            toast.error(`All fields are booked for ${slotLabels[s]}`)
+                            setSlotError(`All fields are booked for ${slotLabels[s]}. Pick another slot or day.`)
                             return
                           }
                           setFullDay(false)
@@ -1945,11 +1984,11 @@ export function ReservationCalendarPage() {
                             role="radio"
                             aria-checked={active}
                             onClick={handleSlotClick}
-                            disabled={isSlotFull}
+                            disabled={isSlotFull || started}
                             className={[
                               'rounded-2xl border p-3 text-left transition',
                               active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
-                              isSlotFull ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer',
+                              isSlotFull || started ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer',
                             ].join(' ')}
                           >
                             <div className="flex items-center justify-between gap-3">
@@ -1962,14 +2001,16 @@ export function ReservationCalendarPage() {
                               <div className="min-w-0 flex-1">
                                 <div className="text-sm font-bold">{slotLabels[s]} <span className="text-xs font-semibold text-muted">{formatSlotRange(slotHours, s)}</span></div>
                                 {/* Only what's not available is listed; nothing when every field is open. */}
-                                {isSlotFull || unavailableFields.length > 0 ? (
+                                {started || isSlotFull || unavailableFields.length > 0 ? (
                                   <div className="mt-1 text-xs flex items-center gap-2 text-danger">
                                     <FiClock />
-                                    <span>{isSlotFull ? 'Fully booked' : `Unavailable: ${unavailableFields.map((f) => f.name).join(', ')}`}</span>
+                                    <span>{started ? 'Already started today' : isSlotFull ? 'Fully booked' : `Unavailable: ${unavailableFields.map((f) => f.name).join(', ')}`}</span>
                                   </div>
                                 ) : null}
                               </div>
-                              {isSlotFull ? (
+                              {started ? (
+                                <div className="rounded-2xl px-3 py-1 text-xs font-bold bg-[rgba(var(--text),0.08)] text-muted">STARTED</div>
+                              ) : isSlotFull ? (
                                 <div className="rounded-2xl px-3 py-1 text-xs font-bold bg-danger/15 text-danger">FULL</div>
                               ) : (
                                 <div className="rounded-2xl px-3 py-1 text-xs font-bold bg-success/15 text-success">AVAILABLE</div>
@@ -1981,6 +2022,7 @@ export function ReservationCalendarPage() {
                     )}
                     {!loadingReservations ? (() => {
                       // Full day: all three slots, priced and booked as three slots, paid at one checkout.
+                      const fullDayStarted = slotHasStarted(slotHours, 'morning', dateISO)
                       const fullSlot = timeSlots.find((s) => isSlotFullyBooked(s))
                       const dayStart = formatSlotRange(slotHours, 'morning').split(/\s[–-]\s/)[0]
                       const dayEnd = formatSlotRange(slotHours, 'evening').split(/\s[–-]\s/).pop()
@@ -1989,10 +2031,14 @@ export function ReservationCalendarPage() {
                           type="button"
                           role="radio"
                           aria-checked={fullDay}
-                          disabled={Boolean(fullSlot)}
+                          disabled={Boolean(fullSlot) || fullDayStarted}
                           onClick={() => {
+                            if (fullDayStarted) {
+                              setSlotError("Today's morning slot has already started, so a full day isn't available.")
+                              return
+                            }
                             if (fullSlot) {
-                              toast.error(`${slotLabels[fullSlot]} is fully booked, so a full day isn't available.`)
+                              setSlotError(`${slotLabels[fullSlot]} is fully booked, so a full day isn't available.`)
                               return
                             }
                             setFullDay(true)
@@ -2003,7 +2049,7 @@ export function ReservationCalendarPage() {
                           className={[
                             'rounded-2xl border p-3 text-left transition',
                             fullDay ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
-                            fullSlot ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer',
+                            fullSlot || fullDayStarted ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer',
                           ].join(' ')}
                         >
                           <div className="flex items-center justify-between gap-3">
@@ -2012,7 +2058,9 @@ export function ReservationCalendarPage() {
                             </span>
                             <div className="min-w-0 flex-1">
                               <div className="text-sm font-bold">Full day <span className="text-xs font-semibold text-muted">{dayStart} – {dayEnd}</span></div>
-                              {fullSlot ? (
+                              {fullDayStarted ? (
+                                <div className="mt-1 text-xs text-danger">Today's morning slot has already started</div>
+                              ) : fullSlot ? (
                                 <div className="mt-1 text-xs text-danger">{slotLabels[fullSlot]} is fully booked</div>
                               ) : null}
                             </div>
@@ -2071,98 +2119,93 @@ export function ReservationCalendarPage() {
               </div>
             </Card>
 
-            {/* Public games are an open roster: the marshals place players, so there is no field to pick. */}
+            {/* Public games are an open roster on every field: the marshals place players, so there is no field to pick. */}
+            {publicGame && (
+            <Card className="p-4 md:p-6">
+              <div className="flex items-center gap-2 text-sm font-bold">
+                <FiMapPin /> <span>Field</span>
+              </div>
+              <div className="mt-3 flex items-start gap-3 rounded-2xl border border-accent/40 bg-accent/10 p-3 ring-2 ring-accent/25">
+                <span aria-hidden className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full border-2 border-accent bg-accent text-white">
+                  <FiCheck className="h-3 w-3" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-bold">All 3 fields</div>
+                  <div className="mt-1 text-xs text-muted">{availableFields.map((f) => f.name).join(' · ')}</div>
+                  <div className="mt-1 text-xs text-muted">Public games use every field. The marshals place players on arrival.</div>
+                </div>
+              </div>
+            </Card>
+            )}
             {!publicGame && (
             <Card className="p-4 md:p-6">
               <div className="flex items-center gap-2 text-sm font-bold">
                 <FiMapPin /> <span>Field</span>
               </div>
-              <p className="mt-1 text-xs text-muted">Pick the specific field at the selected location.</p>
+              <p className="mt-1 text-xs text-muted">Assigned automatically from your group size. Change the number of players to change your fields.</p>
 
               {loadingReservations ? (
                 <div className="mt-4 text-sm text-muted">Loading availability...</div>
               ) : (
                 <div className="mt-4 grid gap-3 sm:grid-cols-3">
-                  {availableFields.map((f) => {
-                    const active = selectedFieldIds.includes(f.id)
-                    const isFieldBooked = isWd && !isFieldSlotAvailable(f.id, slot)
-                    const beingBooked = isFieldBooked && isFieldBeingBooked(f.id, slot)
-                    const isDisabled = isFieldBooked && !active
+                  {FIELD_CHOICES.map((choice) => {
+                    const names = availableFields.slice(0, choice.count).map((f) => f.name)
+                    const active = selectedFieldIds.length === choice.count
+                    const bookedField = isWd ? availableFields.slice(0, choice.count).find((f) => !isFieldSlotAvailable(f.id, slot)) : undefined
+                    const beingBooked = Boolean(bookedField && isFieldBeingBooked(bookedField.id, slot))
 
                     return (
-                      <label
-                        key={f.id}
+                      <div
+                        key={choice.count}
+                        aria-current={active ? 'true' : undefined}
                         className={[
                           'flex items-start gap-3 rounded-2xl border p-3 text-left transition',
-                          active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
-                          isDisabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer',
-                          isFieldBooked && !active ? 'bg-danger/5 border-danger/20' : '',
+                          active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 opacity-60',
+                          bookedField && !active ? 'bg-danger/5 border-danger/20' : '',
                         ].join(' ')}
                       >
-                        <input
-                          type="checkbox"
-                          checked={active}
-                          disabled={isDisabled}
-                          onChange={() => {
-                            if (isDisabled) {
-                              if (isFieldBooked) {
-                                toast.error(beingBooked
-                                  ? `Someone is booking ${f.name} for ${slotLabels[slot]} right now. Try again in a few minutes or pick another field.`
-                                  : `${f.name} is already booked for ${slotLabels[slot]}`)
-                              }
-                              return
-                            }
-                            setSelectedFieldIds((prev) => {
-                              if (prev.includes(f.id)) return prev.filter((id) => id !== f.id)
-                              return [...prev, f.id]
-                            })
-                          }}
-                          className="mt-1 h-4 w-4 rounded border-white/20 bg-transparent accent-accent"
-                        />
-                        <div className="flex-1">
-                          <div className="flex items-center justify-between">
-                            <div className="text-sm font-bold">{f.name}</div>
-                            {sessionType === 'private' && (
-                              <div className="text-[10px] text-muted bg-black/30 px-2 py-0.5 rounded-full">
-                                Min {getMinPlayersForSelection([f.id], slot)} players
-                              </div>
-                            )}
-                            {isFieldBooked && !active && (
-                              <div className={`rounded-full px-2 py-0.5 text-[10px] ${beingBooked ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400' : 'bg-danger/10 text-danger'}`}>
-                                {beingBooked ? 'BEING BOOKED' : 'BOOKED'}
-                              </div>
-                            )}
+                        <span aria-hidden className={`mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full border-2 ${active ? 'border-accent bg-accent text-white' : 'border-[rgba(var(--text),0.3)]'}`}>
+                          {active ? <FiCheck className="h-3 w-3" /> : null}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="text-sm font-bold">{choice.label}</div>
+                            <div className="shrink-0 rounded-full bg-[rgba(var(--text),0.08)] px-2 py-0.5 text-[10px] font-semibold text-muted">{fieldCountMinimum(choice.count)}+ players</div>
                           </div>
-                          <div className="mt-1 text-xs text-muted">{f.location}</div>
-                          {isFieldBooked && !active && (
+                          <div className="mt-1 text-xs text-muted">{names.join(' · ')}</div>
+                          {active ? <div className="mt-1 text-xs font-semibold text-accent">Your fields</div> : null}
+                          {bookedField && !active ? (
                             <div className={`mt-1 text-xs ${beingBooked ? 'text-amber-600 dark:text-amber-400' : 'text-danger'}`}>
-                              {beingBooked ? 'Another player is booking it right now' : 'Already reserved for this time slot'}
+                              {beingBooked ? `${bookedField.name} is being booked right now` : `${bookedField.name} is already reserved for this slot`}
                             </div>
-                          )}
+                          ) : null}
                         </div>
-                      </label>
+                      </div>
                     )
                   })}
                 </div>
               )}
 
+              {sessionType === 'private' && !loadingReservations && selectedFieldIds.length === 0 ? (
+                <div className="mt-3 text-xs font-semibold text-danger">Upper Ground is already booked for this slot. Pick another time slot or date.</div>
+              ) : sessionType === 'private' && !loadingReservations && selectedFieldIds.length < wantedFieldCount ? (
+                <div className="mt-3 text-xs font-semibold text-amber-600 dark:text-amber-400">
+                  Your group would normally get {FIELD_CHOICES[wantedFieldCount - 1].label}, but some of those fields are already booked for this slot. You get {FIELD_CHOICES[selectedFieldIds.length - 1].label} instead.
+                </div>
+              ) : null}
+
               {sessionType === 'private' && (
                 <div className="mt-4 rounded-2xl border border-accent/20 bg-accent/5 p-4">
                   <div className="text-xs font-bold text-accent">Field Requirements</div>
                   <div className="mt-2 space-y-1 text-xs text-muted">
-                    <div>• Upper Ground: Minimum 10 players</div>
-                    <div>
-                      • Lower Ground: Minimum 20 players
-                      {isUpperGroundTaken(slot) && (
-                        <span className="text-accent"> (Upper Ground is taken, so minimum is 10 for this slot)</span>
-                      )}
-                    </div>
-                    <div>
-                      • Forest: Minimum 50 players
-                      {isUpperGroundTaken(slot) && isLowerGroundTaken(slot) && (
-                        <span className="text-accent"> (Upper and Lower Ground are taken, so minimum is 10 for this slot)</span>
-                      )}
-                    </div>
+                    {[1, 2, 3].map((count) => {
+                      const current = selectedFieldIds.length === count
+                      return (
+                        <div key={count} className={current ? 'font-semibold text-accent' : ''}>
+                          • {fieldCountMinimum(count)}{count < 3 ? `–${fieldCountMinimum(count + 1) - 1}` : '+'} players: {FIELD_CHOICES[count - 1].label}{current ? ' (your group)' : ''}
+                        </div>
+                      )
+                    })}
                     <div className="mt-2 text-accent/80">
                       Current selection requires at least {minPlayersForFields} players
                       {players < minPlayersForFields && (
@@ -2344,6 +2387,7 @@ export function ReservationCalendarPage() {
                 </div>
               ) : null}
 
+              <InlineError className="mt-4" message={slotError} />
               {sessionType === 'private' && browsingHoldError ? (
                 <div className="mt-4 rounded-2xl border border-danger/25 bg-danger/10 p-3 text-xs font-semibold text-danger">
                   {browsingHoldError}
@@ -2362,8 +2406,7 @@ export function ReservationCalendarPage() {
                   const newDateISO = toISODate(addDays(today, 1))
                   const newIsWeekend = isWeekend(newDateISO)
                   const newDefault = newIsWeekend ? 1 : 10
-                  const fields = getFieldsForLocation(selectedLocation)
-                  setSelectedFieldIds(fields.length > 0 ? [fields[0].id] : [])
+                  setSelectedFieldIds(fieldChoiceIds(selectedLocation, 1))
                   setDateISO(newDateISO)
                   setSlot('morning')
                   setSlotTouched(false)
@@ -2451,6 +2494,7 @@ export function ReservationCalendarPage() {
                   </div>
                 ) : null}
 
+                <InlineError message={teamError} />
                 {teamLookup.status === 'error' && (
                   <div className="rounded-2xl border border-danger/30 bg-danger/10 p-3 text-sm text-danger">{teamLookup.error}</div>
                 )}
@@ -2640,6 +2684,7 @@ export function ReservationCalendarPage() {
                   </div>
                   <p className="mt-1 text-xs text-muted">Select a rental package. These are managed by the admin.</p>
 
+                  <InlineError className="mt-4" message={loadError} />
                   {loadingPackages ? (
                     <div className="mt-4 text-sm text-muted">Loading packages...</div>
                   ) : packages.length === 0 ? (
@@ -2839,12 +2884,12 @@ export function ReservationCalendarPage() {
               <div className="flex items-center gap-2 text-sm font-bold">
                 <FiTool /> <span>Bring Your Own (Free)</span>
               </div>
-              <p className="mt-1 text-xs text-muted">Bringing your own weapon? Mark it here and rent fewer weapons above. Only weapons registered and approved on a player's profile count.</p>
+              <p className="mt-1 text-xs text-muted">Bringing your own weapon? Mark it here and rent fewer weapons above. Only weapons added to a player's profile count.</p>
 
 
               {playerApprovedWeapons.length === 0 && playerApprovedEquipment.length === 0 ? (
                 <div className="mt-4 text-sm text-muted">
-                  No approved items yet. Go to{" "}
+                  No weapons or gear added yet. Go to{" "}
                   <button
                     type="button"
                     className="text-gold underline"
@@ -2852,7 +2897,7 @@ export function ReservationCalendarPage() {
                   >
                     My Weapons & Gear
                   </button>{" "}
-                  to submit gear for admin approval.
+                  to add yours.
                 </div>
               ) : (
                 <div className="mt-4 grid gap-4">
@@ -3049,6 +3094,10 @@ export function ReservationCalendarPage() {
 
               </div>
 
+              {hasInsufficientEquipmentStock ? (() => {
+                const shortage = equipmentStockCheck.find((item) => !item.ok)
+                return <InlineError className="mt-4" message={`${shortage?.name || 'Gear'}: needs ${shortage?.required ?? players}, only ${shortage?.available ?? 0} free this slot. Pick other gear or another slot.`} />
+              })() : null}
               <div className="mt-4 flex flex-col gap-2 sm:flex-row">
                 <Button variant="ghost" onClick={() => setStep(soloBooking ? 1 : 2)}>Back</Button>
                 <Button
@@ -3060,11 +3109,7 @@ export function ReservationCalendarPage() {
                     hasInsufficientEquipmentStock
                   }
                   onClick={() => {
-                    if (hasInsufficientEquipmentStock) {
-                      const shortage = equipmentStockCheck.find((item) => !item.ok)
-                      toast.error(`${shortage?.name || 'Gear'}: needs ${shortage?.required ?? players}, only ${shortage?.available ?? 0} free this slot.`)
-                      return
-                    }
+                    if (hasInsufficientEquipmentStock) return
                     setStep(publicGame ? 5 : 4)
                   }}
                 >
@@ -3173,6 +3218,7 @@ export function ReservationCalendarPage() {
                   onChange={(e) => setNotes(e.target.value)}
                 />
               </div>
+              {!layoutDesignerOpen ? <InlineError className="mt-4" message={blueprintError} /> : null}
               <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4 text-xs text-muted">
                 <div><span className="font-semibold text-text">Mode:</span> {gameModePreference}</div>
                 <div className="mt-1"><span className="font-semibold text-text">Layout:</span> {layoutBlueprintUrl ? (fieldLayoutItems.length > 0 ? `Designed (${fieldLayoutItems.length} pieces)` : 'Sketch uploaded') : 'Marshal decides'}</div>
@@ -3191,7 +3237,8 @@ export function ReservationCalendarPage() {
             fieldName={(availableFields.filter((f) => selectedFieldIds.includes(f.id)).map((f) => f.name).join(' + ') || 'Field')}
             initialItems={fieldLayoutItems}
             saving={uploadingBlueprint}
-            onClose={() => setLayoutDesignerOpen(false)}
+            error={blueprintError}
+            onClose={() => { setLayoutDesignerOpen(false); setBlueprintError(null) }}
             onSave={async (items, image) => {
               const ok = await uploadBlueprint(image)
               if (!ok) return
@@ -3439,6 +3486,7 @@ export function ReservationCalendarPage() {
                 </div>
               </div>
 
+              <InlineError className="mt-4" message={confirmError} />
               <div className="mt-4 flex flex-col gap-2">
                 <Button variant="ghost" onClick={() => setStep(publicGame ? 3 : 4)}>Back</Button>
                 <Button
@@ -3517,7 +3565,7 @@ export function ReservationCalendarPage() {
               <div>
                 <div id="no-weapon-title" className="text-base font-bold">No registered weapon on file</div>
                 <p className="mt-2 text-sm text-muted">
-                  {noWeaponWarning.name} hasn't registered an approved weapon on their profile, so it can't be counted as an own weapon.
+                  {noWeaponWarning.name} hasn't added a weapon to their profile, so it can't be counted as an own weapon.
                   If you keep them marked, they'll still be charged for a rental weapon.
                 </p>
               </div>

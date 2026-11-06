@@ -11,6 +11,7 @@ import { DEFAULT_PAGE_SIZE, Pagination } from '../../components/ui/Pagination'
 import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
 import { useAuth } from '../../context/AuthContext'
 import { LOCATIONS } from '../operations/shared'
+import { BookingPlayersSection } from '../../components/reservations/BookingPlayersSection'
 
 type GameplayStatus = 'Scheduled' | 'Ongoing' | 'Completed' | 'Cancelled' | 'Archived'
 
@@ -183,7 +184,8 @@ function rowId(doc: GameplayDoc) {
   return String(doc.reservationId || '')
 }
 
-export function RegistrarOngoingGamesPage() {
+// `embedded`: shown as a tab inside the admin Bookings page, which supplies the title and tabs.
+export function RegistrarOngoingGamesPage({ embedded = false }: { embedded?: boolean } = {}) {
   const navigate = useNavigate()
   const [items, setItems] = useState<GameplayDoc[]>([])
   const [loading, setLoading] = useState(true)
@@ -377,6 +379,7 @@ export function RegistrarOngoingGamesPage() {
 
   return (
     <div className="space-y-4">
+      {!embedded ? (
       <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
         <div className="space-y-2">
           <div className="text-sm font-medium text-accent">Games</div>
@@ -388,6 +391,7 @@ export function RegistrarOngoingGamesPage() {
           Archived Games
         </Button>
       </div>
+      ) : null}
 
       <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
         <Card className="rounded-xl px-3 py-2 md:px-3 md:py-2">
@@ -669,7 +673,9 @@ function GameDetailsDialog({
 
   return (
     <Modal eyebrow={`Game ${rowId(doc)}`} title={formatSchedule(doc)} onClose={onClose} footer={actions}>
-      <div className="grid gap-4 md:grid-cols-2">
+      {/* Who is playing, and when: from the booking behind this game. */}
+      <BookingPlayersSection reservationId={doc.reservationId} />
+      <div className="mt-5 grid gap-4 md:grid-cols-2">
         <section>
           <div className="text-xs uppercase tracking-widest text-muted">Game</div>
           <div className="mt-1">

@@ -5,6 +5,8 @@ import { FiEdit2, FiImage, FiPlus, FiTrash2, FiUpload, FiX } from 'react-icons/f
 import { Card } from '../ui/Card'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
+import { Modal } from '../ui/Modal'
+import { FilterTabs } from '../ui/FilterTabs'
 import { apiBase, apiDelete, apiGet, apiPost, apiPut, getApiAuthHeaders } from '../../utils/apiClient'
 
 type DashboardPost = {
@@ -25,7 +27,13 @@ type Props = {
   beforePosts?: React.ReactNode
   // Show only the newest few posts until the reader asks for more. Omit to show them all.
   initialCount?: number
+  // Split the list into Recent (last RECENT_POST_DAYS days) and Past tabs. Used on the admin page.
+  groupByAge?: boolean
+  // Show posts as picture cards; click one to open the full post (and Edit / Delete).
+  collapsible?: boolean
 }
+
+const RECENT_POST_DAYS = 7
 
 function formatPostedDate(value?: string) {
   if (!value) return 'recently posted'
@@ -52,8 +60,13 @@ export function DashboardPostsPanel({
   canManage = false,
   beforePosts,
   initialCount,
+  groupByAge = false,
+  collapsible = false,
 }: Props) {
   const [posts, setPosts] = useState<DashboardPost[]>([])
+  const [ageTab, setAgeTab] = useState<'recent' | 'past'>('recent')
+  // The post opened from the card grid.
+  const [viewing, setViewing] = useState<DashboardPost | null>(null)
   const [showAll, setShowAll] = useState(false)
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
@@ -224,6 +237,12 @@ useEffect(() => {
     }
   }
 
+  // Newest first already; Recent is the last RECENT_POST_DAYS days, Past is everything older.
+  const recentCutoff = Date.now() - RECENT_POST_DAYS * 86_400_000
+  const recentPosts = posts.filter((post) => parsePostDate(post) >= recentCutoff)
+  const pastPosts = posts.filter((post) => parsePostDate(post) < recentCutoff)
+  const visiblePosts = !groupByAge ? posts : ageTab === 'recent' ? recentPosts : pastPosts
+
   return (
     <Card className="p-5 md:p-5">
       <div className="flex items-start justify-between gap-4">
@@ -249,22 +268,69 @@ useEffect(() => {
         </div>
       ) : null}
 
-      <div className="divider mt-4 divide-y">
+      {groupByAge ? (
+        <div className="mt-4">
+          <FilterTabs
+            ariaLabel="Show announcements"
+            value={ageTab}
+            onChange={setAgeTab}
+            options={[
+              { value: 'recent', label: 'Recent', count: recentPosts.length },
+              { value: 'past', label: 'Past', count: pastPosts.length },
+            ]}
+          />
+          <p className="mt-2 text-xs text-muted">
+            {ageTab === 'recent' ? `Posted in the last ${RECENT_POST_DAYS} days.` : `Posted more than ${RECENT_POST_DAYS} days ago.`}
+          </p>
+        </div>
+      ) : null}
+
+      <div className={collapsible ? 'mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3' : 'divider mt-4 divide-y'}>
         {loading ? (
-          <div className="space-y-3 py-2">
+          <div className="col-span-full space-y-3 py-2">
             <div className="skeleton h-4 w-32" />
             <div className="skeleton h-16 w-full" />
           </div>
-        ) : posts.length === 0 ? (
-          <p className="py-6 text-center text-sm text-muted">No announcements yet.</p>
+        ) : visiblePosts.length === 0 ? (
+          <p className="col-span-full py-6 text-center text-sm text-muted">
+            {!groupByAge || posts.length === 0
+              ? 'No announcements yet.'
+              : ageTab === 'recent'
+                ? `Nothing posted in the last ${RECENT_POST_DAYS} days.`
+                : `No announcements older than ${RECENT_POST_DAYS} days.`}
+          </p>
         ) : (
-          (showAll || !initialCount ? posts : posts.slice(0, initialCount)).map((post) => (
-            <div key={post.id || `${post.postedAtISO || post.createdAtISO || post.updatedAtISO || post.message}-${post.imageUrl || 'no-image'}`} className="divider py-4 first:pt-0 last:pb-0">
+          (showAll || !initialCount ? visiblePosts : visiblePosts.slice(0, initialCount)).map((post) => {
+            const key = post.id || `${post.postedAtISO || post.createdAtISO || post.updatedAtISO || post.message}-${post.imageUrl || 'no-image'}`
+            const postedOn = formatPostedDate(post.postedAtISO || post.createdAtISO || post.updatedAtISO)
+            if (collapsible) {
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setViewing(post)}
+                  className="group flex flex-col overflow-hidden rounded-2xl border border-[rgba(var(--text),0.1)] bg-[rgba(var(--text),0.03)] text-left transition hover:border-accent/50 hover:shadow-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+                >
+                  <div className="aspect-[16/10] w-full overflow-hidden bg-[rgba(var(--text),0.05)]">
+                    {post.imageUrl ? (
+                      <img src={post.imageUrl} alt="" loading="lazy" className="h-full w-full object-cover transition group-hover:scale-[1.02]" />
+                    ) : (
+                      <div className="grid h-full place-items-center text-muted"><FiImage className="h-8 w-8 opacity-40" aria-hidden /></div>
+                    )}
+                  </div>
+                  <div className="flex flex-1 flex-col p-3">
+                    <div className="text-[11px] text-muted">{postedOn}</div>
+                    <p className="mt-1 line-clamp-3 whitespace-pre-line text-sm text-text">{post.message || 'No text'}</p>
+                    <span className="mt-auto pt-2 text-xs font-semibold text-accent">View & edit</span>
+                  </div>
+                </button>
+              )
+            }
+            return (
+            <div key={key} className="divider py-4 first:pt-0 last:pb-0">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <div className="text-xs text-muted">
-                    Posted {formatPostedDate(post.postedAtISO || post.createdAtISO || post.updatedAtISO)}
-                  </div>
+                  <div className="text-xs text-muted">Posted {postedOn}</div>
                   <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-text">
                     {post.message}
                   </div>
@@ -302,15 +368,47 @@ useEffect(() => {
                 </div>
               ) : null}
             </div>
-          ))
+            )
+          })
         )}
       </div>
-      {!loading && initialCount && posts.length > initialCount ? (
+      {!loading && initialCount && visiblePosts.length > initialCount ? (
         <div className="mt-3 text-center">
           <Button type="button" variant="ghost" size="sm" onClick={() => setShowAll((value) => !value)}>
-            {showAll ? 'Show fewer' : `Show ${posts.length - initialCount} more`}
+            {showAll ? 'Show fewer' : `Show ${visiblePosts.length - initialCount} more`}
           </Button>
         </div>
+      ) : null}
+
+      {viewing ? (
+        <Modal
+          title="Announcement"
+          eyebrow={`Posted ${formatPostedDate(viewing.postedAtISO || viewing.createdAtISO || viewing.updatedAtISO)}`}
+          size="lg"
+          onClose={() => setViewing(null)}
+          footer={canManage ? (
+            <>
+              <Button type="button" variant="danger" onClick={() => { const post = viewing; setViewing(null); void handleDelete(post) }}>
+                <FiTrash2 /> Delete
+              </Button>
+              <Button type="button" variant="primary" onClick={() => { const post = viewing; setViewing(null); startEdit(post) }}>
+                <FiEdit2 /> Edit
+              </Button>
+            </>
+          ) : undefined}
+        >
+          {viewing.imageUrl ? (
+            <button
+              type="button"
+              onClick={() => setLightboxUrl(viewing.imageUrl || null)}
+              aria-label="View image full size"
+              className="block w-full cursor-zoom-in overflow-hidden rounded-xl bg-[rgba(var(--text),0.04)]"
+            >
+              <img src={viewing.imageUrl} alt="Announcement attachment" className="block max-h-[420px] w-full object-contain" />
+            </button>
+          ) : null}
+          <div className={`${viewing.imageUrl ? 'mt-4 ' : ''}whitespace-pre-wrap text-sm leading-6 text-text`}>{viewing.message || 'No text'}</div>
+        </Modal>
       ) : null}
 
       {canManage && isComposerOpen ? (

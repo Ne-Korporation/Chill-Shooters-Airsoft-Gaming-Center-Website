@@ -3,7 +3,7 @@ import { useForm } from 'react-hook-form'
 import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { motion } from 'framer-motion'
-import { FiCheck, FiEye, FiEyeOff } from 'react-icons/fi'
+import { FiAlertCircle, FiCheck, FiEye, FiEyeOff } from 'react-icons/fi'
 
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
@@ -32,6 +32,8 @@ export function RegisterPage() {
   const [confirmingGoogle, setConfirmingGoogle] = useState(false)
   // The form was submitted with an email that already has an account.
   const [existingEmail, setExistingEmail] = useState<{ email: string; provider: 'password' | 'google' } | null>(null)
+  // Sign-up errors are shown as a label above the Create account button, not as a pop-up.
+  const [formError, setFormError] = useState<string | null>(null)
   const { registerWithGoogle } = useAuth()
 
   const {
@@ -58,8 +60,9 @@ export function RegisterPage() {
   [passwordChecks])
 
   async function onSubmit(values: FormValues) {
+    setFormError(null)
     if (!allRequirementsMet) {
-      toast.error('Please meet all password requirements.')
+      setFormError('Please meet all password requirements.')
       return
     }
 
@@ -85,7 +88,7 @@ export function RegisterPage() {
         setExistingEmail({ email: payload.email, provider: err.body.provider === 'google' ? 'google' : 'password' })
         return
       }
-      toast.error(err?.message || 'Registration failed')
+      setFormError(err?.message || 'Registration failed')
     }
   }
 
@@ -109,6 +112,7 @@ export function RegisterPage() {
 
   async function handleGoogleRegister() {
     setExistingEmail(null)
+    setFormError(null)
     try {
       const profile = await signInWithGoogle()
       // null: the pop-up was blocked and the browser is going to Google; we finish on return.
@@ -119,7 +123,7 @@ export function RegisterPage() {
       await finishGoogleRegister(profile, false)
     } catch (err: any) {
       console.error('Google registration error', err)
-      toast.error(err?.message || 'Google registration failed.')
+      setFormError(err?.message || 'Google registration failed.')
     }
   }
 
@@ -129,7 +133,7 @@ export function RegisterPage() {
     let active = true
     completeGoogleRedirect()
       .then((profile) => (active && profile?.email ? finishGoogleRegister(profile, false) : undefined))
-      .catch((err: any) => { if (active) toast.error(err?.message || 'Google registration failed.') })
+      .catch((err: any) => { if (active) setFormError(err?.message || 'Google registration failed.') })
     return () => { active = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -141,7 +145,7 @@ export function RegisterPage() {
       await finishGoogleRegister(pendingGoogle.profile, true)
     } catch (err: any) {
       setPendingGoogle(null)
-      toast.error(err?.message || 'Google sign-in failed.')
+      setFormError(err?.message || 'Google sign-in failed.')
     } finally {
       setConfirmingGoogle(false)
     }
@@ -313,6 +317,11 @@ export function RegisterPage() {
                 </div>
               </div>
 
+              {formError ? (
+                <div role="alert" className="flex items-start gap-2 rounded-2xl border border-danger/25 bg-danger/10 p-3 text-sm font-semibold text-danger">
+                  <FiAlertCircle className="mt-0.5 shrink-0" aria-hidden /> <span>{formError}</span>
+                </div>
+              ) : null}
               <Button type="submit" disabled={isSubmitting} className="w-full">
                 {isSubmitting ? 'Creating...' : 'Create account'}
               </Button>

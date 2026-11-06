@@ -143,7 +143,7 @@ export function PlayerStatsCard({ playerId, canAdjust = false }: { playerId: str
       ) : null}
 
       <div className="mt-3 text-xs text-muted">
-        Registered gear: {stats.ownedGear.length ? stats.ownedGear.map((g) => g.name).join(', ') : 'none approved yet'}
+        Registered gear: {stats.ownedGear.length ? stats.ownedGear.map((g) => g.name).join(', ') : 'none added yet'}
       </div>
 
       {canAdjust ? (

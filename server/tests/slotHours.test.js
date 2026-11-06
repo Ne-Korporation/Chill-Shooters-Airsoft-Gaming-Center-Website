@@ -25,3 +25,14 @@ test('the weather check follows custom slot hours', () => {
   const late = { ...DEFAULT_SLOT_HOURS, morning: { start: '08:00', end: '12:00' } }
   assert.equal(summarizeSlotForecast([storm], '2026-11-01', 'morning', config, late).severe, false)
 })
+
+// 12:00 PM Manila on 2026-11-06 is 04:00 UTC.
+test('same-day slots stay bookable until they start (Manila time)', async () => {
+  const { slotHasStarted, DEFAULT_SLOT_HOURS } = await import('../utils/slotHours.js')
+  const noon = new Date('2026-11-06T04:00:00Z')
+  assert.equal(slotHasStarted(DEFAULT_SLOT_HOURS, 'morning', '2026-11-06', '2026-11-06', noon), true)
+  assert.equal(slotHasStarted(DEFAULT_SLOT_HOURS, 'afternoon', '2026-11-06', '2026-11-06', noon), true)
+  assert.equal(slotHasStarted(DEFAULT_SLOT_HOURS, 'evening', '2026-11-06', '2026-11-06', noon), false)
+  assert.equal(slotHasStarted(DEFAULT_SLOT_HOURS, 'morning', '2026-11-07', '2026-11-06', noon), false)
+  assert.equal(slotHasStarted(DEFAULT_SLOT_HOURS, 'evening', '2026-11-05', '2026-11-06', noon), true)
+})

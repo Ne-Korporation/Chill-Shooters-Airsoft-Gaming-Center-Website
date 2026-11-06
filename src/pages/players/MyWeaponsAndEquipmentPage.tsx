@@ -7,7 +7,6 @@ import { Modal } from '../../components/ui/Modal'
 import { FiPlus } from 'react-icons/fi'
 import { apiGet, apiPost } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
-import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
 import toast from 'react-hot-toast'
 
 type UserEquipmentItem = {
@@ -45,7 +44,6 @@ const WEAPON_CATEGORY_NAMES: Record<string, string> = {
 export function MyWeaponsAndEquipmentPage() {
   const { playerId } = useParams()
   const { user } = useAuth()
-  const { addNotification } = useNotifications()
   const [equipment, setEquipment] = React.useState<UserEquipmentItem[]>([])
   const [weapons, setWeapons] = React.useState<UserEquipmentItem[]>([])
   const [loading, setLoading] = React.useState(true)
@@ -138,19 +136,10 @@ export function MyWeaponsAndEquipmentPage() {
         createdAtISO: new Date().toISOString(),
         submittedBy: lookupId,
         source: 'player',
-        approvalStatus: 'pending',
+        approvalStatus: 'approved',
       })
-      // The server notifies staff about player submissions itself.
-      if (user?.role !== 'user') sendRoleNotifications(addNotification, {
-        roles: ['admin', 'registrar', 'marshal'],
-        type: 'equipment_submitted',
-        title: 'New Gear Request',
-        message: `A player submitted gear request "${equipmentForm.name.trim()}" for review.`,
-        linkedResourceId: created?.data?.id,
-      })
-
       setEquipment((current) => current.concat(created?.data ? [created.data] : []))
-      toast.success('Gear submitted for admin review.')
+      toast.success('Gear added to your inventory.')
       setAdding(null)
       setEquipmentForm({ name: '', category: 'gear', description: '' })
     } catch (e: any) {
@@ -179,19 +168,10 @@ export function MyWeaponsAndEquipmentPage() {
         createdAtISO: new Date().toISOString(),
         submittedBy: lookupId,
         source: 'player',
-        approvalStatus: 'pending',
+        approvalStatus: 'approved',
       })
-      // The server notifies staff about player submissions itself.
-      if (user?.role !== 'user') sendRoleNotifications(addNotification, {
-        roles: ['admin', 'registrar', 'marshal'],
-        type: 'weapon_submitted',
-        title: 'New Weapon Request',
-        message: `A player submitted weapon request "${weaponName}" for review.`,
-        linkedResourceId: created?.data?.id,
-      })
-
       setWeapons((current) => current.concat(created?.data || []))
-      toast.success('Weapon submitted for admin review.')
+      toast.success('Weapon added. Marshals check its FPS at the field on game day.')
       setAdding(null)
       setWeaponForm({ name: '', category: 'rifles', description: '' })
     } catch (e: any) {
@@ -206,7 +186,7 @@ export function MyWeaponsAndEquipmentPage() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div className="space-y-2">
           <h1 className="text-3xl font-bold">My Weapons and Gear</h1>
-          <p className="text-sm text-muted">Add your own weapons and gear. Staff review each one before you can bring it to a game.</p>
+          <p className="text-sm text-muted">Add your own weapons and gear. They're ready to use as soon as you add them. Marshals check every weapon's FPS at the field on game day.</p>
         </div>
         <div className="flex gap-2">
           <Button onClick={() => setAdding('weapon')}><FiPlus /> Add weapon</Button>
@@ -225,8 +205,8 @@ export function MyWeaponsAndEquipmentPage() {
           <Card className="p-4">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <div className="text-xs uppercase tracking-widest text-muted">My submissions</div>
-                <div className="mt-1 text-lg font-semibold">Weapons and gear awaiting review</div>
+                <div className="text-xs uppercase tracking-widest text-muted">My inventory</div>
+                <div className="mt-1 text-lg font-semibold">Your weapons and gear</div>
               </div>
               <select
                 value={tableFilter}
@@ -249,7 +229,7 @@ export function MyWeaponsAndEquipmentPage() {
               </div>
               <div className="divide-y divide-white/5">
                 {visibleItems.length === 0 ? (
-                  <div className="p-4 text-sm text-muted">No submissions yet.</div>
+                  <div className="p-4 text-sm text-muted">Nothing added yet.</div>
                 ) : (
                   visibleItems.map((item) => (
                     <div key={`${item.kind}-${item.id || item.name}`} className="grid grid-cols-12 items-center px-3 py-3">
@@ -263,13 +243,11 @@ export function MyWeaponsAndEquipmentPage() {
                         ) : null}
                       </div>
                       <div className="col-span-2 flex justify-end">
-                        <span className={`rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.15em] ${item.approvalStatus === 'approved'
-                          ? 'border-success/30 bg-success/10 text-success'
-                          : item.approvalStatus === 'rejected'
-                            ? 'border-danger/30 bg-danger/10 text-danger'
-                            : 'border-warning/30 bg-warning/10 text-warning'
+                        <span className={`rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.15em] ${item.approvalStatus === 'rejected'
+                          ? 'border-danger/30 bg-danger/10 text-danger'
+                          : 'border-success/30 bg-success/10 text-success'
                           }`}>
-                          {item.approvalStatus === 'approved' ? 'Approved' : item.approvalStatus === 'rejected' ? 'Rejected' : 'Pending'}
+                          {item.approvalStatus === 'rejected' ? 'Rejected' : 'Active'}
                         </span>
                       </div>
                     </div>
