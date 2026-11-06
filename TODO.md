@@ -7,7 +7,7 @@ This checklist tracks the requested scope and what remains to make each workflow
 - [x] Reservation deposits: standard/package and custom rental bookings use 50% of the server-calculated total; own-gear bookings use a fixed ₱350 deposit, capped at the booking total.
 - [x] Approved full rental package price: ₱750 total (₱150 entrance, ₱500 rifle rental, ₱50 vest, ₱50 mask, two magazines / 600 BBs), pending validation that the live package and inventory records match.
 - [x] Approved entrance fee: ₱150 per player.
-- [x] Approved field capacity settings are configurable: Salawag and Langkaan at 200/190/180, Biñan at 400/380/360 for morning/afternoon/evening. Confirm these remain current operating limits before launch.
+- [x] Approved field capacity settings are configurable: Salawag and Langkaan at 400/380/360, Biñan at 600/570/540 (matches the landing page) for morning/afternoon/evening. Confirm these remain current operating limits before launch.
 - [x] Private booking minimum: 10 players.
 - [x] Approved FPS ceilings: AEG 450 FPS; sniper/VSR 550 FPS.
 - [x] Cancellation penalty: none. Do not charge a cancellation fee unless the owner changes this policy.

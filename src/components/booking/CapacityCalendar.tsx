@@ -195,7 +195,7 @@ export function CapacityCalendar({
                       <Bar booked={capacity.booked} capacity={capacity.capacity} className="mt-0.5 h-1" />
                     </span>
                   ) : cause ? (
-                    <span className="mt-auto truncate text-[9px] font-semibold text-rose-500">Cause</span>
+                    <span className="mt-auto truncate text-[10px] font-semibold text-rose-500">Cause</span>
                   ) : privateFull ? (
                     <span className="mt-auto truncate text-[10px] font-semibold text-danger">Full</span>
                   ) : privateGroups ? (

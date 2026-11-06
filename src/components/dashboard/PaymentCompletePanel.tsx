@@ -37,7 +37,8 @@ function formatPHP(value: number) {
 }
 
 // Reservations whose full payment is in, compiled with every proof and waiver for final approval.
-export function PaymentCompletePanel() {
+// `hideWhenEmpty`: render nothing unless a reservation is waiting (keeps the dashboard short).
+export function PaymentCompletePanel({ hideWhenEmpty = false }: { hideWhenEmpty?: boolean } = {}) {
   const [items, setItems] = useState<CompiledReservation[]>([])
   const [loading, setLoading] = useState(true)
   const [approvingId, setApprovingId] = useState<string | null>(null)
@@ -72,6 +73,8 @@ export function PaymentCompletePanel() {
       setApprovingId(null)
     }
   }
+
+  if (hideWhenEmpty && (loading || items.length === 0)) return null
 
   return (
     <Panel

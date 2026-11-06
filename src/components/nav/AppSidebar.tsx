@@ -34,6 +34,7 @@ import {
   FiChevronDown,
   FiPlusCircle,
   FiUserPlus,
+  FiVolume2,
 } from 'react-icons/fi'
 
 type Role = 'user' | 'admin' | 'marshal' | 'registrar'
@@ -63,10 +64,10 @@ const marshalItems: Item[] = [
 // attention, handle bookings, run the field, keep inventory, look after people, keep records.
 const adminItems: Item[] = [
   { section: 'Overview', label: 'Dashboard', to: '/app/admin', icon: FiGrid },
-  { section: 'Overview', label: 'Reports', to: '/app/admin/reports', icon: FiBarChart2 },
-  { section: 'Bookings', label: 'Reservations', to: '/app/admin/reservations', icon: FiCalendar },
+  { section: 'Overview', label: 'Announcements', to: '/app/admin/announcements', icon: FiVolume2 },
+  // Reservations, games and archived games are tabs of one Bookings page.
+  { section: 'Bookings', label: 'Bookings', to: '/app/admin/reservations', icon: FiCalendar },
   { section: 'Bookings', label: 'Payments', to: '/app/admin/payments', icon: FiCreditCard },
-  { section: 'Bookings', label: 'Games', to: '/app/games', icon: FiZap },
   { section: 'Game day', label: 'Counter', to: '/app/counter', icon: FiShoppingBag },
   { section: 'Game day', label: 'Walk-ins', to: '/app/walk-ins', icon: FiUserPlus },
   { section: 'Game day', label: 'Rental check-out', to: '/app/rentals', icon: FiLogOut },
@@ -83,6 +84,7 @@ const adminItems: Item[] = [
   { section: 'People', label: 'Players & staff', to: '/app/admin/player-management', icon: FiUsers },
   { section: 'People', label: 'Partnerships', to: '/app/admin/partnerships', icon: FiBriefcase },
   { section: 'People', label: 'Player feedback', to: '/app/admin/feedback', icon: FiMessageSquare },
+  { section: 'Records', label: 'Reports', to: '/app/admin/reports', icon: FiBarChart2 },
   { section: 'Records', label: 'REACH fund', to: '/app/admin/reach-fund', icon: FiHeart },
   { section: 'Records', label: 'Audit logs', to: '/app/admin/audit-logs', icon: FiFileText },
 ]

@@ -15,6 +15,7 @@ import { nextShortId } from '../utils/shortIds.js'
 import { ageFromBirthDate } from '../utils/age.js'
 import { ACTIVE_WAIVER_STATUSES, expireOldWaivers, validUntilFrom } from '../utils/waiverValidity.js'
 import { manilaDateISO } from '../utils/reminders.js'
+import { getSlotHours, slotHasStarted } from '../utils/slotHours.js'
 import { summarizeWeekendCapacity, weekendDatesOf } from '../utils/weekendCapacity.js'
 import { listActiveCauseDays, weekendDatesInMonth } from '../utils/causeDays.js'
 import { hasValidIdentity, identityVerifiedFields, validIdentityFilter, verifiedIdDocument } from '../utils/identityValidity.js'
@@ -44,9 +45,9 @@ import {
 const router = express.Router()
 const SLOT_NAMES = ['morning', 'afternoon', 'evening']
 const DEFAULT_LOCATION_CAPACITIES = {
-  salawag: { morning: 200, afternoon: 190, evening: 180 },
-  langkaan: { morning: 200, afternoon: 190, evening: 180 },
-  binan: { morning: 400, afternoon: 380, evening: 360 },
+  salawag: { morning: 400, afternoon: 380, evening: 360 },
+  langkaan: { morning: 400, afternoon: 380, evening: 360 },
+  binan: { morning: 600, afternoon: 570, evening: 540 },
 }
 
 function getLocationCapacities() {
@@ -439,7 +440,7 @@ const SLOT_BROWSING_HOLD_MINUTES = Math.max(1, Number(process.env.SLOT_BROWSING_
 
 async function getApprovedWeaponOwnerIds(db, userIds) {
   const owners = await db.collection('weapons').distinct('submittedBy', {
-    approvalStatus: 'approved',
+    approvalStatus: { $ne: 'rejected' },
     ...(userIds ? { submittedBy: { $in: userIds.map(String) } } : {}),
   })
   return new Set(owners.map((id) => String(id || '')).filter(Boolean))
@@ -1114,37 +1115,41 @@ function canCreateCollection(role, collection) {
   return false
 }
 
-// Private-session minimums: Upper Ground 10, Lower Ground 20, Forest 50.
+// The fields at each location. Private-game minimums depend on how many are booked (fieldCountMinimum).
 const LOCATION_FIELD_DEFS = {
   salawag: [
-    { id: 'salawag-field-1', name: 'Upper Ground', min: 10 },
-    { id: 'salawag-field-2', name: 'Lower Ground', min: 20 },
-    { id: 'salawag-field-3', name: 'Forest', min: 50 },
+    { id: 'salawag-field-1', name: 'Upper Ground' },
+    { id: 'salawag-field-2', name: 'Lower Ground' },
+    { id: 'salawag-field-3', name: 'Forest' },
   ],
   langkaan: [
-    { id: 'langkaan-field-1', name: 'Upper Ground', min: 10 },
-    { id: 'langkaan-field-2', name: 'Lower Ground', min: 20 },
-    { id: 'langkaan-field-3', name: 'Forest', min: 50 },
+    { id: 'langkaan-field-1', name: 'Upper Ground' },
+    { id: 'langkaan-field-2', name: 'Lower Ground' },
+    { id: 'langkaan-field-3', name: 'Forest' },
   ],
   binan: [
-    { id: 'binan-field-1', name: 'Upper Ground', min: 10 },
-    { id: 'binan-field-2', name: 'Lower Ground', min: 20 },
-    { id: 'binan-field-3', name: 'Forest', min: 50 },
+    { id: 'binan-field-1', name: 'Upper Ground' },
+    { id: 'binan-field-2', name: 'Lower Ground' },
+    { id: 'binan-field-3', name: 'Forest' },
   ],
 }
 
-const SMALL_GROUP_MIN = 10
+// Private games: the minimum group size depends on how many fields are booked, not which ones.
+// 1 field: 10 players, 2 fields: 20, all 3 fields: 50. Matches fieldCountMinimum on the booking page.
+const FIELD_COUNT_MINIMUMS = [0, 10, 20, 50]
 
-// A field's minimum for this slot. Lower Ground opens to 10 once Upper Ground is booked, and
-// Forest opens to 10 once both Upper and Lower Ground are booked.
-export function effectiveFieldMinimum(locationId, fieldId, bookedFieldIds) {
+export function fieldCountMinimum(fieldCount) {
+  const count = Math.max(0, Math.floor(Number(fieldCount) || 0))
+  return FIELD_COUNT_MINIMUMS[Math.min(count, FIELD_COUNT_MINIMUMS.length - 1)]
+}
+
+// Upper Ground is the main field, so every private booking starts with it: Upper Ground,
+// Upper + Lower Ground, or all three. Lower Ground or Forest can't be booked without it.
+export function isAllowedFieldCombination(locationId, fieldIds) {
   const fields = LOCATION_FIELD_DEFS[locationId] || []
-  const field = fields.find((item) => item.id === fieldId)
-  if (!field) return SMALL_GROUP_MIN
-  const booked = (name) => fields.some((item) => item.name === name && bookedFieldIds.has(item.id))
-  if (field.name === 'Lower Ground' && booked('Upper Ground')) return SMALL_GROUP_MIN
-  if (field.name === 'Forest' && booked('Upper Ground') && booked('Lower Ground')) return SMALL_GROUP_MIN
-  return field.min
+  const picked = new Set((fieldIds || []).map(String))
+  if (picked.size === 0 || picked.size > fields.length) return false
+  return fields.slice(0, picked.size).every((field) => picked.has(field.id))
 }
 
 function isWeekdayDateISO(isoDate) {
@@ -1172,17 +1177,19 @@ function validatePrivateFieldSelection({ locationId, fieldIds, playersCount, boo
   if (selectedFields.length === 0) {
     return { ok: false, reason: 'Select at least one valid field for the chosen location.' }
   }
+  if (!isAllowedFieldCombination(locationId, fieldIds)) {
+    return { ok: false, reason: 'Pick Upper Ground, Upper + Lower Ground, or all 3 fields. Lower Ground and Forest can only be booked together with Upper Ground.' }
+  }
 
   const hasBookedSelection = selectedFields.some((field) => bookedFieldIds.has(field.id))
   if (hasBookedSelection) {
     return { ok: false, reason: 'One or more selected fields are already booked for this location and time slot.' }
   }
 
-  for (const field of selectedFields) {
-    const min = effectiveFieldMinimum(locationId, field.id, bookedFieldIds)
-    if (playersCount < min) {
-      return { ok: false, reason: `${field.name} needs at least ${min} players for this time slot.` }
-    }
+  const min = fieldCountMinimum(selectedFields.length)
+  if (playersCount < min) {
+    const count = selectedFields.length
+    return { ok: false, reason: `Booking ${count} field${count === 1 ? '' : 's'} needs at least ${min} players.` }
   }
   return { ok: true }
 }
@@ -1581,7 +1588,7 @@ router.post('/:collection', requireAuth, async (req, res) => {
     if (collection === 'equipments' || collection === 'weapons') {
       payload.submittedBy = String(req.user.id)
       payload.source = 'player'
-      payload.approvalStatus = 'pending'
+      payload.approvalStatus = 'approved'
       payload.status = 'available'
     }
     if (collection === 'feedback') payload.userId = String(req.user.id)
@@ -1798,11 +1805,18 @@ router.post('/:collection', requireAuth, async (req, res) => {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(reservationDate) || Number.isNaN(new Date(`${reservationDate}T12:00:00`).getTime())) {
         return res.status(400).json({ ok: false, error: 'reservationDate must be a valid YYYY-MM-DD date' })
       }
-      if (reservationDate < new Date().toISOString().slice(0, 10)) {
+      // Manila dates: today is bookable, but only for slots that haven't started yet.
+      if (reservationDate < manilaDateISO()) {
         return res.status(400).json({ ok: false, error: 'Reservation date cannot be in the past' })
       }
       if (!['morning', 'afternoon', 'evening'].includes(reservationTime)) {
         return res.status(400).json({ ok: false, error: 'reservationTime must be morning, afternoon, or evening' })
+      }
+      if (reservationDate === manilaDateISO()) {
+        const { hours } = await getSlotHours(db)
+        if (slotHasStarted(hours, reservationTime, reservationDate, manilaDateISO())) {
+          return res.status(400).json({ ok: false, error: `Today's ${reservationTime} slot has already started. Pick a later slot or another day.` })
+        }
       }
 
       if (!['public', 'private'].includes(sessionType)) {
@@ -2077,16 +2091,8 @@ const STAFF_REVIEW_NOTICES = {
       title: 'New Waiver Submitted',
       message: `A new waiver was submitted by ${doc.fullName || player.name || player.id}.`,
     }),
-  weapons: (doc) => ({
-    type: 'weapon_submitted',
-    title: 'New Weapon Request',
-    message: `A player submitted weapon request "${doc.name || doc.id}" for review.`,
-  }),
-  equipments: (doc) => ({
-    type: 'equipment_submitted',
-    title: 'New Gear Request',
-    message: `A player submitted gear request "${doc.name || doc.id}" for review.`,
-  }),
+  // Players' own weapons and gear need no review: they are active as soon as they are added,
+  // and marshals still chronograph every weapon at the field on game day.
 }
 
 async function notifyStaffOfPlayerSubmission(db, collection, doc, player) {
@@ -2281,7 +2287,7 @@ router.put('/:collection/:id', requireAuth, async (req, res) => {
       }
     }
 
-    // A player's own weapon is only approved for play after it passes the chronograph.
+    // Re-approving a rejected player weapon needs a passing chronograph reading.
     if (collection === 'weapons' && existing.source === 'player') {
       const changes = payload.$set || payload
       if (String(changes.approvalStatus || '') === 'approved' && existing.approvalStatus !== 'approved') {

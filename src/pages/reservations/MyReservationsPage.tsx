@@ -294,9 +294,17 @@ export function MyReservationsPage() {
       <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
           <h1 className="text-3xl font-bold">My Reservations</h1>
-          <p className="mt-1 text-sm text-muted">
-            Reschedule up to {RESCHEDULE_CUTOFF_DAYS} days before your game; paid deposits carry over. Unpaid bookings can be cancelled until you pay.
-          </p>
+          <p className="mt-1 text-sm text-muted">Your upcoming and past games.</p>
+          <ul className="mt-3 flex flex-wrap gap-2 text-xs">
+            <li className="inline-flex items-center gap-1.5 rounded-full bg-[rgba(var(--text),0.06)] px-3 py-1.5">
+              <FiRefreshCw className="shrink-0 text-accent" />
+              <span><span className="font-semibold">Reschedule</span> up to {RESCHEDULE_CUTOFF_DAYS} days before. Your deposit carries over.</span>
+            </li>
+            <li className="inline-flex items-center gap-1.5 rounded-full bg-[rgba(var(--text),0.06)] px-3 py-1.5">
+              <FiXCircle className="shrink-0 text-accent" />
+              <span><span className="font-semibold">Cancel</span> anytime before you pay.</span>
+            </li>
+          </ul>
         </div>
         <Button variant="primary" onClick={() => navigate('/app/reservations')}>
           <FiCalendar /> Book a game

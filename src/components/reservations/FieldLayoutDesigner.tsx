@@ -111,6 +111,7 @@ export function FieldLayoutDesigner({
   fieldName,
   initialItems,
   saving,
+  error,
   onClose,
   onSave,
 }: {
@@ -118,6 +119,8 @@ export function FieldLayoutDesigner({
   fieldName: string
   initialItems: LayoutItem[]
   saving?: boolean
+  // Shown above the buttons when saving fails.
+  error?: string | null
   onClose: () => void
   onSave: (items: LayoutItem[], image: File) => void | Promise<void>
 }) {
@@ -338,6 +341,9 @@ export function FieldLayoutDesigner({
           </div>
         </div>
 
+        {error ? (
+          <div role="alert" className="mt-4 rounded-2xl border border-danger/25 bg-danger/10 p-3 text-xs font-semibold text-danger">{error}</div>
+        ) : null}
         <div className="mt-4 flex flex-col-reverse gap-2 border-t border-white/10 pt-4 sm:flex-row sm:justify-end">
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
           <Button variant="primary" disabled={saving || items.length === 0} onClick={() => void save()}>

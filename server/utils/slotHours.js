@@ -52,3 +52,18 @@ export function slotWindow(hours, slot) {
   const range = (hours || DEFAULT_SLOT_HOURS)[slot] || DEFAULT_SLOT_HOURS[slot]
   return [toMinutes(range.start) / 60, toMinutes(range.end) / 60]
 }
+
+// Minutes since midnight on the Manila clock.
+export function manilaMinutesNow(now = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Manila', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(now)
+  const get = (type) => Number(parts.find((part) => part.type === type)?.value || 0)
+  return get('hour') * 60 + get('minute')
+}
+
+// Same-day bookings are allowed until the slot starts. `todayISO` is today's Manila date.
+export function slotHasStarted(hours, slot, dateISO, todayISO, now = new Date()) {
+  if (dateISO !== todayISO) return dateISO < todayISO
+  const range = (hours || DEFAULT_SLOT_HOURS)[slot] || DEFAULT_SLOT_HOURS[slot]
+  const start = toMinutes(range?.start)
+  return start === null ? false : manilaMinutesNow(now) >= start
+}

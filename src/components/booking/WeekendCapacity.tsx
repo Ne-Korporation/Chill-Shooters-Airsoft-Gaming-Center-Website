@@ -94,7 +94,7 @@ export function WeekendCapacity({
             const label = formatDay(day.dateISO)
             const tone = fillTone(day.booked, day.capacity)
             return (
-              <div key={day.dateISO} className={`rounded-xl border border-[rgba(var(--text),0.1)] p-4 ${day.past ? 'opacity-60' : ''}`}>
+              <div key={day.dateISO} className={`flex h-full flex-col rounded-xl border border-[rgba(var(--text),0.1)] p-4 ${day.past ? 'opacity-60' : ''}`}>
                 <div className="flex items-baseline justify-between gap-2">
                   <div>
                     <span className="text-sm font-bold">{label.weekday}</span>
@@ -107,7 +107,8 @@ export function WeekendCapacity({
                     <FiHeart className="mt-0.5 shrink-0" /> Game for a cause: {causeByDate[day.dateISO].title}
                   </div>
                 ) : null}
-                <div className="mt-2">
+                {/* mt-auto keeps the tables of side-by-side days level even when only one has a cause banner. */}
+                <div className="mt-auto pt-2">
                   <DaySlotsTable day={day} past={day.past} note={false} />
                 </div>
               </div>
@@ -149,14 +150,20 @@ export function DaySlotsTable({ day, past, note = true }: { day: WeekendDay; pas
       </div>
 
       <div className="mt-3 overflow-x-auto rounded-xl border border-[rgba(var(--text),0.1)]">
-        <table className="w-full text-sm">
+        {/* Fixed layout: every slot column gets the same width, so tables line up with each other
+            no matter how long each slot's hours are. */}
+        <table className="w-full min-w-[20rem] table-fixed text-sm">
+          <colgroup>
+            <col className="w-[28%]" />
+            {slots.map((slot) => <col key={slot} />)}
+          </colgroup>
           <thead>
             <tr className="bg-[rgba(var(--text),0.04)] text-[11px] text-muted">
-              <th className="px-3 py-2 text-left font-semibold">Location</th>
+              <th className="px-3 py-2 text-left align-middle font-semibold">Location</th>
               {slots.map((slot) => (
-                <th key={slot} className="px-2 py-2 text-center font-semibold">
-                  <div>{SLOT_NAMES[slot] || slot}</div>
-                  <div className="font-normal">{formatSlotRange(slotHours, slot)}</div>
+                <th key={slot} className="px-1.5 py-2 text-center align-middle font-semibold">
+                  <div className="truncate">{SLOT_NAMES[slot] || slot}</div>
+                  <div className="text-[10px] font-normal leading-tight">{formatSlotRange(slotHours, slot)}</div>
                 </th>
               ))}
             </tr>
@@ -164,20 +171,20 @@ export function DaySlotsTable({ day, past, note = true }: { day: WeekendDay; pas
           <tbody>
             {day.locations.map((location) => (
               <tr key={location.id} className="border-t border-[rgba(var(--text),0.08)]">
-                <td className="px-3 py-2 font-semibold" title={location.name}>{SHORT_LOCATION[location.id] || location.name}</td>
+                <td className="truncate px-3 py-2 text-left align-middle font-semibold" title={location.name}>{SHORT_LOCATION[location.id] || location.name}</td>
                 {location.slots.map((slot) => {
                   if (!isPublic) {
                     const booked = slot.groups || 0
                     const full = slot.remaining === 0
                     return (
-                      <td key={slot.slot} className={`px-2 py-2 text-center ${full ? 'font-semibold text-danger' : booked ? 'font-semibold text-accent' : 'text-muted'}`}>
+                      <td key={slot.slot} className={`whitespace-nowrap px-1.5 py-2 text-center align-middle tabular-nums ${full ? 'font-semibold text-danger' : booked ? 'font-semibold text-accent' : 'text-muted'}`}>
                         {full ? 'Full' : booked ? `${booked} booked` : 'Free'}
                       </td>
                     )
                   }
                   const tone = fillTone(slot.booked, slot.capacity)
                   return (
-                    <td key={slot.slot} className={`px-2 py-2 text-center font-semibold ${past ? 'text-muted' : tone.text}`} title={`${slot.booked} of ${slot.capacity} booked`}>
+                    <td key={slot.slot} className={`whitespace-nowrap px-1.5 py-2 text-center align-middle font-semibold tabular-nums ${past ? 'text-muted' : tone.text}`} title={`${slot.booked} of ${slot.capacity} booked`}>
                       {past ? slot.booked : slot.remaining === 0 ? 'Full' : slot.remaining}
                     </td>
                   )

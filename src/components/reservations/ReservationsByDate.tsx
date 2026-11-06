@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { FiCalendar, FiRefreshCw, FiUsers } from 'react-icons/fi'
+import { FiCalendar, FiEye, FiRefreshCw, FiUsers } from 'react-icons/fi'
 import toast from 'react-hot-toast'
 
 import { Card } from '../ui/Card'
@@ -9,6 +9,8 @@ import { FilterTabs } from '../ui/FilterTabs'
 import { DEFAULT_PAGE_SIZE, Pagination, usePagination } from '../ui/Pagination'
 import { apiGetAll } from '../../utils/apiClient'
 import { reservationStatusLabel } from '../../utils/reservationStatus'
+import { useSlotHours } from '../../utils/slotHours'
+import { ReservationDetailsDialog, type ReservationDetails } from './ReservationDetailsDialog'
 
 type ReservationDoc = {
   _id?: any
@@ -73,7 +75,8 @@ const statusTone = (status: string) =>
 
 // Reservations grouped by game date: each date lists its bookings and every player in them.
 // Payment review and status decisions live on the Payments page.
-export function ReservationsByDate() {
+// `embedded`: shown as a tab inside the admin Bookings page, which supplies the title.
+export function ReservationsByDate({ embedded = false }: { embedded?: boolean } = {}) {
   const [reservations, setReservations] = useState<ReservationDoc[]>([])
   const [accounts, setAccounts] = useState<AccountDoc[]>([])
   const [loading, setLoading] = useState(true)
@@ -84,6 +87,19 @@ export function ReservationsByDate() {
   const newestFirst = order === 'auto' ? showPast : order === 'newest'
   const [openDate, setOpenDate] = useState<string | null>(null)
   const today = manilaTodayISO()
+  const slotHours = useSlotHours()
+  // The booking opened in the details sheet, and its payments (loaded when it opens).
+  const [details, setDetails] = useState<ReservationDoc | null>(null)
+  const [detailsPayments, setDetailsPayments] = useState<any[]>([])
+
+  const openDetails = (booking: ReservationDoc) => {
+    setDetails(booking)
+    setDetailsPayments([])
+    const ids = [booking.id, booking._id].filter(Boolean).map(String)
+    apiGetAll<any>('payments', `q=${encodeURIComponent(JSON.stringify({ reservationId: { $in: ids } }))}`)
+      .then(setDetailsPayments)
+      .catch(() => setDetailsPayments([]))
+  }
 
   const load = async () => {
     setLoading(true)
@@ -156,10 +172,12 @@ export function ReservationsByDate() {
   return (
     <div className="space-y-4">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+        {!embedded ? (
         <div>
           <h1 className="text-3xl font-bold">Reservations</h1>
           <p className="mt-1 text-sm text-muted">Dates with bookings and the players in each booking. Review payments and booking decisions on the Payments page.</p>
         </div>
+        ) : <div className="text-sm text-muted">Dates with bookings and the players in each booking.</div>}
         <Button variant="ghost" size="sm" onClick={() => void load()} disabled={loading}>
           <FiRefreshCw /> Refresh
         </Button>
@@ -229,9 +247,14 @@ export function ReservationsByDate() {
                             {booking.id} • <span className="capitalize">{booking.sessionType || 'public'}</span> • {booking.numberOfPlayers || 0} players • {booking.packageName || 'Custom selection'}
                           </div>
                         </div>
-                        <div className="text-right">
-                          <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase ${statusTone(status)}`}>{reservationStatusLabel(booking)}</span>
-                          {statusChangeLabel(booking) ? <div className="mt-1 text-[11px] text-muted">{statusChangeLabel(booking)}</div> : null}
+                        <div className="flex items-start gap-2">
+                          <div className="text-right">
+                            <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase ${statusTone(status)}`}>{reservationStatusLabel(booking)}</span>
+                            {statusChangeLabel(booking) ? <div className="mt-1 text-[11px] text-muted">{statusChangeLabel(booking)}</div> : null}
+                          </div>
+                          <Button size="sm" variant="ghost" onClick={() => openDetails(booking)}>
+                            <FiEye /> View details
+                          </Button>
                         </div>
                       </div>
                       <div className="mt-3 flex items-center gap-2 text-xs uppercase tracking-widest text-muted"><FiUsers /> Players</div>
@@ -255,6 +278,16 @@ export function ReservationsByDate() {
         )
       })}
       <Pagination page={page} pageCount={pageCount} total={total} onPageChange={setPage} />
+
+      {details ? (
+        <ReservationDetailsDialog
+          reservation={details as ReservationDetails}
+          payments={detailsPayments}
+          captainName={playersOf(details)[0]?.name || 'Captain'}
+          slotHours={slotHours}
+          onClose={() => setDetails(null)}
+        />
+      ) : null}
     </div>
   )
 }

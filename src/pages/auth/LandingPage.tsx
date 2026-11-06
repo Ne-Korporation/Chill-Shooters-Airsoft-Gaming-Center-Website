@@ -26,7 +26,7 @@ import { Button } from '../../components/ui/Button'
 import { CapacityCalendar } from '../../components/booking/CapacityCalendar'
 import { useAuth } from '../../context/AuthContext'
 import { getApiBase } from '../../utils/apiClient'
-import { formatSlotRange, useSlotHours } from '../../utils/slotHours'
+import { DEFAULT_SLOT_HOURS, formatSlotRange, manilaTodayISO, slotHasStarted, useSlotHours } from '../../utils/slotHours'
 import { PACKAGE_ENTRANCE_FEE_PER_PLAYER, calculatePackagePricing, packageEquipmentQty, type PackageLike } from '../../utils/packagePricing'
 
 type FAQ = {
@@ -35,9 +35,10 @@ type FAQ = {
 }
 
 type LocationOption = 'salawag' | 'langkaan' | 'binan'
-type FieldArea = 'Upper Ground' | 'Lower Ground' | 'Forest'
+// Labels match FIELD_CHOICES on the booking page, which reads them from the prefill.
+type FieldArea = 'Upper Ground' | 'Upper + Lower Ground' | 'All 3 fields'
 type TimeSlot = 'morning' | 'afternoon' | 'evening'
-type BookingMenu = 'location' | 'field' | 'date' | 'players'
+type BookingMenu = 'location' | 'date' | 'players'
 
 // Read (and cleared) by ReservationCalendarPage to prefill step 1.
 export const LANDING_PREFILL_KEY = 'landing_reservation_prefill'
@@ -50,20 +51,37 @@ export type LandingReservationPrefill = {
   players: number
 }
 
-const bookingLocations: { id: LocationOption; name: string; detail: string }[] = [
-  { id: 'salawag', name: 'Delta Stronghold (Salawag)', detail: 'About 2 hectares · up to 400 players' },
-  { id: 'langkaan', name: 'Delta Stronghold (Langkaan)', detail: 'About 2 hectares · up to 400 players' },
-  { id: 'binan', name: 'LOMA Binan Laguna', detail: 'About 4 hectares · up to 600 players' },
+// maxPlayers is the most a location takes in one slot (server DEFAULT_LOCATION_CAPACITIES, morning).
+const bookingLocations: { id: LocationOption; name: string; detail: string; maxPlayers: number }[] = [
+  { id: 'salawag', name: 'Delta Stronghold (Salawag)', detail: 'About 2 hectares · up to 400 players per slot', maxPlayers: 400 },
+  { id: 'langkaan', name: 'Delta Stronghold (Langkaan)', detail: 'About 2 hectares · up to 400 players per slot', maxPlayers: 400 },
+  { id: 'binan', name: 'LOMA Binan Laguna', detail: 'About 4 hectares · up to 600 players per slot', maxPlayers: 600 },
 ]
 
-const fieldAreas: { id: FieldArea; detail: string }[] = [
-  { id: 'Upper Ground', detail: 'Private games from 10 players' },
-  { id: 'Lower Ground', detail: 'Private games from 20 players' },
-  { id: 'Forest', detail: 'Private games from 50 players' },
-]
+// Fields are assigned from the group size, same as the booking page: 10-19 players get Upper Ground,
+// 20-49 get Upper + Lower Ground, 50+ get all three. Weekday private games start at 10 players;
+// weekends are public games with no minimum.
+const PRIVATE_MIN_PLAYERS = 10
 
-const MIN_BOOKING_PLAYERS = 2
-const MAX_BOOKING_PLAYERS = 100
+function fieldAreaForPlayers(players: number): FieldArea {
+  if (players >= 50) return 'All 3 fields'
+  if (players >= 20) return 'Upper + Lower Ground'
+  return 'Upper Ground'
+}
+
+const MIN_BOOKING_PLAYERS = 1
+
+function isWeekendISO(dateISO: string) {
+  const day = new Date(`${dateISO}T12:00:00`).getDay()
+  return day === 0 || day === 6
+}
+
+// Allowed group size for the current booking bar choices.
+function playerLimits(booking: { location: LocationOption; dateISO: string }) {
+  const max = bookingLocations.find((l) => l.id === booking.location)?.maxPlayers ?? 400
+  const weekend = isWeekendISO(booking.dateISO)
+  return { min: weekend ? MIN_BOOKING_PLAYERS : PRIVATE_MIN_PLAYERS, max, weekend }
+}
 
 const bookingSlots: { id: TimeSlot; label: string }[] = [
   { id: 'morning', label: 'Morning' },
@@ -92,7 +110,7 @@ const fieldLocations = [
     name: 'Delta Stronghold (Salawag)',
     img: '/delta.png',
     size: '~2 hectares',
-    capacity: 'Up to 400 players',
+    capacity: 'Up to 400 players per slot',
     desc: 'Ideal for small to medium groups and tournaments.',
     mapQuery: 'Delta Stronghold Airsoft, Salawag, Dasmariñas, Cavite',
   },
@@ -100,7 +118,7 @@ const fieldLocations = [
     name: 'Delta Stronghold (Langkaan)',
     img: '/langkaanPlaceholder.png',
     size: '~2 hectares',
-    capacity: 'Up to 400 players',
+    capacity: 'Up to 400 players per slot',
     desc: 'Ideal for small to medium groups and tournaments.',
     mapQuery: 'Delta Stronghold Airsoft, Langkaan, Dasmariñas, Cavite',
   },
@@ -108,7 +126,7 @@ const fieldLocations = [
     name: 'LOMA Binan Laguna',
     img: '/loma.png',
     size: '~4 hectares',
-    capacity: 'Up to 600 players',
+    capacity: 'Up to 600 players per slot',
     desc: 'Ideal for large groups and tournaments.',
     mapQuery: 'LOMA Airsoft, Biñan, Laguna',
   },
@@ -611,8 +629,11 @@ export function LandingPage() {
     }
   }, [openMenu])
 
+  // Today can be booked until its last slot starts (Manila time); after that, tomorrow is first.
   const minDateISO = useMemo(() => {
-    const d = new Date()
+    const todayISO = manilaTodayISO()
+    if (bookingSlots.some((s) => !slotHasStarted(DEFAULT_SLOT_HOURS, s.id, todayISO))) return todayISO
+    const d = new Date(`${todayISO}T12:00:00`)
     d.setDate(d.getDate() + 1)
     return toISODate(d)
   }, [])
@@ -627,13 +648,24 @@ export function LandingPage() {
     location: 'salawag',
     fieldArea: 'Upper Ground',
     dateISO: minDateISO,
-    slot: 'morning',
+    slot: bookingSlots.find((s) => !slotHasStarted(DEFAULT_SLOT_HOURS, s.id, minDateISO))?.id ?? 'morning',
     players: 10,
   })
 
+  // Changing location, field area or date can change the allowed group size; keep players inside it.
   const updateBooking = <K extends keyof LandingReservationPrefill>(key: K, value: LandingReservationPrefill[K]) => {
-    setBooking((prev) => ({ ...prev, [key]: value }))
+    setBooking((prev) => {
+      const next = { ...prev, [key]: value }
+      // A slot that has already started today can't be booked; move to the next open one.
+      if (slotHasStarted(slotHours, next.slot, next.dateISO)) {
+        next.slot = bookingSlots.find((s) => !slotHasStarted(slotHours, s.id, next.dateISO))?.id ?? next.slot
+      }
+      const { min, max } = playerLimits(next)
+      const players = Math.min(max, Math.max(min, next.players))
+      return { ...next, players, fieldArea: fieldAreaForPlayers(players) }
+    })
   }
+  const limits = playerLimits(booking)
 
   const bookingDateLabel = useMemo(() => {
     const d = new Date(`${booking.dateISO}T12:00:00`)
@@ -810,7 +842,7 @@ export function LandingPage() {
             transition={{ duration: 0.6, delay: 0.15 }}
             className="mx-auto w-full max-w-[980px] rounded-3xl bg-white p-2 text-[#2b2b2b] shadow-[0_20px_50px_rgba(0,0,0,0.3)] md:rounded-full"
           >
-            <div ref={bookingBarRef} className="grid grid-cols-1 gap-1 sm:grid-cols-2 md:flex md:items-center md:gap-0">
+            <div ref={bookingBarRef} className="grid grid-cols-1 gap-1 sm:grid-cols-3 md:flex md:items-center md:gap-0">
               <BookingField
                 icon={<FiMapPin />}
                 label="Location"
@@ -827,29 +859,6 @@ export function LandingPage() {
                     detail={l.detail}
                     onSelect={() => {
                       updateBooking('location', l.id)
-                      setOpenMenu(null)
-                    }}
-                  />
-                ))}
-              </BookingField>
-
-              <span aria-hidden="true" className="hidden h-12 w-0.5 shrink-0 bg-[#d0d0d0] md:block" />
-
-              <BookingField
-                icon={<FiBox />}
-                label="Field Area"
-                value={booking.fieldArea}
-                open={openMenu === 'field'}
-                onToggle={() => toggleMenu('field')}
-              >
-                {fieldAreas.map((f) => (
-                  <BookingOption
-                    key={f.id}
-                    selected={booking.fieldArea === f.id}
-                    title={f.id}
-                    detail={f.detail}
-                    onSelect={() => {
-                      updateBooking('fieldArea', f.id)
                       setOpenMenu(null)
                     }}
                   />
@@ -879,8 +888,10 @@ export function LandingPage() {
                       <button
                         key={s.id}
                         type="button"
+                        disabled={slotHasStarted(slotHours, s.id, booking.dateISO)}
+                        title={slotHasStarted(slotHours, s.id, booking.dateISO) ? 'Already started today' : undefined}
                         onClick={() => updateBooking('slot', s.id)}
-                        className={`rounded-lg px-1 py-1.5 text-[11px] font-semibold transition ${
+                        className={`rounded-lg px-1 py-1.5 text-[11px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-40 ${
                           booking.slot === s.id ? 'bg-[#3d4a1e] text-white' : 'bg-[#f0f0ea] text-[#2b2b2b] hover:bg-[#e4e4da]'
                         }`}
                       >
@@ -916,8 +927,8 @@ export function LandingPage() {
                     <button
                       type="button"
                       aria-label="Fewer players"
-                      disabled={booking.players <= MIN_BOOKING_PLAYERS}
-                      onClick={() => updateBooking('players', Math.max(MIN_BOOKING_PLAYERS, booking.players - 1))}
+                      disabled={booking.players <= limits.min}
+                      onClick={() => updateBooking('players', Math.max(limits.min, booking.players - 1))}
                       className="grid h-10 w-10 place-items-center rounded-full bg-[#f0f0ea] text-[#3d4a1e] transition hover:bg-[#e4e4da] disabled:opacity-40"
                     >
                       <FiMinus />
@@ -929,8 +940,8 @@ export function LandingPage() {
                     <button
                       type="button"
                       aria-label="More players"
-                      disabled={booking.players >= MAX_BOOKING_PLAYERS}
-                      onClick={() => updateBooking('players', Math.min(MAX_BOOKING_PLAYERS, booking.players + 1))}
+                      disabled={booking.players >= limits.max}
+                      onClick={() => updateBooking('players', Math.min(limits.max, booking.players + 1))}
                       className="grid h-10 w-10 place-items-center rounded-full bg-[#f0f0ea] text-[#3d4a1e] transition hover:bg-[#e4e4da] disabled:opacity-40"
                     >
                       <FiPlus />
@@ -941,8 +952,9 @@ export function LandingPage() {
                       <button
                         key={n}
                         type="button"
+                        disabled={n < limits.min || n > limits.max}
                         onClick={() => updateBooking('players', n)}
-                        className={`rounded-xl py-1.5 text-xs font-semibold transition ${
+                        className={`rounded-xl py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-40 ${
                           booking.players === n ? 'bg-[#3d4a1e] text-white' : 'bg-[#f0f0ea] text-[#2b2b2b] hover:bg-[#e4e4da]'
                         }`}
                       >
@@ -950,6 +962,11 @@ export function LandingPage() {
                       </button>
                     ))}
                   </div>
+                  <p className="mt-3 text-xs leading-relaxed text-[#6a6a6a]">
+                    {limits.weekend
+                      ? `Weekends are public games on all 3 fields (Upper Ground, Lower Ground and Forest): join with any group size. Up to ${limits.max} players per slot.`
+                      : `Weekday private game: at least ${limits.min} players, up to ${limits.max}. Your fields: ${booking.fieldArea} (20+ players get Lower Ground too, 50+ get all 3 fields).`}
+                  </p>
                   <button
                     type="button"
                     onClick={() => setOpenMenu(null)}

@@ -4,7 +4,7 @@ import { useForm } from 'react-hook-form'
 import toast from 'react-hot-toast'
 import { useNavigate, useLocation, Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { FiCheck, FiEye, FiEyeOff } from 'react-icons/fi'
+import { FiAlertCircle, FiCheck, FiEye, FiEyeOff } from 'react-icons/fi'
 import { useTheme } from '../../context/ThemeContext'
 
 import { Button } from '../../components/ui/Button'
@@ -35,6 +35,8 @@ export function LoginPage() {
   const [confirmingGoogle, setConfirmingGoogle] = useState(false)
   // The email + password form was used for an account that was made with Google.
   const [googleOnlyAccount, setGoogleOnlyAccount] = useState<{ name?: string; email: string } | null>(null)
+  // Sign-in errors are shown as a label above the Sign In button, not as a pop-up.
+  const [formError, setFormError] = useState<string | null>(null)
 
   const {
     register,
@@ -72,6 +74,7 @@ export function LoginPage() {
   }
 
   async function onSubmit(values: FormValues) {
+    setFormError(null)
     try {
       const user = await login(values)
       toast.success(user.firstLogin ? 'Welcome to Chill Shooters!' : 'Authentication accepted.')
@@ -81,7 +84,7 @@ export function LoginPage() {
         setGoogleOnlyAccount(err.body.account || { email: values.email.trim() })
         return
       }
-      toast.error(err instanceof Error ? err.message : 'Unable to sign in. Please try again.')
+      setFormError(err instanceof Error ? err.message : 'Unable to sign in. Please try again.')
     }
   }
 
@@ -98,13 +101,14 @@ export function LoginPage() {
 
   async function handleGoogleSignIn() {
     setGoogleOnlyAccount(null)
+    setFormError(null)
     try {
       const profile = await signInWithGoogle()
       // null: the pop-up was blocked and the browser is going to Google; we finish on return.
       if (profile) await finishGoogleSignIn(profile, false)
     } catch (err: any) {
       console.error('Google sign-in error', err)
-      toast.error(err?.message || 'Google sign-in failed.')
+      setFormError(err?.message || 'Google sign-in failed.')
     }
   }
 
@@ -114,7 +118,7 @@ export function LoginPage() {
     let active = true
     completeGoogleRedirect()
       .then((profile) => (active && profile ? finishGoogleSignIn(profile, false) : undefined))
-      .catch((err: any) => { if (active) toast.error(err?.message || 'Google sign-in failed.') })
+      .catch((err: any) => { if (active) setFormError(err?.message || 'Google sign-in failed.') })
     return () => { active = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -126,7 +130,7 @@ export function LoginPage() {
       await finishGoogleSignIn(pendingGoogle.profile, true)
     } catch (err: any) {
       setPendingGoogle(null)
-      toast.error(err?.message || 'Google sign-in failed.')
+      setFormError(err?.message || 'Google sign-in failed.')
     } finally {
       setConfirmingGoogle(false)
     }
@@ -237,6 +241,11 @@ export function LoginPage() {
                 </span>
               </label>
 
+              {formError ? (
+                <div role="alert" className="flex items-start gap-2 rounded-2xl border border-danger/25 bg-danger/10 p-3 text-sm font-semibold text-danger">
+                  <FiAlertCircle className="mt-0.5 shrink-0" aria-hidden /> <span>{formError}</span>
+                </div>
+              ) : null}
               <Button type="submit" disabled={isSubmitting} className="w-full">
                 {isSubmitting ? 'Verifying...' : 'Sign In'}
               </Button>

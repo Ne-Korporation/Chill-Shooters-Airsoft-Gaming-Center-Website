@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react'
-import { FiBarChart2, FiCalendar, FiClock, FiCreditCard, FiLogOut, FiShield, FiShoppingBag, FiTool, FiUsers } from 'react-icons/fi'
+import { FiCalendar, FiCheck, FiClock, FiCreditCard, FiShield, FiTool } from 'react-icons/fi'
 import { Link } from 'react-router-dom'
-import { DashboardPostsPanel } from '../../components/dashboard/DashboardPostsPanel'
 import { CapacityCalendar } from '../../components/booking/CapacityCalendar'
 import { useAuth } from '../../context/AuthContext'
 import { PaymentCompletePanel } from '../../components/dashboard/PaymentCompletePanel'
@@ -102,7 +101,7 @@ export function AdminDashboardPage() {
             const id = reservation?.id || 'unknown'
             const player = reservation?.userName || reservation?.player || reservation?.userId || 'Player'
             activityRows.push({
-              title: `${status === 'confirmed' ? 'Confirmed' : 'Updated'} reservation ${id}`,
+              title: `${status === 'confirmed' ? 'Confirmed' : 'Updated'} reservation ${String(id).replace(/^(R-[0-9a-f]{8})-[0-9a-f-]+$/i, '$1')}`,
               subtitle: player,
               meta: formatRelativeTime(reservation?.updatedAtISO || reservation?.createdAtISO),
               tone: status === 'confirmed' ? 'success' : 'accent',
@@ -167,7 +166,7 @@ export function AdminDashboardPage() {
         description="What's happening across reservations, players, and payments."
         actions={
           <Link to="/app/admin/reservations" className="inline-flex h-10 items-center gap-2 rounded-xl bg-primary px-4 text-sm font-semibold text-white transition hover:brightness-110">
-            <FiCalendar /> Reservations
+            <FiCalendar /> Bookings
           </Link>
         }
       />
@@ -178,18 +177,13 @@ export function AdminDashboardPage() {
         </div>
       ) : null}
 
-      {/* Same layout as the player dashboard: announcements in the main column, a compact summary on the right. */}
+      {/* Capacity calendar in the main column, a compact summary on the right. Announcements have their own page (side nav). */}
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
         <div className="min-w-0 space-y-4">
           <CapacityCalendar
             editable
             title="Game Capacity"
             subtitle="Spots booked for each weekend's open games. Click a day to make it a game for a cause."
-          />
-          <DashboardPostsPanel
-            canManage
-            title="Announcements"
-            subtitle="Posts here appear on every dashboard: players, marshals, and registrars."
           />
         </div>
 
@@ -203,51 +197,54 @@ export function AdminDashboardPage() {
           <Panel
             compact
             title="Needs attention"
-            description={loading ? undefined : attentionCount > 0 ? `${attentionCount} items waiting on you` : 'All caught up'}
+            description={loading || attentionCount === 0 ? undefined : `${attentionCount} item${attentionCount === 1 ? '' : 's'} waiting on you`}
           >
+            {/* Only what's waiting is listed; nothing pending reads as one line. */}
+            {!loading && attentionCount === 0 ? (
+              <div className="flex items-center gap-2 py-1 text-sm text-success"><FiCheck /> Nothing needs your attention.</div>
+            ) : (
             <div className="space-y-0.5">
+              {dashboard.pendingApprovals > 0 ? (
               <ActionRow
                 to="/app/admin/reservations"
                 icon={FiClock}
                 title="Reservations to approve"
                 description={dashboard.pendingApprovals > 0 ? 'Pending or flagged for review' : 'Nothing pending'}
-                badge={loading ? undefined : dashboard.pendingApprovals}
+                badge={dashboard.pendingApprovals}
               />
+              ) : null}
+              {dashboard.reviewQueue > 0 ? (
               <ActionRow
                 to="/app/admin/payments"
                 icon={FiCreditCard}
                 title="Payments to review"
                 description={dashboard.reviewQueue > 0 ? 'Proofs waiting for verification' : 'Nothing pending'}
-                badge={loading ? undefined : dashboard.reviewQueue}
+                badge={dashboard.reviewQueue}
               />
+              ) : null}
+              {dashboard.waiversToReview > 0 ? (
               <ActionRow
                 to="/app/admin/waivers"
                 icon={FiShield}
                 title="Waivers to review"
                 description={dashboard.waiversToReview > 0 ? 'Submitted waivers waiting for approval' : 'Nothing pending'}
-                badge={loading ? undefined : dashboard.waiversToReview}
+                badge={dashboard.waiversToReview}
               />
+              ) : null}
+              {dashboard.equipmentAlerts > 0 ? (
               <ActionRow
                 to="/app/admin/equipment"
                 icon={FiTool}
                 title="Gear alerts"
                 description={dashboard.equipmentAlerts > 0 ? 'Low stock or in maintenance' : 'All gear available'}
-                badge={loading ? undefined : dashboard.equipmentAlerts}
+                badge={dashboard.equipmentAlerts}
               />
+              ) : null}
             </div>
+            )}
           </Panel>
 
-          <PaymentCompletePanel />
-
-          <Panel compact title="Shortcuts">
-            <div className="space-y-0.5">
-              <ActionRow to="/app/counter" icon={FiShoppingBag} title="Counter" description="Balances and extra charges at the field" />
-              <ActionRow to="/app/walk-ins" icon={FiShoppingBag} title="Walk-ins" description="Register walk-ins for weekend public games" />
-              <ActionRow to="/app/rentals" icon={FiLogOut} title="Rental check-out" description="Issue and return gear for today's games" />
-              <ActionRow to="/app/admin/player-management" icon={FiUsers} title="Players & staff" description="Accounts, ID checks, and staff access" />
-              <ActionRow to="/app/admin/reports" icon={FiBarChart2} title="Reports" description="Sales, bookings, rentals, and penalties" />
-            </div>
-          </Panel>
+          <PaymentCompletePanel hideWhenEmpty />
 
           <Panel compact title="Recent activity">
             <ActivityList compact items={dashboard.recentActivity} loading={loading} emptyText="No recent activity yet." />

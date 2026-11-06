@@ -167,8 +167,8 @@ router.get('/players/:id/stats', requireAuth, async (req, res) => {
     const status = (r) => String(r.reservationStatus || '').toLowerCase()
 
     const [weapons, equipment] = await Promise.all([
-      db.collection('weapons').find({ submittedBy: id, approvalStatus: 'approved' }, { projection: { id: 1, name: 1, category: 1 } }).toArray(),
-      db.collection('equipments').find({ submittedBy: id, approvalStatus: 'approved' }, { projection: { id: 1, name: 1, category: 1 } }).toArray(),
+      db.collection('weapons').find({ submittedBy: id, approvalStatus: { $ne: 'rejected' } }, { projection: { id: 1, name: 1, category: 1 } }).toArray(),
+      db.collection('equipments').find({ submittedBy: id, approvalStatus: { $ne: 'rejected' } }, { projection: { id: 1, name: 1, category: 1 } }).toArray(),
     ])
 
     return res.json({

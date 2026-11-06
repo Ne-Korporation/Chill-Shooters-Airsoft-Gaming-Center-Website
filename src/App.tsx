@@ -35,6 +35,7 @@ import { AdminAuditLogsPage } from './pages/admin/AdminAuditLogsPage'
 import { AdminPartnershipsPage } from './pages/admin/AdminPartnershipsPage'
 import { AdminFeedbackPage } from './pages/admin/AdminFeedbackPage'
 import { AdminReachFundPage } from './pages/admin/AdminReachFundPage'
+import { AdminAnnouncementsPage } from './pages/admin/AdminAnnouncementsPage'
 import { AdminWeatherPage } from './pages/admin/AdminWeatherPage'
 import { SafetyLogPage } from './pages/marshal/SafetyLogPage'
 import { TeamGroupingPage } from './pages/operations/TeamGroupingPage'
@@ -232,6 +233,7 @@ export default function App() {
         <Route path="admin/partnerships" element={<AdminPageWrapper><AdminPartnershipsPage /></AdminPageWrapper>} />
         <Route path="admin/feedback" element={<AdminPageWrapper><AdminFeedbackPage /></AdminPageWrapper>} />
         <Route path="admin/reach-fund" element={<AdminPageWrapper><AdminReachFundPage /></AdminPageWrapper>} />
+        <Route path="admin/announcements" element={<AdminPageWrapper><AdminAnnouncementsPage /></AdminPageWrapper>} />
         <Route path="safety" element={<RequireRole roles={['marshal', 'admin']}><SafetyLogPage /></RequireRole>} />
         <Route path="team-grouping" element={<RequireRole roles={['marshal', 'admin']}><TeamGroupingPage /></RequireRole>} />
         <Route path="check-in" element={<RequireRole roles={['registrar', 'marshal', 'admin']}><FieldCheckInPage /></RequireRole>} />
