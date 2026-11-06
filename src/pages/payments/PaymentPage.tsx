@@ -255,7 +255,11 @@ function PaymentPageContent() {
     return !stripeSession && paymentMode !== 'split'
   }, [isXendit, submitting, stripeSession, paymentMode, xenditEnabled])
 
-  const submit = async () => {
+  // Picking Card opens the card form right away, so the method is passed in rather than read from
+  // state (which hasn't updated yet on that click).
+  const submit = async (chosenMethod: PaymentMethod = method) => {
+    const method = chosenMethod
+    const isXendit = method !== 'stripe'
     setSubmitting(true)
     // GCash / QR Ph open in a new tab. It must be opened now, during the click: browsers block
     // tabs opened after waiting on the server.
@@ -412,6 +416,44 @@ function PaymentPageContent() {
 
       <div className="grid gap-4 xl:grid-cols-[1.6fr_0.9fr]">
         <Card className="p-4 md:p-6">
+          {success ? (
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.25 }}
+              className="flex flex-col items-center py-6 text-center"
+              role="status"
+            >
+              <div className="grid h-16 w-16 place-items-center rounded-full bg-success/15 text-success ring-8 ring-success/10">
+                <FiCheck className="h-8 w-8" />
+              </div>
+              <h2 className="mt-5 text-2xl font-bold">Payment received</h2>
+              <p className="mt-2 max-w-md text-sm text-muted">
+                Your card payment went through and your reservation is confirmed.
+                {balanceDue > 0 ? ` Pay the remaining ${formatPHP(balanceDue)} at the counter on game day.` : ''}
+              </p>
+
+              <div className="mt-6 w-full max-w-sm rounded-2xl border border-white/10 bg-white/5 p-4 text-left">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-xs text-muted">Amount paid</span>
+                  <span className="text-lg font-bold text-gold">{formatPHP(amountPaid)}</span>
+                </div>
+                <div className="mt-2 flex items-center justify-between gap-3">
+                  <span className="text-xs text-muted">Receipt</span>
+                  <span className="truncate text-xs font-semibold">{receiptReference || '—'}</span>
+                </div>
+              </div>
+
+              <div className="mt-6 flex w-full max-w-sm flex-col gap-2 sm:flex-row sm:justify-center">
+                <Button variant="primary" onClick={() => navigate('/app/my-reservations')}>
+                  View My Reservations <FiChevronRight />
+                </Button>
+                <Button variant="ghost" onClick={() => navigate('/app')}>
+                  Go to Dashboard
+                </Button>
+              </div>
+            </motion.div>
+          ) : (<>
           {/* Who pays only matters with teammates to split with; a solo booking skips it. */}
           {showWhoPays && (<>
           <div className="text-xs uppercase tracking-widest text-muted">Who pays</div>
@@ -488,8 +530,15 @@ function PaymentPageContent() {
               <button
                 key={option.key}
                 type="button"
-                disabled={Boolean(stripeSession) || Boolean(option.unavailable)}
-                onClick={() => setMethod(option.key)}
+                disabled={Boolean(option.unavailable) || submitting || success}
+                onClick={() => {
+                  // Switching away from Card closes its form. The reservation already saved is kept
+                  // and reused by the GCash / QR Ph checkout, so nothing is booked twice.
+                  if (option.key !== 'stripe' && stripeSession) setStripeSession(null)
+                  setMethod(option.key)
+                  // Card: open Stripe's card form straight away (this saves the reservation).
+                  if (option.key === 'stripe' && !stripeSession && !submitting && !success) void submit('stripe')
+                }}
                 className={[
                   'w-full text-left rounded-2xl border px-4 py-3 transition disabled:cursor-not-allowed disabled:opacity-50',
                   method === option.key
@@ -567,12 +616,13 @@ function PaymentPageContent() {
                         if (user?.id) clearBookingDraft(user.id)
                         setSuccess(true)
                         toast.success('Card payment received. Your reservation is confirmed.')
+                        window.scrollTo({ top: 0, behavior: 'smooth' })
                       }}
                     />
                   </div>
                 ) : (
                   <div className="rounded-2xl border border-white/10 bg-white/5 p-4 text-xs text-muted">
-                    Press Continue to card payment to save your reservation and open the secure card form.
+                    {submitting ? 'Opening the secure card form…' : "The card form didn't open. Press Continue to card payment to try again."}
                   </div>
                 )
               ) : null}
@@ -613,53 +663,17 @@ function PaymentPageContent() {
             </div>
           </div>
 
+          {/* The card form has its own Pay button once it's open. */}
+          {method === 'stripe' && stripeSession ? null : (
           <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:items-center">
-            <Button variant="primary" disabled={!canSubmit} onClick={submit}>
+            <Button variant="primary" disabled={!canSubmit} onClick={() => void submit()}>
               {submitting ? (isXendit ? 'Opening payment…' : 'Submitting…') : success ? 'Paid' : isXendit ? 'Continue to payment' : 'Continue to card payment'}
               <FiChevronRight />
             </Button>
           </div>
+          )}
 
-          {success ? (
-            <motion.div
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.25 }}
-              className="mt-4 rounded-2xl border border-success/25 bg-success/10 p-4"
-            >
-              <div className="flex items-center gap-2 text-sm font-bold text-success">
-                <FiCheck /> Payment Received
-              </div>
-              <div className="mt-2 text-xs text-muted">
-                Your card payment was verified with Stripe and your reservation is confirmed.
-                {paymentMode === 'split'
-                  ? ' Your teammates have been notified of their shares. Track who has paid under Split Payment in the menu — the team has 24 hours to pay. Teammates who have not paid get reminders, and if not every share is in by then, the booking is released for anyone to take.'
-                  : ''}
-              </div>
-
-              <div className="mt-3 rounded-2xl border border-white/10 bg-white/5 p-3">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-xs text-muted">Receipt</span>
-                  <span className="text-xs font-bold">
-                    {receiptReference || '—'}
-                  </span>
-                </div>
-                <div className="mt-2 flex items-center justify-between gap-3">
-                  <span className="text-xs text-muted">Total paid</span>
-                  <span className="text-xs font-bold text-gold">{formatPHP(amountPaid)}</span>
-                </div>
-              </div>
-
-              <div className="mt-4 flex flex-col gap-2 sm:flex-row">
-                <Button variant="primary" onClick={() => navigate('/app')}>
-                  Go to Dashboard <FiChevronRight />
-                </Button>
-                <Button variant="ghost" onClick={() => navigate('/app/my-reservations')}>
-                  View My Reservations
-                </Button>
-              </div>
-            </motion.div>
-          ) : null}
+          </>)}
         </Card>
 
         <Card className="p-4 md:p-6">

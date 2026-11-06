@@ -8,7 +8,7 @@ import {
   stripeIntentMatchesReservation,
 } from '../utils/paymentRules.js'
 import { recordVerifiedStripePayment } from '../utils/stripePayments.js'
-import { emailPaymentEvent } from '../services/notificationEmails.js'
+import { emailPaymentEvent, emailPaymentReceipt } from '../services/notificationEmails.js'
 import { getReservationPayments, syncReservationPaymentState } from '../utils/paymentProgress.js'
 import { normalizePhPhone } from '../utils/phone.js'
 import { nextShortId } from '../utils/shortIds.js'
@@ -158,7 +158,7 @@ router.post('/payments/stripe-confirm', requireAuth, async (req, res) => {
     })
 
     await syncReservationPaymentState(db, reservation)
-    void emailPaymentEvent(db, payment, payment?.paymentStatus || 'paid')
+    void emailPaymentReceipt(db, payment, payment?.paymentStatus || 'paid')
     return res.json({ ok: true, data: payment })
   } catch (err) {
     console.error('Stripe payment confirmation error:', err)

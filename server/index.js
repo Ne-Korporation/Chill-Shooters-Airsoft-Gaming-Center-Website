@@ -37,6 +37,7 @@ const { sendDueReminders } = await import('./utils/reminders.js')
 const { sendWeatherAlerts } = await import('./utils/weather.js')
 const { backfillGameplayLocations } = await import('./utils/reservationGameplay.js')
 const { parseAddress } = await import('./services/mailService.js')
+const { sendUnpaidReservationEmails } = await import('./services/notificationEmails.js')
 
 const app = express()
 app.use(cors())
@@ -83,6 +84,8 @@ setInterval(() => {
     .then(async (db) => {
       await expireOverdueReservations(db, startDbSession, { force: true })
       await sendSplitPaymentWarnings(db, { force: true })
+      // One "waiting for payment" email for bookings left unpaid a few minutes.
+      await sendUnpaidReservationEmails(db)
       await expireOldIdentities(db)
     })
     .catch((err) => console.warn('Payment window sweep failed:', String(err)))

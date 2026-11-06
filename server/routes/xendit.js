@@ -4,7 +4,7 @@ import { getDb, startDbSession, toObjectId } from '../db/mongo.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
 import { getGcashAmountDue, getSplitPayerIds } from '../utils/paymentRules.js'
 import { syncReservationPaymentState } from '../utils/paymentProgress.js'
-import { emailPaymentEvent } from '../services/notificationEmails.js'
+import { emailPaymentReceipt } from '../services/notificationEmails.js'
 import { createInvoice, paidPaymentOf, retrieveInvoice, verifyCallbackToken, XENDIT_CHANNELS, xenditEnabled } from '../utils/xendit.js'
 import { XENDIT_CHECKOUTS, recordXenditPayment } from '../utils/xenditPayments.js'
 import { appUrlFrom } from './guardianApprovals.js'
@@ -46,7 +46,7 @@ async function settleCheckout(db, checkout) {
     if (created) {
       const reservation = await db.collection('reservations').findOne({ id: checkout.reservationId })
       await syncReservationPaymentState(db, reservation)
-      void emailPaymentEvent(db, payment, payment.paymentStatus)
+      void emailPaymentReceipt(db, payment, payment.paymentStatus)
     }
   }
   // A full-day checkout pays several bookings; report them together.
@@ -334,7 +334,7 @@ router.post('/demo-pay/:ref/pay', requireAuth, requireRole('user'), async (req, 
         if (created) {
           const reservation = await db.collection('reservations').findOne({ id: part.checkout.reservationId })
           await syncReservationPaymentState(db, reservation)
-          void emailPaymentEvent(db, payment, payment.paymentStatus)
+          void emailPaymentReceipt(db, payment, payment.paymentStatus)
         }
       }
       if (parts.length > 1) {

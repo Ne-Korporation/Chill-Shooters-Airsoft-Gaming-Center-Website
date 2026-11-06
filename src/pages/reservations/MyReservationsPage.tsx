@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { FiCalendar, FiCheck, FiCopy, FiEye, FiLock, FiPrinter, FiRefreshCw, FiXCircle } from 'react-icons/fi'
+import { FiAlertCircle, FiCalendar, FiCheck, FiCopy, FiEye, FiPrinter, FiRefreshCw, FiXCircle } from 'react-icons/fi'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { apiGet, apiPost } from '../../utils/apiClient'
@@ -14,6 +14,7 @@ import { reservationStatusLabel } from '../../utils/reservationStatus'
 import { RescheduleSlotPicker, isWeekdayISO } from '../../components/reservations/RescheduleSlotPicker'
 import { ReservationDetailsDialog, type ReservationDetails } from '../../components/reservations/ReservationDetailsDialog'
 import { Pagination, usePagination } from '../../components/ui/Pagination'
+import { FilterTabs } from '../../components/ui/FilterTabs'
 
 type RescheduleEvent = {
   fromDate?: string
@@ -90,6 +91,18 @@ function statusOf(reservation: ReservationDoc) {
 
 function formatShortDate(iso: string) {
   return iso ? new Date(`${iso}T12:00:00Z`).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }) : ''
+}
+
+function formatCardDate(iso: string) {
+  return new Date(`${iso}T12:00:00Z`).toLocaleDateString('en-PH', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
+}
+
+// Status chip colors: green when it's set, gold while waiting, red when it needs the player.
+function statusTone(status: string) {
+  if (['confirmed', 'approved', 'completed'].includes(status)) return 'bg-success/15 text-success'
+  if (['needs review', 'rejected', 'declined'].includes(status)) return 'bg-danger/15 text-danger'
+  if (status === 'pending') return 'bg-accent/15 text-accent'
+  return 'bg-[rgba(var(--text),0.08)] text-muted'
 }
 
 function formatPHP(value?: number) {
@@ -217,7 +230,15 @@ export function MyReservationsPage() {
     [reservations],
   )
 
-  const { page, setPage, pageCount, pageItems, total } = usePagination(sorted, 10)
+  // Upcoming games first (soonest on top); past games in their own tab (most recent on top).
+  const [tab, setTab] = useState<'upcoming' | 'past'>('upcoming')
+  const upcoming = useMemo(
+    () => sorted.filter((item) => !dateOf(item) || dateOf(item) >= today).sort((a, b) => (dateOf(a) || '9999').localeCompare(dateOf(b) || '9999')),
+    [sorted, today],
+  )
+  const past = useMemo(() => sorted.filter((item) => dateOf(item) && dateOf(item) < today), [sorted, today])
+  const shown = tab === 'upcoming' ? upcoming : past
+  const { page, setPage, pageCount, pageItems, total } = usePagination(shown, 10, tab)
 
   const startEditing = (reservation: ReservationDoc) => {
     setEditingId(reservationIdOf(reservation))
@@ -274,13 +295,23 @@ export function MyReservationsPage() {
         <div>
           <h1 className="text-3xl font-bold">My Reservations</h1>
           <p className="mt-1 text-sm text-muted">
-            View your bookings and reschedule up to {RESCHEDULE_CUTOFF_DAYS} days before the game. Paid deposits carry over to the new date.
+            Reschedule up to {RESCHEDULE_CUTOFF_DAYS} days before your game; paid deposits carry over. Unpaid bookings can be cancelled until you pay.
           </p>
         </div>
         <Button variant="primary" onClick={() => navigate('/app/reservations')}>
           <FiCalendar /> Book a game
         </Button>
       </div>
+
+      <FilterTabs
+        ariaLabel="Show reservations"
+        value={tab}
+        onChange={setTab}
+        options={[
+          { value: 'upcoming', label: 'Upcoming', count: upcoming.length },
+          { value: 'past', label: 'Past', count: past.length },
+        ]}
+      />
 
       {draft && draftSecondsLeft > 0 ? (
         <Card className="flex flex-col gap-3 border-accent/40 p-4 sm:flex-row sm:items-center sm:justify-between">
@@ -296,8 +327,13 @@ export function MyReservationsPage() {
       ) : null}
 
       {loading ? <Card className="p-4 text-sm text-muted">Loading your reservations…</Card> : null}
-      {!loading && sorted.length === 0 ? (
-        <Card className="p-4 text-sm text-muted">You have no reservations yet.</Card>
+      {!loading && shown.length === 0 ? (
+        <Card className="p-6 text-center text-sm text-muted">
+          {tab === 'upcoming' ? 'No upcoming games.' : 'No past games yet.'}
+          {tab === 'upcoming' ? (
+            <div className="mt-3"><Button variant="primary" onClick={() => navigate('/app/reservations')}><FiCalendar /> Book a game</Button></div>
+          ) : null}
+        </Card>
       ) : null}
 
       {pageItems.map((reservation) => {
@@ -311,101 +347,91 @@ export function MyReservationsPage() {
         const sentBack = Boolean(reservation.sentBack) && status === 'needs review'
         const canReschedule = statusAllows && (sentBack || daysLeft >= RESCHEDULE_CUTOFF_DAYS)
         const cutoffDate = date ? addDaysISO(date, -RESCHEDULE_CUTOFF_DAYS) : ''
-        const blockedReason = !statusAllows
-          ? `A reservation marked "${statusLabel}" can't be rescheduled.`
-          : daysLeft < 0
-            ? 'This game date has passed.'
-            : daysLeft < RESCHEDULE_CUTOFF_DAYS
-              ? `Rescheduling closed on ${formatShortDate(cutoffDate)}: changes must be made at least ${RESCHEDULE_CUTOFF_DAYS} days before the game (${formatShortDate(date)}).`
-              : ''
         const editing = editingId === id
         const reservationPayments = payments.filter((payment) => [reservation.id, reservation._id].map(String).includes(String(payment.reservationId)))
         const hasVerifiedPayment = reservationPayments.some(isVerifiedPayment)
-        const isOpen = OPEN_STATUSES.includes(status)
         // Unpaid and still waiting for payment: the captain can cancel it.
         const canCancel = ['pending', 'needs review'].includes(status)
           && String(reservation.userId || '') === String(user?.id || '')
           && !reservationPayments.some((payment: any) => !['failed', 'rejected'].includes(String(payment.paymentStatus || payment.status || '').toLowerCase()))
+        // Still owes this player's payment and can pay it online now.
+        const payable = canPayOnline && status === 'pending' && reservation.paymentState !== 'finalized'
+          && !reservationPayments.some((payment: any) => String(payment.userId) === String(user?.id) && !['failed', 'rejected'].includes(String(payment.paymentStatus || '').toLowerCase()))
+        const needsAction = sentBack || payable
 
         return (
-          <Card key={id} className="p-4 md:p-5">
-            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-              <div>
+          <Card key={id} className={`p-4 md:p-5 ${needsAction ? 'border-accent/40' : ''}`}>
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div className="min-w-0">
                 <div className="text-lg font-semibold">
-                  {date || 'No date'} · <span className="capitalize">{slotOf(reservation) || '-'}</span>
+                  {date ? formatCardDate(date) : 'No date'} · <span className="capitalize">{slotOf(reservation) || '-'}</span>
                 </div>
-                <div className="mt-1 text-sm text-muted">
-                  {reservation.locationName || reservation.locationId || 'Location'} · <span className="capitalize">{reservation.sessionType || 'public'}</span> · {reservation.numberOfPlayers || 0} players · {reservation.packageName || 'Custom selection'}
+                <div className="mt-0.5 text-sm text-muted">
+                  {reservation.locationName || reservation.locationId || 'Location'} · {reservation.numberOfPlayers || 0} player{Number(reservation.numberOfPlayers) === 1 ? '' : 's'} · {reservation.packageName || 'Custom selection'} · {formatPHP(reservation.totalAmount)}
                 </div>
-                <div className="mt-1 text-xs text-muted">
-                  Total {formatPHP(reservation.totalAmount)} · Deposit {formatPHP(reservation.depositAmount)}
-                </div>
-                <div className="mt-1 flex items-center gap-1.5 text-xs text-muted">
-                  Reservation no. <span className="font-mono font-semibold text-text">{id}</span>
-                  <CopyReservationNumber value={id} />
-                </div>
-                {sentBack ? (
-                  <div className="mt-2 rounded-xl border border-danger/30 bg-danger/10 p-3 text-sm text-danger">
-                    <div className="font-semibold">Staff sent this reservation back to you</div>
-                    <div className="mt-1 text-text">Reason: {reservation.sentBack?.note}</div>
-                    <div className="mt-1 text-xs text-muted">Choose a new date below. Staff will review it again; your deposit carries over.</div>
-                  </div>
-                ) : null}
-                {status === 'cancelled' && reservation.cancellationReason === 'payment_window_expired' ? (
-                  <div className="mt-1 text-xs text-amber-600 dark:text-amber-400">The slot was released because payment wasn't completed in time.</div>
-                ) : null}
-                {status === 'cancelled' && reservation.cancellationReason === 'cancelled_by_player_before_payment' ? (
-                  <div className="mt-1 text-xs text-muted">You cancelled this booking before paying.</div>
-                ) : null}
-                {isOpen && reservation.paymentState !== 'finalized' && reservation.paymentDueAtISO ? (
-                  <div className="mt-1 text-xs text-muted">
-                    {reservation.paymentMode === 'split' ? 'Team payment' : 'Payment'} must be complete by{' '}
-                    {new Date(reservation.paymentDueAtISO).toLocaleString('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short' })} or the slot is released.
-                  </div>
-                ) : null}
               </div>
-              <div className="flex flex-col items-start gap-2 md:items-end">
-                <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold uppercase tracking-widest">
-                  {statusLabel}
-                </span>
-                {canPayOnline && status === 'pending' && reservation.paymentState !== 'finalized' &&
-                  !reservationPayments.some((payment: any) => String(payment.userId) === String(user?.id) && !['failed', 'rejected'].includes(String(payment.paymentStatus || '').toLowerCase())) ? (
-                  <Button variant="primary" disabled={payingId === id} onClick={() => payOnline(id)}>
-                    {payingId === id ? 'Opening payment…' : 'Pay now'}
-                  </Button>
-                ) : null}
-                {hasVerifiedPayment ? (
-                  <Button variant="ghost" onClick={() => printReceipt(reservation, reservationPayments, user?.name || '').catch((err: any) => toast.error(err?.message || 'Unable to print the receipt'))}>
-                    <FiPrinter /> Print receipt
-                  </Button>
-                ) : null}
-                <Button variant="ghost" onClick={() => setDetailsId(id)}>
-                  <FiEye /> View details
-                </Button>
-                {!editing ? (
-                  <Button variant={sentBack ? 'primary' : 'ghost'} disabled={!canReschedule} onClick={() => startEditing(reservation)} title={blockedReason || undefined}>
-                    <FiRefreshCw /> {sentBack ? 'Choose a new date' : 'Reschedule'}
-                  </Button>
-                ) : null}
-                {!canReschedule && blockedReason ? <div className="max-w-xs text-xs text-warning md:text-right">{blockedReason}</div> : null}
-                {canCancel ? (
-                  <Button
-                    variant="danger-soft"
-                    disabled={cancellingId === id}
-                    onClick={() => cancelReservation(id, `${reservation.reservationDate || ''} (${reservation.reservationTime || ''})`)}
-                  >
-                    <FiXCircle /> {cancellingId === id ? 'Cancelling…' : 'Cancel reservation'}
-                  </Button>
-                ) : null}
-                {canCancel ? (
-                  <div className="max-w-xs text-xs text-muted md:text-right">You can cancel until a payment is made.</div>
-                ) : isOpen ? (
-                  <div className="flex max-w-xs items-start gap-1 text-xs text-muted md:text-right">
-                    <FiLock className="mt-0.5 shrink-0" /> No cancellations — you can transfer to another date up to {RESCHEDULE_CUTOFF_DAYS} days before your game, and your deposit carries over.
-                  </div>
-                ) : null}
-              </div>
+              <span className={`shrink-0 rounded-full px-3 py-1 text-xs font-semibold ${statusTone(status)}`}>{statusLabel}</span>
             </div>
+
+            {/* What the player needs to do, if anything, with the button to do it. */}
+            {sentBack ? (
+              <div className="mt-3 flex flex-col gap-3 rounded-xl border border-danger/30 bg-danger/10 p-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="text-sm">
+                  <div className="flex items-center gap-1.5 font-semibold text-danger"><FiAlertCircle /> Staff sent this reservation back</div>
+                  <div className="mt-0.5 text-muted">{reservation.sentBack?.note}</div>
+                </div>
+                {!editing ? (
+                  <Button variant="primary" onClick={() => startEditing(reservation)}><FiRefreshCw /> Choose a new date</Button>
+                ) : null}
+              </div>
+            ) : payable ? (
+              <div className="mt-3 flex flex-col gap-3 rounded-xl border border-accent/30 bg-accent/10 p-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="text-sm">
+                  <div className="flex items-center gap-1.5 font-semibold"><FiAlertCircle className="text-accent" /> Waiting for payment</div>
+                  {reservation.paymentDueAtISO ? (
+                    <div className="mt-0.5 text-muted">
+                      Pay by {new Date(reservation.paymentDueAtISO).toLocaleString('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short' })} or the slot is released.
+                    </div>
+                  ) : null}
+                </div>
+                <Button variant="primary" disabled={payingId === id} onClick={() => payOnline(id)}>
+                  {payingId === id ? 'Opening payment…' : `Pay ${formatPHP(reservation.depositAmount)}`}
+                </Button>
+              </div>
+            ) : null}
+
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <Button size="sm" variant="ghost" onClick={() => setDetailsId(id)}>
+                <FiEye /> Details
+              </Button>
+              {canReschedule && !sentBack && !editing ? (
+                <Button size="sm" variant="ghost" onClick={() => startEditing(reservation)}>
+                  <FiRefreshCw /> Reschedule
+                </Button>
+              ) : null}
+              {hasVerifiedPayment ? (
+                <Button size="sm" variant="ghost" onClick={() => printReceipt(reservation, reservationPayments, user?.name || '').catch((err: any) => toast.error(err?.message || 'Unable to print the receipt'))}>
+                  <FiPrinter /> Receipt
+                </Button>
+              ) : null}
+              {canCancel ? (
+                <Button
+                  size="sm"
+                  variant="danger-soft"
+                  disabled={cancellingId === id}
+                  onClick={() => cancelReservation(id, `${reservation.reservationDate || ''} (${reservation.reservationTime || ''})`)}
+                >
+                  <FiXCircle /> {cancellingId === id ? 'Cancelling…' : 'Cancel'}
+                </Button>
+              ) : null}
+              <span className="ml-auto flex items-center gap-1 text-[11px] text-muted">
+                <span className="font-mono">{id}</span>
+                <CopyReservationNumber value={id} />
+              </span>
+            </div>
+            {tab === 'upcoming' && statusAllows && !sentBack && daysLeft >= 0 && daysLeft < RESCHEDULE_CUTOFF_DAYS ? (
+              <div className="mt-2 text-xs text-muted">Rescheduling closed on {formatShortDate(cutoffDate)} ({RESCHEDULE_CUTOFF_DAYS} days before the game).</div>
+            ) : null}
 
             {editing ? (
               <div className="mt-4 grid gap-3 rounded-2xl border border-white/10 bg-white/5 p-4 md:grid-cols-3">
@@ -449,16 +475,6 @@ export function MyReservationsPage() {
               </div>
             ) : null}
 
-            {reservation.rescheduleHistory?.length ? (
-              <div className="mt-3 space-y-1 text-xs text-muted">
-                {reservation.rescheduleHistory.map((event, index) => (
-                  <div key={index}>
-                    Moved from {event.fromDate} {event.fromTime} to {event.toDate} {event.toTime}
-                    {event.reason ? ` — ${event.reason}` : ''}
-                  </div>
-                ))}
-              </div>
-            ) : null}
           </Card>
         )
       })}
