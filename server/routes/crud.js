@@ -11,7 +11,7 @@ import { calculateBookingPrice, getAmmoReloadPrice, normalizeExtraAmmoReloads } 
 import { getBookingInventoryRequirements, getHeldQuantities, holdBookingInventory, stockQuantity } from '../utils/inventoryHolds.js'
 import { canonicalEmail, normalizeEmail, sameEmailFilter } from '../utils/emails.js'
 import { submitGcashPayment } from '../utils/gcashPayments.js'
-import { nextShortId } from '../utils/shortIds.js'
+import { newReservationId, nextShortId } from '../utils/shortIds.js'
 import { ageFromBirthDate } from '../utils/age.js'
 import { ACTIVE_WAIVER_STATUSES, expireOldWaivers, validUntilFrom } from '../utils/waiverValidity.js'
 import { manilaDateISO } from '../utils/reminders.js'
@@ -635,7 +635,7 @@ router.post('/walk-ins', requireAuth, requireRole('admin', 'registrar'), async (
 
   const nowISO = new Date().toISOString()
   const doc = {
-    id: `R-${randomUUID()}`,
+    id: newReservationId(),
     userId: 'walk-in',
     walkIn: true,
     walkInName,
@@ -1896,7 +1896,7 @@ router.post('/:collection', requireAuth, async (req, res) => {
     }
 
     if (collection === 'reservations') {
-      doc.id = `R-${randomUUID()}`
+      doc.id = newReservationId()
       doc.createdAtISO = nowISO
       doc.updatedAtISO = nowISO
       doc.reservationStatus = 'pending'

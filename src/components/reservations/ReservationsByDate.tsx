@@ -10,6 +10,7 @@ import { DEFAULT_PAGE_SIZE, Pagination, usePagination } from '../ui/Pagination'
 import { apiGetAll } from '../../utils/apiClient'
 import { reservationStatusLabel } from '../../utils/reservationStatus'
 import { useSlotHours } from '../../utils/slotHours'
+import { ReservationIdTag } from './ReservationIdTag'
 import { ReservationDetailsDialog, type ReservationDetails } from './ReservationDetailsDialog'
 
 type ReservationDoc = {
@@ -244,7 +245,7 @@ export function ReservationsByDate({ embedded = false }: { embedded?: boolean } 
                             {booking.teamName ? <> • {booking.teamName}</> : null}
                           </div>
                           <div className="text-xs text-muted">
-                            {booking.id} • <span className="capitalize">{booking.sessionType || 'public'}</span> • {booking.numberOfPlayers || 0} players • {booking.packageName || 'Custom selection'}
+                            <ReservationIdTag id={booking.id} /> • <span className="capitalize">{booking.sessionType || 'public'}</span> • {booking.numberOfPlayers || 0} players • {booking.packageName || 'Custom selection'}
                           </div>
                         </div>
                         <div className="flex items-start gap-2">

@@ -4,6 +4,7 @@ import { FiX } from 'react-icons/fi'
 import { Button } from '../ui/Button'
 import { formatSlotRange, type SlotHours } from '../../utils/slotHours'
 import { reservationStatusLabel } from '../../utils/reservationStatus'
+import { ReservationIdTag } from './ReservationIdTag'
 
 export type ReservationDetails = {
   id?: string
@@ -40,7 +41,7 @@ export type ReservationDetails = {
   rescheduleHistory?: Array<{ fromDate?: string; fromTime?: string; toDate?: string; toTime?: string; reason?: string; atISO?: string }>
 }
 
-type Payment = { amount?: number; paymentMethod?: string; paymentStatus?: string; createdAtISO?: string; transactionReference?: string }
+export type Payment = { amount?: number; paymentMethod?: string; paymentStatus?: string; createdAtISO?: string; transactionReference?: string }
 
 const peso = (value?: number) => `₱${Number(value || 0).toLocaleString('en-PH', { maximumFractionDigits: 2 })}`
 
@@ -76,11 +77,6 @@ export function ReservationDetailsDialog({
 }) {
   const date = reservation.reservationDate || reservation.dateISO || ''
   const slot = String(reservation.reservationTime || reservation.slot || '').toLowerCase()
-  const rentals = (reservation.pricingBreakdown || []).filter((line) => !/entrance fee|discount/i.test(String(line.label || '')))
-  const otherLines = (reservation.pricingBreakdown || []).filter((line) => /entrance fee|discount/i.test(String(line.label || '')))
-  const paid = payments
-    .filter((payment) => !['failed', 'rejected', 'cancelled'].includes(String(payment.paymentStatus || '').toLowerCase()))
-    .reduce((sum, payment) => sum + Number(payment.amount || 0), 0)
   const fields = reservation.fieldNames || (reservation.fieldIds || []).map(fieldLabel).join(', ')
 
   return createPortal(
@@ -93,7 +89,7 @@ export function ReservationDetailsDialog({
               {date ? new Date(`${date}T12:00:00Z`).toLocaleDateString('en-PH', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' }) : 'No date'}
             </h2>
             <div className="mt-1 text-sm text-muted">
-              <span className="capitalize">{slot || '—'}</span>{slot ? ` · ${formatSlotRange(slotHours, slot)}` : ''} · ID {reservation.id || reservation._id}
+              <span className="capitalize">{slot || '—'}</span>{slot ? ` · ${formatSlotRange(slotHours, slot)}` : ''} · <ReservationIdTag id={reservation.id || reservation._id} />
             </div>
           </div>
           <Button size="sm" variant="ghost" onClick={onClose} aria-label="Close" className="w-10 px-0"><FiX /></Button>
@@ -138,59 +134,75 @@ export function ReservationDetailsDialog({
           </section>
         </div>
 
-        <section className="mt-4">
-          <div className="text-xs uppercase tracking-widest text-muted">Rentals</div>
-          {rentals.length ? (
-            <div className="mt-1">
-              {rentals.map((line, index) => <Row key={`${line.label}-${index}`} label={String(line.label || 'Item')}>{peso(line.amount)}</Row>)}
-            </div>
-          ) : (
-            <div className="mt-2 text-sm text-muted">No rentals: the team brings its own gear.</div>
-          )}
-          {reservation.ownWeapons || reservation.ownEquipment ? (
-            <div className="mt-2 text-xs text-muted">
-              Bringing their own: {[reservation.ownWeapons, reservation.ownEquipment].filter(Boolean).join(' · ')}
-            </div>
-          ) : null}
-        </section>
-
-        <section className="mt-4">
-          <div className="text-xs uppercase tracking-widest text-muted">Charges & payments</div>
-          <div className="mt-1">
-            {otherLines.map((line, index) => <Row key={`${line.label}-${index}`} label={String(line.label || '')}>{peso(line.amount)}</Row>)}
-            <Row label="Total">{peso(reservation.totalAmount)}</Row>
-            <Row label="Online deposit">{peso(reservation.depositAmount)}</Row>
-            <Row label="Paid so far">{peso(paid)}</Row>
-            <Row label="Balance due on game day">{peso(Math.max(0, Number(reservation.totalAmount || 0) - Math.max(paid, 0)))}</Row>
-            <Row label="Payment">{reservation.paymentMode === 'split' ? 'Split with the team' : 'Single payer'}</Row>
-          </div>
-          {payments.length ? (
-            <ul className="mt-2 space-y-1 text-xs text-muted">
-              {payments.map((payment, index) => (
-                <li key={index}>
-                  {payment.createdAtISO ? new Date(payment.createdAtISO).toLocaleDateString('en-PH', { dateStyle: 'medium' }) : ''} · {payment.paymentMethod || '—'} · {peso(payment.amount)} ·{' '}
-                  <span className="capitalize">{payment.paymentStatus || 'pending'}</span>
-                  {payment.transactionReference ? ` · Ref ${payment.transactionReference}` : ''}
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </section>
-
-        {reservation.rescheduleHistory?.length ? (
-          <section className="mt-4">
-            <div className="text-xs uppercase tracking-widest text-muted">Reschedules</div>
-            <ul className="mt-2 space-y-1 text-xs text-muted">
-              {reservation.rescheduleHistory.map((event, index) => (
-                <li key={index}>
-                  {event.fromDate} {event.fromTime} → {event.toDate} {event.toTime}{event.reason ? ` — ${event.reason}` : ''}
-                </li>
-              ))}
-            </ul>
-          </section>
-        ) : null}
+        <ReservationChargesSections reservation={reservation} payments={payments} />
       </div>
     </div>,
     document.body,
+  )
+}
+
+// Rentals, charges and payments, and reschedules of one booking. Shared by the reservation
+// details sheet and the staff game details pop-up.
+export function ReservationChargesSections({ reservation, payments }: { reservation: ReservationDetails; payments: Payment[] }) {
+  const rentals = (reservation.pricingBreakdown || []).filter((line) => !/entrance fee|discount/i.test(String(line.label || '')))
+  const otherLines = (reservation.pricingBreakdown || []).filter((line) => /entrance fee|discount/i.test(String(line.label || '')))
+  const paid = payments
+    .filter((payment) => !['failed', 'rejected', 'cancelled'].includes(String(payment.paymentStatus || '').toLowerCase()))
+    .reduce((sum, payment) => sum + Number(payment.amount || 0), 0)
+
+  return (
+    <>
+      <section className="mt-4">
+        <div className="text-xs uppercase tracking-widest text-muted">Rentals</div>
+        {rentals.length ? (
+          <div className="mt-1">
+            {rentals.map((line, index) => <Row key={`${line.label}-${index}`} label={String(line.label || 'Item')}>{peso(line.amount)}</Row>)}
+          </div>
+        ) : (
+          <div className="mt-2 text-sm text-muted">No rentals: the team brings its own gear.</div>
+        )}
+        {reservation.ownWeapons || reservation.ownEquipment ? (
+          <div className="mt-2 text-xs text-muted">
+            Bringing their own: {[reservation.ownWeapons, reservation.ownEquipment].filter(Boolean).join(' · ')}
+          </div>
+        ) : null}
+      </section>
+
+      <section className="mt-4">
+        <div className="text-xs uppercase tracking-widest text-muted">Charges & payments</div>
+        <div className="mt-1">
+          {otherLines.map((line, index) => <Row key={`${line.label}-${index}`} label={String(line.label || '')}>{peso(line.amount)}</Row>)}
+          <Row label="Total">{peso(reservation.totalAmount)}</Row>
+          <Row label="Online deposit">{peso(reservation.depositAmount)}</Row>
+          <Row label="Paid so far">{peso(paid)}</Row>
+          <Row label="Balance due on game day">{peso(Math.max(0, Number(reservation.totalAmount || 0) - Math.max(paid, 0)))}</Row>
+          <Row label="Payment">{reservation.paymentMode === 'split' ? 'Split with the team' : 'Single payer'}</Row>
+        </div>
+        {payments.length ? (
+          <ul className="mt-2 space-y-1 text-xs text-muted">
+            {payments.map((payment, index) => (
+              <li key={index}>
+                {payment.createdAtISO ? new Date(payment.createdAtISO).toLocaleDateString('en-PH', { dateStyle: 'medium' }) : ''} · {payment.paymentMethod || '—'} · {peso(payment.amount)} ·{' '}
+                <span className="capitalize">{payment.paymentStatus || 'pending'}</span>
+                {payment.transactionReference ? ` · Ref ${payment.transactionReference}` : ''}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </section>
+
+      {reservation.rescheduleHistory?.length ? (
+        <section className="mt-4">
+          <div className="text-xs uppercase tracking-widest text-muted">Reschedules</div>
+          <ul className="mt-2 space-y-1 text-xs text-muted">
+            {reservation.rescheduleHistory.map((event, index) => (
+              <li key={index}>
+                {event.fromDate} {event.fromTime} → {event.toDate} {event.toTime}{event.reason ? ` — ${event.reason}` : ''}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+    </>
   )
 }

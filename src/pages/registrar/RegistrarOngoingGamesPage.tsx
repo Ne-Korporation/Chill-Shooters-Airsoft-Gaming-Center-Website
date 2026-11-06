@@ -623,8 +623,8 @@ function DetailRow({ label, children }: { label: string; children: React.ReactNo
   )
 }
 
-// Everything about one game: package, mode, group, layout, the status actions, and the weapons
-// used, which admins and marshals can mark available again or flag for a check.
+// Everything about one game: the booking behind it (players, rentals, charges and payments),
+// package, mode, group, layout, the status actions, and the weapons used, which admins and marshals can mark available again or flag for a check.
 function GameDetailsDialog({
   doc,
   weapons,
@@ -674,7 +674,7 @@ function GameDetailsDialog({
   return (
     <Modal eyebrow={`Game ${rowId(doc)}`} title={formatSchedule(doc)} onClose={onClose} footer={actions}>
       {/* Who is playing, and when: from the booking behind this game. */}
-      <BookingPlayersSection reservationId={doc.reservationId} />
+      <BookingPlayersSection reservationId={doc.reservationId} detailed />
       <div className="mt-5 grid gap-4 md:grid-cols-2">
         <section>
           <div className="text-xs uppercase tracking-widest text-muted">Game</div>
@@ -684,7 +684,6 @@ function GameDetailsDialog({
             <DetailRow label="Package">{doc.Package || '—'}</DetailRow>
             <DetailRow label="Mode">{doc.Mode || '—'}</DetailRow>
             <DetailRow label="Group">{doc.Group || '—'}</DetailRow>
-            {doc.reservationId ? <DetailRow label="Reservation">{doc.reservationId}</DetailRow> : null}
           </div>
         </section>
         <section>
