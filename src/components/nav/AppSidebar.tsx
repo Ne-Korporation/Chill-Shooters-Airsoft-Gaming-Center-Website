@@ -65,8 +65,8 @@ const marshalItems: Item[] = [
 const adminItems: Item[] = [
   { section: 'Overview', label: 'Dashboard', to: '/app/admin', icon: FiGrid },
   { section: 'Overview', label: 'Announcements', to: '/app/admin/announcements', icon: FiVolume2 },
-  // Reservations, games and archived games are tabs of one Bookings page.
-  { section: 'Bookings', label: 'Bookings', to: '/app/admin/reservations', icon: FiCalendar },
+  // Games and archived games are tabs of one Reservations page.
+  { section: 'Bookings', label: 'Reservations', to: '/app/admin/reservations', icon: FiCalendar },
   { section: 'Bookings', label: 'Payments', to: '/app/admin/payments', icon: FiCreditCard },
   { section: 'Game day', label: 'Counter', to: '/app/counter', icon: FiShoppingBag },
   { section: 'Game day', label: 'Walk-ins', to: '/app/walk-ins', icon: FiUserPlus },

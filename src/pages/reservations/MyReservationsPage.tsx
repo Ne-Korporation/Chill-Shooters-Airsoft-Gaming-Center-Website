@@ -1,17 +1,19 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { FiAlertCircle, FiCalendar, FiCheck, FiCopy, FiEye, FiPrinter, FiRefreshCw, FiXCircle } from 'react-icons/fi'
+import { FiAlertCircle, FiCalendar, FiEye, FiFileText, FiRefreshCw, FiXCircle } from 'react-icons/fi'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { apiGet, apiPost } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
-import { isVerifiedPayment, printReceipt, type ReceiptPayment } from '../../utils/receiptPrint'
+import { isVerifiedPayment, type ReceiptPayment } from '../../utils/receiptPrint'
+import { ReceiptModal } from '../../components/payments/ReceiptModal'
 import { clearBookingDraft, draftTimeLeft, markBookingDraftLeft, readBookingDraft, type BookingDraft } from '../../utils/bookingDraft'
 import { isXenditEnabled, startXenditCheckout } from '../../utils/xendit'
 import { useSlotHours } from '../../utils/slotHours'
 import { reservationStatusLabel } from '../../utils/reservationStatus'
 import { RescheduleSlotPicker, isWeekdayISO } from '../../components/reservations/RescheduleSlotPicker'
+import { ReservationIdTag } from '../../components/reservations/ReservationIdTag'
 import { ReservationDetailsDialog, type ReservationDetails } from '../../components/reservations/ReservationDetailsDialog'
 import { Pagination, usePagination } from '../../components/ui/Pagination'
 import { FilterTabs } from '../../components/ui/FilterTabs'
@@ -123,6 +125,8 @@ export function MyReservationsPage() {
   const [reason, setReason] = useState('')
   const [saving, setSaving] = useState(false)
   const [detailsId, setDetailsId] = useState<string | null>(null)
+  // The receipt on screen: its reservation and verified payments, kept as opened.
+  const [receipt, setReceipt] = useState<{ reservation: any; payments: ReceiptPayment[] } | null>(null)
   // "Review my reservation" in the confirmation email links here with ?view=<id>.
   const [searchParams, setSearchParams] = useSearchParams()
   const viewId = searchParams.get('view')
@@ -418,8 +422,8 @@ export function MyReservationsPage() {
                 </Button>
               ) : null}
               {hasVerifiedPayment ? (
-                <Button size="sm" variant="ghost" onClick={() => printReceipt(reservation, reservationPayments, user?.name || '').catch((err: any) => toast.error(err?.message || 'Unable to print the receipt'))}>
-                  <FiPrinter /> Receipt
+                <Button size="sm" variant="ghost" onClick={() => setReceipt({ reservation, payments: reservationPayments as ReceiptPayment[] })}>
+                  <FiFileText /> Receipt
                 </Button>
               ) : null}
               {canCancel ? (
@@ -432,10 +436,7 @@ export function MyReservationsPage() {
                   <FiXCircle /> {cancellingId === id ? 'Cancelling…' : 'Cancel'}
                 </Button>
               ) : null}
-              <span className="ml-auto flex items-center gap-1 text-[11px] text-muted">
-                <span className="font-mono">{id}</span>
-                <CopyReservationNumber value={id} />
-              </span>
+              <ReservationIdTag id={id} className="ml-auto text-[11px] text-muted" />
             </div>
             {tab === 'upcoming' && statusAllows && !sentBack && daysLeft >= 0 && daysLeft < RESCHEDULE_CUTOFF_DAYS ? (
               <div className="mt-2 text-xs text-muted">Rescheduling closed on {formatShortDate(cutoffDate)} ({RESCHEDULE_CUTOFF_DAYS} days before the game).</div>
@@ -502,50 +503,16 @@ export function MyReservationsPage() {
           />
         )
       })() : null}
+
+      {receipt ? (
+        <ReceiptModal
+          payment={[...receipt.payments].reverse().find(isVerifiedPayment) || receipt.payments[0]}
+          reservation={receipt.reservation}
+          reservationPayments={receipt.payments}
+          payerName={user?.name || ''}
+          onClose={() => setReceipt(null)}
+        />
+      ) : null}
     </div>
-  )
-}
-
-// Copies a reservation number so it can be pasted into search (here, in payments or for staff).
-function CopyReservationNumber({ value }: { value: string }) {
-  const [copied, setCopied] = useState(false)
-  useEffect(() => {
-    if (!copied) return
-    const timer = window.setTimeout(() => setCopied(false), 1500)
-    return () => window.clearTimeout(timer)
-  }, [copied])
-
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(value)
-    } catch {
-      // Older browsers or non-secure pages: fall back to a hidden text field.
-      const field = document.createElement('textarea')
-      field.value = value
-      field.style.position = 'fixed'
-      field.style.opacity = '0'
-      document.body.appendChild(field)
-      field.select()
-      const ok = document.execCommand('copy')
-      field.remove()
-      if (!ok) {
-        toast.error('Could not copy. Select the number and copy it instead.')
-        return
-      }
-    }
-    setCopied(true)
-    toast.success('Reservation number copied')
-  }
-
-  return (
-    <button
-      type="button"
-      onClick={copy}
-      aria-label={copied ? 'Reservation number copied' : `Copy reservation number ${value}`}
-      title="Copy reservation number"
-      className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-white/5 px-2 py-0.5 text-[11px] font-semibold text-muted transition hover:border-accent/40 hover:text-text"
-    >
-      {copied ? <FiCheck className="text-success" /> : <FiCopy />} {copied ? 'Copied' : 'Copy'}
-    </button>
   )
 }

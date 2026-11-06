@@ -8,6 +8,9 @@ import { apiGetAll, apiPut } from '../../utils/apiClient'
 import { Pagination, usePagination } from '../../components/ui/Pagination'
 import { useAuth } from '../../context/AuthContext'
 import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
+import { ReceiptModal } from '../../components/payments/ReceiptModal'
+import { ReservationIdTag } from '../../components/reservations/ReservationIdTag'
+import type { ReceiptPayment, ReceiptReservation } from '../../utils/receiptPrint'
 
 
 type PaymentStatus = 'paid' | 'pending' | 'failed' | 'review' | 'confirmed' | 'cancelled'
@@ -27,6 +30,8 @@ type PaymentItem = {
   // Set for payments verified by the online gateway (Xendit, or PayMongo before it); reviewReason explains one held for staff.
   gatewayName: string
   reviewReason: string
+  // The stored payment, for its receipt.
+  raw: ReceiptPayment & { reservationId?: string }
 }
 
 const KNOWN_STATUSES: PaymentStatus[] = ['paid', 'pending', 'failed', 'review', 'confirmed', 'cancelled']
@@ -69,6 +74,19 @@ export function AdminPaymentsPage() {
   const [payments, setPayments] = React.useState<PaymentItem[]>([])
   const [loading, setLoading] = useState(true)
   const { addNotification } = useNotifications()
+  // Reservations by id (and Mongo _id), for each payment's receipt.
+  const [reservationById, setReservationById] = useState<Map<string, ReceiptReservation>>(new Map())
+  const [receipt, setReceipt] = useState<{ payment: PaymentItem; reservation: ReceiptReservation | null; reservationPayments: ReceiptPayment[] } | null>(null)
+
+  const openReceipt = (payment: PaymentItem) => {
+    const reservation = reservationById.get(payment.reservationId) || null
+    const ids = reservation ? [reservation.id, reservation._id].filter(Boolean).map(String) : [payment.reservationId]
+    setReceipt({
+      payment,
+      reservation,
+      reservationPayments: payments.filter((p) => ids.includes(p.reservationId)).map((p) => p.raw),
+    })
+  }
 
   const load = async () => {
     setLoading(true)
@@ -83,6 +101,7 @@ export function AdminPaymentsPage() {
       const cancelledReservations = new Set(reservations
         .filter((r: any) => String(r.reservationStatus || '').toLowerCase() === 'cancelled')
         .flatMap((r: any) => [r.id, r._id].filter(Boolean).map(String)))
+      setReservationById(new Map(reservations.flatMap((r: any) => [r.id, r._id].filter(Boolean).map((key: any) => [String(key), r] as [string, ReceiptReservation]))))
       const nameById = new Map(accounts.map((a: any) => [String(a.id || a._id || ''), String(a.name || a.email || '')]))
       setPayments(
         docs.map((d: any) => {
@@ -104,6 +123,7 @@ export function AdminPaymentsPage() {
           stripe: Boolean(d.stripePaymentIntentId),
           gatewayName: d.xenditInvoiceId ? 'Xendit' : d.paymongoCheckoutId ? 'PayMongo' : '',
           reviewReason: d.reviewReason ?? '',
+          raw: { ...d, id: d.id ?? (d._id ? String(d._id) : ''), paymentStatus: ['pending', 'review'].includes(status) && cancelledReservations.has(reservationId) ? 'cancelled' : (d.paymentStatus ?? d.status) },
           }
         }).sort((a, b) => String(b.date).localeCompare(String(a.date)))
       )
@@ -227,6 +247,7 @@ export function AdminPaymentsPage() {
                   <div className="lg:col-span-3">
                     <div className="text-sm font-semibold">{payment.id}</div>
                     <div className="mt-1 text-xs text-muted">{payment.date}</div>
+                    {payment.reservationId ? <ReservationIdTag id={payment.reservationId} className="mt-1 text-[11px] text-muted" /> : null}
                   </div>
                   <div className="min-w-0 lg:col-span-2">
                     <div className="truncate text-sm font-semibold">{payment.player}</div>
@@ -240,18 +261,9 @@ export function AdminPaymentsPage() {
                   </div>
                   <div className="lg:col-span-4">
                     <ActionGroup className="lg:justify-end" align="start">
-                      {payment.receiptUrl ? (
-                        <a
-                          href={payment.receiptUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="surface hover-row inline-flex h-8 items-center gap-1.5 rounded-xl px-3 text-xs font-semibold text-text"
-                        >
-                          <FiFileText /> Receipt
-                        </a>
-                      ) : (
-                        <span className="inline-flex h-8 items-center px-1 text-xs text-muted">No receipt</span>
-                      )}
+                      <Button size="xs" variant="ghost" onClick={() => openReceipt(payment)}>
+                        <FiFileText /> Receipt
+                      </Button>
                       {payment.status === 'paid' || payment.status === 'confirmed' ? (
                         <span className="inline-flex h-8 items-center px-1 text-xs font-semibold text-success">
                           {payment.gatewayName ? `Verified by ${payment.gatewayName}` : payment.reviewedBy ? `Verified by ${payment.reviewedBy}` : 'Verified'}
@@ -286,6 +298,17 @@ export function AdminPaymentsPage() {
         </div>
         <Pagination page={page} pageCount={pageCount} total={total} onPageChange={setPage} />
       </Card>
+
+      {receipt ? (
+        <ReceiptModal
+          payment={receipt.payment.raw}
+          reservation={receipt.reservation}
+          reservationPayments={receipt.reservationPayments}
+          payerName={receipt.payment.player}
+          proofUrl={receipt.payment.receiptUrl}
+          onClose={() => setReceipt(null)}
+        />
+      ) : null}
     </div>
   )
 }

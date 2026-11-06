@@ -1,9 +1,12 @@
 import React, { useEffect, useState } from 'react'
 import { FiUsers } from 'react-icons/fi'
-import { apiGet } from '../../utils/apiClient'
+import { apiGet, apiGetAll } from '../../utils/apiClient'
+import { reservationStatusLabel } from '../../utils/reservationStatus'
+import { ReservationIdTag } from './ReservationIdTag'
+import { ReservationChargesSections, type Payment, type ReservationDetails } from './ReservationDetailsDialog'
 import { formatSlotRange, useSlotHours } from '../../utils/slotHours'
 
-type Booking = {
+type Booking = Omit<ReservationDetails, 'teamMembers'> & {
   id?: string
   userId?: string
   reservationDate?: string
@@ -35,9 +38,11 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 
 // The booking behind a game: when it is, how many play, on which fields, and who the players are.
 // Loads the reservation (and the captain's account) by id, so any game screen can show it.
-export function BookingPlayersSection({ reservationId }: { reservationId?: string }) {
+// `detailed`: also the booking's status, package, rentals, charges, payments and reschedules, so
+// staff see everything about the reservation from the game itself.
+export function BookingPlayersSection({ reservationId, detailed = false }: { reservationId?: string; detailed?: boolean }) {
   const slotHours = useSlotHours()
-  const [state, setState] = useState<{ loading: boolean; booking?: Booking; captain?: Account; error?: string }>({ loading: true })
+  const [state, setState] = useState<{ loading: boolean; booking?: Booking; captain?: Account; payments?: Payment[] | null; error?: string }>({ loading: true })
 
   useEffect(() => {
     if (!reservationId) {
@@ -50,19 +55,23 @@ export function BookingPlayersSection({ reservationId }: { reservationId?: strin
       try {
         const res = await apiGet<{ ok: boolean; data: Booking }>(`/api/reservations/${encodeURIComponent(reservationId)}`)
         const booking = res.data
-        let captain: Account | undefined
-        if (booking?.userId && !booking.walkIn) {
-          captain = await apiGet<{ ok: boolean; data: Account }>(`/api/user_accounts/${encodeURIComponent(booking.userId)}`)
-            .then((r) => r.data)
-            .catch(() => undefined)
-        }
-        if (alive) setState({ loading: false, booking, captain })
+        const ids = [booking?.id, booking?._id, reservationId].filter(Boolean).map(String)
+        const [captain, payments] = await Promise.all([
+          booking?.userId && !booking.walkIn
+            ? apiGet<{ ok: boolean; data: Account }>(`/api/user_accounts/${encodeURIComponent(booking.userId)}`).then((r) => r.data).catch(() => undefined)
+            : Promise.resolve(undefined),
+          // Roles that can't read payments get null, and the charges are left out instead of showing ₱0 paid.
+          detailed
+            ? apiGetAll<Payment>('payments', `q=${encodeURIComponent(JSON.stringify({ reservationId: { $in: [...new Set(ids)] } }))}`).catch(() => null)
+            : Promise.resolve(null),
+        ])
+        if (alive) setState({ loading: false, booking, captain, payments })
       } catch (e: any) {
         if (alive) setState({ loading: false, error: e?.message || 'Could not load the booking.' })
       }
     })()
     return () => { alive = false }
-  }, [reservationId])
+  }, [reservationId, detailed])
 
   if (state.loading) return <div className="text-sm text-muted">Loading players…</div>
   if (state.error || !state.booking) return <div className="text-sm text-muted">{state.error || 'Booking not found.'}</div>
@@ -83,6 +92,7 @@ export function BookingPlayersSection({ reservationId }: { reservationId?: strin
   const guests = Math.max(0, Number(booking.numberOfPlayers || 0) - players.length)
 
   return (
+    <>
     <div className="grid gap-4 md:grid-cols-2">
       <section>
         <div className="text-xs uppercase tracking-widest text-muted">Booking</div>
@@ -95,7 +105,14 @@ export function BookingPlayersSection({ reservationId }: { reservationId?: strin
           <Row label="Session"><span className="capitalize">{booking.sessionType || 'public'}</span></Row>
           <Row label="Fields">{booking.sessionType === 'public' ? 'All 3 fields' : fields || '—'}</Row>
           {booking.teamName ? <Row label="Team">{booking.teamName}</Row> : null}
-          {booking.id ? <Row label="Reservation">{booking.id}</Row> : null}
+          {booking.id ? <Row label="Reservation"><ReservationIdTag id={booking.id} /></Row> : null}
+          {detailed ? (
+            <>
+              <Row label="Booking status"><span className="capitalize">{reservationStatusLabel(booking)}</span></Row>
+              <Row label="Package">{booking.packageName || 'Custom selection'}</Row>
+              {booking.createdAtISO ? <Row label="Booked on">{new Date(booking.createdAtISO).toLocaleDateString('en-PH', { dateStyle: 'medium' })}</Row> : null}
+            </>
+          ) : null}
         </div>
       </section>
       <section>
@@ -111,5 +128,7 @@ export function BookingPlayersSection({ reservationId }: { reservationId?: strin
         </ul>
       </section>
     </div>
+    {detailed && state.payments ? <ReservationChargesSections reservation={booking} payments={state.payments} /> : null}
+    </>
   )
 }
