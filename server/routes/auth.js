@@ -1,5 +1,6 @@
 import express from 'express'
 import bcrypt from 'bcrypt'
+import { createHash, randomBytes } from 'crypto'
 import transporter from '../services/mailService.js'
 import { getDb, getUserAccountsCollection, USER_ACCOUNTS_COLLECTION } from '../db/mongo.js'
 import { SUSPENDED_ACCOUNT_ERROR, createAuthToken, forgetSuspension, isSuspendedAccount, requireAuth, requireRole } from '../middleware/auth.js'
@@ -8,11 +9,39 @@ import { canonicalEmail, normalizeEmail, sameEmailFilter } from '../utils/emails
 import { verifyFirebaseIdToken } from '../utils/firebaseTokens.js'
 import { cleanMiddleInitial, cleanNamePart, composeFullName, splitFullName } from '../utils/names.js'
 import { ageFromBirthDate } from '../utils/age.js'
+import { emailWelcome } from '../services/notificationEmails.js'
+import { publicAppUrl } from '../utils/appUrl.js'
+import {
+  ATTEMPTS_COLLECTION, LIMITS, OTP_MAX_ATTEMPTS, clientAddress, codeAddressKey, createAttemptStore, loginKeys,
+} from '../utils/attemptLimits.js'
 
 const router = express.Router()
 
 // Games a chosen starting level stands for: the first game of that tier (see getExperienceLevel in utils/teamBalancing.js).
 const STARTING_GAMES_PLAYED = { Beginner: 0, Intermediate: 11, Experienced: 26 }
+
+// One-time codes and links are stored only as hashes, so a database leak can't be used to sign in.
+const hashToken = (token) => createHash('sha256').update(String(token)).digest('hex')
+
+// Guessing limits, counted in MongoDB (see utils/attemptLimits.js).
+const attempts = createAttemptStore(async () => (await getDb()).collection(ATTEMPTS_COLLECTION))
+
+// Answers that read the same whether or not an email has an account, so the forms can't be used
+// to find out who is registered.
+const LOGIN_FAILED_MESSAGE = 'Wrong email or password. Signed up with Google? Use "Continue with Google". Account made at the counter? Use the link in your welcome email.'
+const LOGIN_LIMIT_MESSAGE = 'Too many sign-in attempts. Wait 15 minutes, or use "Forgot password?". If this is your account, check your email: we may have sent you a sign-in link.'
+const CODE_LIMIT_MESSAGE = 'Too many wrong codes. Wait 15 minutes, then request a new code.'
+
+// Wrong one-time codes (sign-up and password reset) from one address, across all accounts.
+async function codeAddressBlocked(req, res) {
+  if (await attempts.count(codeAddressKey(clientAddress(req)), LIMITS.codeAddress) < LIMITS.codeAddress.max) return false
+  res.status(429).json({ ok: false, error: CODE_LIMIT_MESSAGE })
+  return true
+}
+// A real bcrypt hash to compare against when there is no password, so every login takes as long.
+const DUMMY_HASH = bcrypt.hashSync(randomBytes(16).toString('hex'), 10)
+
+const recordWrongCode = (req) => attempts.record([{ key: codeAddressKey(clientAddress(req)), limit: LIMITS.codeAddress }]).catch(() => null)
 
 export function validatePasswordRequirements(password) {
   const value = typeof password === 'string' ? password : ''
@@ -61,11 +90,6 @@ function isGoogleOnlyAccount(user) {
   return !(typeof user?.password === 'string' && user.password.length > 0)
 }
 
-// How the account was made, so the "this email already exists" pop-up can point to the right sign-in.
-function accountProvider(user) {
-  return isGoogleOnlyAccount(user) ? 'google' : 'password'
-}
-
 // Stamps the sign-in and reports whether it is the account's first, so the app can greet a new
 // player with "Welcome" rather than "Welcome back".
 async function recordSignIn(userAccounts, user) {
@@ -102,9 +126,11 @@ async function signInExistingWithGoogle(res, userAccounts, user, body) {
 }
 
 // First Google sign-in for this email: make the account and sign straight in.
-async function createAndSignInWithGoogle(res, userAccounts, email, name, body) {
+async function createAndSignInWithGoogle(req, res, userAccounts, email, name, body) {
   const { newDoc, insertedId } = await createGoogleAccount(userAccounts, email, name)
   await userAccounts.updateOne({ _id: insertedId }, { $set: { lastLoginAtISO: new Date().toISOString() } }).catch(() => {})
+  // Google already verified the address, so the welcome goes out straight away (never fails the sign-in).
+  await emailWelcome(await getDb(), { account: newDoc, req })
   const authUser = toAuthUser(newDoc, true)
   return res.status(201).json({
     ok: true,
@@ -524,6 +550,36 @@ router.put('/admin/players/:id/status', requireAuth, requireRole('admin'), async
   }
 })
 
+// Someone tried to sign up with an email that already has an account. Tell the owner how to get
+// in (at most once an hour), instead of telling whoever filled in the form.
+async function sendAccountExistsNotice(req, user) {
+  const lastSent = user.signupNoticeSentAtISO ? new Date(user.signupNoticeSentAtISO).getTime() : 0
+  if (Date.now() - lastSent < 60 * 60 * 1000 || !transporter) return
+  const userAccounts = await getUserAccountsCollection()
+  await userAccounts.updateOne({ _id: user._id }, { $set: { signupNoticeSentAtISO: new Date().toISOString() } })
+  const appUrl = publicAppUrl(req)
+  const how = isGoogleOnlyAccount(user)
+    ? 'Your account uses Google: on the login page, tap <b>Continue with Google</b>.'
+    : user.passwordSetupRequired
+      ? 'Your account was made at our counter. Use the "Set your password" link in your welcome email, or ask the counter for a new one.'
+      : `Log in with your email and password. Forgot it? Use <a href="${appUrl}/forgot-password">Forgot password</a>.`
+  const from = process.env.EMAIL_USER ? `Chill Shooters <${process.env.EMAIL_USER}>` : 'Chill Shooters <no-reply@chillshooters.local>'
+  await transporter.sendMail({
+    from,
+    to: user.email,
+    subject: 'You already have a Chill Shooters account',
+    html: `
+      <div style="font-family: Arial, sans-serif; line-height: 1.5; color: #111827;">
+        <h2 style="margin-bottom: 8px;">You already have an account</h2>
+        <p>Hello ${String(user.firstName || user.name || 'there').replace(/[<>&"']/g, '')},</p>
+        <p>Someone just tried to sign up for Chill Shooters with this email, but it already has an account, so no new account was made.</p>
+        <p>${how}</p>
+        <p style="color:#6b7280;font-size:13px;">If this wasn't you, you can ignore this email. Nothing about your account has changed.</p>
+      </div>
+    `,
+  }).catch((err) => console.error('Failed to send account-exists notice', err?.message || err))
+}
+
 // --- Self-Registration ---
 router.post('/register', async (req, res) => {
   const body = req.body || {}
@@ -571,21 +627,38 @@ router.post('/register', async (req, res) => {
     const db = await getDb()
     const userAccounts = await getUserAccountsCollection()
 
-    const existing = await userAccounts.findOne(sameEmailFilter(normalizedEmail))
-    if (existing) {
-      const provider = accountProvider(existing)
-      return res.status(409).json({
-        ok: false,
-        emailExists: true,
-        provider,
-        error: provider === 'google'
-          ? 'This email already exists. It was registered with Google, so use "Continue with Google" to sign in.'
-          : 'This email already exists. Log in with your email and password instead.',
-      })
-    }
-
     const shouldHash = process.env.PASSWORD_HASHING_ENABLED === 'true' || true
     const hashedPassword = shouldHash ? await bcrypt.hash(password, 10) : password
+
+    // An email that already has an account gets the same answer as a new sign-up ("check your
+    // email for a code"), so this form can't be used to find out who is registered. The owner
+    // is told by email instead.
+    const existing = await userAccounts.findOne(sameEmailFilter(normalizedEmail))
+    if (existing) {
+      const unfinished = existing.emailVerified === false && !existing.passwordSetupRequired && !isGoogleOnlyAccount(existing)
+      if (unfinished) {
+        // Signed up before but never entered the code: take the new details and send a fresh code.
+        const lastSent = existing.otpSentAtISO ? new Date(existing.otpSentAtISO).getTime() : 0
+        if (Date.now() - lastSent >= 60 * 1000) {
+          const otpCode = generateOtp()
+          await userAccounts.updateOne(
+            { _id: existing._id },
+            {
+              $set: {
+                name, ...nameParts, birthDate, age, password: hashedPassword,
+                otpCode, otpExpiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(), otpSentAtISO: new Date().toISOString(),
+                welcomePending: true, updatedAtISO: new Date().toISOString(),
+              },
+              $unset: { otpAttempts: '' },
+            },
+          )
+          await sendOtpEmail(existing.email, otpCode, name.trim()).catch((err) => console.error('Sign-up code resend failed', err?.message || err))
+        }
+      } else {
+        await sendAccountExistsNotice(req, existing)
+      }
+      return res.status(201).json({ ok: true, needsOtp: true })
+    }
 
     const nextId = await nextShortId(db, 'user_accounts', 'P')
     const otpCode = generateOtp()
@@ -606,6 +679,9 @@ router.post('/register', async (req, res) => {
       identityVerificationStatus: 'not_submitted',
       otpCode,
       otpExpiresAt,
+      otpSentAtISO: new Date().toISOString(),
+      // The welcome email goes out once the email is verified (see /verify-otp).
+      welcomePending: true,
       createdAtISO: new Date().toISOString(),
     }
 
@@ -618,40 +694,146 @@ router.post('/register', async (req, res) => {
       return res.status(500).json({ ok: false, error: 'failed to send verification email', details: String(mailErr) })
     }
 
-    const { password: _password, otpCode: _otpCode, ...publicDoc } = newDoc
-    return res.status(201).json({ ok: true, insertedId: result.insertedId, data: publicDoc, needsOtp: true })
+    // Exactly the same answer as for an email that already has an account (see above).
+    return res.status(201).json({ ok: true, needsOtp: true })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
   }
 })
 
-router.post('/send-otp', async (req, res) => {
-  const body = req.body || {}
-  const email = normalizeEmail(body.email)
+// Resend the sign-up code. Always the same answer, whether or not the email has an account or
+// still needs verifying, so it can't be used to find out who is registered.
+const SIGNUP_CODE_SENT_MESSAGE = 'If this email is waiting to be verified, we sent it a new code. Codes can be resent once a minute.'
+const SIGNUP_CODE_INVALID_MESSAGE = 'That code is wrong or has expired. Each code allows 5 tries; tap "Resend" for a new one.'
 
-  if (!email) {
-    return res.status(400).json({ ok: false, error: 'email is required' })
-  }
+router.post('/send-otp', async (req, res) => {
+  const email = normalizeEmail(req.body?.email)
+  if (!email) return res.status(400).json({ ok: false, error: 'email is required' })
 
   try {
     const userAccounts = await getUserAccountsCollection()
     const user = await userAccounts.findOne({ email })
-
-    if (!user) {
-      return res.status(404).json({ ok: false, error: 'account not found' })
+    // Only for finishing sign-up (a verified account is never marked unverified again); at most
+    // one new code a minute, so its 5 tries can't be renewed endlessly.
+    const lastSent = user?.otpSentAtISO ? new Date(user.otpSentAtISO).getTime() : 0
+    if (user && user.emailVerified === false && Date.now() - lastSent >= 60 * 1000) {
+      const otpCode = generateOtp()
+      await userAccounts.updateOne(
+        { _id: user._id },
+        { $set: { otpCode, otpExpiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(), otpSentAtISO: new Date().toISOString() }, $unset: { otpAttempts: '' } },
+      )
+      await sendOtpEmail(email, otpCode, user.name || 'there').catch((err) => console.error('Sign-up code resend failed', err?.message || err))
     }
+    return res.json({ ok: true, message: SIGNUP_CODE_SENT_MESSAGE })
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: String(err) })
+  }
+})
 
-    const otpCode = generateOtp()
-    const otpExpiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString()
+// --- Forgot password ---
+// 1. POST /forgot-password { email } emails a 6-digit code (only its hash is stored).
+// 2. POST /verify-reset-code { email, otp } checks it (5 tries, 10 minutes) and returns a
+//    one-time reset pass, good for 15 minutes.
+// 3. POST /reset-password { email, resetToken, password } sets the new password with that pass.
+// The server never changes a password without proof the person can read the account's email.
+const RESET_CODE_TTL_MS = 10 * 60 * 1000
+const RESET_PASS_TTL_MS = 15 * 60 * 1000
+const RESET_CODE_MAX_ATTEMPTS = 5
+const RESET_CODE_RESEND_MS = 60 * 1000
+const RESET_SENT_MESSAGE = 'If an account uses this email, we sent it a 6-digit code. It expires in 10 minutes.'
+const RESET_INVALID_MESSAGE = 'That code is wrong or has expired. Each code allows 5 tries; request a new code if you need one.'
 
+async function sendResetCodeEmail(email, code, name = 'there') {
+  if (!transporter) throw new Error('mail transporter not configured')
+  const from = process.env.EMAIL_USER ? `Chill Shooters <${process.env.EMAIL_USER}>` : 'Chill Shooters <no-reply@chillshooters.local>'
+  return transporter.sendMail({
+    from,
+    to: email,
+    subject: 'Your Chill Shooters password reset code',
+    html: `
+      <div style="font-family: Arial, sans-serif; line-height: 1.5; color: #111827;">
+        <h2 style="margin-bottom: 8px;">Reset your password</h2>
+        <p>Hello ${String(name).replace(/[<>&"']/g, '')},</p>
+        <p>Enter this code to choose a new password for your Chill Shooters account:</p>
+        <div style="margin: 20px 0; padding: 16px 20px; display: inline-block; border-radius: 8px; background: #f3f4f6; font-size: 24px; letter-spacing: 4px; font-weight: 700;">${code}</div>
+        <p>This code expires in 10 minutes. If you didn't ask to reset your password, ignore this email; your password stays the same.</p>
+      </div>
+    `,
+  })
+}
+
+// The same answer whether or not the email has an account, so the form can't be used to find out
+// who is registered.
+router.post('/forgot-password', async (req, res) => {
+  const email = normalizeEmail(req.body?.email)
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res.status(400).json({ ok: false, error: 'Enter a valid email address.' })
+  }
+  try {
+    const userAccounts = await getUserAccountsCollection()
+    const user = await userAccounts.findOne(sameEmailFilter(email))
+    // A code sent less than a minute ago is still on its way: don't flood the inbox.
+    const lastSent = user?.resetCodeSentAtISO ? new Date(user.resetCodeSentAtISO).getTime() : 0
+    if (user && Date.now() - lastSent >= RESET_CODE_RESEND_MS) {
+      const code = generateOtp()
+      const nowISO = new Date().toISOString()
+      await userAccounts.updateOne(
+        { _id: user._id },
+        {
+          $set: { resetCodeHash: hashToken(`${user.id}:${code}`), resetCodeExpiresAt: new Date(Date.now() + RESET_CODE_TTL_MS).toISOString(), resetCodeAttempts: 0, resetCodeSentAtISO: nowISO },
+          $unset: { resetTokenHash: '', resetTokenExpiresAt: '' },
+        },
+      )
+      // A failed send is logged, not shown: an error only for real accounts would give them away.
+      await sendResetCodeEmail(user.email, code, user.firstName || user.name || 'there')
+        .catch((mailErr) => console.error('Failed to send password reset code', mailErr?.message || mailErr))
+    }
+    return res.json({ ok: true, message: RESET_SENT_MESSAGE })
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: String(err) })
+  }
+})
+
+router.post('/verify-reset-code', async (req, res) => {
+  const email = normalizeEmail(req.body?.email)
+  const otp = String(req.body?.otp || '').trim()
+  if (!email || !otp) return res.status(400).json({ ok: false, error: 'Enter the 6-digit code.' })
+  if (await codeAddressBlocked(req, res)) return
+  try {
+    const userAccounts = await getUserAccountsCollection()
+    const user = await userAccounts.findOne(sameEmailFilter(email))
+    const expiresAt = user?.resetCodeExpiresAt ? new Date(user.resetCodeExpiresAt).getTime() : 0
+    // Every failure gets the same answer (no "tries left"), whether or not the email has an account.
+    if (!user || !user.resetCodeHash || Date.now() > expiresAt) {
+      await recordWrongCode(req)
+      return res.status(400).json({ ok: false, error: RESET_INVALID_MESSAGE })
+    }
+    // Claim a try before comparing (same as the sign-up code), so a burst can't get past 5.
+    const claim = await userAccounts.updateOne(
+      { _id: user._id, resetCodeHash: user.resetCodeHash, $or: [{ resetCodeAttempts: { $exists: false } }, { resetCodeAttempts: { $lt: RESET_CODE_MAX_ATTEMPTS } }] },
+      { $inc: { resetCodeAttempts: 1 } },
+    )
+    if (!claim.modifiedCount) {
+      await userAccounts.updateOne({ _id: user._id }, { $unset: { resetCodeHash: '', resetCodeExpiresAt: '', resetCodeAttempts: '' } })
+      await recordWrongCode(req)
+      return res.status(400).json({ ok: false, error: RESET_INVALID_MESSAGE })
+    }
+    if (hashToken(`${user.id}:${otp}`) !== user.resetCodeHash) {
+      await recordWrongCode(req)
+      if (Number(user.resetCodeAttempts || 0) + 1 >= RESET_CODE_MAX_ATTEMPTS) {
+        await userAccounts.updateOne({ _id: user._id }, { $unset: { resetCodeHash: '', resetCodeExpiresAt: '', resetCodeAttempts: '' } })
+      }
+      return res.status(400).json({ ok: false, error: RESET_INVALID_MESSAGE })
+    }
+    const resetToken = randomBytes(32).toString('base64url')
     await userAccounts.updateOne(
       { _id: user._id },
-      { $set: { otpCode, otpExpiresAt, emailVerified: false } },
+      {
+        $set: { resetTokenHash: hashToken(resetToken), resetTokenExpiresAt: new Date(Date.now() + RESET_PASS_TTL_MS).toISOString() },
+        $unset: { resetCodeHash: '', resetCodeExpiresAt: '', resetCodeAttempts: '' },
+      },
     )
-
-    await sendOtpEmail(email, otpCode, user.name || 'there')
-
-    return res.json({ ok: true, message: 'Verification code sent.' })
+    return res.json({ ok: true, resetToken, message: 'Code accepted. Choose a new password.' })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
   }
@@ -660,12 +842,12 @@ router.post('/send-otp', async (req, res) => {
 router.post('/reset-password', async (req, res) => {
   const body = req.body || {}
   const email = normalizeEmail(body.email)
-  const password = String(body.password || '').trim()
+  const resetToken = String(body.resetToken || '')
+  const password = String(body.password || '')
 
-  if (!email) {
-    return res.status(400).json({ ok: false, error: 'email is required' })
+  if (!email || !resetToken) {
+    return res.status(400).json({ ok: false, error: 'Verify the code sent to your email first.' })
   }
-
   const passwordValidation = validatePasswordRequirements(password)
   if (!passwordValidation.valid) {
     return res.status(400).json({ ok: false, error: passwordValidation.errors[0] })
@@ -673,18 +855,30 @@ router.post('/reset-password', async (req, res) => {
 
   try {
     const userAccounts = await getUserAccountsCollection()
-    const user = await userAccounts.findOne({ email })
-    if (!user) {
-      return res.status(404).json({ ok: false, error: 'account not found' })
+    const user = await userAccounts.findOne(sameEmailFilter(email))
+    const expiresAt = user?.resetTokenExpiresAt ? new Date(user.resetTokenExpiresAt).getTime() : 0
+    if (!user || !user.resetTokenHash || user.resetTokenHash !== hashToken(resetToken) || Date.now() > expiresAt) {
+      return res.status(400).json({ ok: false, error: 'This reset has expired. Request a new code and try again.' })
     }
 
-    const hashedPassword = await bcrypt.hash(password, 10)
+    // Reading the code proved they own the address, so a pending verification or a walk-in's
+    // first password is settled too.
     await userAccounts.updateOne(
       { _id: user._id },
-      { $set: { password: hashedPassword, updatedAtISO: new Date().toISOString() } },
+      {
+        $set: { password: await bcrypt.hash(password, 10), emailVerified: true, updatedAtISO: new Date().toISOString() },
+        $unset: {
+          resetTokenHash: '', resetTokenExpiresAt: '',
+          otpCode: '', otpExpiresAt: '',
+          passwordSetupRequired: '', passwordSetupTokenHash: '', passwordSetupExpiresAt: '',
+          welcomePending: '',
+        },
+      },
     )
+    // Signed up but never entered the sign-up code: this finishes the sign-up, so welcome them.
+    if (user.welcomePending) await emailWelcome(await getDb(), { account: user, req })
 
-    return res.json({ ok: true, message: 'Password updated successfully.' })
+    return res.json({ ok: true, email: user.email, message: 'Password updated. You can log in now.' })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
   }
@@ -702,40 +896,92 @@ router.post('/verify-otp', async (req, res) => {
   if (!otp) {
     return res.status(400).json({ ok: false, error: 'otp is required' })
   }
+  if (await codeAddressBlocked(req, res)) {
+    return
+  }
 
   try {
     const userAccounts = await getUserAccountsCollection()
     const user = await userAccounts.findOne({ email })
 
-    if (!user) {
-      return res.status(404).json({ ok: false, error: 'account not found' })
+    // No account, already verified, no code or an expired one: the same answer as a wrong code,
+    // so this can't be used to find out who is registered.
+    const expiresAt = user?.otpExpiresAt ? new Date(user.otpExpiresAt).getTime() : 0
+    if (!user || !user.otpCode || Date.now() > expiresAt) {
+      await recordWrongCode(req)
+      return res.status(400).json({ ok: false, error: SIGNUP_CODE_INVALID_MESSAGE })
     }
 
-    if (user.emailVerified && !user.otpCode) {
-      return res.json({ ok: true, alreadyVerified: true, message: 'This account is already verified.' })
-    }
-
-    const now = Date.now()
-    const expiresAt = user.otpExpiresAt ? new Date(user.otpExpiresAt).getTime() : 0
-
-    if (!user.otpCode || !user.otpExpiresAt || now > expiresAt) {
-      return res.status(400).json({ ok: false, error: 'OTP expired. Please request a new code.' })
+    // 5 tries per code. Each try is claimed before the code is compared, so guesses sent all at
+    // once can't get past the limit; when the tries run out the code is thrown away.
+    const claim = await userAccounts.updateOne(
+      { _id: user._id, otpCode: user.otpCode, $or: [{ otpAttempts: { $exists: false } }, { otpAttempts: { $lt: OTP_MAX_ATTEMPTS } }] },
+      { $inc: { otpAttempts: 1 } },
+    )
+    if (!claim.modifiedCount) {
+      await userAccounts.updateOne({ _id: user._id }, { $unset: { otpCode: '', otpExpiresAt: '', otpAttempts: '' } })
+      await recordWrongCode(req)
+      return res.status(400).json({ ok: false, error: SIGNUP_CODE_INVALID_MESSAGE })
     }
 
     if (String(user.otpCode) !== otp) {
-      return res.status(400).json({ ok: false, error: 'Invalid OTP.' })
+      await recordWrongCode(req)
+      if (Number(user.otpAttempts || 0) + 1 >= OTP_MAX_ATTEMPTS) {
+        await userAccounts.updateOne({ _id: user._id }, { $unset: { otpCode: '', otpExpiresAt: '', otpAttempts: '' } })
+      }
+      return res.status(400).json({ ok: false, error: SIGNUP_CODE_INVALID_MESSAGE })
     }
 
     await userAccounts.updateOne(
       { _id: user._id },
-      { $set: { emailVerified: true }, $unset: { otpCode: '', otpExpiresAt: '' } },
+      { $set: { emailVerified: true }, $unset: { otpCode: '', otpExpiresAt: '', otpAttempts: '', welcomePending: '' } },
     )
+
+    // A new self-registered account: welcome them now that the address is confirmed.
+    if (user.welcomePending) await emailWelcome(await getDb(), { account: user, req })
 
     return res.json({ ok: true, message: 'Email verified successfully.' })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
   }
 })
+
+// --- Login ---
+// Guessing limits (utils/attemptLimits.js) are checked and the attempt is counted before anything
+// else, for known and unknown emails alike, so the answers never show whether an email has an
+// account: a wrong password, an unknown email, a Google-only account and a counter-made account
+// without a password all get the same "wrong email or password".
+const UNLOCK_LINK_TTL_MS = 30 * 60 * 1000
+
+// Reaching the account-wide cap emails the owner a one-time sign-in link (at most every 30
+// minutes), so guessing from many addresses can never lock the real player out.
+async function sendUnlockLink(req, user) {
+  const lastSent = user.unlockEmailSentAtISO ? new Date(user.unlockEmailSentAtISO).getTime() : 0
+  if (Date.now() - lastSent < UNLOCK_LINK_TTL_MS || !transporter) return
+  const token = randomBytes(32).toString('base64url')
+  const userAccounts = await getUserAccountsCollection()
+  await userAccounts.updateOne(
+    { _id: user._id },
+    { $set: { unlockTokenHash: hashToken(token), unlockExpiresAt: new Date(Date.now() + UNLOCK_LINK_TTL_MS).toISOString(), unlockEmailSentAtISO: new Date().toISOString() } },
+  )
+  const link = `${publicAppUrl(req)}/unlock?token=${encodeURIComponent(token)}`
+  const from = process.env.EMAIL_USER ? `Chill Shooters <${process.env.EMAIL_USER}>` : 'Chill Shooters <no-reply@chillshooters.local>'
+  await transporter.sendMail({
+    from,
+    to: user.email,
+    subject: 'Sign-in attempts on your Chill Shooters account',
+    html: `
+      <div style="font-family: Arial, sans-serif; line-height: 1.5; color: #111827;">
+        <h2 style="margin-bottom: 8px;">Many sign-in attempts on your account</h2>
+        <p>Hello ${String(user.firstName || user.name || 'there').replace(/[<>&"']/g, '')},</p>
+        <p>There have been many wrong-password attempts on your Chill Shooters account, so password sign-in is paused for a while to keep it safe.</p>
+        <p>If you're trying to sign in, use this one-time link. It signs you straight in and clears the pause:</p>
+        <p><a href="${link}" style="display:inline-block;padding:10px 18px;border-radius:10px;background:#c5a35a;color:#111827;font-weight:700;text-decoration:none;">Sign me in</a></p>
+        <p style="color:#6b7280;font-size:13px;">The link works once and expires in 30 minutes. If it wasn't you, nothing has changed and nobody got in; you can ignore this email, or change your password to be safe.</p>
+      </div>
+    `,
+  }).catch((err) => console.error('Failed to send unlock link', err?.message || err))
+}
 
 router.post('/login', async (req, res) => {
   const body = req.body || {}
@@ -749,42 +995,80 @@ router.post('/login', async (req, res) => {
   }
 
   const normalizedEmail = normalizeEmail(email)
+  const keys = loginKeys(normalizedEmail, clientAddress(req))
 
   try {
     const userAccounts = await getUserAccountsCollection()
     const user = await userAccounts.findOne({ email: normalizedEmail })
-    if (!user) return res.status(401).json({ ok: false, error: 'invalid credentials' })
 
-    // Made with "Continue with Google": there is no password to check.
-    if (isGoogleOnlyAccount(user)) {
-      return res.status(409).json({
-        ok: false,
-        emailExists: true,
-        provider: 'google',
-        account: { name: user.name || '', email: user.email },
-        error: 'This email already exists. It was registered with Google, so use "Continue with Google" to sign in.',
-      })
+    // Count this attempt first (so a burst sent at once is counted), then check the limits.
+    const attemptIds = await attempts.record([
+      { key: keys.pair, limit: LIMITS.loginPair, account: normalizedEmail },
+      { key: keys.address, limit: LIMITS.loginAddress },
+      { key: keys.account, limit: LIMITS.loginAccount, account: normalizedEmail },
+    ])
+    const [pairCount, addressCount, accountCount] = await Promise.all([
+      attempts.count(keys.pair, LIMITS.loginPair),
+      attempts.count(keys.address, LIMITS.loginAddress),
+      attempts.count(keys.account, LIMITS.loginAccount),
+    ])
+    if (accountCount > LIMITS.loginAccount.max && user) await sendUnlockLink(req, user)
+    if (pairCount > LIMITS.loginPair.max || addressCount > LIMITS.loginAddress.max || accountCount > LIMITS.loginAccount.max) {
+      return res.status(429).json({ ok: false, error: LOGIN_LIMIT_MESSAGE })
     }
 
-    if (user.emailVerified === false) {
-      return res.status(403).json({ ok: false, error: 'email not verified' })
-    }
-
-    const stored = user.password
-
+    // No password to check (unknown email, Google-only, or counter-made without a password yet).
+    const stored = user && !user.passwordSetupRequired && !isGoogleOnlyAccount(user) ? user.password : null
     const looksLikeBcrypt = typeof stored === 'string' && stored.startsWith('$2')
-    const passwordOk = looksLikeBcrypt ? await bcrypt.compare(password, stored) : stored === password
+    let passwordOk = false
+    if (looksLikeBcrypt) {
+      passwordOk = await bcrypt.compare(password, stored)
+    } else {
+      // Unknown emails still pay for a hash check, so the response time doesn't give them away.
+      await bcrypt.compare(password, DUMMY_HASH)
+      // Old accounts whose password was stored before hashing was switched on.
+      passwordOk = typeof stored === 'string' && stored.length > 0 && stored === password
+    }
+    if (!passwordOk) return res.status(401).json({ ok: false, error: LOGIN_FAILED_MESSAGE })
 
-    if (!passwordOk) return res.status(401).json({ ok: false, error: 'invalid credentials' })
+    // The right password: this attempt doesn't count, and the owner's earlier failures are cleared.
+    await attempts.forgive(attemptIds)
+    await attempts.clearAccount(normalizedEmail)
+
+    // Only someone with the password learns these.
+    if (user.emailVerified === false) return res.status(403).json({ ok: false, error: 'email not verified' })
     if (isSuspendedAccount(user)) return res.status(403).json({ ok: false, error: SUSPENDED_ACCOUNT_ERROR })
 
     const authUser = toAuthUser(user, await recordSignIn(userAccounts, user))
-
     return res.json({
       ok: true,
       user: authUser,
       token: createAuthToken(authUser, { remember: body.remember === true }),
     })
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: String(err) })
+  }
+})
+
+// POST /api/auth/unlock { token, remember } — the one-time link from the "many sign-in attempts"
+// email: signs the owner in and clears the counts. Opening it proves they own the email.
+router.post('/unlock', async (req, res) => {
+  const token = String(req.body?.token || '')
+  if (!token) return res.status(400).json({ ok: false, error: 'This link is missing its code. Open it again from the email.' })
+  try {
+    const userAccounts = await getUserAccountsCollection()
+    const user = await userAccounts.findOne({ unlockTokenHash: hashToken(token) })
+    if (!user || !user.unlockExpiresAt || Date.now() > new Date(user.unlockExpiresAt).getTime()) {
+      return res.status(400).json({ ok: false, error: 'This sign-in link has expired or was already used. Log in with your password, or use "Forgot password?".' })
+    }
+    await userAccounts.updateOne(
+      { _id: user._id },
+      { $set: { emailVerified: true }, $unset: { unlockTokenHash: '', unlockExpiresAt: '' } },
+    )
+    await attempts.clearAccount(normalizeEmail(user.email))
+    if (isSuspendedAccount(user)) return res.status(403).json({ ok: false, error: SUSPENDED_ACCOUNT_ERROR })
+    const authUser = toAuthUser(user, await recordSignIn(userAccounts, user))
+    return res.json({ ok: true, user: authUser, token: createAuthToken(authUser, { remember: req.body?.remember === true }) })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
   }
@@ -807,7 +1091,7 @@ async function handleGoogleAuth(req, res, unverifiedMessage) {
   try {
     const userAccounts = await getUserAccountsCollection()
     const user = await userAccounts.findOne(sameEmailFilter(normalizedEmail))
-    if (!user) return createAndSignInWithGoogle(res, userAccounts, normalizedEmail, name, body)
+    if (!user) return createAndSignInWithGoogle(req, res, userAccounts, normalizedEmail, name, body)
 
     const eligibility = validateGoogleLoginEligibility(user)
     if (!eligibility.allowed) return res.status(403).json({ ok: false, error: eligibility.error })
@@ -840,6 +1124,95 @@ router.post('/test-email', async (req, res) => {
   } catch (err) {
     console.error('Test email failed', err && (err.stack || err.message || err))
     return res.status(500).json({ ok: false, error: String(err && (err.message || err)) })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Accounts made at the counter for walk-ins
+// ---------------------------------------------------------------------------
+
+const SET_PASSWORD_TTL_MS = 14 * 24 * 60 * 60 * 1000
+
+// A one-time "set your password" link. Only its hash is stored, so a database leak can't be used
+// to take over the account.
+function newSetPasswordLink(req) {
+  const token = randomBytes(32).toString('base64url')
+  return {
+    url: `${publicAppUrl(req)}/reset-password?token=${encodeURIComponent(token)}`,
+    fields: { passwordSetupTokenHash: hashToken(token), passwordSetupExpiresAt: new Date(Date.now() + SET_PASSWORD_TTL_MS).toISOString() },
+  }
+}
+
+// Makes a player account for a walk-in (staff confirm the player is 18 or older) and emails the
+// welcome with a "set your password" link. An email that already has an account is not changed,
+// except that an account still waiting for its password gets a fresh link.
+// Returns { status: 'created' | 'exists' | 'resent', account: { id, name, email } }.
+export async function createWalkInAccount(req, { name, email }) {
+  const db = await getDb()
+  const userAccounts = await getUserAccountsCollection()
+  const normalizedEmail = normalizeEmail(email)
+  const existing = await userAccounts.findOne(sameEmailFilter(normalizedEmail))
+
+  if (existing) {
+    const account = { id: existing.id, name: existing.name, email: existing.email }
+    if (!existing.passwordSetupRequired) return { status: 'exists', account }
+    const link = newSetPasswordLink(req)
+    await userAccounts.updateOne({ _id: existing._id }, { $set: link.fields })
+    await emailWelcome(db, { account: existing, req, setPasswordUrl: link.url, sendKey: `welcome:${existing.id}:${link.fields.passwordSetupExpiresAt}` })
+    return { status: 'resent', account }
+  }
+
+  const nameParts = splitFullName(name)
+  const link = newSetPasswordLink(req)
+  const newDoc = {
+    id: await nextShortId(db, 'user_accounts', 'P'),
+    name: composeFullName(nameParts) || normalizedEmail.split('@')[0],
+    ...nameParts,
+    email: normalizedEmail,
+    emailCanonical: canonicalEmail(normalizedEmail),
+    // Nobody knows this password; the player chooses their own from the welcome email.
+    password: await bcrypt.hash(randomBytes(32).toString('hex'), 10),
+    passwordSetupRequired: true,
+    ...link.fields,
+    role: 'user',
+    experience: 0,
+    // Confirmed when the player opens the link sent to this address.
+    emailVerified: false,
+    identityVerificationStatus: 'not_submitted',
+    createdVia: 'walk_in',
+    createdBy: { id: String(req.user?.id || ''), role: req.user?.role || '' },
+    createdAtISO: new Date().toISOString(),
+  }
+  await userAccounts.insertOne(newDoc)
+  await emailWelcome(db, { account: newDoc, req, setPasswordUrl: link.url })
+  return { status: 'created', account: { id: newDoc.id, name: newDoc.name, email: newDoc.email } }
+}
+
+// POST /api/auth/set-password { token, password } — a walk-in sets their first password from the
+// link in their welcome email. Opening the link also proves they own the email address.
+router.post('/set-password', async (req, res) => {
+  const token = String(req.body?.token || '')
+  const password = String(req.body?.password || '')
+  if (!token) return res.status(400).json({ ok: false, error: 'This link is missing its code. Open it again from the welcome email.' })
+  const passwordValidation = validatePasswordRequirements(password)
+  if (!passwordValidation.valid) return res.status(400).json({ ok: false, error: passwordValidation.errors[0] })
+
+  try {
+    const userAccounts = await getUserAccountsCollection()
+    const user = await userAccounts.findOne({ passwordSetupTokenHash: hashToken(token) })
+    if (!user || !user.passwordSetupExpiresAt || Date.now() > new Date(user.passwordSetupExpiresAt).getTime()) {
+      return res.status(400).json({ ok: false, error: 'This link has expired or was already used. Ask the counter on your next visit to send a new one.' })
+    }
+    await userAccounts.updateOne(
+      { _id: user._id },
+      {
+        $set: { password: await bcrypt.hash(password, 10), emailVerified: true, updatedAtISO: new Date().toISOString() },
+        $unset: { passwordSetupRequired: '', passwordSetupTokenHash: '', passwordSetupExpiresAt: '' },
+      },
+    )
+    return res.json({ ok: true, email: user.email, message: 'Password set. You can sign in now.' })
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: String(err) })
   }
 })
 

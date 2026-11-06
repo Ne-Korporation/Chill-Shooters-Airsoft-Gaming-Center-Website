@@ -42,11 +42,18 @@ export function OtpVerificationPage() {
 
     setBusy(true)
     try {
+      // Password reset: the right code earns a short-lived reset pass, which the new-password page
+      // must send with the new password. It travels in navigation state, not the address bar.
+      if (flow === 'reset') {
+        const res = await apiPost<{ message?: string; resetToken: string }>('/api/auth/verify-reset-code', { email, otp: values.otp.trim() })
+        toast.success(res?.message || 'Code accepted.')
+        navigate(`/reset-password?email=${encodeURIComponent(email)}`, { state: { resetToken: res.resetToken } })
+        return
+      }
       const res = await apiPost<{ message?: string }>('/api/auth/verify-otp', { email, otp: values.otp.trim() })
       toast.success(res?.message || 'OTP verified.')
-      if (flow === 'reset') navigate(`/reset-password?email=${encodeURIComponent(email)}`)
       // A brand-new account is greeted as new on the login page, with the email filled in.
-      else if (flow === 'register') navigate('/login', { state: { newAccount: true, email } })
+      if (flow === 'register') navigate('/login', { state: { newAccount: true, email } })
       else navigate('/login')
     } catch (err: any) {
       toast.error(err?.message || 'OTP verification failed')
@@ -63,7 +70,7 @@ export function OtpVerificationPage() {
 
     setResending(true)
     try {
-      const res = await apiPost<{ message?: string }>('/api/auth/send-otp', { email })
+      const res = await apiPost<{ message?: string }>(flow === 'reset' ? '/api/auth/forgot-password' : '/api/auth/send-otp', { email })
       toast.success(res?.message || 'Verification code resent.')
     } catch (err: any) {
       toast.error(err?.message || 'Unable to resend code')
@@ -90,6 +97,16 @@ export function OtpVerificationPage() {
             <p className="text-muted">
               Enter the one-time code sent to <span className="text-text font-semibold">{email || 'your email'}</span>.
             </p>
+            {/* The server answers the same whether or not the email has an account, so say what happens either way. */}
+            {flow === 'register' ? (
+              <p className="text-sm text-muted">
+                If this email already has an account, we emailed you how to sign in instead of a code.
+              </p>
+            ) : flow === 'reset' ? (
+              <p className="text-sm text-muted">
+                No email after a few minutes? Check spam, and make sure it's the email on your account.
+              </p>
+            ) : null}
 
             {/* <Card className="p-4">
               <div className="text-sm font-semibold">Verification code</div>

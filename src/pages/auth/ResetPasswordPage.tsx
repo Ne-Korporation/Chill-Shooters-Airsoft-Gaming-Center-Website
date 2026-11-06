@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react'
 import { useForm } from 'react-hook-form'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { motion } from 'framer-motion'
 import { FiCheck, FiEye, FiEyeOff } from 'react-icons/fi'
@@ -15,14 +15,19 @@ type FormValues = {
   confirmPassword: string
 }
 
-function readEmail() {
+function readParam(name: string) {
   const sp = new URLSearchParams(window.location.search)
-  return sp.get('email') ?? ''
+  return sp.get(name) ?? ''
 }
 
 export function ResetPasswordPage() {
   const navigate = useNavigate()
-  const email = useMemo(() => readEmail(), [])
+  const email = useMemo(() => readParam('email'), [])
+  // From the welcome email of an account made at the counter: set the first password.
+  const token = useMemo(() => readParam('token'), [])
+  // Forgot password: the pass from the code page (navigation state, so it never sits in the URL).
+  const location = useLocation()
+  const resetToken = String((location.state as { resetToken?: string } | null)?.resetToken || '')
   const [busy, setBusy] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
   const [showConfirm, setShowConfirm] = useState(false)
@@ -63,17 +68,25 @@ export function ResetPasswordPage() {
         toast.error('Passwords do not match.')
         return
       }
-      if (!email) {
-        toast.error('Missing email address.')
+      if (token) {
+        const res = await apiPost<{ message?: string; email?: string }>('/api/auth/set-password', { token, password: values.password })
+        toast.success(res?.message || 'Password set. You can sign in now.')
+        navigate('/login', { state: { email: res?.email } })
+        return
+      }
+      if (!email || !resetToken) {
+        toast.error('Verify the code sent to your email first.')
+        navigate('/forgot-password')
         return
       }
 
-      const res = await apiPost<{ message?: string }>('/api/auth/reset-password', {
+      const res = await apiPost<{ message?: string; email?: string }>('/api/auth/reset-password', {
         email,
+        resetToken,
         password: values.password,
       })
       toast.success(res?.message || 'Password updated successfully.')
-      navigate('/login')
+      navigate('/login', { state: { email: res?.email || email } })
     } catch (err: any) {
       toast.error(err?.message || 'Unable to update password')
     } finally {
@@ -94,10 +107,12 @@ export function ResetPasswordPage() {
           className="grid gap-4 lg:grid-cols-2 lg:gap-6"
         >
           <div className="space-y-3">
-            <div className="text-sm font-medium text-accent">Reset Password</div>
-            <h1 className="text-3xl font-bold leading-tight lg:text-4xl">Secure Credential Update</h1>
+            <div className="text-sm font-medium text-accent">{token ? 'Welcome to Chill Shooters' : 'Reset Password'}</div>
+            <h1 className="text-3xl font-bold leading-tight lg:text-4xl">{token ? 'Set your password' : 'Secure Credential Update'}</h1>
             <p className="text-muted">
-              Updating password for <span className="text-text font-semibold">{email || 'account'}</span>.
+              {token
+                ? 'Your account was made at the counter. Choose a password to sign in and book your next game.'
+                : <>Updating password for <span className="text-text font-semibold">{email || 'account'}</span>.</>}
             </p>
 
           </div>
@@ -191,7 +206,7 @@ export function ResetPasswordPage() {
                 ))}
               </div>
               <Button type="submit" disabled={busy} className="w-full">
-                {busy ? 'Updating...' : 'Update Password'}
+                {busy ? 'Saving...' : token ? 'Set password' : 'Update Password'}
               </Button>
 
               <div className="pt-2 text-xs">

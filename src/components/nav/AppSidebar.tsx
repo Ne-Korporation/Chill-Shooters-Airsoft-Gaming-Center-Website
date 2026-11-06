@@ -2,6 +2,7 @@ import { CapacityCalendar } from '../booking/CapacityCalendar'
 import React, { useEffect, useState } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import type { IconType } from 'react-icons'
+import { GiAk47 } from 'react-icons/gi'
 import { useAuth } from '../../context/AuthContext'
 import { apiGet } from '../../utils/apiClient'
 import { SPLIT_PAYMENTS_CHANGED_EVENT } from '../../pages/payments/SplitPaymentPage'
@@ -9,27 +10,21 @@ import {
   FiGrid,
   FiCalendar,
   FiList,
-  FiAlertTriangle,
   FiHeart,
   FiPackage,
   FiUsers,
   FiUser,
   FiBarChart2,
   FiFileText,
-  FiSettings,
-  FiTruck,
   FiShield,
   FiTool,
   FiZap,
-  FiClipboard,
   FiCreditCard,
   FiTarget,
   FiBriefcase,
   FiMessageSquare,
   FiDollarSign,
-  FiShuffle,
   FiShoppingBag,
-  FiLogOut,
   FiCloudRain,
   FiChevronDown,
   FiPlusCircle,
@@ -52,12 +47,8 @@ const marshalItems: Item[] = [
   { label: 'Dashboard', to: '/app', icon: FiGrid },
   { label: 'Games', to: '/app/games', icon: FiZap },
   { label: 'Gear', to: '/app/admin/equipment', icon: FiTool },
-  { label: 'Weapons', to: '/app/admin/weapons', icon: FiTruck },
-  { label: 'Safety Logs', to: '/app/safety', icon: FiAlertTriangle },
-  { label: 'Field Check-in', to: '/app/check-in', icon: FiClipboard },
-  { label: 'Team Grouping', to: '/app/team-grouping', icon: FiShuffle },
-  { label: 'Rental Check-out', to: '/app/rentals', icon: FiLogOut },
-  { label: 'Repairs', to: '/app/repairs', icon: FiTool },
+  { label: 'Weapons', to: '/app/admin/weapons', icon: GiAk47 },
+  { label: 'Game counter', to: '/app/counter', icon: FiShoppingBag },
 ]
 
 // Grouped by the job the admin is doing, in the order a game day runs: check what needs
@@ -68,17 +59,12 @@ const adminItems: Item[] = [
   // Games and archived games are tabs of one Reservations page.
   { section: 'Bookings', label: 'Reservations', to: '/app/admin/reservations', icon: FiCalendar },
   { section: 'Bookings', label: 'Payments', to: '/app/admin/payments', icon: FiCreditCard },
-  { section: 'Game day', label: 'Counter', to: '/app/counter', icon: FiShoppingBag },
+  { section: 'Game day', label: 'Games', to: '/app/counter', icon: FiZap },
   { section: 'Game day', label: 'Walk-ins', to: '/app/walk-ins', icon: FiUserPlus },
-  { section: 'Game day', label: 'Rental check-out', to: '/app/rentals', icon: FiLogOut },
-  { section: 'Game day', label: 'Field check-in', to: '/app/check-in', icon: FiClipboard },
-  { section: 'Game day', label: 'Team grouping', to: '/app/team-grouping', icon: FiShuffle },
-  { section: 'Game day', label: 'Safety logs', to: '/app/safety', icon: FiAlertTriangle },
   { section: 'Game day', label: 'Weather', to: '/app/weather', icon: FiCloudRain },
-  { section: 'Inventory', label: 'Weapons', to: '/app/admin/weapons', icon: FiTruck },
+  { section: 'Inventory', label: 'Weapons', to: '/app/admin/weapons', icon: GiAk47 },
   { section: 'Inventory', label: 'Gear', to: '/app/admin/equipment', icon: FiTool },
   { section: 'Inventory', label: 'Rental packages', to: '/app/admin/rental-packages', icon: FiPackage },
-  { section: 'Inventory', label: 'Repairs', to: '/app/repairs', icon: FiSettings },
   // Waivers are mostly approved automatically from the verified profile ID, so they sit with the records kept here.
   { section: 'Inventory', label: 'Waivers', to: '/app/admin/waivers', icon: FiShield },
   { section: 'People', label: 'Players & staff', to: '/app/admin/player-management', icon: FiUsers },
@@ -92,12 +78,9 @@ const adminItems: Item[] = [
 const registrarItems: Item[] = [
   { label: 'Dashboard', to: '/app', icon: FiGrid },
   { label: 'Reservations', to: '/app/registrar/reservations', icon: FiCalendar },
-  { label: 'Counter', to: '/app/counter', icon: FiShoppingBag },
+  { label: 'Game counter', to: '/app/counter', icon: FiShoppingBag },
   { label: 'Walk-ins', to: '/app/walk-ins', icon: FiUserPlus },
-  { label: 'Field Check-in', to: '/app/check-in', icon: FiClipboard },
-  { label: 'Rental Check-out', to: '/app/rentals', icon: FiLogOut },
   { label: 'Games', to: '/app/registrar/games', icon: FiZap },
-  { label: 'Availed Packages', to: '/app/registrar/availed-packages', icon: FiPackage },
   { label: 'Submitted Waivers', to: '/app/registrar/waivers', icon: FiShield },
   { label: 'Submitted Payments', to: '/app/registrar/submitted-payments', icon: FiCreditCard },
 ]

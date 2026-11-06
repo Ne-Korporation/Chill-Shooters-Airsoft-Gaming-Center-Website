@@ -70,10 +70,13 @@ function toItems(docs: any[]): InventoryItem[] {
     .filter((item) => item.id)
 }
 
-export function SafetyLogPage() {
+// Chronograph checks and damage reports. Shown on the Weapons page (`embedded`), which supplies
+// the title and picks the tab.
+export function SafetyLogPage({ embedded = false, tab: tabFromPage }: { embedded?: boolean; tab?: 'fps' | 'damage' } = {}) {
   const { user } = useAuth()
   const isAdmin = user?.role === 'admin'
-  const [tab, setTab] = useState<'fps' | 'damage'>('fps')
+  const [ownTab, setTab] = useState<'fps' | 'damage'>('fps')
+  const tab = tabFromPage || ownTab
   const [fpsLogs, setFpsLogs] = useState<FpsLog[]>([])
   const [limits, setLimits] = useState({ aeg: 450, sniper: 550 })
   const [reports, setReports] = useState<DamageReport[]>([])
@@ -207,14 +210,22 @@ export function SafetyLogPage() {
 
   return (
     <div className="space-y-4">
+      {embedded ? (
+        <p className="text-sm text-muted">
+          {tab === 'fps'
+            ? `Chronograph checks: AEG limit ${limits.aeg} FPS, sniper/VSR ${limits.sniper} FPS.`
+            : 'Damage and loss reports, with penalty billing to the reservation.'}
+        </p>
+      ) : (
       <div>
         <h1 className="text-3xl font-bold">Safety Logs</h1>
         <p className="mt-1 text-sm text-muted">
           Chronograph checks (AEG limit {limits.aeg} FPS, sniper/VSR {limits.sniper} FPS) and damage reports with penalty billing.
         </p>
       </div>
+      )}
 
-      <div className="flex gap-2">
+      <div className={embedded ? 'hidden' : 'flex gap-2'}>
         {([['fps', 'FPS safety log'], ['damage', 'Damage reports']] as const).map(([value, label]) => (
           <button
             key={value}

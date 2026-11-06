@@ -136,7 +136,8 @@ function CompleteRepairForm({ repair, onDone }: { repair: Repair; onDone: () => 
 
 // The gunsmith's log: open a repair (pulls the item from rental), record parts and cost when
 // it's fixed, and see which models break most and what they cost.
-export function RepairsPage() {
+// `embedded`: shown as the Repairs tab of the Weapons page, which supplies the title.
+export function RepairsPage({ embedded = false }: { embedded?: boolean } = {}) {
   const [repairs, setRepairs] = useState<Repair[]>([])
   const [summary, setSummary] = useState<{ byItem: SummaryRow[]; byCategory: SummaryRow[] }>({ byItem: [], byCategory: [] })
   const [inventory, setInventory] = useState<InventoryOption[]>([])
@@ -222,10 +223,14 @@ export function RepairsPage() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-3xl font-bold">Repairs</h1>
-        <p className="mt-1 text-sm text-muted">Gunsmith repair log: damage, parts replaced, repair date, and cost for each item.</p>
-      </div>
+      {embedded ? (
+        <p className="text-sm text-muted">Gunsmith repair log for weapons and gear: damage, parts replaced, repair date, and cost for each item.</p>
+      ) : (
+        <div>
+          <h1 className="text-3xl font-bold">Repairs</h1>
+          <p className="mt-1 text-sm text-muted">Gunsmith repair log: damage, parts replaced, repair date, and cost for each item.</p>
+        </div>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
         <Card className="h-fit p-4 md:p-5">

@@ -40,6 +40,9 @@ const { parseAddress } = await import('./services/mailService.js')
 const { sendUnpaidReservationEmails } = await import('./services/notificationEmails.js')
 
 const app = express()
+// The API runs behind Render's proxy: trust that one hop so req.ip is the visitor's address
+// (used by the login and code guessing limits), not the proxy's.
+app.set('trust proxy', 1)
 app.use(cors())
 // Email links need the website's address; remember it from the site calling the API.
 app.use(rememberAppOrigin)

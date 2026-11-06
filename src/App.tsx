@@ -7,6 +7,7 @@ import { RegisterPage } from './pages/auth/RegisterPage'
 import { ForgotPasswordPage } from './pages/auth/ForgotPasswordPage'
 import { OtpVerificationPage } from './pages/auth/OtpVerificationPage'
 import { ResetPasswordPage } from './pages/auth/ResetPasswordPage'
+import { UnlockPage } from './pages/auth/UnlockPage'
 
 import { DashboardHomePage } from './pages/dashboard/DashboardHomePage'
 import { ReservationCalendarPage } from './pages/reservations/ReservationCalendarPage'
@@ -37,22 +38,16 @@ import { AdminFeedbackPage } from './pages/admin/AdminFeedbackPage'
 import { AdminReachFundPage } from './pages/admin/AdminReachFundPage'
 import { AdminAnnouncementsPage } from './pages/admin/AdminAnnouncementsPage'
 import { AdminWeatherPage } from './pages/admin/AdminWeatherPage'
-import { SafetyLogPage } from './pages/marshal/SafetyLogPage'
-import { TeamGroupingPage } from './pages/operations/TeamGroupingPage'
-import { FieldCheckInPage } from './pages/operations/FieldCheckInPage'
 import { GuardianApprovalPage } from './pages/guardian/GuardianApprovalPage'
 import { GuardianConfirmPage } from './pages/guardian/GuardianConfirmPage'
 import { CounterPage } from './pages/operations/CounterPage'
 import { WalkInsPage } from './pages/operations/WalkInsPage'
-import { RentalsPage } from './pages/operations/RentalsPage'
-import { RepairsPage } from './pages/operations/RepairsPage'
 
 import { PlayerManagementPage } from './pages/admin/PlayerManagementPage'
 
 import { RegistrarDashboardHomePage } from './pages/registrar/RegistrarDashboardHomePage'
 import { RegistrarReservationsPage } from './pages/registrar/RegistrarReservationsPage'
 import { RegistrarOngoingGamesPage, RegistrarArchivedGamesPage } from './pages/registrar'
-import { RegistrarAvailedPackagesPage } from './pages/registrar/RegistrarAvailedPackagesPage'
 import { RegistrarSubmittedWaiversPage } from './pages/registrar/RegistrarSubmittedWaiversPage'
 import { MarshalDashboardHomePage } from './pages/marshal/MarshalDashboardHomePage'
 import { PlayerFeedbackPage } from './pages/players/PlayerFeedbackPage'
@@ -109,13 +104,6 @@ function RegistrarOngoingGamesPageWrapper() {
   )
 }
 
-function RegistrarAvailedPackagesPageWrapper() {
-  return (
-    <RequireRole roles={['registrar']}>
-      <RegistrarAvailedPackagesPage />
-    </RequireRole>
-  )
-}
 
 function RegistrarSubmittedWaiversPageWrapper() {
   return (
@@ -144,6 +132,7 @@ export default function App() {
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
       <Route path="/otp" element={<OtpVerificationPage />} />
       <Route path="/reset-password" element={<ResetPasswordPage />} />
+      <Route path="/unlock" element={<UnlockPage />} />
       <Route path="/guardian-approval/:token" element={<GuardianApprovalPage />} />
       <Route path="/pay/demo" element={<RequireAuth><RequireRole roles={['user']}><DemoPaymentPage /></RequireRole></RequireAuth>} />
       <Route path="/guardian-confirm/:token" element={<GuardianConfirmPage />} />
@@ -234,13 +223,18 @@ export default function App() {
         <Route path="admin/feedback" element={<AdminPageWrapper><AdminFeedbackPage /></AdminPageWrapper>} />
         <Route path="admin/reach-fund" element={<AdminPageWrapper><AdminReachFundPage /></AdminPageWrapper>} />
         <Route path="admin/announcements" element={<AdminPageWrapper><AdminAnnouncementsPage /></AdminPageWrapper>} />
-        <Route path="safety" element={<RequireRole roles={['marshal', 'admin']}><SafetyLogPage /></RequireRole>} />
-        <Route path="team-grouping" element={<RequireRole roles={['marshal', 'admin']}><TeamGroupingPage /></RequireRole>} />
-        <Route path="check-in" element={<RequireRole roles={['registrar', 'marshal', 'admin']}><FieldCheckInPage /></RequireRole>} />
-        <Route path="counter" element={<RequireRole roles={['registrar', 'admin']}><CounterPage /></RequireRole>} />
+        {/* Safety logs now live on the Weapons page (FPS safety log and Damage reports tabs). */}
+        <Route path="safety" element={<Navigate to="/app/admin/weapons?view=fps" replace />} />
+        {/* Team grouping now lives on the Games page (each game's Teams tab). */}
+        <Route path="team-grouping" element={<Navigate to="/app/counter?view=today" replace />} />
+        {/* Field check-in now lives on the Games page (each game's Check-in tab). */}
+        <Route path="check-in" element={<Navigate to="/app/counter?view=today" replace />} />
+        <Route path="counter" element={<RequireRole roles={['registrar', 'marshal', 'admin']}><CounterPage /></RequireRole>} />
         <Route path="walk-ins" element={<RequireRole roles={['registrar', 'admin']}><WalkInsPage /></RequireRole>} />
-        <Route path="rentals" element={<RequireRole roles={['marshal', 'registrar', 'admin']}><RentalsPage /></RequireRole>} />
-        <Route path="repairs" element={<RequireRole roles={['marshal', 'admin']}><RepairsPage /></RequireRole>} />
+        {/* Rental check-out now lives on the Games page (each game's Rentals tab, and the Still out tab). */}
+        <Route path="rentals" element={<Navigate to="/app/counter?view=out" replace />} />
+        {/* Repairs now live on the Weapons page (Repairs tab). */}
+        <Route path="repairs" element={<Navigate to="/app/admin/weapons?view=repairs" replace />} />
         <Route path="weather" element={<RequireRole roles={['registrar', 'marshal', 'admin']}><AdminWeatherPage /></RequireRole>} />
         <Route path="admin/reports" element={<AdminPageWrapper><AdminReportsPage /></AdminPageWrapper>} />
         <Route path="admin/notifications" element={<AdminPageWrapper><AdminNotificationsPage /></AdminPageWrapper>} />
@@ -249,7 +243,8 @@ export default function App() {
         <Route path="registrar" element={<RegistrarDashboardHomePage />} />
         <Route path="registrar/reservations" element={<RegistrarReservationsPageWrapper />} />
         <Route path="registrar/games" element={<RegistrarOngoingGamesPageWrapper />} />
-        <Route path="registrar/availed-packages" element={<RegistrarAvailedPackagesPageWrapper />} />
+        {/* Availed Packages was removed (it showed made-up gear statuses); real gear status is on Weapons and each game's Rentals tab. */}
+        <Route path="registrar/availed-packages" element={<Navigate to="/app/counter" replace />} />
         <Route path="registrar/waivers" element={<RegistrarSubmittedWaiversPageWrapper />} />
         <Route path="registrar/submitted-payments" element={<RegistrarSubmittedPaymentsPageWrapper />} />
 
