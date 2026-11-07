@@ -13,7 +13,7 @@ import { signedWaiverText, type WaiverText } from '../../utils/waiverText'
 import { WaiverTextEditor } from '../../components/waivers/WaiverTextEditor'
 import { printWaiverDocument } from '../../utils/waiverPrint'
 import { formatPhPhone } from '../../utils/phone'
-import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
+import { useNotifications } from '../../context/NotificationContext'
 import { useAuth } from '../../context/AuthContext'
 
 type WaiverRecord = {
@@ -139,13 +139,6 @@ export function AdminWaiversPage() {
         setWaivers((current) => current.map((waiver) => (waiver.id === waiverId || waiver._id === waiverId ? response.data : waiver)))
 
         try {
-          sendRoleNotifications(addNotification, {
-            roles: ['admin', 'registrar', 'marshal'],
-            type: status === 'approved' ? 'waiver_approved' : 'waiver_denied',
-            title: status === 'approved' ? `Waiver approved by ${reviewer}` : `Waiver denied by ${reviewer}`,
-            message: `${reviewer} ${status} waiver ${waiverId} for ${selectedWaiver.fullName || 'a player'}.`,
-            linkedResourceId: waiverId,
-          })
 
           // Notify the player
           if (selectedWaiver.userId) {

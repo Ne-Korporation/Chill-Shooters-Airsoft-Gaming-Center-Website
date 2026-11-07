@@ -1,6 +1,6 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { FiArchive, FiCheck, FiChevronRight, FiEye, FiMapPin, FiSearch, FiShield, FiX } from 'react-icons/fi'
+import { FiArchive, FiCheck, FiChevronDown, FiChevronRight, FiEye, FiFolder, FiFolderMinus, FiMapPin, FiSearch, FiShield, FiX } from 'react-icons/fi'
 import { toast } from 'react-hot-toast'
 
 import { Card } from '../../components/ui/Card'
@@ -8,7 +8,6 @@ import { Button } from '../../components/ui/Button'
 import { Modal } from '../../components/ui/Modal'
 import { apiGet, apiPut } from '../../utils/apiClient'
 import { DEFAULT_PAGE_SIZE, Pagination } from '../../components/ui/Pagination'
-import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
 import { useAuth } from '../../context/AuthContext'
 import { LOCATIONS } from '../operations/shared'
 import { BookingPlayersSection } from '../../components/reservations/BookingPlayersSection'
@@ -60,7 +59,26 @@ export const formatSchedule = (doc: { Schedule?: string }) => {
   return slot ? `${date} · ${slot.charAt(0).toUpperCase()}${slot.slice(1)}` : date
 }
 
-export const locationName = (doc: { LocationId?: string; Location?: string }) =>
+// Folder heading for a game date: "Today · Sat, Nov 7", "Tomorrow · …", or "Mon, Nov 9, 2026".
+const folderLabel = (day: string) => {
+  if (!day) return 'No date'
+  const today = manilaToday()
+  const label = new Date(`${day}T12:00:00Z`).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
+  if (day === today) return `Today · ${label}`
+  if (day === addDays(today, 1)) return `Tomorrow · ${label}`
+  if (day === addDays(today, -1)) return `Yesterday · ${label}`
+  return label
+}
+
+// "2026-11-03 • morning" → "Morning".
+const slotOf = (doc: { Schedule?: string }) => {
+  const slot = String(doc.Schedule || '').split('•')[1]?.trim() || ''
+  return slot ? `${slot.charAt(0).toUpperCase()}${slot.slice(1)}` : 'No slot'
+}
+
+const STATUS_ORDER: GameplayStatus[] = ['Ongoing', 'Scheduled', 'Completed', 'Cancelled', 'Archived']
+
+export const locationName =(doc: { LocationId?: string; Location?: string }) =>
   LOCATIONS.find((loc) => loc.id === doc.LocationId)?.name || doc.Location || doc.LocationId || '—'
 
 type GameWeapon = {
@@ -193,7 +211,6 @@ export function RegistrarOngoingGamesPage({ embedded = false }: { embedded?: boo
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
   const [counts, setCounts] = useState({ Scheduled: 0, Ongoing: 0, Completed: 0, Cancelled: 0, Archived: 0 })
-  const { addNotification } = useNotifications()
   const { user } = useAuth()
   const canUpdateWeapons = user?.role === 'admin' || user?.role === 'marshal'
   // The game whose details pop-up is open; the row is re-read from the list after each refresh.
@@ -237,6 +254,10 @@ export function RegistrarOngoingGamesPage({ embedded = false }: { embedded?: boo
     setPage(1)
   }
   const filtersActive = JSON.stringify({ ...filters, sort: DEFAULT_FILTERS.sort }) !== JSON.stringify(DEFAULT_FILTERS)
+  // Time slot, game mode and sort sit behind "More filters"; they stay visible while one is set.
+  const [moreFiltersOpen, setMoreFiltersOpen] = useState(false)
+  const moreFiltersSet = Boolean(filters.slot || filters.mode || filters.sort !== DEFAULT_FILTERS.sort)
+  const showMoreFilters = moreFiltersOpen || moreFiltersSet
 
   // Latest filters/page for the background refresh.
   const latest = React.useRef({ filters, page })
@@ -311,8 +332,31 @@ export function RegistrarOngoingGamesPage({ embedded = false }: { embedded?: boo
     }
   }, [refresh])
 
-  const filtered = items
   const pageCount = Math.max(1, Math.ceil(total / DEFAULT_PAGE_SIZE))
+
+  // This page's games in one folder per game date, in the order the server sorted them.
+  const folders = useMemo(() => {
+    const byDay = new Map<string, GameplayDoc[]>()
+    for (const doc of items) {
+      const day = gameDayOf(doc)
+      byDay.set(day, [...(byDay.get(day) || []), doc])
+    }
+    return [...byDay.entries()].map(([day, games]) => {
+      const statusCounts: Partial<Record<GameplayStatus, number>> = {}
+      for (const doc of games) {
+        const s = normalizeStatus(doc.Status)
+        statusCounts[s] = (statusCounts[s] || 0) + 1
+      }
+      return { day, games, statusCounts }
+    })
+  }, [items])
+
+  // Today's folder (or the first one when there are no games today) starts open; any folder
+  // can be opened or closed, and that choice is kept while the list refreshes.
+  const [folderToggles, setFolderToggles] = useState<Record<string, boolean>>({})
+  const defaultOpenDay = folders.some((f) => f.day === manilaToday()) ? manilaToday() : folders[0]?.day
+  const folderOpen = (day: string) => folderToggles[day] ?? day === defaultOpenDay
+  const toggleFolder = (day: string) => setFolderToggles((current) => ({ ...current, [day]: !folderOpen(day) }))
 
   const updateStatus = async (doc: GameplayDoc, nextStatus: GameplayStatus) => {
     const id = rowId(doc)
@@ -324,13 +368,6 @@ export function RegistrarOngoingGamesPage({ embedded = false }: { embedded?: boo
           Status: nextStatus,
           updatedAtISO: new Date().toISOString(),
         },
-      })
-      sendRoleNotifications(addNotification, {
-        roles: ['admin', 'registrar', 'marshal'],
-        type: 'gameplay_status_updated',
-        title: 'Gameplay Status Updated',
-        message: `Gameplay ${id} moved to ${nextStatus}.`,
-        linkedResourceId: id,
       })
       toast.success(`Gameplay marked ${nextStatus.toLowerCase()}`)
       await refresh()
@@ -362,13 +399,6 @@ export function RegistrarOngoingGamesPage({ embedded = false }: { embedded?: boo
           archivedAtISO: new Date().toISOString(),
           updatedAtISO: new Date().toISOString(),
         },
-      })
-      sendRoleNotifications(addNotification, {
-        roles: ['admin', 'registrar', 'marshal'],
-        type: 'gameplay_status_updated',
-        title: 'Gameplay Archived',
-        message: `Gameplay ${id} was archived.`,
-        linkedResourceId: id,
       })
       toast.success('Gameplay archived')
       await refresh()
@@ -447,7 +477,7 @@ export function RegistrarOngoingGamesPage({ embedded = false }: { embedded?: boo
           </div>
         </div>
 
-        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
           <label className="block text-xs font-semibold text-muted">
             Status
             <select value={filters.status} onChange={(e) => setFilter('status', e.target.value as StatusFilter)} className="select-field mt-1 h-10 w-full">
@@ -496,6 +526,10 @@ export function RegistrarOngoingGamesPage({ embedded = false }: { embedded?: boo
               {LOCATIONS.map((loc) => <option key={loc.id} value={loc.id}>{loc.name}</option>)}
             </select>
           </label>
+        </div>
+        {/* Less-used filters, tucked away until asked for (or while one of them is set). */}
+        {showMoreFilters ? (
+        <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
           <label className="block text-xs font-semibold text-muted">
             Time slot
             <select value={filters.slot} onChange={(e) => setFilter('slot', e.target.value)} className="select-field mt-1 h-10 w-full">
@@ -521,64 +555,74 @@ export function RegistrarOngoingGamesPage({ embedded = false }: { embedded?: boo
             </select>
           </label>
         </div>
-        <div className="mt-2 flex items-center justify-between text-xs text-muted">
+        ) : null}
+        <div className="mt-2 flex items-center justify-between gap-3 text-xs text-muted">
           <span>{loading ? 'Loading…' : `${total} game${total === 1 ? '' : 's'} match`}</span>
-          {filtersActive ? (
-            <button type="button" className="font-semibold text-accent hover:underline" onClick={() => { setFilters({ ...DEFAULT_FILTERS, sort: filters.sort }); setPage(1) }}>
-              Clear filters
-            </button>
-          ) : null}
+          <div className="flex items-center gap-4">
+            {!moreFiltersSet ? (
+              <button type="button" className="font-semibold text-accent hover:underline" onClick={() => setMoreFiltersOpen((v) => !v)}>
+                {moreFiltersOpen ? 'Fewer filters' : 'More filters'}
+              </button>
+            ) : null}
+            {filtersActive ? (
+              <button type="button" className="font-semibold text-accent hover:underline" onClick={() => { setFilters({ ...DEFAULT_FILTERS, sort: filters.sort }); setPage(1) }}>
+                Clear filters
+              </button>
+            ) : null}
+          </div>
         </div>
 
-        <div className="mt-5 overflow-x-auto">
-          <table className="min-w-full text-sm">
-            <thead>
-              <tr className="text-left text-xs uppercase tracking-widest text-muted">
-                <th className="py-2 pr-3">ID</th>
-                <th className="py-2 pr-3">Schedule</th>
-                <th className="py-2 pr-3">Location</th>
-                <th className="py-2 pr-3">Status</th>
-                <th className="py-2 pr-3 text-right">Details</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr>
-                  <td colSpan={5} className="py-6 text-sm text-muted">
-                    Loading gameplay…
-                  </td>
-                </tr>
-              ) : filtered.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="py-6 text-sm text-muted">
-                    {filtersActive ? 'No games match these filters.' : 'No gameplay records.'}
-                  </td>
-                </tr>
-              ) : (
-                filtered.map((doc) => (
-                  <tr key={rowId(doc)} className="border-t border-white/5">
-                    <td className="py-3 pr-3">
-                      <div className="font-bold">{rowId(doc) || '—'}</div>
-                    </td>
-                    <td className="py-3 pr-3">
-                      <div className="font-bold">{formatSchedule(doc)}</div>
-                    </td>
-                    <td className="py-3 pr-3">
-                      <div className="font-semibold">{locationName(doc)}</div>
-                    </td>
-                    <td className="py-3 pr-3">
-                      <StatusBadge status={normalizeStatus(doc.Status)} />
-                    </td>
-                    <td className="py-3 pr-3 text-right">
-                      <Button size="sm" variant="ghost" onClick={() => openDetails(doc)}>
-                        <FiEye /> Game details
-                      </Button>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+        {/* Games grouped into a folder per game date. */}
+        <div className="mt-5 space-y-2">
+          {loading ? (
+            <div className="py-6 text-sm text-muted">Loading gameplay…</div>
+          ) : folders.length === 0 ? (
+            <div className="py-6 text-sm text-muted">{filtersActive ? 'No games match these filters.' : 'No gameplay records.'}</div>
+          ) : (
+            folders.map((folder) => {
+              const isOpen = folderOpen(folder.day)
+              return (
+                <div key={folder.day || 'none'} className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.03]">
+                  <button
+                    type="button"
+                    onClick={() => toggleFolder(folder.day)}
+                    aria-expanded={isOpen}
+                    className="flex w-full items-center gap-3 px-4 py-3 text-left transition hover:bg-white/5"
+                  >
+                    {isOpen ? <FiFolderMinus className="shrink-0 text-lg text-gold" /> : <FiFolder className="shrink-0 text-lg text-gold" />}
+                    <div className="min-w-0 flex-1">
+                      <div className="font-bold">{folderLabel(folder.day)}</div>
+                      <div className="text-xs text-muted">
+                        {folder.games.length} game{folder.games.length === 1 ? '' : 's'}
+                        {STATUS_ORDER.filter((s) => folder.statusCounts[s]).map((s) => ` · ${folder.statusCounts[s]} ${s.toLowerCase()}`).join('')}
+                      </div>
+                    </div>
+                    <FiChevronDown className={['shrink-0 text-muted transition-transform', isOpen ? 'rotate-180' : ''].join(' ')} />
+                  </button>
+                  {isOpen ? (
+                    <ul className="divide-y divide-white/5 border-t border-white/10">
+                      {folder.games.map((doc) => (
+                        <li key={rowId(doc)} className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:gap-4">
+                          <div className="min-w-0 flex-1">
+                            <div className="font-semibold">
+                              {slotOf(doc)} · {locationName(doc)}
+                            </div>
+                            <div className="text-xs text-muted">{rowId(doc) || '—'}{doc.Group ? ` · ${doc.Group}` : ''}</div>
+                          </div>
+                          <div className="flex items-center justify-between gap-3 sm:justify-end">
+                            <StatusBadge status={normalizeStatus(doc.Status)} />
+                            <Button size="sm" variant="ghost" onClick={() => openDetails(doc)}>
+                              <FiEye /> Game details
+                            </Button>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
+              )
+            })
+          )}
         </div>
         <Pagination page={page} pageCount={pageCount} total={total} onPageChange={setPage} />
 

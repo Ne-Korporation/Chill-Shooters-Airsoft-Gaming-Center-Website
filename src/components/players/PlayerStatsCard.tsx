@@ -4,6 +4,7 @@ import { FiAward } from 'react-icons/fi'
 
 import { Button } from '../ui/Button'
 import { apiGet, apiPut } from '../../utils/apiClient'
+import { bookingRoles } from '../../utils/bookingRoles'
 
 type PlayerStats = {
   gamesPlayed: number
@@ -16,7 +17,7 @@ type PlayerStats = {
     total: number
     upcoming: number
     cancelled: number
-    recent: Array<{ id: string; reservationDate: string; reservationTime: string; reservationStatus: string; locationName?: string; asCaptain: boolean }>
+    recent: Array<{ id: string; reservationDate: string; reservationTime: string; reservationStatus: string; locationName?: string; asCaptain: boolean; sessionType?: string }>
   }
   ownedGear: Array<{ id: string; name: string; kind: 'weapon' | 'equipment'; category?: string }>
 }
@@ -136,7 +137,7 @@ export function PlayerStatsCard({ playerId, canAdjust = false }: { playerId: str
           {stats.reservations.recent.map((r) => (
             <li key={r.id}>
               {r.reservationDate} · <span className="capitalize">{r.reservationTime}</span> · {r.locationName || ''} · <span className="capitalize">{r.reservationStatus}</span>
-              {r.asCaptain ? ' · captain' : ' · teammate'}
+              {' · '}{(r.asCaptain ? bookingRoles(r.sessionType).booker : bookingRoles(r.sessionType).member).toLowerCase()}
             </li>
           ))}
         </ul>

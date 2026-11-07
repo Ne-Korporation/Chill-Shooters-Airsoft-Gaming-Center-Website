@@ -77,7 +77,6 @@ export function RegistrarDashboardHomePage() {
           <WeatherAdvisoryWidget />
           <DashboardPostsPanel
             title="Announcements"
-            subtitle="Updates and reminders from the admin team."
             initialCount={3}
           />
 

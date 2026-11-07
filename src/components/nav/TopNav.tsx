@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { FiBell, FiCloudRain, FiLogOut, FiMenu } from 'react-icons/fi'
+import { FiBell, FiLogOut, FiMenu } from 'react-icons/fi'
 import { Link, useNavigate } from 'react-router-dom'
 import { ThemeToggle } from './ThemeToggle'
 import { useTheme } from '../../context/ThemeContext'
@@ -8,8 +8,6 @@ import { useAuth } from '../../context/AuthContext'
 import { useNotifications } from '../../context/NotificationContext'
 import { resolveNotificationRoute } from '../../utils/notificationRoutes'
 import { kindOf, timeLabel } from '../../utils/notificationDisplay'
-import { Modal } from '../ui/Modal'
-import { WeatherPanel } from '../../pages/admin/AdminWeatherPage'
 
 function NotificationBell({ userId, role }: { userId: string; role?: string }) {
   const { notifications, unreadCount, markAsRead, markAllAsRead, getNotificationsForRole } = useNotifications()
@@ -131,28 +129,6 @@ function NotificationBell({ userId, role }: { userId: string; role?: string }) {
   )
 }
 
-// Weather icon beside the notification bell; opens the forecast and advisories in a pop-up.
-function WeatherButton() {
-  const [open, setOpen] = React.useState(false)
-  return (
-    <>
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className="hover-row rounded-xl p-2 text-text"
-        aria-label="Weather"
-        title="Weather"
-      >
-        <FiCloudRain className="text-lg" />
-      </button>
-      {open ? (
-        <Modal eyebrow="Weather" title="Weather advisories" onClose={() => setOpen(false)} size="xl">
-          <WeatherPanel />
-        </Modal>
-      ) : null}
-    </>
-  )
-}
 
 const roleLabels: Record<string, string> = {
   admin: 'Admin',
@@ -214,7 +190,6 @@ export function TopNav({
         </div>
 
         <div className="flex items-center gap-1.5">
-          {user?.role === 'admin' || user?.role === 'marshal' || user?.role === 'registrar' ? <WeatherButton /> : null}
           {user?.id && <NotificationBell userId={user.id} role={user.role} />}
 
           <div className="hidden sm:block">

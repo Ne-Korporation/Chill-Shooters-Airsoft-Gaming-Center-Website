@@ -56,7 +56,7 @@ function parsePostDate(post: DashboardPost) {
 
 export function DashboardPostsPanel({
   title = 'Dashboard posts',
-  subtitle = 'Admin updates and field notices visible across every dashboard.',
+  subtitle = '',
   canManage = false,
   beforePosts,
   initialCount,
@@ -248,7 +248,7 @@ useEffect(() => {
       <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="text-base font-semibold">{title}</h2>
-          <p className="mt-0.5 text-sm text-muted">{subtitle}</p>
+          {subtitle ? <p className="mt-0.5 text-sm text-muted">{subtitle}</p> : null}
         </div>
         <div className="flex items-center gap-2">
           {canManage ? (

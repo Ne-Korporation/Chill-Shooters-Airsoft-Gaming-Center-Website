@@ -18,6 +18,7 @@ import { manilaDateISO } from '../utils/reminders.js'
 import { getSlotHours, slotHasStarted } from '../utils/slotHours.js'
 import { summarizeWeekendCapacity, weekendDatesOf } from '../utils/weekendCapacity.js'
 import { listActiveCauseDays, weekendDatesInMonth } from '../utils/causeDays.js'
+import { closedDayError, findClosedDay, listClosedDays } from '../utils/closedDays.js'
 import { hasValidIdentity, identityVerifiedFields, validIdentityFilter, verifiedIdDocument } from '../utils/identityValidity.js'
 
 // ID type recorded on a child's waiver: the parent attaches any valid ID or school ID.
@@ -28,6 +29,8 @@ import { appUrlFrom } from './guardianApprovals.js'
 import { findOwnChild, hasApprovedWaiver } from './children.js'
 import { createWalkInAccount } from './auth.js'
 import { evaluateFpsReading, weaponFpsClass } from './operations.js'
+import { fpsBlockReason, gameFpsStatus } from '../utils/fpsChecks.js'
+import { checkAmmoStock } from '../utils/ammoStock.js'
 import { emailGearReviewEvent, emailGuardianWaiverSubmitted, emailIdentityDecision, emailReservationEvent, emailSplitShareRequest, emailTeamAdded } from '../services/notificationEmails.js'
 import {
   paymentWindowMsFor,
@@ -108,9 +111,9 @@ router.get('/waiver-text', async (req, res) => {
 })
 
 const LOCATION_NAMES = {
-  salawag: 'Delta Stronghold (Salawag)',
-  langkaan: 'Delta Stronghold (Langkaan)',
-  binan: 'LOMA Binan Laguna',
+  salawag: 'Chill Shooters (Salawag)',
+  langkaan: 'Chill Shooters (Langkaan)',
+  binan: 'BBC Airsoft Binan Laguna',
 }
 
 // Player counts per location and slot for the given public-game dates (no player details).
@@ -149,12 +152,13 @@ router.get('/public/capacity-calendar', async (req, res) => {
     const dayCount = new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).getUTCDate()
     const dates = Array.from({ length: dayCount }, (_, i) => `${month}-${String(i + 1).padStart(2, '0')}`)
     const weekends = new Set(weekendDatesInMonth(month))
-    const [days, causeDays] = await Promise.all([
+    const [days, causeDays, closedDays] = await Promise.all([
       capacityForDates(db, dates, todayISO),
       listActiveCauseDays(db, { from: dates[0], to: dates[dates.length - 1] }),
+      listClosedDays(db, { from: dates[0], to: dates[dates.length - 1] }),
     ])
     const data = days.map((day) => ({ ...day, kind: weekends.has(day.dateISO) ? 'public' : 'private' }))
-    return res.json({ ok: true, todayISO, month, data, causeDays })
+    return res.json({ ok: true, todayISO, month, data, causeDays, closedDays })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
   }
@@ -167,11 +171,12 @@ router.get('/public/weekend-capacity', async (_req, res) => {
     const db = await getDb()
     const todayISO = manilaDateISO()
     const dates = weekendDatesOf(todayISO)
-    const [days, causeDays] = await Promise.all([
+    const [days, causeDays, closedDays] = await Promise.all([
       capacityForDates(db, dates, todayISO),
       listActiveCauseDays(db, { from: dates[0], to: dates[dates.length - 1] }),
+      listClosedDays(db, { from: dates[0], to: dates[dates.length - 1] }),
     ])
-    return res.json({ ok: true, todayISO, data: days, causeDays })
+    return res.json({ ok: true, todayISO, data: days, causeDays, closedDays })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
   }
@@ -522,6 +527,8 @@ router.post('/slot-holds', requireAuth, requireRole('user'), async (req, res) =>
   let session
   try {
     const db = await getDb()
+    const closedDay = await findClosedDay(db, reservationDate)
+    if (closedDay) return res.status(409).json({ ok: false, error: closedDayError(closedDay) })
     await expireOverdueReservations(db, startDbSession)
     session = startDbSession()
     let hold
@@ -597,9 +604,9 @@ router.delete('/slot-holds/mine', requireAuth, requireRole('user'), async (req, 
 })
 
 const WALK_IN_LOCATION_NAMES = {
-  salawag: 'Delta Stronghold (Salawag)',
-  langkaan: 'Delta Stronghold (Langkaan)',
-  binan: 'LOMA Binan Laguna',
+  salawag: 'Chill Shooters (Salawag)',
+  langkaan: 'Chill Shooters (Langkaan)',
+  binan: 'BBC Airsoft Binan Laguna',
 }
 const ONSITE_PAYMENT_METHODS = { cash: 'Cash', gcash: 'GCash', bank_transfer: 'Bank transfer' }
 
@@ -709,6 +716,8 @@ router.post('/walk-ins', requireAuth, requireRole('admin', 'registrar'), async (
       await holdBookingInventory({ db, session, reservationId: doc.id, requirements: doc.inventoryRequirements || [] })
       await db.collection('reservations').insertOne(doc, { session })
     })
+
+    if ((doc.inventoryRequirements || []).some((r) => r.kind === 'ammo_grams')) void checkAmmoStock(db).catch(() => null)
 
     // Marshals see walk-ins on the games board like any confirmed booking.
     await db.collection('gameplay').insertOne({
@@ -821,6 +830,8 @@ router.post('/reservations/:id/reschedule', requireAuth, requireRole('user', 'ad
     if (req.user.role === 'user' && !isOwnedByUser(reservation, req.user.id)) {
       return res.status(403).json({ ok: false, error: 'You can only reschedule your own reservations.' })
     }
+    const closedDay = await findClosedDay(db, newDate)
+    if (closedDay) return res.status(409).json({ ok: false, error: closedDayError(closedDay) })
 
     const status = String(reservation.reservationStatus || 'pending').toLowerCase()
     if (!RESCHEDULABLE_STATUSES.includes(status)) {
@@ -1297,7 +1308,9 @@ router.get('/:collection', requireAuth, async (req, res) => {
         ],
       })
     }
-    if (!playerUser && collection === 'notifications' && req.user.role !== 'admin') {
+    // Staff (admins included) see their own notifications and the ones sent to their role, never
+    // a player's personal ones (game reminders, split payments, weather for their game…).
+    if (!playerUser && collection === 'notifications') {
       filter = mergeFilters(filter, {
         $or: [
           { userId: String(req.user.id) },
@@ -1306,7 +1319,7 @@ router.get('/:collection', requireAuth, async (req, res) => {
         ],
       })
     }
-    if (collection === 'notifications' && req.user.role !== 'admin') {
+    if (collection === 'notifications') {
       filter = mergeFilters(filter, { dismissedBy: { $ne: String(req.user.id) } })
     }
 
@@ -1495,7 +1508,11 @@ async function notifyAddedTeammates(db, reservation, appUrl) {
   const members = (reservation.teamMembers || []).filter((member) => !member.isMinor && String(member.id) !== String(reservation.userId))
   if (members.length === 0) return
   const captain = await findDocumentById(db, 'user_accounts', reservation.userId)
-  const captainName = captain?.name || 'Your team captain'
+  // A private game is one team with a captain; a public game is open play, so it is just a booking.
+  const isPrivate = String(reservation.sessionType || '').toLowerCase() === 'private'
+  const captainName = captain?.name || (isPrivate ? 'Your team captain' : 'The player who booked')
+  const whose = isPrivate ? `${captainName}'s team` : `${captainName}'s booking`
+  const payingFor = isPrivate ? 'the team' : 'the booking'
   const when = `${reservation.reservationDate} (${reservation.reservationTime})`
   const split = reservation.paymentMode === 'split'
   const splitPayers = new Set((reservation.splitPayerIds || []).map(String))
@@ -1508,7 +1525,7 @@ async function notifyAddedTeammates(db, reservation, appUrl) {
         await notifyUser(db, {
           userId,
           type: 'split_payment_requested',
-          title: `You were added to ${captainName}'s team: pay your share`,
+          title: `You were added to ${whose}: pay your share`,
           message: `${captainName} added you to a reservation on ${when}. Your share is ₱${share.toLocaleString()}; pay it from Split Payment before ${dueLabel}.`,
           linkedResourceId: reservation.id,
         })
@@ -1518,8 +1535,8 @@ async function notifyAddedTeammates(db, reservation, appUrl) {
           userId,
           // Not a reservation_ type: the booking is the captain's, so it isn't in the teammate's My Reservations.
           type: 'team_added',
-          title: `You were added to ${captainName}'s team`,
-          message: `${captainName} added you to a reservation on ${when}. ${captainName} is paying for the team, so you have nothing to pay online.`,
+          title: `You were added to ${whose}`,
+          message: `${captainName} added you to a reservation on ${when}. ${captainName} is paying for ${payingFor}, so you have nothing to pay online.`,
           linkedResourceId: reservation.id,
         })
         void emailTeamAdded(db, reservation, userId, captainName)
@@ -1831,6 +1848,8 @@ router.post('/:collection', requireAuth, async (req, res) => {
       if (reservationDate < manilaDateISO()) {
         return res.status(400).json({ ok: false, error: 'Reservation date cannot be in the past' })
       }
+      const closedDay = await findClosedDay(db, reservationDate)
+      if (closedDay) return res.status(409).json({ ok: false, error: closedDayError(closedDay) })
       if (!['morning', 'afternoon', 'evening'].includes(reservationTime)) {
         return res.status(400).json({ ok: false, error: 'reservationTime must be morning, afternoon, or evening' })
       }
@@ -2016,6 +2035,8 @@ router.post('/:collection', requireAuth, async (req, res) => {
         // No email yet: a booking paid straight away gets only the confirmation email; one left
         // unpaid gets a "waiting for payment" email a few minutes later (sendUnpaidReservationEmails).
         void notifyAddedTeammates(db, doc, appUrlFrom(req))
+        // The booking may have taken the last of the BBs: tell staff if ammo is now low.
+        if ((doc.inventoryRequirements || []).some((r) => r.kind === 'ammo_grams')) void checkAmmoStock(db).catch(() => null)
         return res.status(201).json({ ok: true, insertedId, data: doc })
       } catch (err) {
         if (err?.statusCode) {
@@ -2101,13 +2122,11 @@ router.post('/:collection', requireAuth, async (req, res) => {
 
 // Players may not post role-wide notifications themselves, so the server tells staff about
 // player submissions that wait on their review.
+// Only what someone has to act on: a waiver approved automatically (verified ID) needs nobody.
+// Waivers are reviewed by registrars (and admins), so marshals aren't told.
 const STAFF_REVIEW_NOTICES = {
   waivers: (doc, player) => (doc.autoApproved
-    ? {
-      type: 'waiver_submitted',
-      title: 'Waiver Signed',
-      message: `${doc.fullName || player.name || player.id} signed their waiver. It was approved automatically because their ID is verified.`,
-    }
+    ? null
     : {
       type: 'waiver_submitted',
       title: 'New Waiver Submitted',
@@ -2120,7 +2139,7 @@ const STAFF_REVIEW_NOTICES = {
 async function notifyStaffOfPlayerSubmission(db, collection, doc, player) {
   const notice = STAFF_REVIEW_NOTICES[collection]?.(doc, player)
   if (!notice) return
-  for (const role of ['admin', 'registrar', 'marshal']) {
+  for (const role of ['admin', 'registrar']) {
     await notifyRole(db, { role, ...notice, linkedResourceId: doc.id })
   }
 }
@@ -2242,6 +2261,14 @@ router.put('/:collection/:id', requireAuth, async (req, res) => {
       if (['ongoing', 'completed'].includes(nextStatus) && /^\d{4}-\d{2}-\d{2}$/.test(gameDay) && gameDay > manilaDateISO()) {
         return res.status(409).json({ ok: false, error: `This game is scheduled for ${gameDay}. It can be started on game day.` })
       }
+      // Starting a game: every gun in it must have passed the chronograph today.
+      if (nextStatus === 'ongoing' && !String(existing.Status || '').toLowerCase().startsWith('ongo') && existing.reservationId) {
+        const reservation = await db.collection('reservations').findOne({ id: String(existing.reservationId) })
+        if (reservation) {
+          const reason = fpsBlockReason(await gameFpsStatus(db, reservation))
+          if (reason) return res.status(409).json({ ok: false, error: reason })
+        }
+      }
     }
     if (collection === 'notifications' && isSharedNotification(existing, req.user)) {
       await db.collection(collection).updateOne({ _id: existing._id }, { $addToSet: { readBy: String(req.user.id) } })
@@ -2354,7 +2381,10 @@ router.put('/:collection/:id', requireAuth, async (req, res) => {
       if (Object.keys(payload).some((field) => field.startsWith('$') && field !== '$set')) {
         return res.status(400).json({ ok: false, error: 'Inventory updates support direct fields or $set only.' })
       }
-      const existingQuantity = Number(existing.qty ?? existing.quantity ?? existing.stock ?? (collection === 'weapons' ? 1 : 0))
+      // Every weapon and piece of gear is its own record ("Vest #4"), so a piece counts as 1
+      // unless it carries an older quantity field. (Ammo holds grams, not pieces: its holds have
+      // quantity 0 and never block an edit.)
+      const existingQuantity = Number(existing.qty ?? existing.quantity ?? existing.stock ?? 1)
       const nextQuantity = Number(changes.qty ?? changes.quantity ?? changes.stock ?? existingQuantity)
       if (!Number.isInteger(nextQuantity) || nextQuantity < 0) {
         return res.status(400).json({ ok: false, error: 'Inventory quantity must be a non-negative whole number.' })
@@ -2376,9 +2406,20 @@ router.put('/:collection/:id', requireAuth, async (req, res) => {
       const heldQuantity = Number(held[0]?.quantity || 0)
       const nextStatus = String(changes.status ?? existing.status ?? 'available').toLowerCase()
       if (nextQuantity < heldQuantity || (heldQuantity > 0 && nextStatus !== 'available')) {
+        // Name the booking(s) holding it, so staff know what to do about it.
+        const holds = await db.collection('inventory_holds').find(
+          {
+            itemId: String(existing.id || id),
+            collection: collection === 'equipment' ? 'equipments' : collection,
+            status: 'held',
+            reservationDate: { $gte: new Date().toISOString().slice(0, 10) },
+          },
+          { projection: { reservationId: 1, reservationDate: 1, reservationTime: 1 } },
+        ).sort({ reservationDate: 1 }).limit(3).toArray()
+        const bookings = holds.map((h) => `${h.reservationId} (${h.reservationDate} ${h.reservationTime || ''})`.trim()).join(', ')
         return res.status(409).json({
           ok: false,
-          error: `Inventory has ${heldQuantity} unit(s) held for active reservations and cannot be reduced or disabled.`,
+          error: `${existing.name || 'This item'} is reserved for an upcoming booking${bookings ? `: ${bookings}` : ''}. It can't be taken out of service until that game is over. You can still edit its details.`,
         })
       }
     }

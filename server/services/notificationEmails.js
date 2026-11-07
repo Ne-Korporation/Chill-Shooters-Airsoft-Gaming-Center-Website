@@ -239,7 +239,7 @@ async function confirmedReservationLines(db, reservation) {
   const nameOf = (memberId, fallback) => accounts.find((account) => String(account.id) === memberId)?.name || fallback || 'Player'
   const captain = nameOf(String(reservation.userId), '')
   const team = [
-    `${escapeHtml(captain)} (captain)`,
+    `${escapeHtml(captain)} (${isPrivateGame(reservation) ? 'captain' : 'booked'})`,
     ...(reservation.teamMembers || []).map((member) => escapeHtml(nameOf(String(member.id), member.name))),
   ]
   const guests = Math.max(0, Number(reservation.numberOfPlayers || 0) - team.length)
@@ -345,7 +345,7 @@ export function emailSplitShareRequest(db, reservation, userId, share, captainNa
     subject: 'Your share of a Chill Shooters reservation is due',
     title: 'Split payment requested',
     lines: [
-      `${escapeHtml(captainName)} added you to their team and split the payment. Here is how much you need to pay:`,
+      `${escapeHtml(captainName)} added you to their ${isPrivateGame(reservation) ? 'team' : 'booking'} and split the payment. Here is how much you need to pay:`,
       `<div style="margin:12px 0;padding:14px 18px;border-radius:10px;background:#f3f4f6;"><div style="color:#6b7280;font-size:12px;">Your share to pay</div><div style="font-size:24px;font-weight:bold;">${formatPHP(share)}</div><div style="color:#6b7280;font-size:12px;">Pay before ${escapeHtml(dueLabel)}</div></div>`,
       `<table style="border-collapse:collapse;">${details.map(([label, value]) => `<tr><td style="padding:2px 12px 2px 0;color:#6b7280;">${label}</td><td style="padding:2px 0;">${value}</td></tr>`).join('')}</table>`,
       payLink
@@ -380,6 +380,9 @@ export function emailIdentityDecision(db, account, verified, baseUrl = '') {
   })
 }
 
+// A private game is one team with a captain; a public game is open play, so there is no team.
+const isPrivateGame = (reservation) => String(reservation?.sessionType || '').toLowerCase() === 'private'
+
 // A teammate added to a booking the captain pays for: the game details and nothing to pay online.
 export function emailTeamAdded(db, reservation, userId, captainName, viewLink = '') {
   if (!reservation || !userId) return Promise.resolve({ skipped: 'missing data' })
@@ -389,15 +392,17 @@ export function emailTeamAdded(db, reservation, userId, captainName, viewLink = 
     ['Players', escapeHtml(reservation.numberOfPlayers || '')],
     ['Package', escapeHtml(reservation.packageName || 'Custom selection')],
     ...(reservation.teamName ? [['Team name', escapeHtml(reservation.teamName)]] : []),
-    ['Your payment', `<b>Nothing to pay online</b>: ${escapeHtml(captainName)} is paying for the team.`],
+    ['Your payment', `<b>Nothing to pay online</b>: ${escapeHtml(captainName)} is paying for ${isPrivateGame(reservation) ? 'the team' : 'the booking'}.`],
   ]
   return sendLogged(db, {
     key: `team-added:${id}:${userId}`,
     userId,
     subject: `${captainName} added you to a Chill Shooters game`,
-    title: 'You were added to a team',
+    title: isPrivateGame(reservation) ? 'You were added to a team' : 'You were added to a booking',
     lines: [
-      `${escapeHtml(captainName)} added you to their team for a game at Chill Shooters.`,
+      isPrivateGame(reservation)
+        ? `${escapeHtml(captainName)} added you to their team for a private game at Chill Shooters.`
+        : `${escapeHtml(captainName)} added you to their booking for a public game at Chill Shooters.`,
       `<table style="border-collapse:collapse;">${details.map(([label, value]) => `<tr><td style="padding:2px 12px 2px 0;color:#6b7280;">${label}</td><td style="padding:2px 0;">${value}</td></tr>`).join('')}</table>`,
       'Make sure your waiver is approved before the game, and arrive 30 minutes early for the safety briefing.',
       viewLink ? button(viewLink, 'View the reservation') : '',

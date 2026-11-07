@@ -1,7 +1,7 @@
 import express from 'express'
 import { getDb } from '../db/mongo.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
-import { forecastForDate, isWeatherConfigured, locationCoords, sendAdvisory, sendWeatherAlerts } from '../utils/weather.js'
+import { WEATHER_DAILY, WEATHER_OUTLOOK, forecastForDate, isWeatherConfigured, liveDailyForecast, locationCoords, refreshWeatherOutlook, sendAdvisory, sendWeatherAlerts } from '../utils/weather.js'
 import { SLOT_HOURS_ID, SLOT_ORDER, getSlotHours, validateSlotHours } from '../utils/slotHours.js'
 import { manilaDateISO } from '../utils/reminders.js'
 
@@ -71,11 +71,51 @@ router.get('/weather-advisories/current', requireAuth, async (req, res) => {
   try {
     const db = await getDb()
     const today = manilaDateISO(0)
-    const docs = await db.collection('weather_advisories').find({ date: { $gte: today } }).sort({ createdAtISO: -1 }).limit(50).toArray()
+    const dates = Array.from({ length: 6 }, (_, i) => manilaDateISO(i))
+    const [docs, outlook, savedDaily, live] = await Promise.all([
+      db.collection('weather_advisories').find({ date: { $gte: today } }).sort({ createdAtISO: -1 }).limit(50).toArray(),
+      db.collection(WEATHER_OUTLOOK).find({ date: { $gte: today } }).sort({ date: 1 }).limit(100).toArray(),
+      db.collection(WEATHER_DAILY).find({ date: { $gte: today } }).sort({ date: 1 }).limit(50).toArray(),
+      liveDailyForecast(db, dates).catch(() => []),
+    ])
+    // The daily forecast for every field and day, rainy or not: live from the API, with the
+    // last saved reading for any field the API couldn't return just now.
+    const nowISO = new Date().toISOString()
+    const liveKeys = new Set(live.map((d) => `${d.locationId}|${d.date}`))
+    const dailyDocs = [
+      ...live.map((d) => ({ ...d, updatedAtISO: nowISO })),
+      ...savedDaily.filter((d) => !liveKeys.has(`${d.locationId}|${d.date}`)),
+    ].sort((a, b) => a.date.localeCompare(b.date))
+    const forecast = dailyDocs.map((d) => ({
+      locationId: d.locationId,
+      locationName: locationCoords(d.locationId)?.name || d.locationId,
+      date: d.date,
+      slots: Array.isArray(d.slots) ? d.slots : [],
+      updatedAtISO: d.updatedAtISO,
+    }))
+    // Latest hourly API reading per location, date and slot.
+    const liveSlot = new Map()
+    for (const d of dailyDocs) {
+      for (const s of Array.isArray(d.slots) ? d.slots : []) liveSlot.set(`${d.locationId}|${d.date}|${s.slot}`, s)
+    }
     const latest = new Map()
     for (const doc of docs) {
       const key = `${doc.locationId}|${doc.date}|${doc.slot || ''}`
+      // An automatic advisory is a snapshot of an older forecast. Once the latest forecast for
+      // that slot no longer shows rain, storms or strong wind, it is out of date and not shown.
+      // Advisories sent by staff are always shown.
+      const live = doc.source === 'auto' && doc.slot ? liveSlot.get(key) : null
+      if (live && !live.rainy && !live.severe) continue
       if (!latest.has(key)) latest.set(key, doc)
+    }
+    // The automatic forecast outlook fills in every other rainy slot. An advisory already sent
+    // for the same slot (or the whole day) takes its place.
+    for (const doc of outlook) {
+      const key = `${doc.locationId}|${doc.date}|${doc.slot}`
+      if (latest.has(key) || latest.has(`${doc.locationId}|${doc.date}|`)) continue
+      const current = liveSlot.get(key)
+      if (current && !current.rainy && !current.severe) continue
+      latest.set(key, { ...doc, id: `FC-${String(doc._id)}`, source: 'forecast', createdAtISO: doc.updatedAtISO })
     }
     const advisories = [...latest.values()]
 
@@ -108,13 +148,13 @@ router.get('/weather-advisories/current', requireAuth, async (req, res) => {
           : [...booked].some((key) => key.startsWith(`${a.locationId}|${a.date}|`)),
       }))
       .sort((a, b) => a.date.localeCompare(b.date) || SLOT_ORDER.indexOf(a.slot || '') - SLOT_ORDER.indexOf(b.slot || ''))
-    return res.json({ ok: true, data })
+    return res.json({ ok: true, data, forecast })
   } catch (err) {
     return sendError(res, err)
   }
 })
 
-router.get('/weather-advisories', requireAuth, requireRole(...STAFF), async (_req, res) => {
+router.get('/weather-advisories',requireAuth, requireRole(...STAFF), async (_req, res) => {
   try {
     const db = await getDb()
     const data = await db.collection('weather_advisories').find({}).sort({ createdAtISO: -1 }).limit(100).toArray()
@@ -153,11 +193,12 @@ router.post('/weather-advisories', requireAuth, requireRole('admin', 'registrar'
   }
 })
 
-// POST /api/weather-advisories/check — run tomorrow's automatic check now.
+// POST /api/weather-advisories/check — refresh the 5-day outlook and run tomorrow's automatic check now.
 router.post('/weather-advisories/check', requireAuth, requireRole('admin'), async (_req, res) => {
   try {
     const db = await getDb()
-    return res.json({ ok: true, data: await sendWeatherAlerts(db, { force: true }) })
+    const outlook = await refreshWeatherOutlook(db, { force: true })
+    return res.json({ ok: true, data: { ...(await sendWeatherAlerts(db, { force: true })), outlook } })
   } catch (err) {
     return sendError(res, err)
   }

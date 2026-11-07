@@ -43,6 +43,8 @@ import { ModelQuantityPicker } from '../../components/inventory/ModelQuantityPic
 import { FieldLayoutDesigner, type LayoutItem } from '../../components/reservations/FieldLayoutDesigner'
 import { DEFAULT_SLOT_HOURS, formatSlotRange, manilaTodayISO, slotHasStarted, useSlotHours } from '../../utils/slotHours'
 import { causeDayMessage, useCauseDays } from '../../utils/causeDays'
+import { closedDayMessage, useClosedDays } from '../../utils/closedDays'
+import { bookingRoles } from '../../utils/bookingRoles'
 
 // Slot holds last 15 minutes on the server; refresh well before that while the player is booking.
 const SLOT_HOLD_REFRESH_MS = 4 * 60 * 1000
@@ -171,19 +173,19 @@ type WaiverRecord = {
 
 const locationFields: Record<LocationOption, Field[]> = {
   salawag: [
-    { id: 'salawag-field-1', name: 'Upper Ground', location: 'Delta Stronghold Salawag', locationId: 'salawag' },
-    { id: 'salawag-field-2', name: 'Lower Ground', location: 'Delta Stronghold Salawag', locationId: 'salawag' },
-    { id: 'salawag-field-3', name: 'Forest', location: 'Delta Stronghold Salawag', locationId: 'salawag' },
+    { id: 'salawag-field-1', name: 'Upper Ground', location: 'Chill Shooters Salawag', locationId: 'salawag' },
+    { id: 'salawag-field-2', name: 'Lower Ground', location: 'Chill Shooters Salawag', locationId: 'salawag' },
+    { id: 'salawag-field-3', name: 'Forest', location: 'Chill Shooters Salawag', locationId: 'salawag' },
   ],
   langkaan: [
-    { id: 'langkaan-field-1', name: 'Upper Ground', location: 'Delta Stronghold Langkaan', locationId: 'langkaan' },
-    { id: 'langkaan-field-2', name: 'Lower Ground', location: 'Delta Stronghold Langkaan', locationId: 'langkaan' },
-    { id: 'langkaan-field-3', name: 'Forest', location: 'Delta Stronghold Langkaan', locationId: 'langkaan' },
+    { id: 'langkaan-field-1', name: 'Upper Ground', location: 'Chill Shooters Langkaan', locationId: 'langkaan' },
+    { id: 'langkaan-field-2', name: 'Lower Ground', location: 'Chill Shooters Langkaan', locationId: 'langkaan' },
+    { id: 'langkaan-field-3', name: 'Forest', location: 'Chill Shooters Langkaan', locationId: 'langkaan' },
   ],
   binan: [
-    { id: 'binan-field-1', name: 'Upper Ground', location: 'LOMA Binan Laguna', locationId: 'binan' },
-    { id: 'binan-field-2', name: 'Lower Ground', location: 'LOMA Binan Laguna', locationId: 'binan' },
-    { id: 'binan-field-3', name: 'Forest', location: 'LOMA Binan Laguna', locationId: 'binan' },
+    { id: 'binan-field-1', name: 'Upper Ground', location: 'BBC Airsoft Binan Laguna', locationId: 'binan' },
+    { id: 'binan-field-2', name: 'Lower Ground', location: 'BBC Airsoft Binan Laguna', locationId: 'binan' },
+    { id: 'binan-field-3', name: 'Forest', location: 'BBC Airsoft Binan Laguna', locationId: 'binan' },
   ],
 }
 
@@ -215,9 +217,9 @@ function getFieldById(fieldId: string): Field | undefined {
 }
 
 const locationOptions: { id: LocationOption; name: string; detail: string; capacity: string }[] = [
-  { id: 'salawag', name: 'Delta Stronghold (Salawag)', detail: 'Approximately 2 hectares.', capacity: 'Up to 400 players per slot' },
-  { id: 'langkaan', name: 'Delta Stronghold (Langkaan)', detail: 'Approximately 2 hectares.', capacity: 'Up to 400 players per slot' },
-  { id: 'binan', name: 'LOMA Binan Laguna', detail: 'Approximately 4 hectares.', capacity: 'Up to 600 players per slot' },
+  { id: 'salawag', name: 'Chill Shooters (Salawag)', detail: 'Approximately 2 hectares.', capacity: 'Up to 400 players per slot' },
+  { id: 'langkaan', name: 'Chill Shooters (Langkaan)', detail: 'Approximately 2 hectares.', capacity: 'Up to 400 players per slot' },
+  { id: 'binan', name: 'BBC Airsoft Binan Laguna', detail: 'Approximately 4 hectares.', capacity: 'Up to 600 players per slot' },
 ]
 
 const slotLabels: Record<TimeSlot, string> = {
@@ -448,6 +450,11 @@ export function ReservationCalendarPage() {
     monthCalendars[0] ? `${monthCalendars[0].key}-01` : '',
     monthCalendars[monthCalendars.length - 1] ? `${monthCalendars[monthCalendars.length - 1].key}-31` : '',
   )
+  // Days the admin marked as "no game": shown but can't be picked.
+  const closedDays = useClosedDays(
+    monthCalendars[0] ? `${monthCalendars[0].key}-01` : '',
+    monthCalendars[monthCalendars.length - 1] ? `${monthCalendars[monthCalendars.length - 1].key}-31` : '',
+  )
 
   const [selectedLocation, setSelectedLocation] = useState<LocationOption>(() => draftState.selectedLocation ?? landingPrefill?.location ?? 'salawag')
 
@@ -663,7 +670,7 @@ export function ReservationCalendarPage() {
       return
     }
     if (byEmail && user?.email && query.toLowerCase() === user.email.toLowerCase()) {
-      setTeamLookup({ status: 'error', error: 'You are already counted as the team captain.' })
+      setTeamLookup({ status: 'error', error: sessionType === 'private' ? 'You are already counted as the team captain.' : 'You are already on this booking.' })
       return
     }
     setTeamLookup({ status: 'searching' })
@@ -1947,27 +1954,29 @@ export function ReservationCalendarPage() {
                                 // Today stays open while it still has a slot that hasn't started.
                                 const isPastOrToday = iso < todayDateISO || (iso === todayDateISO && timeSlots.every((ts) => slotHasStarted(slotHours, ts, iso)))
                                 const isWd = isWeekday(iso)
-                                const cause = causeDays[iso]
+                                const closedDay = closedDays[iso]
+                                const cause = closedDay ? undefined : causeDays[iso]
+                                const unavailable = isPastOrToday || Boolean(closedDay)
 
                                 return (
                                   <button
                                     key={iso}
                                     type="button"
-                                    title={cause ? causeDayMessage(cause) : undefined}
-                                    aria-label={cause ? `${iso}: ${causeDayMessage(cause)}` : undefined}
-                                    disabled={isPastOrToday}
+                                    title={closedDay ? closedDayMessage(closedDay) : cause ? causeDayMessage(cause) : undefined}
+                                    aria-label={closedDay ? `${iso}: ${closedDayMessage(closedDay)}` : cause ? `${iso}: ${causeDayMessage(cause)}` : undefined}
+                                    disabled={unavailable}
                                     onClick={() => {
-                                      if (isPastOrToday) return
+                                      if (unavailable) return
                                       setDateISO(iso)
                                     }}
                                     className={[
                                       'group relative h-12 rounded-xl border px-1 text-center text-[11px] transition',
-                                      active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : cause ? 'border-rose-500/40 bg-rose-500/10 hover:bg-rose-500/15' : 'border-white/10 bg-white/5 hover:bg-white/8',
-                                      isPastOrToday ? 'cursor-not-allowed opacity-40 hover:bg-white/5' : 'cursor-pointer',
+                                      active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : closedDay ? 'border-dashed border-white/15 bg-white/[0.03]' : cause ? 'border-rose-500/40 bg-rose-500/10 hover:bg-rose-500/15' : 'border-white/10 bg-white/5 hover:bg-white/8',
+                                      unavailable ? 'cursor-not-allowed opacity-40 hover:bg-white/5' : 'cursor-pointer',
                                     ].join(' ')}
                                   >
                                     <div className="font-bold leading-tight">{d.getDate()}</div>
-                                    <div className="text-[9px] leading-tight text-muted/70">{isWd ? 'PRIV' : 'PUB'}</div>
+                                    <div className="text-[9px] leading-tight text-muted/70">{closedDay ? 'NO GAME' : isWd ? 'PRIV' : 'PUB'}</div>
                                     {cause ? (
                                       <>
                                         <FiHeart className="absolute right-1 top-1 h-2.5 w-2.5 text-rose-500" aria-hidden="true" />
@@ -2588,8 +2597,8 @@ export function ReservationCalendarPage() {
 
                 <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
                   <div className="flex items-center justify-between gap-3 text-xs uppercase tracking-[0.18em] text-muted">
-                    <span>Your team</span>
-                    <span>{selectedTeammates.length}/{maxTeammates} teammates</span>
+                    <span>{sessionType === 'private' ? 'Your team' : 'Players on this booking'}</span>
+                    <span>{selectedTeammates.length}/{maxTeammates} {sessionType === 'private' ? 'teammates' : 'players'}</span>
                   </div>
 
                   <div className="mt-3 space-y-2">
@@ -2598,7 +2607,7 @@ export function ReservationCalendarPage() {
                         <div className="truncate text-sm font-bold">{user?.name || 'You'}</div>
                         <div className="truncate text-xs text-muted">{user?.email}</div>
                       </div>
-                      <span className="text-[10px] uppercase tracking-[0.18em] text-gold">Captain</span>
+                      <span className="text-[10px] uppercase tracking-[0.18em] text-gold">{bookingRoles(sessionType).booker}</span>
                     </div>
 
                     {selectedTeammates.map((member) => {

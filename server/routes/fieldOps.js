@@ -9,6 +9,7 @@ import { emailDamageCharge } from '../services/notificationEmails.js'
 import { getExperienceLevel, getAgeGroup, suggestBalancedTeams } from '../utils/teamBalancing.js'
 import { createPieces, modelFilter } from '../utils/inventoryPieces.js'
 import { computePenalty, getPenaltyRules, resolvePenaltyCharge } from '../utils/penaltyRules.js'
+import { fpsBlockReason, gameFpsStatus } from '../utils/fpsChecks.js'
 
 // Field-side operations from the manuscript scope that sit outside the booking flow:
 // player experience and balanced team grouping, onsite/balance payments and extra
@@ -16,6 +17,9 @@ import { computePenalty, getPenaltyRules, resolvePenaltyCharge } from '../utils/
 const router = express.Router()
 
 const STAFF = ['admin', 'registrar', 'marshal']
+// Who does what at the field: registrars take every payment, marshals hand out and check in guns,
+// gear and ammo, and both run players (check-in, teams, starting and finishing games).
+const GEAR = ['admin', 'marshal']
 const ACTIVE_RESERVATION_STATUSES = ['pending', 'needs review', 'confirmed', 'approved']
 // Status each inventory page treats as its maintenance queue.
 const MAINTENANCE_STATUS = { weapons: 'needs-check', equipments: 'maintenance' }
@@ -161,7 +165,7 @@ router.get('/players/:id/stats', requireAuth, async (req, res) => {
 
     const reservations = await db.collection('reservations').find(
       { $or: [{ userId: id }, { 'teamMembers.id': id }] },
-      { projection: { id: 1, reservationDate: 1, reservationTime: 1, reservationStatus: 1, locationName: 1, packageName: 1, userId: 1 } },
+      { projection: { id: 1, reservationDate: 1, reservationTime: 1, reservationStatus: 1, locationName: 1, packageName: 1, userId: 1, sessionType: 1 } },
     ).sort({ reservationDate: -1 }).limit(200).toArray()
     const today = new Date().toISOString().slice(0, 10)
     const status = (r) => String(r.reservationStatus || '').toLowerCase()
@@ -187,6 +191,7 @@ router.get('/players/:id/stats', requireAuth, async (req, res) => {
             locationName: r.locationName,
             packageName: r.packageName,
             asCaptain: String(r.userId) === id,
+            sessionType: r.sessionType || 'public',
           })),
         },
         ownedGear: [
@@ -307,7 +312,7 @@ async function getPresentRoster(db, session) {
 
 // GET /api/team-grouping?location&date&slot&teams=2 — the players present (checked in), a
 // suggestion balanced on experience level, and the marshal's saved assignment if there is one.
-router.get('/team-grouping', requireAuth, requireRole('admin', 'marshal'), async (req, res) => {
+router.get('/team-grouping', requireAuth, requireRole(...STAFF), async (req, res) => {
   try {
     const session = readSession(req.query)
     const teamCount = Math.min(Math.max(Number(req.query.teams) || 2, 2), 6)
@@ -329,7 +334,7 @@ router.get('/team-grouping', requireAuth, requireRole('admin', 'marshal'), async
 })
 
 // POST /api/team-grouping { location, date, slot, teams: [{ name, playerKeys }] } — the marshal's final say.
-router.post('/team-grouping', requireAuth, requireRole('admin', 'marshal'), async (req, res) => {
+router.post('/team-grouping', requireAuth, requireRole(...STAFF), async (req, res) => {
   try {
     const session = readSession(req.body || {})
     const teams = Array.isArray(req.body?.teams) ? req.body.teams : []
@@ -405,14 +410,14 @@ router.get('/field-checkin', requireAuth, requireRole(...STAFF), async (req, res
 
     const reservations = await db.collection('reservations').find(
       { id: { $in: [...teams.keys()] } },
-      { projection: { id: 1, userId: 1, walkIn: 1, walkInName: 1, teamName: 1, numberOfPlayers: 1, reservationStatus: 1 } },
+      { projection: { id: 1, userId: 1, walkIn: 1, walkInName: 1, teamName: 1, numberOfPlayers: 1, reservationStatus: 1, sessionType: 1 } },
     ).toArray()
     const captains = await getPlayerProfiles(db, reservations.map((r) => r.userId).filter(Boolean))
     for (const reservation of reservations) {
       const team = teams.get(reservation.id)
       if (!team) continue
       team.label = reservation.teamName
-        || (reservation.walkIn ? `Walk-in: ${reservation.walkInName || 'Guest'}` : `${captains.get(String(reservation.userId))?.name || 'Player'}'s team`)
+        || (reservation.walkIn ? `Walk-in: ${reservation.walkInName || 'Guest'}` : `${captains.get(String(reservation.userId))?.name || 'Player'}'s ${String(reservation.sessionType || '').toLowerCase() === 'private' ? 'team' : 'booking'}`)
       team.reservationStatus = reservation.reservationStatus
     }
 
@@ -473,6 +478,7 @@ function buildLedger(reservation, payments) {
     .filter((p) => PAID_STATUSES.includes(String(p.paymentStatus || p.status || '').toLowerCase()))
     .reduce((sum, p) => sum + Number(p.amount || 0), 0) * 100) / 100
   const total = Math.round(Number(reservation.totalAmount || 0) * 100) / 100
+  const extraTotal = Math.round((reservation.extraCharges || []).reduce((sum, c) => sum + Number(c.amount || 0), 0) * 100) / 100
   return {
     reservation: {
       id: keyOf(reservation),
@@ -487,6 +493,8 @@ function buildLedger(reservation, payments) {
       packageName: reservation.packageName,
       reservationStatus: reservation.reservationStatus,
       teamMembers: reservation.teamMembers || [],
+      // Players who said they'd bring their own gun (no rental gun for them).
+      ownWeaponBringerIds: (reservation.ownWeaponBringerIds || []).map(String),
     },
     total,
     depositAmount: Number(reservation.depositAmount || 0),
@@ -504,6 +512,10 @@ function buildLedger(reservation, payments) {
     collected,
     verified,
     balanceDue: Math.max(0, Math.round((total - collected) * 100) / 100),
+    // The part of the balance that belongs to the booking itself; the rest is additional charges
+    // added at the counter (payments count toward the booking first).
+    additionalTotal: extraTotal,
+    bookingBalanceDue: Math.max(0, Math.round((total - extraTotal - collected) * 100) / 100),
   }
 }
 
@@ -545,6 +557,7 @@ router.post('/payments/onsite', requireAuth, requireRole('admin', 'registrar'), 
   try {
     let payment
     let reservation
+    let settlesGame = false
     await session.withTransaction(async () => {
       reservation = await db.collection('reservations').findOne(idFilter(body.reservationId), { session })
       if (!reservation) throw Object.assign(new Error('Reservation not found'), { statusCode: 404 })
@@ -552,6 +565,13 @@ router.post('/payments/onsite', requireAuth, requireRole('admin', 'registrar'), 
         throw Object.assign(new Error('This reservation is cancelled.'), { statusCode: 409 })
       }
       const reservationId = keyOf(reservation)
+      // The booking's own balance can be collected any time (usually at check-in). Additional
+      // charges added at the counter (extra ammo, extra guns) are collected after the game, once
+      // every rented gun and piece of gear is back: a damaged or missing item adds a penalty, so
+      // the final amount isn't known until then.
+      const stillOut = await db.collection('rentals')
+        .find({ reservationId, status: 'out' }, { session, projection: { itemName: 1, unitLabel: 1, playerName: 1 } })
+        .toArray()
       await db.collection('payment_deposit_locks').updateOne({ _id: reservationId }, { $inc: { version: 1 } }, { upsert: true, session })
       if (reference) {
         const reused = await db.collection('payments').findOne(
@@ -561,9 +581,17 @@ router.post('/payments/onsite', requireAuth, requireRole('admin', 'registrar'), 
         if (reused) throw Object.assign(new Error('This reference number was already recorded.'), { statusCode: 409 })
       }
       const payments = await db.collection('payments').find({ reservationId: { $in: [reservation.id, String(reservation._id)].filter(Boolean) } }, { session }).toArray()
-      const { balanceDue } = buildLedger(reservation, payments)
+      const { balanceDue, bookingBalanceDue } = buildLedger(reservation, payments)
+      // This payment settles the additional charges with every rental back: the game is over.
+      settlesGame = !stillOut.length && balanceDue - bookingBalanceDue > 0.01 && amount >= balanceDue - 0.01
       if (amount > balanceDue + 0.01) {
         throw Object.assign(new Error(`Only ₱${balanceDue.toLocaleString()} is still due.`), { statusCode: 400 })
+      }
+      if (stillOut.length && amount > bookingBalanceDue + 0.01) {
+        const list = stillOut.map((r) => `${r.itemName}${r.unitLabel && !String(r.itemName).includes(r.unitLabel) ? ` ${r.unitLabel}` : ''} (${r.playerName})`).join(', ')
+        throw Object.assign(new Error(bookingBalanceDue > 0
+          ? `Only the booking balance (₱${bookingBalanceDue.toLocaleString()}) can be collected now. Collect the additional charges after every rental is checked in. Still out: ${list}.`
+          : `The booking is paid. Collect the additional charges after every rental is checked in. Still out: ${list}.`), { statusCode: 409 })
       }
 
       const nowISO = new Date().toISOString()
@@ -587,14 +615,39 @@ router.post('/payments/onsite', requireAuth, requireRole('admin', 'registrar'), 
       await db.collection('payments').insertOne(payment, { session })
     })
     await syncReservationPaymentState(db, reservation)
+    // Paying off the additional charges after every rental is back is the end of the game, so
+    // its gameplay record is marked Completed (unless staff already completed or cancelled it).
+    let gameCompleted = false
+    if (settlesGame) {
+      const nowISO = new Date().toISOString()
+      const result = await db.collection('gameplay').updateMany(
+        { reservationId: { $in: [reservation.id, String(reservation._id)].filter(Boolean) }, Status: { $regex: '^(sched|ongo)', $options: 'i' } },
+        { $set: { Status: 'Completed', completedAtISO: nowISO, completedBy: actorOf(req), autoCompletedBy: 'final payment', updatedAtISO: nowISO } },
+      )
+      gameCompleted = result.modifiedCount > 0
+    }
     const payments = await getReservationPayments(db, reservation)
-    return res.status(201).json({ ok: true, data: payment, ledger: buildLedger(reservation, payments) })
+    return res.status(201).json({ ok: true, data: payment, gameCompleted, ledger: buildLedger(reservation, payments) })
   } catch (err) {
     return sendError(res, err)
   } finally {
     await session.endSession()
   }
 })
+
+// Gear charges (ammo, gun rentals) belong to the marshals who hand the gear out; the rest of the
+// bill belongs to the registrar. Admins can do both.
+const GEAR_CHARGE_TYPES = ['ammo_reload', 'gun_rental']
+export function canAddChargeType(role, type) {
+  if (role === 'admin') return true
+  return GEAR_CHARGE_TYPES.includes(type) ? role === 'marshal' : role === 'registrar'
+}
+// Taking a charge off: the registrar fixes any line of the bill; a marshal only the ammo or gun
+// lines (one added by mistake).
+export function canRemoveChargeType(role, type) {
+  if (role === 'admin' || role === 'registrar') return true
+  return role === 'marshal' && GEAR_CHARGE_TYPES.includes(type)
+}
 
 // POST /api/reservations/:id/charges { type, quantity, unitPrice, note } — ammo reloads, field
 // modification fees, or other charges added to the bill. There is no cancellation fee.
@@ -603,6 +656,10 @@ router.post('/reservations/:id/charges', requireAuth, requireRole(...STAFF), asy
   const config = getChargeConfig()
   const type = String(body.type || '')
   if (!config[type]) return res.status(400).json({ ok: false, error: 'Choose a charge type.' })
+  // Ammo is handed out by the marshals; field fees and other charges are the registrar's.
+  if (!canAddChargeType(req.user.role, type)) {
+    return res.status(403).json({ ok: false, error: type === 'ammo_reload' ? 'Marshals hand out and add extra ammo.' : 'The registrar adds this charge.' })
+  }
   const quantity = Number(body.quantity ?? 1)
   const unitPrice = money(body.unitPrice ?? config[type].unitPrice)
   if (!Number.isInteger(quantity) || quantity < 1 || quantity > 500) return res.status(400).json({ ok: false, error: 'Quantity must be a whole number from 1 to 500.' })
@@ -639,6 +696,149 @@ router.post('/reservations/:id/charges', requireAuth, requireRole(...STAFF), asy
     const updated = await db.collection('reservations').findOne({ _id: reservation._id })
     const payments = await getReservationPayments(db, updated)
     return res.status(201).json({ ok: true, data: charge, ledger: buildLedger(updated, payments) })
+  } catch (err) {
+    return sendError(res, err)
+  }
+})
+
+// POST /api/reservations/:id/add-gun { itemId, playerName, playerId? } — a player rents an extra
+// gun at the counter: the gun is handed to them (a rental record, like the Rentals tab) and its
+// rental price goes on the bill as an additional charge.
+router.post('/reservations/:id/add-gun', requireAuth, requireRole(...GEAR), async (req, res) => {
+  const body = req.body || {}
+  const playerName = String(body.playerName || '').trim().slice(0, 120)
+  if (!playerName) return res.status(400).json({ ok: false, error: 'Choose who gets the gun.' })
+  try {
+    const db = await getDb()
+    const reservation = await findById(db, 'reservations', req.params.id)
+    if (!reservation) return res.status(404).json({ ok: false, error: 'Reservation not found' })
+    const gun = await findById(db, 'weapons', body.itemId)
+    if (!gun || gun.source === 'player') return res.status(404).json({ ok: false, error: 'Gun not found' })
+    if (String(gun.status || 'available').toLowerCase() !== 'available') return res.status(409).json({ ok: false, error: `${gun.name} is not available.` })
+    const alreadyOut = await db.collection('rentals').findOne({ itemId: keyOf(gun), status: 'out' })
+    if (alreadyOut) return res.status(409).json({ ok: false, error: `${gun.name} is already out with ${alreadyOut.playerName}.` })
+    const price = money(gun.price)
+    if (!Number.isFinite(price) || price <= 0) return res.status(400).json({ ok: false, error: `${gun.name} has no rental price. Set one in the inventory first.` })
+
+    const nowISO = new Date().toISOString()
+    const unitLabel = Number(gun.unitNumber) ? `#${Number(gun.unitNumber)}` : ''
+    const rental = {
+      id: await nextShortId(db, 'rentals', 'RNT'),
+      reservationId: keyOf(reservation),
+      reservationDate: reservation.reservationDate,
+      playerName,
+      playerId: String(body.playerId || '').trim(),
+      itemCollection: 'weapons',
+      itemId: keyOf(gun),
+      itemName: gun.name || keyOf(gun),
+      itemCategory: gun.category || '',
+      unitLabel,
+      status: 'out',
+      issuedAtISO: nowISO,
+      issuedBy: actorOf(req),
+      billed: true,
+    }
+    const label = `Gun rental: ${gun.name}${unitLabel && !String(gun.name).includes('#') ? ` ${unitLabel}` : ''} (${playerName})`
+    const charge = {
+      id: `CHG-${new ObjectId().toHexString().slice(-8).toUpperCase()}`,
+      type: 'gun_rental',
+      label,
+      quantity: 1,
+      unitPrice: price,
+      amount: price,
+      note: '',
+      rentalId: rental.id,
+      addedBy: actorOf(req),
+      atISO: nowISO,
+    }
+    await db.collection('rentals').insertOne(rental)
+    await db.collection('reservations').updateOne(
+      { _id: reservation._id },
+      {
+        $inc: { totalAmount: price, balanceAmount: price, extraChargesTotal: price },
+        $push: { pricingBreakdown: { label, amount: price }, extraCharges: charge },
+        $set: { updatedAtISO: nowISO },
+      },
+    )
+    const updated = await db.collection('reservations').findOne({ _id: reservation._id })
+    return res.status(201).json({ ok: true, data: { rental, charge }, ledger: buildLedger(updated, await getReservationPayments(db, updated)) })
+  } catch (err) {
+    return sendError(res, err)
+  }
+})
+
+// POST /api/reservations/:id/charges/:chargeId/remove { quantity? } — takes back a charge added at
+// the counter (an ammo reload added by mistake or not used, for example). With `quantity`, only
+// that many units come off (one reload of three); without it, the whole charge is removed. A
+// charge can't be taken off once the money for it has been collected: refund it instead.
+router.post('/reservations/:id/charges/:chargeId/remove', requireAuth, requireRole(...STAFF), async (req, res) => {
+  try {
+    const db = await getDb()
+    const reservation = await findById(db, 'reservations', req.params.id)
+    if (!reservation) return res.status(404).json({ ok: false, error: 'Reservation not found' })
+    const charges = Array.isArray(reservation.extraCharges) ? reservation.extraCharges : []
+    const charge = charges.find((c) => c.id === req.params.chargeId)
+    if (!charge) return res.status(404).json({ ok: false, error: 'That charge is no longer on the bill.' })
+    if (!canRemoveChargeType(req.user.role, charge.type)) return res.status(403).json({ ok: false, error: 'Only the registrar can take this charge off the bill.' })
+
+    const quantity = Number(charge.quantity || 1)
+    const asked = req.body?.quantity === undefined ? quantity : Number(req.body.quantity)
+    if (!Number.isInteger(asked) || asked < 1) return res.status(400).json({ ok: false, error: 'Quantity must be a whole number of at least 1.' })
+    const removeQty = Math.min(asked, quantity)
+    const removedAmount = Math.round(removeQty * Number(charge.unitPrice || 0) * 100) / 100
+    const amount = removeQty === quantity ? Number(charge.amount || 0) : removedAmount
+
+    const payments = await getReservationPayments(db, reservation)
+    const { total, collected } = buildLedger(reservation, payments)
+    if (Math.round((total - amount) * 100) / 100 < collected - 0.01) {
+      return res.status(409).json({ ok: false, error: 'This charge has already been paid, so it can’t be removed. Refund it instead.' })
+    }
+
+    // The matching bill line (same label and amount; the last one if there are several).
+    const breakdown = [...(reservation.pricingBreakdown || [])]
+    let lineIndex = -1
+    for (let i = breakdown.length - 1; i >= 0; i -= 1) {
+      if (breakdown[i]?.label === charge.label && Math.abs(Number(breakdown[i]?.amount) - Number(charge.amount)) < 0.01) { lineIndex = i; break }
+    }
+
+    const nowISO = new Date().toISOString()
+    let nextCharges
+    if (removeQty === quantity) {
+      nextCharges = charges.filter((c) => c.id !== charge.id)
+      if (lineIndex >= 0) breakdown.splice(lineIndex, 1)
+    } else {
+      const left = quantity - removeQty
+      const baseLabel = String(charge.label).replace(/ × \d+$/, '')
+      const updated = {
+        ...charge,
+        quantity: left,
+        amount: Math.round((Number(charge.amount) - amount) * 100) / 100,
+        label: `${baseLabel}${left > 1 ? ` × ${left}` : ''}`,
+      }
+      nextCharges = charges.map((c) => (c.id === charge.id ? updated : c))
+      if (lineIndex >= 0) breakdown[lineIndex] = { label: updated.label, amount: updated.amount }
+    }
+
+    // Only applies if the bill hasn't changed since it was read (another charge added at the same time).
+    const result = await db.collection('reservations').updateOne(
+      { _id: reservation._id, extraCharges: charges },
+      {
+        $set: { extraCharges: nextCharges, pricingBreakdown: breakdown, updatedAtISO: nowISO },
+        $inc: { totalAmount: -amount, balanceAmount: -amount, extraChargesTotal: -amount },
+        $push: { removedCharges: { ...charge, removedQuantity: removeQty, removedAmount: amount, removedBy: actorOf(req), removedAtISO: nowISO } },
+      },
+    )
+    if (!result.modifiedCount) return res.status(409).json({ ok: false, error: 'The bill just changed. Try again.' })
+    // Taking a gun rental off the bill also takes the gun back, if it hasn't been returned yet.
+    if (charge.rentalId && removeQty === quantity) {
+      await db.collection('rentals').updateOne(
+        { id: charge.rentalId, status: 'out' },
+        { $set: { status: 'returned', condition: 'ok', returnNote: 'Rental removed from the bill', returnedAtISO: nowISO, returnedBy: actorOf(req) } },
+      )
+    }
+
+    const updated = await db.collection('reservations').findOne({ _id: reservation._id })
+    return res.json({ ok: true, ledger: buildLedger(updated, await getReservationPayments(db, updated)) })
   } catch (err) {
     return sendError(res, err)
   }
@@ -774,8 +974,60 @@ router.get('/reservations/:id/weapons', requireAuth, requireRole(...STAFF), asyn
   }
 })
 
+// GET /api/reservations/:id/own-gear — the guns and gear players on this booking bring from home,
+// by player: what the booking picked from their registered gear, plus the approved guns of
+// anyone who said they'd bring their own gun. The counter leaves those slots out at handout.
+// GET /api/reservations/:id/fps-checks — the guns in this game and today's chronograph result for
+// each ('pass', 'fail' or 'pending'). The game can only start once every gun has passed.
+router.get('/reservations/:id/fps-checks', requireAuth, requireRole(...STAFF), async (req, res) => {
+  try {
+    const db = await getDb()
+    const reservation = await findById(db, 'reservations', req.params.id)
+    if (!reservation) return res.status(404).json({ ok: false, error: 'Reservation not found' })
+    const status = await gameFpsStatus(db, reservation)
+    return res.json({ ok: true, data: { ...status, blockReason: fpsBlockReason(status) } })
+  } catch (err) {
+    return sendError(res, err)
+  }
+})
+
+router.get('/reservations/:id/own-gear', requireAuth, requireRole(...STAFF), async (req, res) => {
+  try {
+    const db = await getDb()
+    const reservation = await findById(db, 'reservations', req.params.id)
+    if (!reservation) return res.status(404).json({ ok: false, error: 'Reservation not found' })
+    const memberIds = [String(reservation.userId || ''), ...(reservation.teamMembers || []).map((m) => String(m.id || ''))].filter(Boolean)
+    const bringers = new Set((reservation.ownWeaponBringerIds || []).map(String))
+    const pickedIds = {
+      weapons: (reservation.selectedOwnWeaponIds || []).map(String),
+      equipments: (reservation.selectedOwnEquipmentIds || []).map(String),
+    }
+    const data = []
+    for (const collection of ['weapons', 'equipments']) {
+      const docs = memberIds.length
+        ? await db.collection(collection).find(
+          { source: 'player', submittedBy: { $in: memberIds }, approvalStatus: { $ne: 'rejected' } },
+          { projection: { id: 1, name: 1, category: 1, submittedBy: 1, approvalStatus: 1 } },
+        ).toArray()
+        : []
+      for (const doc of docs) {
+        const owner = String(doc.submittedBy)
+        const picked = pickedIds[collection].includes(String(doc.id))
+        // A gun counts when the booking picked it, or when its owner said they'd bring their own
+        // gun and it is approved.
+        const brought = picked || (collection === 'weapons' && bringers.has(owner) && doc.approvalStatus === 'approved')
+        if (!brought) continue
+        data.push({ playerId: owner, collection, id: String(doc.id), name: doc.name || 'Own item', category: String(doc.category || '').toLowerCase() })
+      }
+    }
+    return res.json({ ok: true, data, bringerIds: [...bringers] })
+  } catch (err) {
+    return sendError(res, err)
+  }
+})
+
 // POST /api/rentals/issue { reservationId, playerName, playerId?, itemCollection, itemId, unitLabel }
-router.post('/rentals/issue', requireAuth, requireRole(...STAFF), async (req, res) => {
+router.post('/rentals/issue', requireAuth, requireRole(...GEAR), async (req, res) => {
   const body = req.body || {}
   const itemCollection = String(body.itemCollection || '')
   const playerName = String(body.playerName || '').trim().slice(0, 120)
@@ -788,10 +1040,9 @@ router.post('/rentals/issue', requireAuth, requireRole(...STAFF), async (req, re
     const item = await findById(db, itemCollection, body.itemId)
     if (!item) return res.status(404).json({ ok: false, error: 'Item not found' })
     const unitLabel = String(body.unitLabel || '').trim().slice(0, 40)
-    if (unitLabel) {
-      const alreadyOut = await db.collection('rentals').findOne({ itemId: keyOf(item), unitLabel, status: 'out' })
-      if (alreadyOut) return res.status(409).json({ ok: false, error: `${item.name} ${unitLabel} is already out with ${alreadyOut.playerName}.` })
-    }
+    // Each piece is its own record, so a piece that is out can't be handed to a second player.
+    const alreadyOut = await db.collection('rentals').findOne({ itemId: keyOf(item), status: 'out' })
+    if (alreadyOut) return res.status(409).json({ ok: false, error: `${item.name}${alreadyOut.unitLabel ? ` ${alreadyOut.unitLabel}` : ''} is already out with ${alreadyOut.playerName}.` })
     const nowISO = new Date().toISOString()
     const rental = {
       id: await nextShortId(db, 'rentals', 'RNT'),
@@ -817,7 +1068,7 @@ router.post('/rentals/issue', requireAuth, requireRole(...STAFF), async (req, re
 
 // PUT /api/rentals/:id/return { condition: 'ok' | 'damaged' | 'missing', note } — damaged or
 // missing items open a damage report (for penalty billing) and leave the rental pool.
-router.put('/rentals/:id/return', requireAuth, requireRole(...STAFF), async (req, res) => {
+router.put('/rentals/:id/return', requireAuth, requireRole(...GEAR), async (req, res) => {
   const condition = String(req.body?.condition || '')
   if (!['ok', 'damaged', 'missing'].includes(condition)) return res.status(400).json({ ok: false, error: 'condition must be ok, damaged, or missing' })
   const note = String(req.body?.note || '').trim().slice(0, 300)
@@ -848,9 +1099,10 @@ router.put('/rentals/:id/return', requireAuth, requireRole(...STAFF), async (req
 // ---------------------------------------------------------------------------
 
 // replacementValue is what a lost piece costs to replace; it is the loss penalty.
-// stockGrams is the BB stock of an ammo record (ammo is tracked in grams, not pieces).
-const PIECE_FIELDS = ['category', 'price', 'replacementValue', 'description', 'note', 'status', 'partnerId', 'fpsClass', 'fpsLimit', 'stockGrams']
-const NUMERIC_PIECE_FIELDS = ['price', 'replacementValue', 'fpsLimit', 'stockGrams']
+// stockGrams is the BB stock of an ammo record (ammo is tracked in grams, not pieces), and
+// lowStockGrams the level below which staff are told to restock (utils/ammoStock.js).
+const PIECE_FIELDS = ['category', 'price', 'replacementValue', 'description', 'note', 'status', 'partnerId', 'fpsClass', 'fpsLimit', 'stockGrams', 'lowStockGrams']
+const NUMERIC_PIECE_FIELDS = ['price', 'replacementValue', 'fpsLimit', 'stockGrams', 'lowStockGrams']
 
 function readPieceFields(body) {
   const fields = {}

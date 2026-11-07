@@ -6,6 +6,7 @@ import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { apiGet } from '../../utils/apiClient'
 import { isXenditEnabled, startXenditCheckout } from '../../utils/xendit'
+import { isPrivateSession } from '../../utils/bookingRoles'
 
 export const SPLIT_PAYMENTS_CHANGED_EVENT = 'split-payments-changed'
 
@@ -29,6 +30,7 @@ export type SplitPaymentItem = {
     totalAmount: number
     depositAmount: number
     paymentDueAtISO?: string
+    sessionType?: string
   }
   isCaptain: boolean
   captainName: string
@@ -233,7 +235,7 @@ export function SplitPaymentPage() {
                 {item.reservation.locationName} · {item.reservation.numberOfPlayers} players · {item.reservation.packageName}
               </div>
               <div className="mt-1 text-xs text-muted">
-                {item.isCaptain ? 'You are the team captain' : `Captain: ${item.captainName}`} · Reservation total {formatPHP(item.reservation.totalAmount)} · Due online {formatPHP(item.progress.target)}
+                {isPrivateSession(item.reservation.sessionType) ? (item.isCaptain ? 'You are the team captain' : `Captain: ${item.captainName}`) : (item.isCaptain ? 'You booked this game' : `Booked by ${item.captainName}`)} · Reservation total {formatPHP(item.reservation.totalAmount)} · Due online {formatPHP(item.progress.target)}
               </div>
             </div>
             <span className="self-start rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold uppercase tracking-widest">

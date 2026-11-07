@@ -10,8 +10,7 @@ import { apiGet, apiGetAll, apiPost, apiPut, apiDelete } from '../../utils/apiCl
 import { Pagination, usePagination } from '../../components/ui/Pagination'
 import { ModelSummaryStrip } from '../../components/inventory/ModelSummaryStrip'
 import { BulkUpdateModal, InventoryToolbar, SelectBox, forEachPiece, type BulkChange } from '../../components/inventory/BulkActionBar'
-import { isAmmo, modelOf, summarizeModels } from '../../utils/inventoryModels'
-import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
+import { DEFAULT_LOW_STOCK_GRAMS, ammoLowLevel, isAmmo, isLowOnAmmo, modelOf, summarizeModels } from '../../utils/inventoryModels'
 
 // Rental gear is only masks, vests, and ammo.
 type EquipmentCategory = 'masks' | 'vests' | 'ammo'
@@ -30,6 +29,8 @@ type InventoryItem = {
   price: number
   // Grams of BBs in stock; only used for ammo
   stockGrams: number
+  // Below this many grams the ammo is low (DEFAULT_LOW_STOCK_GRAMS when not set).
+  lowStockGrams?: number
   replacementValue?: number
   note: string
   description?: string
@@ -64,7 +65,7 @@ const StatusBadge = ({ status }: { status: EquipmentStatus }) => {
 // Ammo is one record per BB type, stocked in grams and priced per refill.
 const AMMO_PRICE_PER_REFILL = '50'
 
-const emptyForm = () => ({ name: '', description: '', pieces: '1', grams: '', applyToModel: true, price: '0', replacementValue: '', status: 'available' as EquipmentStatus, category: 'masks' as EquipmentCategory, partnerId: '' })
+const emptyForm = () => ({ name: '', description: '', pieces: '1', grams: '', lowGrams: '', applyToModel: true, price: '0', replacementValue: '', status: 'available' as EquipmentStatus, category: 'masks' as EquipmentCategory, partnerId: '' })
 
 export function AdminEquipmentPage() {
   const [activeCategory, setActiveCategory] = React.useState<EquipmentCategory | 'all'>('all')
@@ -95,6 +96,7 @@ export function AdminEquipmentPage() {
         unitNumber: Number(d.unitNumber) || 0,
         price: typeof d.price === 'number' ? d.price : 0,
         stockGrams: Number(d.stockGrams) || 0,
+        lowStockGrams: Number(d.lowStockGrams) || undefined,
         replacementValue: Number(d.replacementValue) || 0,
         note: d.note || d.description || '',
         description: d.description || d.note || '',
@@ -135,6 +137,8 @@ export function AdminEquipmentPage() {
 
   const rentalPieces = inventory.filter((item) => item.source !== 'player')
   const totalInStock = rentalPieces.length
+  // BB ammo below its warning level (center stock only).
+  const lowAmmo = inventory.filter((item) => item.source !== 'player' && isLowOnAmmo(item))
   const models = summarizeModels(inventory)
   const maintenanceCount = inventory.filter((item) => item.status === 'maintenance').length
   const rentedCount = inventory.filter((item) => item.status === 'rented').length
@@ -169,7 +173,7 @@ export function AdminEquipmentPage() {
         status: form.status,
         price: Number(form.price) || 0,
         replacementValue: Number(form.replacementValue) || 0, 
-        ...(ammo ? { stockGrams: Math.round(grams) } : {}),
+        ...(ammo ? { stockGrams: Math.round(grams), lowStockGrams: Math.max(0, Math.round(Number(form.lowGrams) || 0)) } : {}),
         description: form.description.trim(),
         note: form.description.trim() || 'Newly entered from admin inventory.',
         partnerId: form.partnerId,
@@ -194,6 +198,7 @@ export function AdminEquipmentPage() {
       description: item.description || item.note || '',
       pieces: '1',
       grams: item.stockGrams ? String(item.stockGrams) : '',
+      lowGrams: item.lowStockGrams ? String(item.lowStockGrams) : '',
       applyToModel: true,
       price: String(item.price),
       replacementValue: item.replacementValue ? String(item.replacementValue) : '',
@@ -238,7 +243,6 @@ export function AdminEquipmentPage() {
     }
   }
 
-  const { addNotification } = useNotifications()
 
   // Bulk selection: tick rows (or every row matching the filters) and change them together.
   const [selectedIds, setSelectedIds] = React.useState<string[]>([])
@@ -286,13 +290,6 @@ export function AdminEquipmentPage() {
         status: 'available',
         updatedAtISO: new Date().toISOString(),
       })
-      sendRoleNotifications(addNotification, {
-        roles: ['admin', 'registrar', 'marshal'],
-        type: 'equipment_approved',
-        title: 'Gear Approved',
-        message: `Gear ${id} was approved and is available for use.`,
-        linkedResourceId: id,
-      })
       toast.success('Player item approved')
       await refresh()
     } catch (e: any) {
@@ -315,13 +312,6 @@ export function AdminEquipmentPage() {
         approvalStatus: 'rejected',
         rejectionReason: rejectionReason.trim(),
         updatedAtISO: new Date().toISOString(),
-      })
-      sendRoleNotifications(addNotification, {
-        roles: ['admin', 'registrar', 'marshal'],
-        type: 'equipment_rejected',
-        title: 'Gear Rejected',
-        message: `Gear ${rejectionTargetId} was rejected.`,
-        linkedResourceId: rejectionTargetId,
       })
       toast.success('Player item rejected')
       setRejectionTargetId(null)
@@ -352,7 +342,7 @@ export function AdminEquipmentPage() {
         status: form.status,
         description: form.description.trim(),
         note: form.description.trim() || 'Updated from admin inventory.',
-        ...(ammo ? { stockGrams: Math.round(grams) } : {}),
+        ...(ammo ? { stockGrams: Math.round(grams), lowStockGrams: Math.max(0, Math.round(Number(form.lowGrams) || 0)) } : {}),
         ...(form.applyToModel ? {} : { price: Number(form.price) || 0, replacementValue: Number(form.replacementValue) || 0, category: form.category, partnerId: form.partnerId }),
         updatedAtISO: new Date().toISOString(),
       })
@@ -401,6 +391,23 @@ export function AdminEquipmentPage() {
           <p className="mt-1 text-sm text-muted">Track inventory by category, condition, and ownership source.</p>
         </div>
       </div>
+
+      {lowAmmo.length > 0 ? (
+        <Card className="border-danger/30 p-4">
+          <div className="text-sm font-bold text-danger">BB ammo running low</div>
+          <ul className="mt-2 space-y-1.5 text-sm">
+            {lowAmmo.map((item) => (
+              <li key={item.id} className="flex flex-wrap items-center justify-between gap-2">
+                <span>
+                  <span className="font-semibold">{item.name}</span>
+                  <span className="text-muted"> · {item.stockGrams.toLocaleString()} g left (warns below {ammoLowLevel(item).toLocaleString()} g)</span>
+                </span>
+                <Button size="sm" variant="ghost" onClick={() => handleSelect(item)}>Restock</Button>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      ) : null}
 
       <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
         <Card className="rounded-xl px-3 py-2 md:px-3 md:py-2">
@@ -577,7 +584,10 @@ export function AdminEquipmentPage() {
                     </div>
                     <div className="mt-1 truncate text-xs text-muted">{item.description || item.note}</div>
                   </div>
-                  <div className="col-span-1 text-right text-sm font-semibold">{isAmmo(item) ? `${item.stockGrams.toLocaleString()} g` : item.source === 'player' || !item.unitNumber ? '—' : `#${item.unitNumber}`}</div>
+                  <div className="col-span-1 text-right text-sm font-semibold">
+                    {isAmmo(item) ? `${item.stockGrams.toLocaleString()} g` : item.source === 'player' || !item.unitNumber ? '—' : `#${item.unitNumber}`}
+                    {isLowOnAmmo(item) ? <span className="mt-0.5 block text-[10px] font-semibold uppercase text-danger">Low stock</span> : null}
+                  </div>
                   <div className="col-span-1 text-right text-sm text-accent">₱{item.price}{isAmmo(item) ? <span className="block text-[10px] text-muted">per refill</span> : null}</div>
                   <div className="col-span-2 pl-4">
                     <StatusBadge status={item.status} />
@@ -669,6 +679,19 @@ export function AdminEquipmentPage() {
                   value={form.grams}
                   onChange={(event) => setForm((prev) => ({ ...prev, grams: event.target.value }))}
                   placeholder="e.g. 5000"
+                />
+              </div>
+            ) : null}
+            {isAmmo(form) ? (
+              <div className="mt-3">
+                <Input
+                  label="Warn me when stock is below (grams)"
+                  hint={`Admins and marshals get a notice when the BBs drop below this. Leave blank for ${DEFAULT_LOW_STOCK_GRAMS.toLocaleString()} g.`}
+                  type="number"
+                  min="0"
+                  value={form.lowGrams}
+                  onChange={(event) => setForm((prev) => ({ ...prev, lowGrams: event.target.value }))}
+                  placeholder={String(DEFAULT_LOW_STOCK_GRAMS)}
                 />
               </div>
             ) : null}

@@ -3,7 +3,7 @@ import { randomUUID } from 'crypto'
 import { emailWeatherAdvisory } from '../services/notificationEmails.js'
 import { notifyUser } from './paymentProgress.js'
 import { manilaDateISO, playerIdsOf } from './reminders.js'
-import { DEFAULT_SLOT_HOURS, SLOT_ORDER, getSlotHours, slotWindow } from './slotHours.js'
+import { DEFAULT_SLOT_HOURS, SLOT_ORDER, getSlotHours, slotHasStarted, slotWindow } from './slotHours.js'
 
 // Day-before weather advisories from the OpenWeatherMap 5-day / 3-hour forecast
 // (OPENWEATHER_API_KEY). For every location with games tomorrow, each slot's
@@ -15,9 +15,9 @@ export const ADVISORY_STATUSES = ['pending', 'needs review', 'confirmed', 'appro
 
 // Field coordinates. Override with WEATHER_COORDS_<LOCATION>="lat,lon".
 const DEFAULT_COORDS = {
-  salawag: { lat: 14.3260, lon: 120.9800, name: 'Delta Stronghold (Salawag)' },
-  langkaan: { lat: 14.3070, lon: 120.9510, name: 'Delta Stronghold (Langkaan)' },
-  binan: { lat: 14.3036, lon: 121.0781, name: 'LOMA Binan Laguna' },
+  salawag: { lat: 14.3260, lon: 120.9800, name: 'Chill Shooters (Salawag)' },
+  langkaan: { lat: 14.3070, lon: 120.9510, name: 'Chill Shooters (Langkaan)' },
+  binan: { lat: 14.3036, lon: 121.0781, name: 'BBC Airsoft Binan Laguna' },
 }
 
 
@@ -229,9 +229,140 @@ export async function sendWeatherAlerts(db, { force = false, http, env = process
         source: 'auto',
         forecast,
         title: `Weather advisory for your game tomorrow`,
-        message: `The forecast for ${name} tomorrow (${slot}) shows ${forecast.reasons.join(' and ')}. We play rain or shine unless the marshals stop play for safety. If weather stops you from coming, contact us and staff can move your booking and payment to another date; payments are not refundable.`,
+        message: `The forecast for ${name} tomorrow (${slot}) shows ${forecast.reasons.join(' and ')}. We play rain or shine.`,
       }))
     }
   }
   return { checked: slotsByLocation.size, advisories: sent.length }
+}
+
+// ---- Automatic forecast outlook ---------------------------------------------------------------
+// Every hour the 5-day forecast for every field is checked. Each slot that looks rainy, stormy, or
+// windy is kept in `weather_outlook` (one record per location, date and slot) and shown to every
+// account on the dashboard weather widget. Slots that clear up are removed, so the outlook always
+// matches the latest forecast. No one is notified from here: booked players still get the
+// day-before notice and email from sendWeatherAlerts.
+
+export const WEATHER_OUTLOOK = 'weather_outlook'
+// The full daily forecast (every slot, rainy or not), one record per location and date, so the
+// dashboard widget can show the forecast for every day and not only the rainy ones.
+export const WEATHER_DAILY = 'weather_daily'
+const OUTLOOK_DAYS = 5
+
+// The fields of a slot summary shown to every account.
+function publicSlotForecast(forecast, hours) {
+  return {
+    slot: forecast.slot,
+    hours: hours[forecast.slot] || null,
+    severe: forecast.severe,
+    rainy: Boolean(forecast.rainy),
+    summary: forecast.summary,
+    rainChancePercent: forecast.rainChancePercent,
+    rainMm: forecast.rainMm,
+    windKph: forecast.windKph,
+    tempC: forecast.tempC,
+  }
+}
+
+// The daily forecast for every field and date, straight from the API (cached 30 minutes by
+// fetchForecast). Fields whose forecast can't be fetched are left out.
+export async function liveDailyForecast(db, dates, { http, env = process.env } = {}) {
+  if (!isWeatherConfigured(env)) return []
+  const { hours } = await getSlotHours(db)
+  const results = await Promise.all(Object.keys(DEFAULT_COORDS).map(async (locationId) => {
+    let entries
+    try {
+      entries = await fetchForecast(locationId, { http, env })
+    } catch (err) {
+      console.warn('Weather forecast failed for', locationId, err?.message || err)
+      return []
+    }
+    return dates.map((date) => ({
+      locationId,
+      date,
+      slots: SLOT_ORDER
+        .map((slot) => summarizeSlotForecast(entries, date, slot, weatherConfig(env), hours))
+        .filter((forecast) => forecast.available)
+        .map((forecast) => publicSlotForecast(forecast, hours)),
+    })).filter((day) => day.slots.length > 0)
+  }))
+  return results.flat()
+}
+
+export function outlookMessage(name, slot, forecast) {
+  return `Forecast for ${name} (${slot}): ${forecast.reasons.join(' and ')}. We play rain or shine.`
+}
+
+let lastOutlookRun = 0
+
+export async function refreshWeatherOutlook(db, { force = false, http, env = process.env } = {}) {
+  if (!isWeatherConfigured(env)) return { skipped: 'not configured' }
+  const now = Date.now()
+  if (!force && now - lastOutlookRun < 50 * 60_000) return { skipped: 'recent' }
+  lastOutlookRun = now
+
+  const todayISO = manilaDateISO(0)
+  const dates = Array.from({ length: OUTLOOK_DAYS }, (_, i) => manilaDateISO(i))
+  const { hours } = await getSlotHours(db)
+  const collection = db.collection(WEATHER_OUTLOOK)
+  const daily = db.collection(WEATHER_DAILY)
+  const nowISO = new Date().toISOString()
+  let flagged = 0
+
+  for (const locationId of Object.keys(DEFAULT_COORDS)) {
+    const coords = locationCoords(locationId, env)
+    let entries
+    try {
+      entries = await fetchForecast(locationId, { http, env })
+    } catch (err) {
+      // Keep the last outlook for this field if the API is briefly unavailable.
+      console.warn('Weather outlook failed for', locationId, err?.message || err)
+      continue
+    }
+    const keep = []
+    for (const date of dates) {
+      // Every slot with forecast data, for the daily forecast shown on the dashboard.
+      const daySlots = SLOT_ORDER
+        .map((slot) => summarizeSlotForecast(entries, date, slot, weatherConfig(env), hours))
+        .filter((forecast) => forecast.available)
+        .map((forecast) => publicSlotForecast(forecast, hours))
+      if (daySlots.length) {
+        await daily.updateOne(
+          { _id: `${locationId}|${date}` },
+          { $set: { locationId, date, slots: daySlots, updatedAtISO: nowISO } },
+          { upsert: true },
+        )
+      }
+      for (const slot of SLOT_ORDER) {
+        if (slotHasStarted(hours, slot, date, todayISO)) continue
+        const forecast = summarizeSlotForecast(entries, date, slot, weatherConfig(env), hours)
+        if (!forecast.available || (!forecast.severe && !forecast.rainy)) continue
+        const key = `${locationId}|${date}|${slot}`
+        keep.push(key)
+        flagged += 1
+        await collection.updateOne(
+          { _id: key },
+          {
+            $set: {
+              locationId,
+              date,
+              slot,
+              severe: forecast.severe,
+              title: forecast.severe ? 'Severe weather forecast' : 'Rain forecast',
+              message: outlookMessage(coords.name, slot, forecast),
+              forecast,
+              updatedAtISO: nowISO,
+            },
+            $setOnInsert: { createdAtISO: nowISO },
+          },
+          { upsert: true },
+        )
+      }
+    }
+    // This field's slots that cleared up, and anything already in the past.
+    await collection.deleteMany({ locationId, _id: { $nin: keep } })
+  }
+  await collection.deleteMany({ date: { $lt: todayISO } })
+  await daily.deleteMany({ date: { $lt: todayISO } })
+  return { checkedDays: dates.length, flagged }
 }

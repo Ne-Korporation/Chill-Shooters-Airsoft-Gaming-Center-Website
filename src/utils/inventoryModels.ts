@@ -10,6 +10,17 @@ export function isAmmo(item: { category?: string }) {
   return String(item.category || '').toLowerCase() === 'ammo'
 }
 
+// Below this many grams an ammo record is low and staff are told to restock (the server sends
+// the notice; see server/utils/ammoStock.js). Set per ammo record, 2,000 g by default.
+export const DEFAULT_LOW_STOCK_GRAMS = 2000
+export function ammoLowLevel(item: { lowStockGrams?: number }) {
+  const own = Number(item.lowStockGrams)
+  return Number.isFinite(own) && own > 0 ? own : DEFAULT_LOW_STOCK_GRAMS
+}
+export function isLowOnAmmo(item: { category?: string; stockGrams?: number; lowStockGrams?: number }) {
+  return isAmmo(item) && Math.max(0, Number(item.stockGrams) || 0) < ammoLowLevel(item)
+}
+
 export type ModelSummary = { model: string; total: number; available: number; price: number; category: string; grams: number }
 
 // Count of pieces per model and how many are available, for rental (non player-owned) gear.

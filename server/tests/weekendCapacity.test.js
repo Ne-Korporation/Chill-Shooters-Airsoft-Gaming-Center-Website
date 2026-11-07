@@ -13,10 +13,10 @@ const summary = summarizeWeekendCapacity({
   dates: ['2026-11-07', '2026-11-08'],
   todayISO: '2026-11-08',
   capacities: { salawag: { morning: 200, afternoon: 190 } },
-  locationNames: { salawag: 'Delta Stronghold (Salawag)' },
+  locationNames: { salawag: 'Chill Shooters (Salawag)' },
   reservations: [
     { reservationDate: '2026-11-08', reservationTime: 'morning', locationId: 'salawag', reservationStatus: 'confirmed', numberOfPlayers: 12 },
-    { reservationDate: '2026-11-08', reservationTime: 'morning', location: 'Delta Stronghold (Salawag)', reservationStatus: 'pending', players: 3 },
+    { reservationDate: '2026-11-08', reservationTime: 'morning', location: 'Chill Shooters (Salawag)', reservationStatus: 'pending', players: 3 },
     // Cancelled bookings and other dates don't count.
     { reservationDate: '2026-11-08', reservationTime: 'morning', locationId: 'salawag', reservationStatus: 'cancelled', numberOfPlayers: 50 },
     { reservationDate: '2026-11-15', reservationTime: 'morning', locationId: 'salawag', reservationStatus: 'confirmed', numberOfPlayers: 50 },

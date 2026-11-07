@@ -88,6 +88,8 @@ export function SafetyLogPage({ embedded = false, tab: tabFromPage, onRepairOpen
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
 
+  // The manual reading form, closed unless a gun outside the inventory needs testing.
+  const [fpsFormOpen, setFpsFormOpen] = useState(false)
   const [fpsForm, setFpsForm] = useState({ weaponId: '', weaponName: '', weaponClass: 'aeg', fps: '', playerName: '', notes: '' })
   const [damageForm, setDamageForm] = useState({ kind: 'damage', itemType: 'weapon', itemId: '', itemName: '', reservationId: '', playerName: '', description: '' })
   const [review, setReview] = useState<{ id: string; amount: string; note: string; overrideReason: string; quote: PenaltyQuote | null } | null>(null)
@@ -165,6 +167,7 @@ export function SafetyLogPage({ embedded = false, tab: tabFromPage, onRepairOpen
       if (res.data.result === 'pass') toast.success(`${res.data.weaponName}: ${res.data.fps} FPS — PASS`)
       else toast.error(`${res.data.weaponName}: ${res.data.fps} FPS — FAIL (limit ${res.data.limit})${res.weaponPulled ? '. Weapon moved to maintenance.' : ''}`)
       setFpsForm((current) => ({ ...current, weaponId: '', weaponName: '', fps: '', playerName: '', notes: '' }))
+      setFpsFormOpen(false)
       await load()
     } catch (err: any) {
       toast.error(err?.message || 'Unable to save reading')
@@ -252,9 +255,22 @@ export function SafetyLogPage({ embedded = false, tab: tabFromPage, onRepairOpen
       </div>
 
       {tab === 'fps' ? (
-        <div className="grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
+        <div className="space-y-4">
+          {/* Readings are normally taken from a weapon's FPS button (Inventory) or the FPS check in
+              a game. This form is only for a gun that isn't in the system, like a walk-in's own gun. */}
+          {!fpsFormOpen ? (
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
+              <span>Test guns from their FPS button in Inventory, or from a game's FPS check before it starts.</span>
+              <button type="button" onClick={() => setFpsFormOpen(true)} className="flex items-center gap-1.5 font-semibold text-accent hover:underline">
+                <FiCrosshair /> Test a gun that isn't in the inventory
+              </button>
+            </div>
+          ) : (
           <Card className="p-4 md:p-5">
-            <div className="flex items-center gap-2 text-sm font-bold"><FiCrosshair /> Record a chronograph reading</div>
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-sm font-bold"><FiCrosshair /> Test a gun that isn't in the inventory</div>
+              <button type="button" onClick={() => setFpsFormOpen(false)} className="text-xs text-muted hover:text-text">Close</button>
+            </div>
             <form className="mt-4 space-y-3" onSubmit={submitFps}>
               <ItemCombobox
                 label="Weapon"
@@ -305,10 +321,11 @@ export function SafetyLogPage({ embedded = false, tab: tabFromPage, onRepairOpen
               </Button>
             </form>
           </Card>
+          )}
 
           <Card className="p-4 md:p-5">
             <div className="flex items-center justify-between">
-              <div className="text-xs uppercase tracking-widest text-muted">Recent readings</div>
+              <div className="text-xs uppercase tracking-widest text-muted">FPS history</div>
               <div className="text-xs text-muted">{fpsStats.total} logged · <span className="text-danger">{fpsStats.failed} failed</span></div>
             </div>
             <div className="mt-3 divide-y divide-white/5">

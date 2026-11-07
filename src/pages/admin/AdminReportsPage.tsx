@@ -424,15 +424,24 @@ export function AdminReportsPage() {
   const preparedBy = `${user?.name || user?.email || 'Unknown user'}${user?.role ? ` (${user.role})` : ''}`
   const generatedAt = new Date().toLocaleString('en-PH', { dateStyle: 'long', timeStyle: 'short' })
 
-  // Only what has a value is shown, most important first; zero rows and empty sections are left out.
+  // Only what has a value is shown, most important first: zero rows, zero amounts and empty
+  // sections are left out, on screen, in print and in the CSV.
   const shown = useMemo(() => ({
     metrics: report.metrics
-      .filter((metric) => /[1-9]/.test(metric.value))
+      // "2 · ₱0" keeps just "2"; a tile with nothing but zeros is dropped.
+      .map((metric) => ({ ...metric, value: metric.value.split(' · ').filter((part) => /[1-9]/.test(part)).join(' · ') }))
+      .filter((metric) => metric.value)
       .sort((a, b) => metricRank(a.label) - metricRank(b.label)),
     statement: report.statement.filter((row) => Math.round(row.amount) !== 0),
     breakdown: report.breakdown.filter((row) => row.reservations || row.players || row.collected),
+    payments: report.periodPayments.filter((payment) => Math.round(paymentAmount(payment) * 100) !== 0),
+    penalties: report.penalties.filter((row) => Math.round(Number(row.amount) * 100) !== 0),
+    donations: report.donations.filter((row) => row.bookings || row.collected || row.reserved || row.pledged),
   }), [report])
-  const hasActivity = shown.metrics.length > 0 || report.donations.length > 0 || report.periodPayments.length > 0 || report.penalties.length > 0 || report.periodRentals.length > 0
+  // A blank cell instead of "₱0" or "0" inside the tables that are kept.
+  const money = (value: number) => (Math.round(Number(value) * 100) === 0 ? '' : formatCurrency(value))
+  const count = (value: number) => (Number(value) ? String(value) : '')
+  const hasActivity = shown.metrics.length > 0 || shown.donations.length > 0 || shown.payments.length > 0 || shown.penalties.length > 0 || report.periodRentals.length > 0
 
   const exportCsv = () => {
     const lines: string[] = []
@@ -451,7 +460,7 @@ export function AdminReportsPage() {
       [period === 'yearly' ? 'Month' : 'Date', 'Reservations', 'Players', 'Revenue collected (PHP)'].join(','),
       shown.breakdown.map((row) => [row.key, row.reservations, row.players, row.collected].map(csvCell).join(',')),
     )
-    section('Payment ID,Reservation ID,Date,Method,Status,Amount (PHP)', report.periodPayments.map((payment) => [
+    section('Payment ID,Reservation ID,Date,Method,Status,Amount (PHP)', shown.payments.map((payment) => [
       payment.id,
       payment.reservationId,
       dayOf(payment.createdAtISO || payment.createdAt),
@@ -459,10 +468,10 @@ export function AdminReportsPage() {
       paymentStatusOf(payment),
       paymentAmount(payment),
     ].map(csvCell).join(',')))
-    section('Game for a cause date,Cause,Beneficiary,Donation share (%),Bookings,Players,Booking value (PHP),Collected (PHP),Reserved for donation (PHP),Expected donation (PHP)', report.donations.map((row) => [
+    section('Game for a cause date,Cause,Beneficiary,Donation share (%),Bookings,Players,Booking value (PHP),Collected (PHP),Reserved for donation (PHP),Expected donation (PHP)', shown.donations.map((row) => [
       row.dateISO, row.title, row.beneficiary, row.donationPercent, row.bookings, row.players, row.bookingValue, row.collected, row.reserved, row.pledged,
     ].map(csvCell).join(',')))
-    section('Penalty date,Reservation ID,Charge,Amount (PHP)', report.penalties.map((row) => [row.day, row.reservationId, row.label, row.amount].map(csvCell).join(',')))
+    section('Penalty date,Reservation ID,Charge,Amount (PHP)', shown.penalties.map((row) => [row.day, row.reservationId, row.label, row.amount].map(csvCell).join(',')))
     section('Rental ID,Issued,Reservation ID,Player,Item,Category,Status', report.periodRentals.map((rental) =>
       [rental.id, dayOf(rental.issuedAtISO), rental.reservationId, rental.playerName, rental.itemName, rental.itemCategory, rental.status].map(csvCell).join(',')))
 
@@ -597,7 +606,7 @@ export function AdminReportsPage() {
         </Card>
         ) : null}
 
-        {report.donations.length ? (
+        {shown.donations.length ? (
         <Card className="p-4">
           <div className="flex items-center gap-2 text-xs uppercase tracking-widest text-muted"><FiHeart className="text-rose-500" /> Donations · games for a cause</div>
           <div className="mt-3 overflow-x-auto">
@@ -614,27 +623,29 @@ export function AdminReportsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
-                {report.donations.map((row) => (
+                {shown.donations.map((row) => (
                   <tr key={row.dateISO}>
                     <td className="py-2 pr-4 whitespace-nowrap">{row.dateISO}</td>
                     <td className="py-2 pr-4">{row.title}{row.beneficiary ? <div className="text-xs text-muted">For {row.beneficiary}</div> : null}</td>
                     <td className="py-2 pr-4 text-right">{row.donationPercent}%</td>
-                    <td className="py-2 pr-4 text-right">{row.bookings}</td>
-                    <td className="py-2 pr-4 text-right">{row.players}</td>
-                    <td className="py-2 pr-4 text-right">{formatCurrency(row.collected)}</td>
+                    <td className="py-2 pr-4 text-right">{count(row.bookings)}</td>
+                    <td className="py-2 pr-4 text-right">{count(row.players)}</td>
+                    <td className="py-2 pr-4 text-right">{money(row.collected)}</td>
                     <td className="py-2 text-right font-semibold">
-                      {formatCurrency(row.reserved)}
+                      {money(row.reserved)}
                       {row.pledged > row.reserved ? <div className="text-xs font-normal text-muted">{formatCurrency(row.pledged - row.reserved)} more expected</div> : null}
                     </td>
                   </tr>
                 ))}
               </tbody>
+              {Math.round(report.donationReserved) !== 0 ? (
               <tfoot className="font-semibold">
                 <tr className="border-t border-white/10">
                   <td className="py-2 pr-4" colSpan={6}>Total reserved for donations</td>
                   <td className="py-2 text-right">{formatCurrency(report.donationReserved)}</td>
                 </tr>
               </tfoot>
+              ) : null}
             </table>
           </div>
           <div className="mt-2 text-xs text-muted">
@@ -660,13 +671,13 @@ export function AdminReportsPage() {
           </Card>
           ) : null}
 
-          {report.penalties.length ? (
+          {shown.penalties.length ? (
           <Card className="p-4">
             <div className="text-xs uppercase tracking-widest text-muted">Penalties and extra charges</div>
             <div className="mt-3 overflow-x-auto">
               <table className="w-full text-sm">
                 <tbody className="divide-y divide-white/5">
-                  {report.penalties.map((row, index) => (
+                  {shown.penalties.map((row, index) => (
                     <tr key={`${row.reservationId}-${index}`}>
                       <td className="py-2 pr-4 whitespace-nowrap">{row.day}</td>
                       <td className="py-2 pr-4">{row.label}<div className="text-xs text-muted">{row.reservationId}</div></td>
@@ -699,18 +710,18 @@ export function AdminReportsPage() {
                 {shown.breakdown.map((row) => (
                   <tr key={row.key}>
                     <td className="py-2 pr-4">{row.key}</td>
-                    <td className="py-2 pr-4 text-right">{row.reservations}</td>
-                    <td className="py-2 pr-4 text-right">{row.players}</td>
-                    <td className="py-2 text-right">{formatCurrency(row.collected)}</td>
+                    <td className="py-2 pr-4 text-right">{count(row.reservations)}</td>
+                    <td className="py-2 pr-4 text-right">{count(row.players)}</td>
+                    <td className="py-2 text-right">{money(row.collected)}</td>
                   </tr>
                 ))}
               </tbody>
               <tfoot className="font-semibold">
                 <tr className="border-t border-white/10">
                   <td className="py-2 pr-4">Total</td>
-                  <td className="py-2 pr-4 text-right">{shown.breakdown.reduce((n, r) => n + r.reservations, 0)}</td>
-                  <td className="py-2 pr-4 text-right">{shown.breakdown.reduce((n, r) => n + r.players, 0)}</td>
-                  <td className="py-2 text-right">{formatCurrency(report.collected)}</td>
+                  <td className="py-2 pr-4 text-right">{count(shown.breakdown.reduce((n, r) => n + r.reservations, 0))}</td>
+                  <td className="py-2 pr-4 text-right">{count(shown.breakdown.reduce((n, r) => n + r.players, 0))}</td>
+                  <td className="py-2 text-right">{money(report.collected)}</td>
                 </tr>
               </tfoot>
             </table>
@@ -718,7 +729,7 @@ export function AdminReportsPage() {
         </Card>
         ) : null}
 
-        {report.periodPayments.length ? (
+        {shown.payments.length ? (
         <Card className="p-4">
           <div className="text-xs uppercase tracking-widest text-muted">Payments in this period · {transactionLabel}</div>
           <div className="mt-3 overflow-x-auto">
@@ -734,7 +745,7 @@ export function AdminReportsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
-                {report.periodPayments.map((payment, index) => (
+                {shown.payments.map((payment, index) => (
                   <tr key={payment.id || index}>
                     <td className="py-2 pr-4">{dayOf(payment.createdAtISO || payment.createdAt)}</td>
                     <td className="py-2 pr-4">{payment.id || '-'}</td>

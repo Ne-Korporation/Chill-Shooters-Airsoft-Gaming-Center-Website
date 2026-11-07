@@ -25,6 +25,25 @@
   --glass:26,26,26;
 }
 
+/* Paper is white: printing (reports, bills, Save as PDF) always uses the day colors, even in
+   night mode, so nothing prints as a dark page or light text on dark. */
+@media print{
+  [data-theme='dark']{
+    --bg:255,255,255;
+    --bg2:255,255,255;
+    --text:10,20,35;
+    --muted:60,75,95;
+    --card:255,255,255;
+    --border:226,232,240;
+    --shadow:none;
+    --glass:255,255,255;
+    color-scheme: light;
+  }
+  html, body{ background:#fff !important; color:#000 !important; }
+  [data-theme='dark'] .surface,
+  [data-theme='dark'] .glass{ background:#fff !important; border-color:#ccc !important; box-shadow:none !important; }
+}
+
 /* Glass panels are theme-controlled via CSS variables */
 .glass{
   background: rgba(var(--glass), 0.78);

@@ -5,6 +5,7 @@ import { Button } from '../ui/Button'
 import { formatSlotRange, type SlotHours } from '../../utils/slotHours'
 import { reservationStatusLabel } from '../../utils/reservationStatus'
 import { ReservationIdTag } from './ReservationIdTag'
+import { bookingRoles } from '../../utils/bookingRoles'
 
 export type ReservationDetails = {
   id?: string
@@ -111,9 +112,9 @@ export function ReservationDetailsDialog({
           </section>
 
           <section>
-            <div className="text-xs uppercase tracking-widest text-muted">Team</div>
+            <div className="text-xs uppercase tracking-widest text-muted">{bookingRoles(reservation.sessionType).group}</div>
             <ul className="mt-2 space-y-1 text-sm">
-              <li><span className="font-semibold">{captainName}</span> <span className="text-xs text-muted">· Captain</span></li>
+              <li><span className="font-semibold">{captainName}</span> <span className="text-xs text-muted">· {bookingRoles(reservation.sessionType).booker}</span></li>
               {(reservation.teamMembers || []).map((member) => (
                 <li key={member.id || member.name}>{member.name || member.id}</li>
               ))}

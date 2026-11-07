@@ -31,7 +31,8 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       <AuthProvider>
         <ThemeProvider>
           <App />
-          <Toaster position="top-right" toastOptions={toastOptions} />
+          {/* Above every pop-up (the highest go up to 100002), so messages are never hidden behind one. */}
+          <Toaster position="top-right" toastOptions={toastOptions} containerStyle={{ zIndex: 200000 }} />
         </ThemeProvider>
       </AuthProvider>
     </BrowserRouter>
