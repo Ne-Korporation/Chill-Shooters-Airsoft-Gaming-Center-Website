@@ -15,6 +15,7 @@ import { RentalsPanel, StillOutPanel } from './RentalsPage'
 import { TeamCheckIn, fetchCheckInTeams, type CheckInSession, type CheckInTeam } from './FieldCheckInPage'
 import { SessionTeams } from './TeamGroupingPage'
 import { formatDateTime, formatPHP, manilaTodayISO, selectClass } from './shared'
+import { formatSlotRange, useSlotHours } from '../../utils/slotHours'
 
 type Ledger = {
   reservation: {
@@ -338,11 +339,50 @@ export function CounterPage() {
   const [view, setView] = useState<View>(fromView && VIEWS.includes(fromView) ? fromView : 'ongoing')
   const [games, setGames] = useState<GameDoc[]>([])
   const [bookings, setBookings] = useState<Map<string, BookingSummary>>(new Map())
-  const [arrivals, setArrivals] = useState<Map<string, { arrived: number; total: number }>>(new Map())
+  const [arrivals, setArrivals] = useState<Map<string, { arrived: number; total: number; label?: string }>>(new Map())
   const [loading, setLoading] = useState(true)
   const [lookup, setLookup] = useState('')
   const [stillOut, setStillOut] = useState<number | null>(null)
   const [open, setOpen] = useState<{ reservationId: string; game?: GameDoc } | null>(fromLink ? { reservationId: fromLink } : null)
+  const slotHours = useSlotHours()
+  // Every game on the "Today" tab is on today's date, so the date is shown once above the cards
+  // and each card only shows its slot and hours.
+  const todayLabel = new Date(`${manilaTodayISO()}T12:00:00Z`).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: '2-digit', year: 'numeric', timeZone: 'UTC' })
+  const slotLabel = (game: GameDoc) => {
+    const slot = String(game.Schedule || '').split('•')[1]?.trim().toLowerCase() || ''
+    if (!slot) return formatSchedule(game)
+    const range = formatSlotRange(slotHours, slot)
+    const name = `${slot.charAt(0).toUpperCase()}${slot.slice(1)}`
+    return range ? `${name} · ${range}` : name
+  }
+
+  // Bookings in the same session (date + slot + field) share one header, so the schedule and
+  // field aren't repeated on every card. Games come sorted by schedule, so order is kept.
+  const sessionGroups = React.useMemo(() => {
+    const groups = new Map<string, { key: string; type: string; games: GameDoc[] }>()
+    for (const game of games) {
+      const key = `${game.Schedule || ''}|${game.LocationId || game.Location || ''}`
+      const group = groups.get(key) || { key, type: '', games: [] }
+      group.games.push(game)
+      groups.set(key, group)
+    }
+    for (const group of groups.values()) {
+      const types = new Set(group.games.map((g) => String(g.Group || '').trim().toLowerCase()).filter((t) => t === 'public' || t === 'private'))
+      group.type = types.size === 1 ? [...types][0] : ''
+    }
+    return [...groups.values()]
+  }, [games])
+
+  // The card title names the booking (team or captain); "public"/"private" is the game type, shown on the session header.
+  const gameTitle = (game: GameDoc) => {
+    const booking = bookings.get(String(game.reservationId || ''))
+    const label = arrivals.get(String(game.reservationId || ''))?.label
+    if (label) return label
+    if (booking?.walkIn) return `Walk-in: ${booking.walkInName || 'Guest'}`
+    const group = String(game.Group || '').trim()
+    if (group && !/^(public|private)$/i.test(group)) return group
+    return booking?.packageName || game.Package || 'Booking'
+  }
 
   const load = useCallback(async (silent = false) => {
     if (view === 'out') return
@@ -368,7 +408,7 @@ export function CounterPage() {
       setBookings(new Map((bRes?.data || []).map((b) => [String(b.id), b])))
       setArrivals(new Map(sessionTeams.flat().map((team) => [
         team.reservationId,
-        { arrived: team.players.filter((p) => p.checkedIn).length, total: team.players.length },
+        { arrived: team.players.filter((p) => p.checkedIn).length, total: team.players.length, label: team.label },
       ])))
     } catch (e: any) {
       if (!silent) toast.error(e?.message || 'Could not load games')
@@ -444,8 +484,18 @@ export function CounterPage() {
           {view === 'ongoing' ? "No games are in progress. Games appear here once they're started." : 'No games are scheduled for today.'}
         </Card>
       ) : (
+        <>
+        {view === 'today' ? <div className="text-sm font-semibold text-muted">{todayLabel}</div> : null}
+        {sessionGroups.map((group) => (
+        <section key={group.key} className="space-y-2">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+            <span className="flex items-center gap-1 font-bold"><FiClock /> {view === 'today' ? slotLabel(group.games[0]) : formatSchedule(group.games[0])}</span>
+            <span className="flex items-center gap-1 text-muted"><FiMapPin /> {locationName(group.games[0])}</span>
+            {group.type ? <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted">{group.type} game</span> : null}
+            <span className="text-xs text-muted">{group.games.length} booking{group.games.length === 1 ? '' : 's'}</span>
+          </div>
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {games.map((game) => {
+          {group.games.map((game) => {
             const booking = bookings.get(String(game.reservationId || ''))
             const ongoing = /^ongo/i.test(String(game.Status || ''))
             const arrival = arrivals.get(String(game.reservationId || ''))
@@ -459,7 +509,7 @@ export function CounterPage() {
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <div className="truncate font-bold">{booking?.walkIn ? `Walk-in: ${booking.walkInName}` : game.Group || booking?.packageName || game.Package || 'Game'}</div>
+                    <div className="truncate font-bold">{gameTitle(game)}</div>
                     <div className="text-[11px] text-muted">{game.id} · {game.reservationId}</div>
                   </div>
                   <span className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${ongoing ? 'border-success/30 bg-success/15 text-success' : 'border-accent/30 bg-accent/15 text-accent'}`}>
@@ -467,8 +517,7 @@ export function CounterPage() {
                   </span>
                 </div>
                 <div className="mt-3 space-y-1 text-xs text-muted">
-                  <div className="flex items-center gap-1"><FiClock /> {formatSchedule(game)}</div>
-                  <div className="flex items-center gap-1"><FiMapPin /> {locationName(game)}</div>
+                  {booking?.packageName || game.Package ? <div className="flex items-center gap-1 truncate"><FiTarget /> {booking?.packageName || game.Package}</div> : null}
                   {arrival ? (
                     <div className={`flex items-center gap-1 ${arrival.total > 0 && arrival.arrived === arrival.total ? 'font-semibold text-success' : ''}`}>
                       <FiUsers /> {arrival.arrived} of {arrival.total} checked in
@@ -479,6 +528,9 @@ export function CounterPage() {
             )
           })}
         </div>
+        </section>
+        ))}
+        </>
       )}
 
       {open ? <GameDialog key={open.reservationId} reservationId={open.reservationId} game={open.game} canTakePayment={canTakePayment} canGroupTeams={canGroupTeams} onClose={close} /> : null}

@@ -7,6 +7,7 @@ import { PaymentCompletePanel } from '../../components/dashboard/PaymentComplete
 import { ActionRow, ActivityList, DashboardHeader, Panel, StatTile, type ActivityTone } from '../../components/dashboard/DashboardParts'
 import { apiGet } from '../../utils/apiClient'
 import { equipmentAlerts } from '../../utils/inventoryModels'
+import { WeatherAdvisoryWidget } from '../../components/dashboard/WeatherAdvisoryWidget'
 
 
 type ActivityItem = {
@@ -188,6 +189,7 @@ export function AdminDashboardPage() {
         </div>
 
         <aside className="space-y-3">
+          <WeatherAdvisoryWidget />
           <div className="grid grid-cols-3 gap-2">
             <StatTile compact label="Bookings" value={dashboard.reservations} hint="All" loading={loading} />
             <StatTile compact label="Players" value={dashboard.players} hint="Accounts" loading={loading} />

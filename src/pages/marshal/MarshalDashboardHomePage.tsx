@@ -8,6 +8,7 @@ import { ActionRow, DashboardHeader, Panel, StatTile } from '../../components/da
 import { apiGet } from '../../utils/apiClient'
 import { FiCheckCircle, FiTool, FiZap } from 'react-icons/fi'
 import { GiAk47 } from 'react-icons/gi'
+import { WeatherAdvisoryWidget } from '../../components/dashboard/WeatherAdvisoryWidget'
 
 type DashboardState = {
   activeGames: number
@@ -134,6 +135,7 @@ export function MarshalDashboardHomePage() {
         </div>
 
         <aside className="space-y-3">
+          <WeatherAdvisoryWidget />
           <DashboardPostsPanel
             title="Announcements"
             subtitle="Updates and reminders from the admin team."

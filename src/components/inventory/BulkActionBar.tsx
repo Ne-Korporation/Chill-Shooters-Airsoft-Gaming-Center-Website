@@ -42,12 +42,13 @@ export function InventoryToolbar({
   selecting: boolean
   selectedCount: number
   allSelected: boolean
-  addLabel: string
+  addLabel?: string
   onStartSelecting: () => void
   onToggleAll: () => void
   onCancel: () => void
   onUpdate: () => void
-  onAdd: () => void
+  // Leave out to place the add button elsewhere on the page.
+  onAdd?: () => void
 }) {
   return (
     <div className="flex flex-wrap items-center justify-end gap-2">
@@ -68,9 +69,11 @@ export function InventoryToolbar({
           <FiCheckSquare /> Select items
         </Button>
       )}
-      <Button size="sm" onClick={onAdd}>
-        <FiPlus /> {addLabel}
-      </Button>
+      {onAdd ? (
+        <Button size="sm" onClick={onAdd}>
+          <FiPlus /> {addLabel}
+        </Button>
+      ) : null}
     </div>
   )
 }

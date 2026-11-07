@@ -171,6 +171,8 @@ function WeaponInventory() {
         .some((value) => String(value || '').toLowerCase().includes(term))
       return matchCategory && matchStatus && matchSource && matchSearch
     })
+      // Ascending by ID; numbers inside IDs compare by value (W-2 before W-10).
+      .sort((a, b) => String(a.id || '').localeCompare(String(b.id || ''), undefined, { numeric: true, sensitivity: 'base' }))
   }, [weapons, category, status, sourceFilter, search, ownerNames])
   const { page, setPage, pageCount, pageItems, total } = usePagination(filtered, undefined, `${category}|${status}|${sourceFilter}|${search}`)
 
@@ -451,15 +453,15 @@ function WeaponInventory() {
       <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
         <Card className="rounded-xl px-3 py-2 md:px-3 md:py-2">
           <div className="truncate text-[10px] uppercase tracking-wider text-muted">Weapons in catalog</div>
-          <div className="mt-0.5 text-base font-bold text-accent">{weapons.length}</div>
+          <div className="mt-0.5 text-base font-bold text-success">{weapons.length}</div>
         </Card>
         <Card className="rounded-xl px-3 py-2 md:px-3 md:py-2">
           <div className="truncate text-[10px] uppercase tracking-wider text-muted">Currently rented</div>
-          <div className="mt-0.5 text-base font-bold text-danger">{weapons.filter((weapon) => weapon.status === 'rented').length}</div>
+          <div className="mt-0.5 text-base font-bold text-warning">{weapons.filter((weapon) => weapon.status === 'rented').length}</div>
         </Card>
         <Card className="rounded-xl px-3 py-2 md:px-3 md:py-2">
           <div className="truncate text-[10px] uppercase tracking-wider text-muted">Needs check</div>
-          <div className="mt-0.5 text-base font-bold text-success">{maintenanceCount}</div>
+          <div className="mt-0.5 text-base font-bold text-danger">{maintenanceCount}</div>
         </Card>
       </div>
 
@@ -473,17 +475,9 @@ function WeaponInventory() {
             { value: 'player', label: "Players' weapons", ...(pendingPlayerWeaponsCount > 0 ? { count: pendingPlayerWeaponsCount } : {}) },
           ]}
         />
-        <InventoryToolbar
-          selecting={selecting}
-          selectedCount={selectedIds.length}
-          allSelected={allFilteredSelected}
-          addLabel="Add weapon"
-          onStartSelecting={() => setSelecting(true)}
-          onToggleAll={toggleAll}
-          onCancel={stopSelecting}
-          onUpdate={() => setBulkOpen(true)}
-          onAdd={openAddForm}
-        />
+        <Button size="sm" onClick={openAddForm}>
+          <FiPlus /> Add weapon
+        </Button>
       </div>
 
       <Card className="p-4">
@@ -492,8 +486,45 @@ function WeaponInventory() {
             <div className="text-xs uppercase tracking-widest text-muted">{category === 'all' ? 'All categories' : categoryLabel(category).toUpperCase()}</div>
             <div className="mt-2 text-sm text-muted">{activeCategoryMeta?.subtitle || 'All weapon categories'}</div>
           </div>
+        </div>
 
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+        {sourceFilter === 'player' && pendingPlayerWeaponsCount > 0 ? (
+          <div className="mt-4 rounded-2xl border border-accent/20 bg-accent/10 p-4">
+            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+              <div>
+                <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-accent">Pending player submissions</div>
+                <div className="mt-1 text-sm text-text">These weapons are waiting for your approval before they are treated as active inventory.</div>
+              </div>
+              <div className="rounded-full border border-accent/20 bg-background/50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-accent">
+                {pendingPlayerWeaponsCount} awaiting review
+              </div>
+            </div>
+            <div className="mt-3 grid gap-2 md:grid-cols-2">
+              {pendingPlayerWeapons.map((weapon) => (
+                <div key={weapon.id} className="rounded-xl border border-white/10 bg-background/50 p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-sm font-semibold">{weapon.name}</div>
+                    <ActionGroup>
+                      <Button size="xs" variant="success-soft" onClick={(event) => { event.stopPropagation(); openApproveDialog(weapon) }}>
+                        <FiCheck /> Approve
+                      </Button>
+                      <Button size="xs" variant="danger-soft" onClick={(event) => { event.stopPropagation(); openRejectDialog(weapon.id) }}>
+                        <FiX /> Reject
+                      </Button>
+                    </ActionGroup>
+                  </div>
+                  <div className="mt-1 text-xs text-muted">{weapon.description || weapon.note}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {sourceFilter === 'business' ? <ModelSummaryStrip models={models} unit="piece" /> : null}
+
+        {/* Filters and the select/update/add toolbar sit right above the list they act on, after the model summary. */}
+        <div className="mt-4 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
             <div>
               <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-muted">Search</div>
               <input
@@ -533,41 +564,16 @@ function WeaponInventory() {
               </select>
             </div>
           </div>
+          <InventoryToolbar
+            selecting={selecting}
+            selectedCount={selectedIds.length}
+            allSelected={allFilteredSelected}
+            onStartSelecting={() => setSelecting(true)}
+            onToggleAll={toggleAll}
+            onCancel={stopSelecting}
+            onUpdate={() => setBulkOpen(true)}
+          />
         </div>
-
-        {sourceFilter === 'player' && pendingPlayerWeaponsCount > 0 ? (
-          <div className="mt-4 rounded-2xl border border-accent/20 bg-accent/10 p-4">
-            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-              <div>
-                <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-accent">Pending player submissions</div>
-                <div className="mt-1 text-sm text-text">These weapons are waiting for your approval before they are treated as active inventory.</div>
-              </div>
-              <div className="rounded-full border border-accent/20 bg-background/50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-accent">
-                {pendingPlayerWeaponsCount} awaiting review
-              </div>
-            </div>
-            <div className="mt-3 grid gap-2 md:grid-cols-2">
-              {pendingPlayerWeapons.map((weapon) => (
-                <div key={weapon.id} className="rounded-xl border border-white/10 bg-background/50 p-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="text-sm font-semibold">{weapon.name}</div>
-                    <ActionGroup>
-                      <Button size="xs" variant="success-soft" onClick={(event) => { event.stopPropagation(); openApproveDialog(weapon) }}>
-                        <FiCheck /> Approve
-                      </Button>
-                      <Button size="xs" variant="danger-soft" onClick={(event) => { event.stopPropagation(); openRejectDialog(weapon.id) }}>
-                        <FiX /> Reject
-                      </Button>
-                    </ActionGroup>
-                  </div>
-                  <div className="mt-1 text-xs text-muted">{weapon.description || weapon.note}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : null}
-
-        {sourceFilter === 'business' ? <ModelSummaryStrip models={models} unit="piece" /> : null}
 
         {bulkOpen ? (
           <BulkUpdateModal
@@ -916,17 +922,19 @@ function WeaponInventory() {
 }
 
 
-type WeaponsView = 'inventory' | 'fps' | 'damage' | 'repairs'
-const WEAPON_VIEWS: WeaponsView[] = ['inventory', 'fps', 'damage', 'repairs']
+type WeaponsView = 'inventory' | 'fps' | 'repairs'
+const WEAPON_VIEWS: WeaponsView[] = ['inventory', 'fps', 'repairs']
 
-// Weapons: the catalog and maintenance queue, plus the safety records kept on the weapons
-// (chronograph checks and damage reports with penalty billing, once the Safety Logs page) and the
-// gunsmith repair log (once the Repairs page).
-// ?view=fps|damage|repairs opens a tab directly.
+// Weapons: the catalog and maintenance queue, the FPS safety log (chronograph checks), and
+// "Damage & repairs": damage/loss reports and the gunsmith repair log together, since a report
+// sends the item to maintenance and its repair cost is what gets billed.
+// ?view=fps|repairs opens a tab directly (the old ?view=damage opens Damage & repairs).
 export function AdminWeaponsPage() {
   const [searchParams, setSearchParams] = useSearchParams()
-  const fromLink = searchParams.get('view') as WeaponsView | null
+  const linked = searchParams.get('view')
+  const fromLink = (linked === 'damage' ? 'repairs' : linked) as WeaponsView | null
   const [view, setView] = React.useState<WeaponsView>(fromLink && WEAPON_VIEWS.includes(fromLink) ? fromLink : 'inventory')
+  const [repairsVersion, setRepairsVersion] = React.useState(0)
 
   const changeView = (next: WeaponsView) => {
     setView(next)
@@ -949,11 +957,30 @@ export function AdminWeaponsPage() {
         options={[
           { value: 'inventory', label: 'Inventory' },
           { value: 'fps', label: <><FiCrosshair /> FPS safety log</> },
-          { value: 'damage', label: <><FiAlertTriangle /> Damage reports</> },
-          { value: 'repairs', label: <><FiTool /> Repairs</> },
+          { value: 'repairs', label: <><FiTool /> Damage &amp; repairs</> },
         ]}
       />
-      {view === 'inventory' ? <WeaponInventory /> : view === 'repairs' ? <RepairsPage embedded /> : <SafetyLogPage embedded tab={view} />}
+      {view === 'inventory' ? (
+        <WeaponInventory />
+      ) : view === 'repairs' ? (
+        <div className="space-y-8">
+          <p className="text-sm text-muted">
+            File a damage report when an item comes back broken: its repair opens below automatically. When the gunsmith is done,
+            mark it repaired and the cost is billed to the player's booking. Lost items get a loss report only.
+          </p>
+          <section className="space-y-3">
+            <h2 className="flex items-center gap-2 text-lg font-bold"><FiAlertTriangle /> Damage &amp; loss reports</h2>
+            <SafetyLogPage embedded tab="damage" onRepairOpened={() => setRepairsVersion((v) => v + 1)} />
+          </section>
+          <section className="space-y-3 border-t border-white/10 pt-6">
+            <h2 className="flex items-center gap-2 text-lg font-bold"><FiTool /> Repairs</h2>
+            {/* Remounted when a damage report opens a repair, so the new one shows up. */}
+            <RepairsPage key={repairsVersion} embedded />
+          </section>
+        </div>
+      ) : (
+        <SafetyLogPage embedded tab="fps" />
+      )}
     </div>
   )
 }

@@ -242,14 +242,40 @@ router.post('/damage-reports', requireAuth, requireRole('admin', 'marshal'), asy
     }
     await db.collection('damage_reports').insertOne(doc)
 
+    // A damaged inventory item goes straight to the repair log, linked to this report, so staff
+    // don't enter it twice. Completing that repair bills the linked booking and settles the report.
+    let repair = null
+    if (item && kind === 'damage' && body.openRepair !== false) {
+      repair = {
+        id: await nextShortId(db, 'repairs', 'RPR'),
+        itemCollection: collection,
+        itemId: String(item.id || item._id),
+        itemName: item.name || String(item.id || item._id),
+        itemCategory: item.category || '',
+        damage: description,
+        gunsmith: '',
+        damageReportId: doc.id,
+        playerInduced: Boolean(reservation),
+        reservationId: doc.reservationId,
+        playerId: doc.playerId,
+        status: 'in_progress',
+        openedAtISO: nowISO,
+        openedBy: actorOf(req),
+      }
+      await db.collection('repairs').insertOne(repair)
+      await db.collection('damage_reports').updateOne({ _id: doc._id }, { $set: { repairId: repair.id } })
+      doc.repairId = repair.id
+    }
+
     if (item && body.sendToMaintenance !== false) {
+      const reason = kind === 'loss' ? `Reported lost (${doc.id})` : repair ? `Under repair (${repair.id})` : `Damage report ${doc.id}`
       await db.collection(collection).updateOne(
         { _id: item._id },
-        { $set: { status: MAINTENANCE_STATUS[collection], maintenanceReason: kind === 'loss' ? `Reported lost (${doc.id})` : `Damage report ${doc.id}`, updatedAtISO: nowISO } },
+        { $set: { status: MAINTENANCE_STATUS[collection], maintenanceReason: reason, updatedAtISO: nowISO } },
       )
     }
 
-    return res.status(201).json({ ok: true, data: doc })
+    return res.status(201).json({ ok: true, data: doc, repair })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
   }

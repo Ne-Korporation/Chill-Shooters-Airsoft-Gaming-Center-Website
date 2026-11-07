@@ -203,17 +203,18 @@ export function WalkInsPage() {
         <p className="mt-1 text-sm text-muted">Register players who arrive without a booking.</p>
       </div>
 
-      <div className={`flex items-start gap-3 rounded-2xl border p-4 text-sm ${open ? 'border-accent/30 bg-accent/10' : 'border-amber-500/30 bg-amber-500/10'}`}>
-        <FiInfo className={`mt-0.5 h-5 w-5 shrink-0 ${open ? 'text-accent' : 'text-amber-600 dark:text-amber-400'}`} />
-        <div>
-          <div className="font-semibold">This is only for public games.</div>
-          <div className="mt-1 text-xs text-muted">
-            {open
-              ? "Walk-ins join today's public game (weekends). Private games are booked online."
-              : 'Public games run on weekends only, so walk-ins open again on Saturday. Today is a private-booking day.'}
+      {/* Only needed on private-booking days, to explain why the form is closed. */}
+      {!open ? (
+        <div className="flex items-start gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm">
+          <FiInfo className="mt-0.5 h-5 w-5 shrink-0 text-amber-600 dark:text-amber-400" />
+          <div>
+            <div className="font-semibold">Walk-ins are for public games only.</div>
+            <div className="mt-1 text-xs text-muted">
+              Public games run on weekends only, so walk-ins open again on Saturday. Today is a private-booking day.
+            </div>
           </div>
         </div>
-      </div>
+      ) : null}
 
       <div className="max-w-2xl">
         <WalkInForm

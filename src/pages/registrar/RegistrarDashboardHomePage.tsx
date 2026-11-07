@@ -7,6 +7,7 @@ import { useAuth } from '../../context/AuthContext'
 import { ActionRow, DashboardHeader, Panel, StatTile } from '../../components/dashboard/DashboardParts'
 import { FiCalendar, FiShield, FiShoppingBag, FiCreditCard, FiZap } from 'react-icons/fi'
 import { apiGet } from '../../utils/apiClient'
+import { WeatherAdvisoryWidget } from '../../components/dashboard/WeatherAdvisoryWidget'
 
 export function RegistrarDashboardHomePage() {
   const [pendingReservations, setPendingReservations] = useState(0)
@@ -73,6 +74,7 @@ export function RegistrarDashboardHomePage() {
         </div>
 
         <aside className="space-y-3">
+          <WeatherAdvisoryWidget />
           <DashboardPostsPanel
             title="Announcements"
             subtitle="Updates and reminders from the admin team."

@@ -48,6 +48,8 @@ type DamageReport = {
   reviewNote?: string
   reportedAtISO: string
   reportedBy?: Actor
+  // Repair opened automatically when the report was filed
+  repairId?: string
 }
 
 type InventoryItem = { id: string; name: string }
@@ -72,7 +74,8 @@ function toItems(docs: any[]): InventoryItem[] {
 
 // Chronograph checks and damage reports. Shown on the Weapons page (`embedded`), which supplies
 // the title and picks the tab.
-export function SafetyLogPage({ embedded = false, tab: tabFromPage }: { embedded?: boolean; tab?: 'fps' | 'damage' } = {}) {
+// `onRepairOpened`: filing a damage report opens its repair automatically; the page refreshes its repair list.
+export function SafetyLogPage({ embedded = false, tab: tabFromPage, onRepairOpened }: { embedded?: boolean; tab?: 'fps' | 'damage'; onRepairOpened?: () => void } = {}) {
   const { user } = useAuth()
   const isAdmin = user?.role === 'admin'
   const [ownTab, setTab] = useState<'fps' | 'damage'>('fps')
@@ -174,10 +177,17 @@ export function SafetyLogPage({ embedded = false, tab: tabFromPage }: { embedded
     event.preventDefault()
     setSaving(true)
     try {
-      await apiPost('/api/damage-reports', damageForm)
-      toast.success(damageForm.kind === 'loss' ? 'Loss report filed. The item was taken out of rental.' : 'Damage report filed. The item was moved to maintenance.')
+      const res = await apiPost<{ ok: boolean; data: DamageReport; repair?: { id: string } | null }>('/api/damage-reports', damageForm)
+      toast.success(
+        damageForm.kind === 'loss'
+          ? 'Loss report filed. The item was taken out of rental.'
+          : res.repair
+            ? `Damage report filed and repair ${res.repair.id} opened. Mark it repaired once the gunsmith is done.`
+            : 'Damage report filed. The item was moved to maintenance.',
+      )
       setDamageForm({ kind: damageForm.kind, itemType: damageForm.itemType, itemId: '', itemName: '', reservationId: '', playerName: '', description: '' })
       await load()
+      if (res.repair) onRepairOpened?.()
     } catch (err: any) {
       toast.error(err?.message || 'Unable to file report')
     } finally {
@@ -428,6 +438,7 @@ export function SafetyLogPage({ embedded = false, tab: tabFromPage }: { embedded
                       <div className="mt-0.5 text-xs text-muted">
                         {report.id} · {formatDateTime(report.reportedAtISO)} · {report.reservationId || 'no reservation'}
                         {report.playerName ? ` · ${report.playerName}` : ''}
+                        {report.repairId ? <> · <span className="font-semibold text-accent">Repair {report.repairId}</span></> : null}
                       </div>
                       <div className="mt-1 text-sm text-muted">{report.description}</div>
                       {report.reviewNote ? <div className="mt-1 text-xs text-muted">Review: {report.reviewNote}</div> : null}

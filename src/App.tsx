@@ -37,7 +37,6 @@ import { AdminPartnershipsPage } from './pages/admin/AdminPartnershipsPage'
 import { AdminFeedbackPage } from './pages/admin/AdminFeedbackPage'
 import { AdminReachFundPage } from './pages/admin/AdminReachFundPage'
 import { AdminAnnouncementsPage } from './pages/admin/AdminAnnouncementsPage'
-import { AdminWeatherPage } from './pages/admin/AdminWeatherPage'
 import { GuardianApprovalPage } from './pages/guardian/GuardianApprovalPage'
 import { GuardianConfirmPage } from './pages/guardian/GuardianConfirmPage'
 import { CounterPage } from './pages/operations/CounterPage'
@@ -235,7 +234,7 @@ export default function App() {
         <Route path="rentals" element={<Navigate to="/app/counter?view=out" replace />} />
         {/* Repairs now live on the Weapons page (Repairs tab). */}
         <Route path="repairs" element={<Navigate to="/app/admin/weapons?view=repairs" replace />} />
-        <Route path="weather" element={<RequireRole roles={['registrar', 'marshal', 'admin']}><AdminWeatherPage /></RequireRole>} />
+        <Route path="weather" element={<Navigate to="/app" replace />} />
         <Route path="admin/reports" element={<AdminPageWrapper><AdminReportsPage /></AdminPageWrapper>} />
         <Route path="admin/notifications" element={<AdminPageWrapper><AdminNotificationsPage /></AdminPageWrapper>} />
         <Route path="admin/audit-logs" element={<AdminPageWrapper><AdminAuditLogsPage /></AdminPageWrapper>} />
