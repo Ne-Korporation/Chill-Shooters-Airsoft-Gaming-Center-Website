@@ -3,6 +3,7 @@ import { getDb } from '../db/mongo.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
 import { forecastForDate, isWeatherConfigured, locationCoords, sendAdvisory, sendWeatherAlerts } from '../utils/weather.js'
 import { SLOT_HOURS_ID, SLOT_ORDER, getSlotHours, validateSlotHours } from '../utils/slotHours.js'
+import { manilaDateISO } from '../utils/reminders.js'
 
 // Game slot hours, the weather forecast for staff, manual advisories to booked players,
 // and the advisory history.
@@ -58,6 +59,56 @@ router.get('/weather/forecast', requireAuth, requireRole(...STAFF), async (req, 
   if (!isWeatherConfigured()) return res.json({ ok: true, configured: false, data: [] })
   try {
     return res.json({ ok: true, configured: true, data: await forecastForDate(await getDb(), locationId, date) })
+  } catch (err) {
+    return sendError(res, err)
+  }
+})
+
+// GET /api/weather-advisories/current — every signed-in account: advisories for today and later
+// (the latest one per location, date and slot), for the dashboard weather widget. `mine` marks
+// advisories for a game the viewer is booked on. Sender and recipient details stay staff-only.
+router.get('/weather-advisories/current', requireAuth, async (req, res) => {
+  try {
+    const db = await getDb()
+    const today = manilaDateISO(0)
+    const docs = await db.collection('weather_advisories').find({ date: { $gte: today } }).sort({ createdAtISO: -1 }).limit(50).toArray()
+    const latest = new Map()
+    for (const doc of docs) {
+      const key = `${doc.locationId}|${doc.date}|${doc.slot || ''}`
+      if (!latest.has(key)) latest.set(key, doc)
+    }
+    const advisories = [...latest.values()]
+
+    const userId = String(req.user?.id || '')
+    const booked = new Set()
+    if (userId && advisories.length) {
+      const reservations = await db.collection('reservations').find(
+        { reservationDate: { $in: [...new Set(advisories.map((a) => a.date))] }, $or: [{ userId }, { 'teamMembers.id': userId }] },
+        { projection: { locationId: 1, reservationDate: 1, reservationTime: 1, reservationStatus: 1 } },
+      ).toArray()
+      for (const r of reservations) {
+        if (/cancel|reject|declin/i.test(String(r.reservationStatus || ''))) continue
+        booked.add(`${String(r.locationId || '').toLowerCase()}|${r.reservationDate}|${String(r.reservationTime || '').toLowerCase()}`)
+      }
+    }
+
+    const data = advisories
+      .map((a) => ({
+        id: a.id,
+        source: a.source,
+        locationId: a.locationId,
+        locationName: locationCoords(a.locationId)?.name || a.locationId,
+        date: a.date,
+        slot: a.slot || null,
+        title: a.title || 'Weather advisory',
+        message: a.message,
+        createdAtISO: a.createdAtISO,
+        mine: a.slot
+          ? booked.has(`${a.locationId}|${a.date}|${a.slot}`)
+          : [...booked].some((key) => key.startsWith(`${a.locationId}|${a.date}|`)),
+      }))
+      .sort((a, b) => a.date.localeCompare(b.date) || SLOT_ORDER.indexOf(a.slot || '') - SLOT_ORDER.indexOf(b.slot || ''))
+    return res.json({ ok: true, data })
   } catch (err) {
     return sendError(res, err)
   }

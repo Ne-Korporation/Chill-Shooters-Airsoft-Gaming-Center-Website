@@ -670,13 +670,38 @@ async function reportRentalProblem(db, rental, condition, note, req) {
     reportedAtISO: nowISO,
     reportedBy: actorOf(req),
   }
+  // A damaged return goes straight to the repair log, linked to the report and the booking, so
+  // staff don't enter it again; completing the repair bills the booking and settles the report.
+  let repair = null
+  if (condition !== 'missing' && rental.itemId) {
+    repair = {
+      id: await nextShortId(db, 'repairs', 'RPR'),
+      itemCollection: rental.itemCollection,
+      itemId: String(rental.itemId),
+      itemName: report.itemName,
+      itemCategory: '',
+      damage: report.description,
+      gunsmith: '',
+      damageReportId: report.id,
+      playerInduced: Boolean(rental.reservationId),
+      reservationId: rental.reservationId || '',
+      playerId: report.playerId,
+      status: 'in_progress',
+      openedAtISO: nowISO,
+      openedBy: actorOf(req),
+    }
+    report.repairId = repair.id
+  }
   await db.collection('damage_reports').insertOne(report)
+  if (repair) await db.collection('repairs').insertOne(repair)
   await db.collection(rental.itemCollection).updateOne(
     idFilter(rental.itemId),
     {
       $set: {
         status: MAINTENANCE_STATUS[rental.itemCollection],
-        maintenanceReason: `${condition === 'missing' ? 'Missing' : 'Damaged'} after rental ${rental.id} (${report.id})`,
+        maintenanceReason: repair
+          ? `Under repair (${repair.id}) after rental ${rental.id}`
+          : `${condition === 'missing' ? 'Missing' : 'Damaged'} after rental ${rental.id} (${report.id})`,
         updatedAtISO: nowISO,
       },
     },

@@ -1019,6 +1019,57 @@ export function ReservationCalendarPage() {
     [packages, selectedPackageId, cheapestPackage],
   )
 
+  // Package recommendation: the player enters a budget, the group size is the headcount from
+  // step 1. Packages that fit the group and the budget are listed first, cheapest first.
+  const [budgetInput, setBudgetInput] = useState<string>(() => (typeof draftState.budgetInput === 'string' ? draftState.budgetInput : ''))
+  const budget = useMemo(() => {
+    const value = Math.round(Number(budgetInput))
+    return budgetInput.trim() !== '' && Number.isFinite(value) && value > 0 ? value : null
+  }, [budgetInput])
+
+  const rankedPackages = useMemo(() => {
+    const rows = packages.map((pkg, index) => {
+      const price = calculatePackagePricing({
+        pkg,
+        players,
+        sessionMultiplier: 1,
+        weapons,
+        equipment,
+        entranceFeePerPlayer: ENTRANCE_FEE_PER_PLAYER,
+        ownWeapons: verifiedOwnWeaponCount,
+      })
+      // A group package (set price for N players) only fits exactly N players.
+      const groupSize = packageNotForGroup(pkg, players)
+      const fitsGroup = groupSize === null && players >= pkg.minPlayers
+      const overBudgetBy = budget !== null ? Math.max(0, price.total - budget) : 0
+      return { pkg, price, groupSize, fitsGroup, overBudgetBy, recommended: budget !== null && fitsGroup && overBudgetBy === 0, index }
+    })
+    if (budget === null) return rows
+    return [...rows].sort((a, b) => {
+      const rank = (row: typeof a) => (row.recommended ? 0 : row.fitsGroup ? 1 : 2)
+      return rank(a) - rank(b) || (rank(a) < 2 ? a.price.total - b.price.total : a.index - b.index)
+    })
+  }, [packages, players, weapons, equipment, verifiedOwnWeaponCount, budget])
+
+  const recommendedCount = rankedPackages.filter((row) => row.recommended).length
+  // Shown when nothing fits: the cheapest package for this group and how far it is over.
+  const closestOverBudget = useMemo(() => {
+    if (budget === null || recommendedCount > 0) return null
+    return rankedPackages.filter((row) => row.fitsGroup).sort((a, b) => a.price.total - b.price.total)[0] ?? null
+  }, [budget, recommendedCount, rankedPackages])
+
+  // Entering a budget moves the pick to the cheapest package that fits it, if the current one doesn't.
+  const lastBudgetRef = useRef(budget)
+  useEffect(() => {
+    if (lastBudgetRef.current === budget) return
+    lastBudgetRef.current = budget
+    if (budget === null || selectionMode !== 'package') return
+    const current = rankedPackages.find((row) => row.pkg.id === selectedPackageId)
+    if (current?.recommended) return
+    const best = rankedPackages.find((row) => row.recommended)
+    if (best) setSelectedPackageId(best.pkg.id)
+  }, [budget, rankedPackages, selectedPackageId, selectionMode])
+
   const isWd = useMemo(() => isWeekday(dateISO), [dateISO])
 
   // ---------------------------------------------------------------------
@@ -1544,14 +1595,14 @@ export function ReservationCalendarPage() {
         step, selectedLocation, selectedFieldIds, dateISO, slot, selectedSlots, fullDay, players, notes, teamName, gameModePreference,
         layoutRequest, layoutBlueprintUrl, selectedPackageId, selectionMode, customWeaponIds, customEquipmentIds,
         ownWeapons, ownEquipment, selectedOwnWeaponIds, selectedOwnEquipmentIds, ownWeaponTarget, teammateOwnWeaponIds,
-        selectedTeammates, paymentMode, paymentPlan, extraAmmoReloads, fieldLayoutItems,
+        selectedTeammates, paymentMode, paymentPlan, extraAmmoReloads, fieldLayoutItems, budgetInput,
       },
     })
   }, [
     user?.id, step, draftLabel, selectedLocation, selectedFieldIds, dateISO, slot, selectedSlots, fullDay, players, notes, teamName,
     gameModePreference, layoutRequest, layoutBlueprintUrl, selectedPackageId, selectionMode, customWeaponIds,
     customEquipmentIds, ownWeapons, ownEquipment, selectedOwnWeaponIds, selectedOwnEquipmentIds, ownWeaponTarget,
-    teammateOwnWeaponIds, selectedTeammates, paymentMode, paymentPlan, extraAmmoReloads, fieldLayoutItems,
+    teammateOwnWeaponIds, selectedTeammates, paymentMode, paymentPlan, extraAmmoReloads, fieldLayoutItems, budgetInput,
   ])
 
   // Coming back to a draft: hold the slot again (it may have been taken in the meantime).
@@ -2682,7 +2733,41 @@ export function ReservationCalendarPage() {
                   <div className="flex items-center gap-2 text-sm font-bold">
                     <FiTag /> <span>Available Packages</span>
                   </div>
-                  <p className="mt-1 text-xs text-muted">Select a rental package. These are managed by the admin.</p>
+                  <p className="mt-1 text-xs text-muted">Select a rental package, or enter your budget and we will show the packages that match your group and fit it.</p>
+
+                  {packages.length > 0 ? (
+                    <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-3">
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <label className="block">
+                          <div className="text-[11px] font-bold uppercase tracking-[0.12em] text-muted">Budget (₱, optional)</div>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            placeholder="e.g. 5000"
+                            value={budgetInput}
+                            onChange={(event) => setBudgetInput(event.target.value.replace(/[^\d]/g, '').slice(0, 9))}
+                            className="mt-1.5 w-full rounded-xl border border-white/10 bg-black/20 px-3 py-2.5 text-sm text-text"
+                          />
+                        </label>
+                        <div>
+                          <div className="text-[11px] font-bold uppercase tracking-[0.12em] text-muted">Group size</div>
+                          <div className="mt-1.5 flex items-center justify-between gap-2 rounded-xl border border-white/10 bg-black/20 px-3 py-2">
+                            <span className="flex items-center gap-2 text-sm font-semibold"><FiUsers className="text-gold" /> {players} player{players === 1 ? '' : 's'}</span>
+                            <Button size="xs" variant="ghost" onClick={() => setStep(1)}>Change</Button>
+                          </div>
+                        </div>
+                      </div>
+                      {budget !== null ? (
+                        <div className={['mt-3 text-xs', recommendedCount > 0 ? 'text-success' : 'text-warning'].join(' ')}>
+                          {recommendedCount > 0
+                            ? `${recommendedCount} package${recommendedCount === 1 ? '' : 's'} fit${recommendedCount === 1 ? 's' : ''} ${formatCurrency(budget)} for ${players} player${players === 1 ? '' : 's'}, cheapest first.`
+                            : closestOverBudget
+                              ? `No package fits ${formatCurrency(budget)} for ${players} player${players === 1 ? '' : 's'}. The closest is "${closestOverBudget.pkg.name}" at ${formatCurrency(closestOverBudget.price.total)} (${formatCurrency(closestOverBudget.overBudgetBy)} more).`
+                              : `No package matches a group of ${players}. Try changing your group size or use Custom Selection.`}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
 
                   <InlineError className="mt-4" message={loadError} />
                   {loadingPackages ? (
@@ -2691,10 +2776,8 @@ export function ReservationCalendarPage() {
                     <div className="mt-4 text-sm text-muted">No packages available yet. Ask admin to create rental packages.</div>
                   ) : (
                     <div className="mt-4 grid gap-3 lg:grid-cols-2">
-                      {packages.map((pkg) => {
+                      {rankedPackages.map(({ pkg, price, groupSize, recommended, overBudgetBy }) => {
                         const active = pkg.id === selectedPackageId
-                        // A group package (set price for N players) only fits exactly N players.
-                        const groupSize = packageNotForGroup(pkg, players)
                         return (
                           <button
                             key={pkg.id}
@@ -2705,18 +2788,10 @@ export function ReservationCalendarPage() {
                             className={[
                               'rounded-2xl border p-4 text-left transition disabled:cursor-not-allowed disabled:opacity-50',
                               active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
+                              budget !== null && !recommended && !active ? 'opacity-60' : '',
                             ].join(' ')}
                           >
                             {(() => {
-                              const price = calculatePackagePricing({
-                                pkg,
-                                players,
-                                sessionMultiplier: 1,
-                                weapons,
-                                equipment,
-                                entranceFeePerPlayer: ENTRANCE_FEE_PER_PLAYER,
-                                ownWeapons: verifiedOwnWeaponCount,
-                              })
                               const discount = resolvePackageDiscountConfig(pkg)
                               const stock = pkg.weaponIds.length > 0 ? packageWeaponStock(pkg) : null
                               const includes = [
@@ -2746,10 +2821,25 @@ export function ReservationCalendarPage() {
                                         <>
                                           <div className="text-base font-bold text-accent">{formatCurrency(price.perPlayer)}</div>
                                           <div className="text-[11px] text-muted">per player</div>
+                                          {budget !== null ? (
+                                            <div className="mt-0.5 text-[11px] text-muted">{formatCurrency(price.total)} total</div>
+                                          ) : null}
                                         </>
                                       )}
                                     </div>
                                   </div>
+
+                                  {budget !== null && groupSize === null ? (
+                                    recommended ? (
+                                      <div className="mt-2 inline-flex items-center gap-1 rounded-full border border-success/30 bg-success/10 px-2 py-0.5 text-[11px] font-semibold text-success">
+                                        <FiCheck className="h-3 w-3" /> Fits your budget · {formatCurrency(budget - price.total)} left
+                                      </div>
+                                    ) : overBudgetBy > 0 ? (
+                                      <div className="mt-2 inline-flex items-center rounded-full border border-warning/30 bg-warning/10 px-2 py-0.5 text-[11px] font-semibold text-warning">
+                                        {formatCurrency(overBudgetBy)} over budget
+                                      </div>
+                                    ) : null
+                                  ) : null}
 
                                   <div className="mt-3 text-[11px] font-bold uppercase tracking-[0.12em] text-muted">Each player gets</div>
                                   <ul className="mt-1.5 grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-text">

@@ -8,6 +8,7 @@ import { FiCalendar, FiPlus, FiShield } from 'react-icons/fi'
 import { ActivityList, DashboardHeader, Panel, StatTile, type ActivityTone } from '../../components/dashboard/DashboardParts'
 import { apiGet } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
+import { WeatherAdvisoryWidget } from '../../components/dashboard/WeatherAdvisoryWidget'
 
 
 type ActivityItem = {
@@ -283,6 +284,7 @@ export function DashboardHomePage() {
         <aside className="order-first space-y-3 lg:order-none lg:col-start-2 lg:row-start-1">
           {/* Shown only while the player owes a split payment share. */}
           <SplitShareDueCard />
+          <WeatherAdvisoryWidget />
           <div className="grid grid-cols-3 gap-2">
             <StatTile compact label="Bookings" value={dashboard.totalReservations} hint="All time" loading={loading} />
             <StatTile compact label="Upcoming" value={dashboard.upcomingReservations} hint="Confirmed" loading={loading} />
