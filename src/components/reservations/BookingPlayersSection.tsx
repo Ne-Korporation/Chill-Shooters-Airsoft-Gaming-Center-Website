@@ -5,6 +5,7 @@ import { reservationStatusLabel } from '../../utils/reservationStatus'
 import { ReservationIdTag } from './ReservationIdTag'
 import { ReservationChargesSections, type Payment, type ReservationDetails } from './ReservationDetailsDialog'
 import { formatSlotRange, useSlotHours } from '../../utils/slotHours'
+import { bookingRoles } from '../../utils/bookingRoles'
 
 type Booking = Omit<ReservationDetails, 'teamMembers'> & {
   id?: string
@@ -80,13 +81,14 @@ export function BookingPlayersSection({ reservationId, detailed = false }: { res
   const date = booking.reservationDate || booking.dateISO || ''
   const slot = String(booking.reservationTime || booking.slot || '').toLowerCase()
   const fields = (booking.fieldIds || []).map(fieldName).join(' + ')
+  const roles = bookingRoles(booking.sessionType)
   const players = booking.walkIn
     ? [{ name: booking.walkInName || 'Walk-in guest', detail: 'Walk-in' }]
     : [
-      { name: state.captain?.name || 'Captain', detail: ['Captain', state.captain?.email].filter(Boolean).join(' · ') },
+      { name: state.captain?.name || roles.booker, detail: [roles.booker, state.captain?.email].filter(Boolean).join(' · ') },
       ...(booking.teamMembers || []).map((member) => ({
-        name: member.name || member.id || 'Teammate',
-        detail: [member.isMinor ? 'Minor' : 'Teammate', member.email].filter(Boolean).join(' · '),
+        name: member.name || member.id || roles.member,
+        detail: [member.isMinor ? 'Minor' : roles.member, member.email].filter(Boolean).join(' · '),
       })),
     ]
   const guests = Math.max(0, Number(booking.numberOfPlayers || 0) - players.length)

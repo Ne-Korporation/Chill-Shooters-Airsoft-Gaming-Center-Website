@@ -5,6 +5,7 @@ import { FiCheck, FiExternalLink } from 'react-icons/fi'
 import { Panel } from './DashboardParts'
 import { Button } from '../ui/Button'
 import { apiGet, apiPut } from '../../utils/apiClient'
+import { isPrivateSession } from '../../utils/bookingRoles'
 
 type CompiledReservation = {
   reservation: {
@@ -18,6 +19,7 @@ type CompiledReservation = {
     depositAmount: number
     paymentMode: string
     captainName: string
+    sessionType?: string
     forwardedToAdminAtISO: string
   }
   payments: Array<{
@@ -94,7 +96,7 @@ export function PaymentCompletePanel({ hideWhenEmpty = false }: { hideWhenEmpty?
                     {reservation.reservationDate} · <span className="capitalize">{reservation.reservationTime}</span> · {reservation.locationName}
                   </div>
                   <div className="mt-0.5 text-xs text-muted">
-                    Captain {reservation.captainName} · {reservation.numberOfPlayers} players · {reservation.packageName} ·{' '}
+                    {isPrivateSession(reservation.sessionType) ? 'Captain' : 'Booked by'} {reservation.captainName} ·{reservation.numberOfPlayers} players · {reservation.packageName} ·{' '}
                     {reservation.paymentMode === 'split' ? 'Split payment' : 'Single payer'} · {formatPHP(reservation.depositAmount)} paid of {formatPHP(reservation.totalAmount)}
                   </div>
                 </div>

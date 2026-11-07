@@ -11,6 +11,7 @@ import { apiGetAll } from '../../utils/apiClient'
 import { reservationStatusLabel } from '../../utils/reservationStatus'
 import { useSlotHours } from '../../utils/slotHours'
 import { ReservationIdTag } from './ReservationIdTag'
+import { bookingRoles } from '../../utils/bookingRoles'
 import { ReservationDetailsDialog, type ReservationDetails } from './ReservationDetailsDialog'
 
 type ReservationDoc = {
@@ -52,7 +53,7 @@ export function statusChangeLabel(reservation: Pick<ReservationDoc, 'lastStatusC
 
 type AccountDoc = { _id?: any; id?: string; name?: string; email?: string }
 
-type Player = { name: string; email: string; role: 'Captain' | 'Teammate' | 'Walk-in' }
+type Player = { name: string; email: string; role: string }
 
 const SLOT_ORDER = ['morning', 'afternoon', 'evening']
 
@@ -128,11 +129,12 @@ export function ReservationsByDate({ embedded = false }: { embedded?: boolean } 
     if (reservation.walkIn) {
       return [{ name: reservation.walkInName || 'Walk-in guest', email: '', role: 'Walk-in' }]
     }
+    const roles = bookingRoles(reservation.sessionType)
     const captain = accountById.get(String(reservation.userId || ''))
-    const list: Player[] = [{ name: captain?.name || String(reservation.userId || 'Unknown'), email: captain?.email || '', role: 'Captain' }]
+    const list: Player[] = [{ name: captain?.name || String(reservation.userId || 'Unknown'), email: captain?.email || '', role: roles.booker }]
     for (const member of reservation.teamMembers || []) {
       const account = accountById.get(String(member.id || ''))
-      list.push({ name: account?.name || member.name || String(member.id || 'Teammate'), email: account?.email || member.email || '', role: 'Teammate' })
+      list.push({ name: account?.name || member.name || String(member.id || roles.member), email: account?.email || member.email || '', role: roles.member })
     }
     return list
   }

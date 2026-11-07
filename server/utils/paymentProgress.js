@@ -118,15 +118,7 @@ export async function autoConfirmIfVerified(db, reservationId, startSession) {
     message: `Your payment was verified and your reservation for ${reservationLabel(reservation)} is confirmed.${balance > 0 ? ` Please pay the remaining ₱${balance.toLocaleString()} at the counter on game day by cash, GCash, or bank transfer.` : ''}`,
     linkedResourceId: reservation.id,
   })
-  await notifyRole(db, {
-    role: 'admin',
-    type: 'reservation_confirmed',
-    title: 'Reservation confirmed automatically',
-    message: paidOnline
-      ? `Reservation ${reservation.id} for ${reservationLabel(reservation)} was paid online and confirmed without manual review.`
-      : `Reservation ${reservation.id} for ${reservationLabel(reservation)} was confirmed once its payments were verified.`,
-    linkedResourceId: reservation.id,
-  })
+  // Staff aren't told: an automatic confirmation needs nobody to act (it shows on Reservations).
   return 'confirmed'
 }
 
@@ -181,13 +173,16 @@ export async function syncReservationPaymentState(db, reservation) {
       { $set: { forwardedToAdminAtISO: nowISO, paymentFinalizedAtISO: nowISO } },
     )
     if (forwarded.modifiedCount === 1) {
-      await notifyRole(db, {
-        role: 'admin',
-        type: 'reservation_payment_finalized',
-        title: 'Reservation fully paid: payment needs verifying',
-        message: `All payments for ${reservationLabel(reservation)} are in. Verify them on Payments (Verification & receipts); the booking is confirmed as soon as they are.`,
-        linkedResourceId: reservation.id,
-      })
+      // Registrars handle payments, so they're told as well as admins.
+      for (const role of ['admin', 'registrar']) {
+        await notifyRole(db, {
+          role,
+          type: 'reservation_payment_finalized',
+          title: 'Reservation fully paid: payment needs verifying',
+          message: `All payments for ${reservationLabel(reservation)} are in. Verify them on Payments; the booking is confirmed as soon as they are.`,
+          linkedResourceId: reservation.id,
+        })
+      }
       const split = String(reservation.paymentMode || 'self').toLowerCase() === 'split'
       await notifyUser(db, {
         userId: reservation.userId,

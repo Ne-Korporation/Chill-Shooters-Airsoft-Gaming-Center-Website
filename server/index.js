@@ -34,7 +34,8 @@ const { default: causeDaysRouter } = await import('./routes/causeDays.js')
 const { expireOverdueReservations, sendSplitPaymentWarnings } = await import('./utils/paymentProgress.js')
 const { expireOldIdentities } = await import('./utils/identityValidity.js')
 const { sendDueReminders } = await import('./utils/reminders.js')
-const { sendWeatherAlerts } = await import('./utils/weather.js')
+const { checkAmmoStock } = await import('./utils/ammoStock.js')
+const { refreshWeatherOutlook, sendWeatherAlerts } = await import('./utils/weather.js')
 const { backfillGameplayLocations } = await import('./utils/reservationGameplay.js')
 const { parseAddress } = await import('./services/mailService.js')
 const { sendUnpaidReservationEmails } = await import('./services/notificationEmails.js')
@@ -97,16 +98,30 @@ setInterval(() => {
 // Game-day and waiver reminders; each one is sent once, so a frequent sweep is safe.
 setInterval(() => {
   getDb()
-    .then((db) => sendDueReminders(db, { force: true }))
+    .then(async (db) => {
+      await sendDueReminders(db, { force: true })
+      // BB ammo low-stock notice, also caught here after a restock or a stock edit.
+      await checkAmmoStock(db).catch((err) => console.warn('Ammo stock check failed:', String(err)))
+    })
     .catch((err) => console.warn('Reminder sweep failed:', String(err)))
 }, 30 * 60_000).unref()
+setTimeout(() => {
+  getDb().then((db) => checkAmmoStock(db)).catch((err) => console.warn('Ammo stock check failed:', String(err)))
+}, 20_000).unref()
 
-// Day-before weather check for booked games; each advisory is sent once per reservation and day.
-setInterval(() => {
+// Weather from the OpenWeather API, hourly and once shortly after start-up:
+// - the 5-day outlook every account sees on the dashboard weather widget, and
+// - the day-before advisory to booked players (sent once per reservation and day).
+function runWeatherChecks() {
   getDb()
-    .then((db) => sendWeatherAlerts(db))
+    .then(async (db) => {
+      await refreshWeatherOutlook(db).catch((err) => console.warn('Weather outlook failed:', String(err)))
+      await sendWeatherAlerts(db).catch((err) => console.warn('Weather check failed:', String(err)))
+    })
     .catch((err) => console.warn('Weather check failed:', String(err)))
-}, 60 * 60_000).unref()
+}
+setTimeout(runWeatherChecks, 15_000).unref()
+setInterval(runWeatherChecks, 60 * 60_000).unref()
 
 let transporter
 if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {

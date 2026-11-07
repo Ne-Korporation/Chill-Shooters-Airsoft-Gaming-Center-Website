@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { flushSync } from 'react-dom'
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -56,47 +55,67 @@ function tickLabel(key: string) {
 
 const peso = (value: number) => `₱${Math.round(value).toLocaleString('en-PH')}`
 
-// A canvas keeps its on-screen size when printed, so it overflows its half of the page. Before
-// printing, each chart is drawn once at a fixed size in light ink and printed as an image.
+// A canvas keeps its on-screen size when printed, so it overflows its half of the page; and a
+// picture made only when Print is pressed often isn't loaded in time, so the chart printed blank.
+// So each chart is also drawn off screen, at a fixed size in light ink on white, whenever its data
+// changes, and that picture is what prints.
 const PRINT_SIZE = { width: 560, height: 200 }
 
-function printSnapshot(chart: ChartJS<'line'>) {
-  const options = chart.options as any
-  const dataset = chart.data.datasets[0] as any
-  const saved = {
-    dpr: options.devicePixelRatio,
-    line: dataset.borderColor,
-    pointBackground: dataset.pointBackgroundColor,
-    pointBorder: dataset.pointBorderColor,
-    xTicks: options.scales.x.ticks.color,
-    xBorder: options.scales.x.border.color,
-    yTicks: options.scales.y.ticks.color,
-    yGrid: options.scales.y.grid.color,
-  }
+function printImageOf(labels: string[], values: number[], format: (value: number) => string) {
   const ink = INK.light
-  dataset.borderColor = ink.line
-  dataset.pointBackgroundColor = ink.line
-  dataset.pointBorderColor = ink.surface
-  options.scales.x.ticks.color = ink.text
-  options.scales.x.border.color = ink.grid
-  options.scales.y.ticks.color = ink.text
-  options.scales.y.grid.color = ink.grid
-  options.devicePixelRatio = 2
-  chart.resize(PRINT_SIZE.width, PRINT_SIZE.height)
-  chart.update('none')
-  const image = chart.toBase64Image('image/png', 1)
-
-  dataset.borderColor = saved.line
-  dataset.pointBackgroundColor = saved.pointBackground
-  dataset.pointBorderColor = saved.pointBorder
-  options.scales.x.ticks.color = saved.xTicks
-  options.scales.x.border.color = saved.xBorder
-  options.scales.y.ticks.color = saved.yTicks
-  options.scales.y.grid.color = saved.yGrid
-  options.devicePixelRatio = saved.dpr
-  chart.resize()
-  chart.update('none')
-  return image
+  const holder = document.createElement('div')
+  holder.style.cssText = `position:fixed;left:-10000px;top:0;width:${PRINT_SIZE.width}px;height:${PRINT_SIZE.height}px;`
+  const canvas = document.createElement('canvas')
+  canvas.width = PRINT_SIZE.width
+  canvas.height = PRINT_SIZE.height
+  holder.appendChild(canvas)
+  document.body.appendChild(holder)
+  try {
+    const chart = new ChartJS(canvas, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          data: values,
+          borderColor: ink.line,
+          borderWidth: 2,
+          cubicInterpolationMode: 'monotone',
+          pointRadius: values.length <= 31 ? 3 : 0,
+          pointBackgroundColor: ink.line,
+          pointBorderColor: ink.surface,
+          pointBorderWidth: 2,
+        }],
+      },
+      options: {
+        responsive: false,
+        animation: false,
+        devicePixelRatio: 2,
+        plugins: { legend: { display: false }, tooltip: { enabled: false } },
+        scales: {
+          x: { grid: { display: false }, border: { color: ink.grid }, ticks: { color: ink.text, font: { size: 10 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 8 } },
+          y: { beginAtZero: true, grid: { color: ink.grid }, border: { display: false }, ticks: { color: ink.text, font: { size: 10 }, maxTicksLimit: 5, precision: 0, callback: (value) => format(Number(value)) } },
+        },
+      },
+      // A white background, so the line shows on paper and in a saved PDF.
+      plugins: [{
+        id: 'whiteBackground',
+        beforeDraw: (c) => {
+          const ctx = c.ctx
+          ctx.save()
+          ctx.fillStyle = '#ffffff'
+          ctx.fillRect(0, 0, c.width, c.height)
+          ctx.restore()
+        },
+      }],
+    })
+    const image = chart.toBase64Image('image/png', 1)
+    chart.destroy()
+    return image
+  } catch {
+    return ''
+  } finally {
+    holder.remove()
+  }
 }
 
 function TrendChart({
@@ -177,29 +196,23 @@ function TrendChart({
 // the same dates (two charts rather than one with two y-axes, since ₱ and counts don't share a scale).
 export function ReportTrendCharts({ rows, start, end, byMonth }: { rows: Row[]; start: string; end: string; byMonth: boolean }) {
   const { theme } = useTheme()
-  const [printImages, setPrintImages] = useState<{ revenue?: string; reservations?: string }>({})
   const revenueRef = useRef<ChartJS<'line'> | null>(null)
   const reservationsRef = useRef<ChartJS<'line'> | null>(null)
-
-  // Swap the canvases for print-sized images while the print dialog is open.
-  useEffect(() => {
-    const before = () => {
-      const revenue = revenueRef.current ? printSnapshot(revenueRef.current) : undefined
-      const reservations = reservationsRef.current ? printSnapshot(reservationsRef.current) : undefined
-      flushSync(() => setPrintImages({ revenue, reservations }))
-    }
-    const after = () => setPrintImages({})
-    window.addEventListener('beforeprint', before)
-    window.addEventListener('afterprint', after)
-    return () => {
-      window.removeEventListener('beforeprint', before)
-      window.removeEventListener('afterprint', after)
-    }
-  }, [])
 
   const timeline = useMemo(() => fillTimeline(rows, start, end, byMonth), [rows, start, end, byMonth])
   const labels = timeline.map((row) => tickLabel(row.key))
   const ink = theme === 'light' ? INK.light : INK.dark
+
+  // The print pictures, made ahead of time (see printImageOf) so they're ready when Print is pressed.
+  const [printImages, setPrintImages] = useState<{ revenue?: string; reservations?: string }>({})
+  useEffect(() => {
+    setPrintImages({
+      revenue: printImageOf(labels, timeline.map((row) => row.collected), peso) || undefined,
+      reservations: printImageOf(labels, timeline.map((row) => row.reservations), (value) => value.toLocaleString('en-PH')) || undefined,
+    })
+    // labels follow timeline
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timeline])
 
   return (
     <div className="report-charts grid gap-2 md:grid-cols-2">

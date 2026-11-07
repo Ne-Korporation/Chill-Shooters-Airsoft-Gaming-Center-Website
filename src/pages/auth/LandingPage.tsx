@@ -9,7 +9,7 @@ import {
   FiChevronLeft,
   FiChevronRight,
   FiClock,
-  FiCreditCard,
+  FiUserCheck,
   FiMail,
   FiMapPin,
   FiMenu,
@@ -53,9 +53,9 @@ export type LandingReservationPrefill = {
 
 // maxPlayers is the most a location takes in one slot (server DEFAULT_LOCATION_CAPACITIES, morning).
 const bookingLocations: { id: LocationOption; name: string; detail: string; maxPlayers: number }[] = [
-  { id: 'salawag', name: 'Delta Stronghold (Salawag)', detail: 'About 2 hectares · up to 400 players per slot', maxPlayers: 400 },
-  { id: 'langkaan', name: 'Delta Stronghold (Langkaan)', detail: 'About 2 hectares · up to 400 players per slot', maxPlayers: 400 },
-  { id: 'binan', name: 'LOMA Binan Laguna', detail: 'About 4 hectares · up to 600 players per slot', maxPlayers: 600 },
+  { id: 'salawag', name: 'Chill Shooters (Salawag)', detail: 'About 2 hectares · up to 400 players per slot', maxPlayers: 400 },
+  { id: 'langkaan', name: 'Chill Shooters (Langkaan)', detail: 'About 2 hectares · up to 400 players per slot', maxPlayers: 400 },
+  { id: 'binan', name: 'BBC Airsoft Binan Laguna', detail: 'About 4 hectares · up to 600 players per slot', maxPlayers: 600 },
 ]
 
 // Fields are assigned from the group size, same as the booking page: 10-19 players get Upper Ground,
@@ -90,9 +90,9 @@ const bookingSlots: { id: TimeSlot; label: string }[] = [
 ]
 
 const howItWorks = [
-  { icon: FiCalendar, title: 'Pick your slot', desc: 'Choose a field, date, and time that fits your group.' },
-  { icon: FiShield, title: 'Sign the waiver', desc: 'A quick online form. Players under 18 need a guardian.' },
-  { icon: FiCreditCard, title: 'Pay online', desc: 'Pay with GCash, Maya, your bank, or a card. Confirmed automatically.' },
+  { icon: FiUserCheck, title: 'Sign up and verify your ID', desc: 'Create your account and upload a valid ID so we can verify you.' },
+  { icon: FiShield, title: 'Fill out the waiver', desc: 'A quick online form. Players under 18 need a guardian.' },
+  { icon: FiCalendar, title: 'Book your game', desc: 'Choose a field, date, and time that fits your group.' },
   { icon: FiTarget, title: 'Show up and play', desc: 'Our marshals brief your squad and get you in the game.' },
 ]
 
@@ -107,28 +107,28 @@ const navLinks = [
 // The three fields, shown as cards and on the map. mapQuery is what the embedded Google map searches for.
 const fieldLocations = [
   {
-    name: 'Delta Stronghold (Salawag)',
+    name: 'Chill Shooters (Salawag)',
     img: '/delta.png',
     size: '~2 hectares',
     capacity: 'Up to 400 players per slot',
     desc: 'Ideal for small to medium groups and tournaments.',
-    mapQuery: 'Delta Stronghold Airsoft, Salawag, Dasmariñas, Cavite',
+    mapQuery: 'Chill Shooters Airsoft, Salawag, Dasmariñas, Cavite',
   },
   {
-    name: 'Delta Stronghold (Langkaan)',
+    name: 'Chill Shooters (Langkaan)',
     img: '/langkaanPlaceholder.png',
     size: '~2 hectares',
     capacity: 'Up to 400 players per slot',
     desc: 'Ideal for small to medium groups and tournaments.',
-    mapQuery: 'Delta Stronghold Airsoft, Langkaan, Dasmariñas, Cavite',
+    mapQuery: 'Chill Shooters Airsoft, Langkaan, Dasmariñas, Cavite',
   },
   {
-    name: 'LOMA Binan Laguna',
+    name: 'BBC Airsoft Binan Laguna',
     img: '/loma.png',
     size: '~4 hectares',
     capacity: 'Up to 600 players per slot',
     desc: 'Ideal for large groups and tournaments.',
-    mapQuery: 'LOMA Airsoft, Biñan, Laguna',
+    mapQuery: 'BBC Airsoft, Biñan, Laguna',
   },
 ] as const
 

@@ -28,6 +28,7 @@ function summarize(reservation) {
     totalAmount: reservation.totalAmount,
     depositAmount: reservation.depositAmount,
     reservationStatus: reservation.reservationStatus,
+    sessionType: reservation.sessionType || 'public',
     paymentDueAtISO: reservation.paymentDueAtISO,
   }
 }

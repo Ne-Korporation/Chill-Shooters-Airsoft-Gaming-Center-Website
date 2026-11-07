@@ -1,5 +1,5 @@
 import React from 'react'
-import { FiAlertTriangle, FiCheck, FiCrosshair, FiEdit2, FiPlus, FiTool, FiTrash2, FiX } from 'react-icons/fi'
+import { FiAlertTriangle, FiCheck, FiCrosshair, FiEdit2, FiPlus, FiTool, FiTrash2 } from 'react-icons/fi'
 import { useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { ActionGroup, Button } from '../../components/ui/Button'
@@ -13,7 +13,16 @@ import { BulkUpdateModal, InventoryToolbar, SelectBox, forEachPiece, type BulkCh
 import { modelOf, summarizeModels } from '../../utils/inventoryModels'
 import { SafetyLogPage } from '../marshal/SafetyLogPage'
 import { RepairsPage } from '../operations/RepairsPage'
-import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
+import { Input } from '../../components/ui/Input'
+
+// "Today", "Yesterday" or "Nov 3" for a chronograph reading.
+function fpsWhen(iso: string) {
+  const day = (d: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(d)
+  const tested = day(new Date(iso))
+  if (tested === day(new Date())) return 'today'
+  if (tested === day(new Date(Date.now() - 86_400_000))) return 'yesterday'
+  return new Date(iso).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', timeZone: 'Asia/Manila' })
+}
 
 type WeaponCategory = 'rifles' | 'gel_blasters' | 'pistols' | 'snipers' | 'mg' | 'shotguns' | 'grenades' | 'photoshoot'
 
@@ -97,11 +106,6 @@ function WeaponInventory() {
   const [selectedWeaponId, setSelectedWeaponId] = React.useState<string | null>(null)
   // The add/edit form opens in a pop-up.
   const [formOpen, setFormOpen] = React.useState(false)
-  const [rejectionTargetId, setRejectionTargetId] = React.useState<string | null>(null)
-  const [rejectionReason, setRejectionReason] = React.useState('')
-  // Approving a player's own weapon needs a passing chronograph reading.
-  const [approvalTarget, setApprovalTarget] = React.useState<{ id: string; fpsClass: 'aeg' | 'sniper' } | null>(null)
-  const [chronoFps, setChronoFps] = React.useState('')
   const nameRef = React.useRef<HTMLInputElement | null>(null)
 
   const [partners, setPartners] = React.useState<Array<{ id: string; name: string }>>([])
@@ -134,7 +138,8 @@ function WeaponInventory() {
         createdAtISO: d.createdAtISO || null,
         submittedBy: d.submittedBy,
         source: (d.source || (d.submittedBy ? 'player' : 'business')) as 'business' | 'player',
-        approvalStatus: (d.approvalStatus || (d.source === 'player' || d.submittedBy ? 'pending' : 'approved')) as 'pending' | 'approved' | 'rejected',
+        // Player weapons need no admin approval: the marshal checks them on game day.
+        approvalStatus: (d.approvalStatus === 'rejected' ? 'rejected' : 'approved') as 'pending' | 'approved' | 'rejected',
         rejectionReason: d.rejectionReason || '',
         partnerId: d.partnerId || '',
         fpsClass: d.fpsClass || '',
@@ -150,6 +155,42 @@ function WeaponInventory() {
   }, [])
 
   React.useEffect(() => { refresh() }, [refresh])
+
+  // The latest chronograph reading per weapon, shown on its row, and the FPS check pop-up.
+  const [lastFps, setLastFps] = React.useState<Map<string, { fps: number; limit: number; result: string; testedAtISO: string }>>(new Map())
+  const loadFps = React.useCallback(() => {
+    apiGet<{ data: Array<{ weaponId: string; fps: number; limit: number; result: string; testedAtISO: string }> }>('/api/fps-logs?limit=500')
+      .then((res) => {
+        const latest = new Map<string, { fps: number; limit: number; result: string; testedAtISO: string }>()
+        for (const log of res.data || []) if (log.weaponId && !latest.has(log.weaponId)) latest.set(log.weaponId, log)
+        setLastFps(latest)
+      })
+      .catch(() => null)
+  }, [])
+  React.useEffect(() => { loadFps() }, [loadFps])
+  const [fpsFor, setFpsFor] = React.useState<WeaponItem | null>(null)
+  const [fpsReading, setFpsReading] = React.useState('')
+  const [fpsNotes, setFpsNotes] = React.useState('')
+  const [fpsSaving, setFpsSaving] = React.useState(false)
+  const saveFps = async () => {
+    if (!fpsFor) return
+    const fps = Number(fpsReading)
+    if (!Number.isFinite(fps) || fps <= 0) return toast.error('Enter the chronograph reading in FPS.')
+    setFpsSaving(true)
+    try {
+      const res = await apiPost<{ data: { result: string; limit: number }; weaponPulled?: boolean }>('/api/fps-logs', { weaponId: fpsFor.id, fps, notes: fpsNotes })
+      if (res.data.result === 'pass') toast.success(`${fpsFor.name}: ${fps} FPS, passed (limit ${res.data.limit}).`)
+      else toast.error(`${fpsFor.name}: ${fps} FPS is over the ${res.data.limit} limit.${res.weaponPulled ? ' Pulled from rentals for repair.' : ''}`)
+      setFpsFor(null)
+      setFpsNotes('')
+      loadFps()
+      await refresh()
+    } catch (e: any) {
+      toast.error(String(e?.message || e))
+    } finally {
+      setFpsSaving(false)
+    }
+  }
 
   React.useEffect(() => {
     if (sourceFilter !== 'player' || Object.keys(ownerNames).length > 0) return
@@ -179,8 +220,6 @@ function WeaponInventory() {
   const activeCategoryMeta = category === 'all' ? null : categoryOptions.find((item) => item.key === category)
   const maintenanceQueue = weapons.filter((weapon) => weapon.status === 'needs-check')
   const maintenanceCount = maintenanceQueue.length
-  const pendingPlayerWeapons = weapons.filter((weapon) => weapon.source === 'player' && weapon.approvalStatus === 'pending')
-  const pendingPlayerWeaponsCount = pendingPlayerWeapons.length
 
   const models = summarizeModels(weapons)
 
@@ -328,7 +367,6 @@ function WeaponInventory() {
     }
   }
 
-  const { addNotification } = useNotifications()
 
   // Bulk selection: tick rows (or every row matching the filters) and change them together.
   const [selectedIds, setSelectedIds] = React.useState<string[]>([])
@@ -369,69 +407,6 @@ function WeaponInventory() {
     await refresh()
   }
 
-  const openApproveDialog = (weapon: { id: string; category?: string }) => {
-    setApprovalTarget({ id: weapon.id, fpsClass: String(weapon.category || '').toLowerCase().startsWith('sniper') ? 'sniper' : 'aeg' })
-    setChronoFps('')
-  }
-
-  const handleApprovePlayerWeapon = async () => {
-    if (!approvalTarget) return
-    const id = approvalTarget.id
-    try {
-      await apiPut<any>(`/api/weapons/${encodeURIComponent(id)}`, {
-        approvalStatus: 'approved',
-        status: 'available',
-        chronoFps: Number(chronoFps),
-        fpsClass: approvalTarget.fpsClass,
-        updatedAtISO: new Date().toISOString(),
-      })
-      setApprovalTarget(null)
-      sendRoleNotifications(addNotification, {
-        roles: ['admin', 'registrar', 'marshal'],
-        type: 'weapon_approved',
-        title: 'Weapon Approved',
-        message: `Weapon ${id} was approved for use.`,
-        linkedResourceId: id,
-      })
-      toast.success('Player weapon approved')
-      await refresh()
-    } catch (e: any) {
-      toast.error(String(e?.message || e))
-    }
-  }
-
-  const openRejectDialog = (id: string) => {
-    setRejectionTargetId(id)
-    setRejectionReason('')
-  }
-
-  const handleRejectPlayerWeapon = async () => {
-    if (!rejectionTargetId || !rejectionReason.trim()) {
-      toast.error('Please enter a rejection reason')
-      return
-    }
-    try {
-      await apiPut<any>(`/api/weapons/${encodeURIComponent(rejectionTargetId)}`, {
-        approvalStatus: 'rejected',
-        rejectionReason: rejectionReason.trim(),
-        updatedAtISO: new Date().toISOString(),
-      })
-      sendRoleNotifications(addNotification, {
-        roles: ['admin', 'registrar', 'marshal'],
-        type: 'weapon_rejected',
-        title: 'Weapon Rejected',
-        message: `Weapon ${rejectionTargetId} was rejected.`,
-        linkedResourceId: rejectionTargetId,
-      })
-      toast.success('Player weapon rejected')
-      setRejectionTargetId(null)
-      setRejectionReason('')
-      await refresh()
-    } catch (e: any) {
-      toast.error(String(e?.message || e))
-    }
-  }
-
   const resetForm = () => {
     setSelectedWeaponId(null)
     setForm(emptyForm())
@@ -459,11 +434,52 @@ function WeaponInventory() {
           <div className="truncate text-[10px] uppercase tracking-wider text-muted">Currently rented</div>
           <div className="mt-0.5 text-base font-bold text-warning">{weapons.filter((weapon) => weapon.status === 'rented').length}</div>
         </Card>
-        <Card className="rounded-xl px-3 py-2 md:px-3 md:py-2">
-          <div className="truncate text-[10px] uppercase tracking-wider text-muted">Needs check</div>
+        {/* Clicking it filters the list below to just these weapons. */}
+        <button
+          type="button"
+          onClick={() => {
+            setSourceFilter('business')
+            setCategory('all')
+            setSearch('')
+            setStatus(status === 'needs-check' ? 'all' : 'needs-check')
+          }}
+          aria-pressed={status === 'needs-check'}
+          className={[
+            'rounded-xl border px-3 py-2 text-left transition',
+            status === 'needs-check' ? 'border-danger/50 bg-danger/10' : 'border-white/10 bg-white/5 hover:bg-white/10',
+          ].join(' ')}
+        >
+          <div className="truncate text-[10px] uppercase tracking-wider text-muted">Needs check{status === 'needs-check' ? ' · showing' : ''}</div>
           <div className="mt-0.5 text-base font-bold text-danger">{maintenanceCount}</div>
-        </Card>
+        </button>
       </div>
+
+      {/* Weapons waiting for a marshal, at the top so they're found first. Clear one after
+          inspecting it, or open it to note what's wrong. */}
+      {maintenanceQueue.length > 0 ? (
+        <Card className="border-danger/30 p-4">
+          <div className="flex items-center gap-2 text-sm font-bold">
+            <FiAlertTriangle className="text-danger" /> Needs check before play ({maintenanceQueue.length})
+          </div>
+          <p className="mt-1 text-xs text-muted">Inspect each one, then mark it OK to put it back in the rental pool.</p>
+          <ul className="mt-3 divide-y divide-white/5">
+            {maintenanceQueue.map((weapon) => (
+              <li key={weapon.id} className="flex flex-col gap-2 py-2.5 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold">{weapon.name}</div>
+                  <div className="text-xs text-muted">
+                    {weapon.id}{weapon.note || weapon.description ? ` · ${weapon.note || weapon.description}` : ''}
+                  </div>
+                </div>
+                <div className="flex flex-none gap-2">
+                  <Button size="sm" variant="ghost" onClick={() => handleSelect(weapon)}><FiEdit2 /> Details</Button>
+                  <Button size="sm" onClick={() => void handleToggleFlag(weapon.id)}><FiCheck /> Checked, OK</Button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      ) : null}
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <FilterTabs
@@ -472,7 +488,7 @@ function WeaponInventory() {
           onChange={setSourceFilter}
           options={[
             { value: 'business', label: 'Rental weapons' },
-            { value: 'player', label: "Players' weapons", ...(pendingPlayerWeaponsCount > 0 ? { count: pendingPlayerWeaponsCount } : {}) },
+            { value: 'player', label: "Players' weapons" },
           ]}
         />
         <Button size="sm" onClick={openAddForm}>
@@ -487,38 +503,6 @@ function WeaponInventory() {
             <div className="mt-2 text-sm text-muted">{activeCategoryMeta?.subtitle || 'All weapon categories'}</div>
           </div>
         </div>
-
-        {sourceFilter === 'player' && pendingPlayerWeaponsCount > 0 ? (
-          <div className="mt-4 rounded-2xl border border-accent/20 bg-accent/10 p-4">
-            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-              <div>
-                <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-accent">Pending player submissions</div>
-                <div className="mt-1 text-sm text-text">These weapons are waiting for your approval before they are treated as active inventory.</div>
-              </div>
-              <div className="rounded-full border border-accent/20 bg-background/50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-accent">
-                {pendingPlayerWeaponsCount} awaiting review
-              </div>
-            </div>
-            <div className="mt-3 grid gap-2 md:grid-cols-2">
-              {pendingPlayerWeapons.map((weapon) => (
-                <div key={weapon.id} className="rounded-xl border border-white/10 bg-background/50 p-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="text-sm font-semibold">{weapon.name}</div>
-                    <ActionGroup>
-                      <Button size="xs" variant="success-soft" onClick={(event) => { event.stopPropagation(); openApproveDialog(weapon) }}>
-                        <FiCheck /> Approve
-                      </Button>
-                      <Button size="xs" variant="danger-soft" onClick={(event) => { event.stopPropagation(); openRejectDialog(weapon.id) }}>
-                        <FiX /> Reject
-                      </Button>
-                    </ActionGroup>
-                  </div>
-                  <div className="mt-1 text-xs text-muted">{weapon.description || weapon.note}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : null}
 
         {sourceFilter === 'business' ? <ModelSummaryStrip models={models} unit="piece" /> : null}
 
@@ -623,7 +607,7 @@ function WeaponInventory() {
                     <div className="mt-1 text-xs text-muted">{weapon.description || weapon.note}</div>
                     {weapon.source === 'player' ? (
                       <div className="mt-1 text-xs text-muted">
-                        Owner: {ownerNames[String(weapon.submittedBy)] || weapon.submittedBy || 'Unknown'} · <span className="capitalize">{weapon.approvalStatus}</span>
+                        Owner: {ownerNames[String(weapon.submittedBy)] || weapon.submittedBy || 'Unknown'}
                       </div>
                     ) : null}
                   </div>
@@ -631,22 +615,24 @@ function WeaponInventory() {
                   <div className="col-span-1 text-right text-sm font-semibold text-muted">₱{weapon.price.toLocaleString()}</div>
                   <div className="col-span-2 pl-4">
                     <StatusBadge status={weapon.status} />
+                    {/* The last chronograph reading for this gun. */}
+                    {lastFps.get(weapon.id) ? (() => {
+                      const log = lastFps.get(weapon.id)!
+                      return (
+                        <div className={`mt-1 text-[11px] ${log.result === 'pass' ? 'text-success' : 'text-danger'}`} title={`Tested ${new Date(log.testedAtISO).toLocaleString('en-PH', { timeZone: 'Asia/Manila' })}`}>
+                          {log.result === 'pass' ? '✓' : '✗'} {log.fps} FPS · {fpsWhen(log.testedAtISO)}
+                        </div>
+                      )
+                    })() : <div className="mt-1 text-[11px] text-muted">No FPS reading</div>}
                   </div>
                   <div className="col-span-3">
                     <ActionGroup>
+                      <Button size="xs" variant="ghost" onClick={(e) => { e.stopPropagation(); setFpsFor(weapon); setFpsReading('') }}>
+                        <FiCrosshair /> FPS
+                      </Button>
                       <Button size="xs" variant="ghost" onClick={(e) => { e.stopPropagation(); handleSelect(weapon) }}>
                         <FiEdit2 /> Edit
                       </Button>
-                      {weapon.source === 'player' && weapon.approvalStatus === 'pending' ? (
-                        <>
-                          <Button size="xs" variant="success-soft" onClick={(event) => { event.stopPropagation(); openApproveDialog(weapon) }}>
-                            <FiCheck /> Approve
-                          </Button>
-                          <Button size="xs" variant="danger-soft" onClick={(event) => { event.stopPropagation(); openRejectDialog(weapon.id) }}>
-                            <FiX /> Reject
-                          </Button>
-                        </>
-                      ) : null}
                       <Button size="xs" variant={weapon.status === 'needs-check' ? 'ghost' : 'accent-soft'} onClick={(e) => { e.stopPropagation(); handleToggleFlag(weapon.id) }}>
                         {weapon.status === 'needs-check' ? 'Unflag' : 'Flag'}
                       </Button>
@@ -663,86 +649,21 @@ function WeaponInventory() {
         </div>
         <Pagination page={page} pageCount={pageCount} total={total} onPageChange={setPage} />
 
-        {sourceFilter === 'business' ? (
-        <div className="mt-4">
-          <Card className="p-4 bg-white/5/60">
-            <div className="text-xs uppercase tracking-widest text-muted">Maintenance queue</div>
-            <div className="mt-2 text-sm text-muted">Weapons that need servicing or re-inspection are surfaced here.</div>
-            <div className="mt-4 space-y-2">
-              {maintenanceQueue.length === 0 ? (
-                <div className="rounded-xl border border-white/5 bg-white/5 px-3 py-3 text-sm text-muted">
-                  No weapons currently need inspection.
-                </div>
-              ) : (
-                maintenanceQueue.map((weapon) => (
-                  <div key={weapon.id} className="rounded-xl border border-white/5 bg-white/5 px-3 py-3">
-                    <div className="text-sm font-semibold">{weapon.name}</div>
-                    <div className="mt-1 text-xs text-muted">{weapon.description || weapon.note || 'Marked for inspection.'}</div>
-                  </div>
-                ))
-              )}
-            </div>
-          </Card>
-        </div>
-        ) : null}
       </Card>
-      {approvalTarget ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" role="dialog" aria-modal="true" aria-labelledby="weapon-approval-title">
-          <div className="max-h-[90dvh] overflow-y-auto overscroll-contain w-full max-w-lg rounded-2xl border border-white/10 bg-background p-5 shadow-2xl">
-            <div id="weapon-approval-title" className="text-lg font-bold">Approve player weapon</div>
-            <p className="mt-1 text-sm text-muted">
-              Chrono the weapon first. It's approved only if the reading is within the limit (AEG 450 FPS, sniper 550 FPS unless changed in settings).
-            </p>
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              <label className="block">
-                <div className="mb-2 text-sm font-semibold">Class</div>
-                <select
-                  value={approvalTarget.fpsClass}
-                  onChange={(event) => setApprovalTarget({ ...approvalTarget, fpsClass: event.target.value as 'aeg' | 'sniper' })}
-                  className="w-full rounded-xl border border-white/10 bg-background px-4 py-3 text-sm [&>option]:bg-background"
-                >
-                  <option value="aeg">AEG / rifle</option>
-                  <option value="sniper">Sniper / bolt-action</option>
-                </select>
-              </label>
-              <label className="block">
-                <div className="mb-2 text-sm font-semibold">Chronograph reading (FPS)</div>
-                <input
-                  autoFocus
-                  inputMode="numeric"
-                  value={chronoFps}
-                  onChange={(event) => setChronoFps(event.target.value.replace(/[^\d.]/g, ''))}
-                  placeholder="e.g. 380"
-                  className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-text outline-none focus:border-accent/50"
-                />
-              </label>
-            </div>
-            <div className="mt-4 flex justify-end gap-2">
-              <Button variant="ghost" onClick={() => setApprovalTarget(null)}>Cancel</Button>
-              <Button onClick={handleApprovePlayerWeapon} disabled={!(Number(chronoFps) > 0)}>Approve weapon</Button>
-            </div>
+      {fpsFor ? (
+        <Modal eyebrow="FPS check" title={`${fpsFor.name}${fpsFor.unitNumber && !fpsFor.name.includes('#') ? ` #${fpsFor.unitNumber}` : ''}`} onClose={() => setFpsFor(null)}>
+          <div className="text-sm text-muted">
+            {fpsFor.id} · limit {fpsFor.fpsLimit || (String(fpsFor.fpsClass || fpsFor.category).startsWith('sniper') ? 550 : 450)} FPS.
+            {lastFps.get(fpsFor.id) ? ` Last reading ${lastFps.get(fpsFor.id)!.fps} FPS (${fpsWhen(lastFps.get(fpsFor.id)!.testedAtISO)}).` : ' No readings yet.'}
           </div>
-        </div>
-      ) : null}
-      {rejectionTargetId ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" role="dialog" aria-modal="true" aria-labelledby="weapon-rejection-title">
-          <div className="max-h-[90dvh] overflow-y-auto overscroll-contain w-full max-w-lg rounded-2xl border border-white/10 bg-background p-5 shadow-2xl">
-            <div id="weapon-rejection-title" className="text-lg font-bold">Reject player weapon</div>
-            <p className="mt-1 text-sm text-muted">Add a comment explaining why this submission was rejected.</p>
-            <textarea
-              autoFocus
-              value={rejectionReason}
-              onChange={(event) => setRejectionReason(event.target.value)}
-              placeholder="Reason for rejection"
-              rows={4}
-              className="mt-4 w-full resize-y rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-text outline-none focus:border-danger/50"
-            />
-            <div className="mt-4 flex justify-end gap-2">
-              <Button variant="ghost" onClick={() => setRejectionTargetId(null)}>Cancel</Button>
-              <Button onClick={handleRejectPlayerWeapon} disabled={!rejectionReason.trim()}>Reject weapon</Button>
-            </div>
+          <div className="mt-4 grid gap-3">
+            <Input label="Reading (FPS)" type="number" min="1" value={fpsReading} onChange={(e) => setFpsReading(e.target.value)} autoFocus
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void saveFps() } }} />
+            <Input label="Notes (optional)" value={fpsNotes} onChange={(e) => setFpsNotes(e.target.value)} />
+            <p className="text-xs text-muted">A center gun that reads over its limit is pulled from rentals for repair automatically.</p>
+            <Button disabled={fpsSaving || !fpsReading} onClick={() => void saveFps()}>{fpsSaving ? 'Saving…' : 'Save reading'}</Button>
           </div>
-        </div>
+        </Modal>
       ) : null}
       {formOpen ? (
         <Modal eyebrow="Weapons" title={selectedWeaponId ? `Edit ${selectedWeaponId}` : 'Add weapons'} onClose={closeForm}>
@@ -956,7 +877,7 @@ export function AdminWeaponsPage() {
         onChange={changeView}
         options={[
           { value: 'inventory', label: 'Inventory' },
-          { value: 'fps', label: <><FiCrosshair /> FPS safety log</> },
+          { value: 'fps', label: <><FiCrosshair /> FPS history</> },
           { value: 'repairs', label: <><FiTool /> Damage &amp; repairs</> },
         ]}
       />

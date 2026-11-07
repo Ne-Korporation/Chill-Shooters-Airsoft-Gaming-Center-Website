@@ -35,9 +35,9 @@ type Advisory = {
 }
 
 const LOCATIONS = [
-  { id: 'salawag', name: 'Delta Stronghold (Salawag)' },
-  { id: 'langkaan', name: 'Delta Stronghold (Langkaan)' },
-  { id: 'binan', name: 'LOMA Binan Laguna' },
+  { id: 'salawag', name: 'Chill Shooters (Salawag)' },
+  { id: 'langkaan', name: 'Chill Shooters (Langkaan)' },
+  { id: 'binan', name: 'BBC Airsoft Binan Laguna' },
 ]
 
 function manilaDate(offsetDays = 0) {
@@ -129,7 +129,7 @@ export function WeatherPanel() {
 
   const fillFromForecast = (entry: SlotForecast) => {
     setSlot(entry.slot)
-    setMessage(`The forecast for ${locationName} on ${date} (${entry.slot}) shows ${entry.reasons.join(' and ') || entry.summary}. We play rain or shine unless the marshals stop play for safety. If weather stops you from coming, contact us and staff can move your booking and payment to another date.`)
+    setMessage(`The forecast for ${locationName} on ${date} (${entry.slot}) shows ${entry.reasons.join(' and ') || entry.summary}. We play rain or shine.`)
     setShowForecast(false)
   }
 

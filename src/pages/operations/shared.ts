@@ -1,9 +1,9 @@
 import { modelOf } from '../../utils/inventoryModels'
 
 export const LOCATIONS = [
-  { id: 'salawag', name: 'Delta Stronghold (Salawag)' },
-  { id: 'langkaan', name: 'Delta Stronghold (Langkaan)' },
-  { id: 'binan', name: 'LOMA Binan Laguna' },
+  { id: 'salawag', name: 'Chill Shooters (Salawag)' },
+  { id: 'langkaan', name: 'Chill Shooters (Langkaan)' },
+  { id: 'binan', name: 'BBC Airsoft Binan Laguna' },
 ] as const
 
 export const SLOTS = ['morning', 'afternoon', 'evening'] as const

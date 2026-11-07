@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { FiChevronLeft, FiChevronRight } from 'react-icons/fi'
 import { apiGet } from '../../utils/apiClient'
 import { formatSlotRange, type SlotHours } from '../../utils/slotHours'
+import { closedDayMessage, useClosedDays } from '../../utils/closedDays'
 
 const SLOTS = ['morning', 'afternoon', 'evening'] as const
 const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -68,6 +69,7 @@ export function RescheduleSlotPicker({
   const [capacities, setCapacities] = useState<Capacities>({})
   const [loading, setLoading] = useState(true)
   const [month, setMonth] = useState(() => (date || addDaysISO(todayISO, 1)).slice(0, 7))
+  const closedDays = useClosedDays(`${month}-01`, `${month}-31`)
   const locationId = normalizeLocation(target.locationId)
   const weekdayBooking = target.originalDate ? isWeekdayISO(target.originalDate) : false
 
@@ -108,7 +110,7 @@ export function RescheduleSlotPicker({
     return { available: true, remaining, reason: '' }
   }
 
-  const dateAllowed = (dateISO: string) => dateISO > todayISO && isWeekdayISO(dateISO) === weekdayBooking
+  const dateAllowed = (dateISO: string) => dateISO > todayISO && isWeekdayISO(dateISO) === weekdayBooking && !closedDays[dateISO]
   const dateHasOpenSlot = (dateISO: string) => SLOTS.some((name) => slotState(dateISO, name).available)
 
   const days = useMemo(() => {
@@ -159,7 +161,7 @@ export function RescheduleSlotPicker({
                   const firstOpen = SLOTS.find((name) => slotState(dayISO, name).available)
                   onChange({ date: dayISO, slot: slotState(dayISO, slot).available ? slot : firstOpen || slot })
                 }}
-                title={!allowed ? (weekdayBooking ? 'Weekday bookings move to weekdays only' : 'Weekend bookings move to weekends only') : open ? 'Has open slots' : 'No open slots'}
+                title={closedDays[dayISO] ? closedDayMessage(closedDays[dayISO]) : !allowed ? (weekdayBooking ? 'Weekday bookings move to weekdays only' : 'Weekend bookings move to weekends only') : open ? 'Has open slots' : 'No open slots'}
                 className={[
                   'h-9 rounded-lg text-xs font-semibold transition',
                   selected
