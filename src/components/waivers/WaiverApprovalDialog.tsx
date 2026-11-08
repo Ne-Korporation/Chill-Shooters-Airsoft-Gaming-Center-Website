@@ -110,7 +110,7 @@ export function WaiverApprovalDialog({
     set((current) => ({ ...current, [key]: !current[key] }))
 
   return createPortal(
-    <div className="fixed inset-0 z-[100000] flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true">
+    <div className="fixed inset-0 z-[100000] flex items-center justify-center bg-black/70 p-3 sm:p-4" role="dialog" aria-modal="true">
       <Card className="max-h-[90dvh] w-full max-w-md space-y-4 overflow-y-auto">
         <div>
           <h2 className="text-lg font-bold">Approve waiver: ID check</h2>

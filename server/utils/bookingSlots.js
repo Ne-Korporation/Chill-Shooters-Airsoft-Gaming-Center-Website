@@ -28,3 +28,22 @@ export function getSlotPlayerCount(reservations) {
     0,
   )
 }
+
+const isPrivate = (item) => String(item?.sessionType || '').toLowerCase() === 'private'
+
+// Why a new booking can't take this slot, or null. `reservations` are the slot's blocking
+// reservations; `holds` are other players' live slot holds (bookings in progress).
+// - A private game (booked or being booked) closes the slot to everyone.
+// - A private game can't be booked where public players are already booked.
+export function slotConflict({ reservations = [], holds = [], sessionType }) {
+  if (reservations.some(isPrivate)) {
+    return { reason: 'private_booked', message: 'This slot is already booked for a private game. Please pick another time or date.' }
+  }
+  if (holds.some(isPrivate)) {
+    return { reason: 'being_booked', message: 'Another player is booking this slot right now. Please pick another time or date.' }
+  }
+  if (String(sessionType || '').toLowerCase() === 'private' && reservations.length > 0) {
+    return { reason: 'public_booked', message: 'Public players are already booked in this slot, so it can\'t be booked as a private game. Please pick another time or date.' }
+  }
+  return null
+}

@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
+import { useLiveRefresh } from '../../utils/liveUpdates'
 import { FiCheck, FiCornerUpLeft, FiFileText, FiFlag } from 'react-icons/fi'
 import { ActionGroup, Button } from '../../components/ui/Button'
 import { FilterTabs, titleCaseLabel } from '../../components/ui/FilterTabs'
@@ -139,6 +140,7 @@ export function AdminPaymentsPage() {
     load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+  useLiveRefresh(['payments', 'reservations'], () => load())
 
   const filtered = useMemo(
     () => payments.filter((payment) => (active === 'all' ? true : payment.status === active)),

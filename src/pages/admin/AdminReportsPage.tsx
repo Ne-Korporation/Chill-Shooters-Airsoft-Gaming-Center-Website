@@ -592,7 +592,8 @@ export function AdminReportsPage() {
         {shown.statement.length ? (
         <Card className="p-4">
           <div className="text-xs uppercase tracking-widest text-muted">Financial statement</div>
-          <table className="mt-3 w-full text-sm">
+          <div className="mt-3 overflow-x-auto">
+          <table className="w-full text-sm">
             <tbody className="divide-y divide-white/5">
               {shown.statement.map((row) => (
                 <tr key={row.label}>
@@ -602,6 +603,7 @@ export function AdminReportsPage() {
               ))}
             </tbody>
           </table>
+          </div>
           <div className="mt-2 text-xs text-muted">Booking values cover reservations dated in this period; collections count verified payments received in it.</div>
         </Card>
         ) : null}
@@ -658,7 +660,8 @@ export function AdminReportsPage() {
           {report.topRentals.length ? (
           <Card className="p-4">
             <div className="text-xs uppercase tracking-widest text-muted">Most rented items</div>
-            <table className="mt-3 w-full text-sm">
+            <div className="mt-3 overflow-x-auto">
+            <table className="w-full text-sm">
               <tbody className="divide-y divide-white/5">
                 {report.topRentals.map(([name, count]) => (
                   <tr key={name}>
@@ -668,6 +671,7 @@ export function AdminReportsPage() {
                 ))}
               </tbody>
             </table>
+            </div>
           </Card>
           ) : null}
 

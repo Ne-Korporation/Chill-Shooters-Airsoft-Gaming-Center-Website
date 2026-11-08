@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
+import { useLiveRefresh } from '../../utils/liveUpdates'
 import toast from 'react-hot-toast'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
@@ -49,9 +50,10 @@ export function RegistrarSubmittedWaiversPage() {
   const [rows, setRows] = useState<WaiverRow[]>([])
   const [loading, setLoading] = useState(true)
   const [savingId, setSavingId] = useState<string | null>(null)
+  useLiveRefresh(['waivers'], () => refresh(true))
 
-  const refresh = async () => {
-    setLoading(true)
+  const refresh = async (silent = false) => {
+    if (!silent) setLoading(true)
     try {
       // Archived waivers (replaced by a resubmission, or archived by an admin) leave the queue.
       const docs = (await apiGetAll<any>('waivers')).filter((item) => !item.archived)

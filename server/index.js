@@ -1,6 +1,5 @@
 import express from 'express'
 import nodemailer from 'nodemailer'
-import cors from 'cors'
 import dotenv from 'dotenv'
 import path from 'path'
 import { fileURLToPath } from 'url'
@@ -9,6 +8,8 @@ import { getDb, startDbSession } from './db/mongo.js'
 import { ensureDatabaseSetup } from './db/setup.js'
 import { requireAuth, requireRole } from './middleware/auth.js'
 import { configuredAppUrl, rememberAppOrigin } from './utils/appUrl.js'
+import { bumpTopics, changeSnapshot, trackChanges } from './utils/changeFeed.js'
+import { corsPolicy, errorHandler, hideServerErrors, noStoreForAuthenticated, rateLimit, securityHeaders } from './middleware/security.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -44,13 +45,31 @@ const app = express()
 // The API runs behind Render's proxy: trust that one hop so req.ip is the visitor's address
 // (used by the login and code guessing limits), not the proxy's.
 app.set('trust proxy', 1)
-app.use(cors())
+// Security: no framework banner, strict headers, only our website's origins, no caching of
+// signed-in answers, and no internal error details in production (see middleware/security.js).
+app.disable('x-powered-by')
+app.use(securityHeaders)
+app.use(corsPolicy())
+app.use(noStoreForAuthenticated)
+app.use(hideServerErrors)
+// Flood protection per visitor address: the whole API, plus tighter limits on sign-in/sign-up,
+// uploads (which hit paid services) and the public contact form.
+app.use('/api', rateLimit({ name: 'api', windowMs: 60_000, max: 1000 }))
+app.use('/api/auth', rateLimit({ name: 'auth', windowMs: 15 * 60_000, max: 100, message: 'Too many sign-in requests. Please wait a few minutes and try again.' }))
+app.use(['/api/upload-image', '/api/upload-document', '/api/scan-id', '/api/uploads'], rateLimit({ name: 'uploads', windowMs: 10 * 60_000, max: 40, message: 'Too many uploads. Please wait a few minutes and try again.' }))
+app.use('/api/contact', rateLimit({ name: 'contact', windowMs: 60 * 60_000, max: 5, message: 'Too many messages sent. Please try again later.' }))
 // Email links need the website's address; remember it from the site calling the API.
 app.use(rememberAppOrigin)
 if (!configuredAppUrl()) {
   console.warn('PUBLIC_APP_URL is not set: email links use the address of the site calling the API, or http://localhost:5173 until one does. Set it to the website address (for example https://your-site.vercel.app).')
 }
 app.use(express.json({ limit: '10mb' }))
+// Open pages poll this to refresh themselves when data changes (see utils/changeFeed.js).
+app.use(trackChanges)
+app.get('/api/changes', (_req, res) => {
+  res.set('Cache-Control', 'no-store')
+  return res.json({ ok: true, data: changeSnapshot() })
+})
 
 const PORT = Number(process.env.PORT) || 3001
 
@@ -86,7 +105,8 @@ getDb()
 setInterval(() => {
   getDb()
     .then(async (db) => {
-      await expireOverdueReservations(db, startDbSession, { force: true })
+      const expired = await expireOverdueReservations(db, startDbSession, { force: true })
+      if (expired > 0) bumpTopics('reservations', 'slots', 'notifications')
       await sendSplitPaymentWarnings(db, { force: true })
       // One "waiting for payment" email for bookings left unpaid a few minutes.
       await sendUnpaidReservationEmails(db)
@@ -94,6 +114,18 @@ setInterval(() => {
     })
     .catch((err) => console.warn('Payment window sweep failed:', String(err)))
 }, 60_000).unref()
+
+// Slot holds run out on their own (no request to notice), so look for holds that expired since the
+// last check and tell open booking pages the slot is free again.
+let lastHoldCheck = new Date()
+setInterval(() => {
+  const now = new Date()
+  getDb()
+    .then((db) => db.collection('slot_holds').countDocuments({ expiresAt: { $gt: lastHoldCheck, $lte: now } }))
+    .then((count) => { if (count > 0) bumpTopics('slots') })
+    .catch(() => null)
+    .finally(() => { lastHoldCheck = now })
+}, 15_000).unref()
 
 // Game-day and waiver reminders; each one is sent once, so a frequent sweep is safe.
 setInterval(() => {
@@ -228,6 +260,10 @@ app.delete('/api/notifications', requireAuth, requireRole('admin'), async (req, 
     return res.status(500).json({ ok: false, error: String(err) })
   }
 })
+
+// Unknown API paths and anything thrown past a route.
+app.use('/api', (_req, res) => res.status(404).json({ ok: false, error: 'Not found' }))
+app.use(errorHandler)
 
 const server = app.listen(PORT, () => {
   console.log(`API server listening on http://localhost:${PORT}`)

@@ -204,7 +204,8 @@ export function RepairsPage({ embedded = false }: { embedded?: boolean } = {}) {
   const SummaryTable = ({ title, rows }: { title: string; rows: SummaryRow[] }) => (
     <div>
       <div className="text-xs uppercase tracking-widest text-muted">{title}</div>
-      <table className="mt-2 w-full text-sm">
+      <div className="mt-2 overflow-x-auto">
+      <table className="w-full text-sm">
         <thead>
           <tr className="text-left text-xs text-muted"><th className="py-1 font-medium">Name</th><th className="font-medium">Repairs</th><th className="text-right font-medium">Spend</th></tr>
         </thead>
@@ -218,6 +219,7 @@ export function RepairsPage({ embedded = false }: { embedded?: boolean } = {}) {
           ))}
         </tbody>
       </table>
+      </div>
     </div>
   )
 

@@ -28,7 +28,7 @@ export function ExistingAccountDialog({
   if (!account) return null
   const linkingGoogle = provider === 'password' && Boolean(onProceed)
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/60 p-4" role="dialog" aria-modal="true" aria-labelledby="existing-account-title">
+    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/60 p-3 sm:p-4" role="dialog" aria-modal="true" aria-labelledby="existing-account-title">
       <Card className="my-auto w-full max-w-sm space-y-4">
         <div>
           <h2 id="existing-account-title" className="text-lg font-bold">An account is already registered</h2>

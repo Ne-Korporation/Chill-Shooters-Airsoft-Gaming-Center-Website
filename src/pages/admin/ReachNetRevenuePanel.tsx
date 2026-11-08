@@ -145,6 +145,7 @@ export function ReachNetRevenuePanel({ onAllocated }: { onAllocated: () => void 
 
       <div className="mt-4 grid gap-6 lg:grid-cols-2">
         <div>
+          <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <tbody className="divide-y divide-white/5">
               {rows.map(([label, amount, hint]) => (
@@ -176,6 +177,7 @@ export function ReachNetRevenuePanel({ onAllocated }: { onAllocated: () => void 
               ) : null}
             </tbody>
           </table>
+          </div>
           <div className="mt-3">
             {locked ? (
               <div className="text-xs text-success">
