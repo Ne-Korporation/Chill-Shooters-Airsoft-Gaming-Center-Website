@@ -103,6 +103,8 @@ export function summarizeSlotForecast(entries, date, slot, config = weatherConfi
 }
 
 const forecastCache = new Map()
+// For tests: forget cached forecasts so the next fetch hits the (fake) API.
+export const clearForecastCache = () => forecastCache.clear()
 
 export async function fetchForecast(locationId, { http = axios, env = process.env } = {}) {
   const config = weatherConfig(env)
@@ -148,13 +150,17 @@ export async function sendAdvisory(db, { locationId, date, slot, title, message,
   for (const reservation of reservations) {
     const reservationSlot = reservation.reservationTime || reservation.slot
     for (const userId of playerIdsOf(reservation)) {
-      await notifyUser(db, {
-        userId,
-        type: 'weather_advisory',
-        title,
-        message,
-        linkedResourceId: reservation.id,
-      })
+      // Automatic advisories are email only: the in-app notice comes from the hourly forecast
+      // check (refreshWeatherOutlook), which keeps it in line with the latest forecast.
+      if (source !== 'auto') {
+        await notifyUser(db, {
+          userId,
+          type: 'weather_advisory',
+          title,
+          message,
+          linkedResourceId: reservation.id,
+        })
+      }
       void emailWeatherAdvisory(db, reservation, userId, {
         key: source === 'auto' ? `weather:auto:${reservation.id}:${date}:${userId}` : `weather:${advisoryId}:${reservation.id}:${userId}`,
         title,
@@ -240,8 +246,9 @@ export async function sendWeatherAlerts(db, { force = false, http, env = process
 // Every hour the 5-day forecast for every field is checked. Each slot that looks rainy, stormy, or
 // windy is kept in `weather_outlook` (one record per location, date and slot) and shown to every
 // account on the dashboard weather widget. Slots that clear up are removed, so the outlook always
-// matches the latest forecast. No one is notified from here: booked players still get the
-// day-before notice and email from sendWeatherAlerts.
+// matches the latest forecast. Players booked on a flagged slot get one in-app notification for
+// it, which is rewritten when the forecast changes and removed once the slot clears up, starts, or
+// the booking is cancelled. The day-before email still comes from sendWeatherAlerts.
 
 export const WEATHER_OUTLOOK = 'weather_outlook'
 // The full daily forecast (every slot, rainy or not), one record per location and date, so the
@@ -293,6 +300,37 @@ export function outlookMessage(name, slot, forecast) {
   return `Forecast for ${name} (${slot}): ${forecast.reasons.join(' and ')}. We play rain or shine.`
 }
 
+// "Thu, Nov 12" for a YYYY-MM-DD date.
+const noticeDate = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' })
+
+export function forecastNotice(name, date, slot, forecast) {
+  return {
+    title: forecast.severe ? 'Severe weather forecast for your game' : 'Rain forecast for your game',
+    message: `Your ${slot} game at ${name} on ${noticeDate(date)}: ${forecast.reasons.join(' and ')}. We play rain or shine.`,
+  }
+}
+
+// Creates or rewrites a player's forecast notification for one slot. A changed forecast updates
+// the text without marking it unread again, so hourly changes don't keep pinging the player.
+async function upsertForecastNotice(db, { key, userId, reservationId, locationId, date, title, message }) {
+  const notifications = db.collection('notifications')
+  const existing = await notifications.findOne({ weatherKey: key })
+  if (existing) {
+    if (existing.title !== title || existing.message !== message) {
+      await notifications.updateOne({ weatherKey: key }, { $set: { title, message, updatedAtISO: new Date().toISOString() } })
+    }
+    return
+  }
+  await notifyUser(db, {
+    userId,
+    type: 'weather_advisory',
+    title,
+    message,
+    linkedResourceId: reservationId,
+    fields: { weatherKey: key, weatherLocationId: locationId, weatherDate: date },
+  })
+}
+
 let lastOutlookRun = 0
 
 export async function refreshWeatherOutlook(db, { force = false, http, env = process.env } = {}) {
@@ -307,7 +345,18 @@ export async function refreshWeatherOutlook(db, { force = false, http, env = pro
   const collection = db.collection(WEATHER_OUTLOOK)
   const daily = db.collection(WEATHER_DAILY)
   const nowISO = new Date().toISOString()
+  const notifications = db.collection('notifications')
   let flagged = 0
+
+  // Active bookings in the outlook window, for the forecast notifications.
+  const bookings = (await db.collection('reservations').find(
+    { $or: [{ reservationDate: { $in: dates } }, { dateISO: { $in: dates } }], reservationStatus: { $in: ADVISORY_STATUSES } },
+    { projection: { id: 1, userId: 1, teamMembers: 1, locationId: 1, location: 1, reservationDate: 1, dateISO: 1, reservationTime: 1, slot: 1, reservationStatus: 1 } },
+  ).toArray()).filter((r) => ADVISORY_STATUSES.includes(String(r.reservationStatus || '').toLowerCase()))
+  const bookedOn = (locationId, date, slot) => bookings.filter((r) =>
+    String(r.locationId || r.location || '').toLowerCase() === locationId
+    && (r.reservationDate || r.dateISO) === date
+    && String(r.reservationTime || r.slot || '').toLowerCase() === slot)
 
   for (const locationId of Object.keys(DEFAULT_COORDS)) {
     const coords = locationCoords(locationId, env)
@@ -320,6 +369,7 @@ export async function refreshWeatherOutlook(db, { force = false, http, env = pro
       continue
     }
     const keep = []
+    const keepNotices = []
     for (const date of dates) {
       // Every slot with forecast data, for the daily forecast shown on the dashboard.
       const daySlots = SLOT_ORDER
@@ -357,12 +407,24 @@ export async function refreshWeatherOutlook(db, { force = false, http, env = pro
           },
           { upsert: true },
         )
+        const { title, message } = forecastNotice(coords.name, date, slot, forecast)
+        for (const reservation of bookedOn(locationId, date, slot)) {
+          for (const userId of playerIdsOf(reservation)) {
+            const noticeKey = `${key}|${userId}`
+            if (keepNotices.includes(noticeKey)) continue
+            keepNotices.push(noticeKey)
+            await upsertForecastNotice(db, { key: noticeKey, userId, reservationId: reservation.id, locationId, date, title, message })
+          }
+        }
       }
     }
     // This field's slots that cleared up, and anything already in the past.
     await collection.deleteMany({ locationId, _id: { $nin: keep } })
+    // Forecast notifications for slots that cleared up, started, or lost their booking.
+    await notifications.deleteMany({ weatherLocationId: locationId, weatherKey: { $nin: keepNotices } })
   }
   await collection.deleteMany({ date: { $lt: todayISO } })
+  await notifications.deleteMany({ weatherDate: { $lt: todayISO } })
   await daily.deleteMany({ date: { $lt: todayISO } })
   return { checkedDays: dates.length, flagged }
 }

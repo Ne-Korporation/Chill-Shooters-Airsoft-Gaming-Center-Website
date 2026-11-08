@@ -20,10 +20,10 @@ test('slotWindow converts to decimal hours', () => {
 test('the weather check follows custom slot hours', () => {
   const storm = { dt: Date.parse('2026-11-01T05:00:00+08:00') / 1000, pop: 0, wind: { speed: 2 }, main: { temp: 28 }, weather: [{ id: 211 }] }
   const config = { rainChance: 0.7, rainMm: 2.5, windMs: 17 }
-  // The 05:00–08:00 block overlaps a 06:00 morning but not a 08:00 morning.
-  assert.equal(summarizeSlotForecast([storm], '2026-11-01', 'morning', config).severe, true)
-  const late = { ...DEFAULT_SLOT_HOURS, morning: { start: '08:00', end: '12:00' } }
-  assert.equal(summarizeSlotForecast([storm], '2026-11-01', 'morning', config, late).severe, false)
+  // The 05:00–08:00 block overlaps a 06:00 morning but not the default 08:00 morning.
+  const early = { ...DEFAULT_SLOT_HOURS, morning: { start: '06:00', end: '12:00' } }
+  assert.equal(summarizeSlotForecast([storm], '2026-11-01', 'morning', config, early).severe, true)
+  assert.equal(summarizeSlotForecast([storm], '2026-11-01', 'morning', config).severe, false)
 })
 
 // 12:00 PM Manila on 2026-11-06 is 04:00 UTC.

@@ -111,8 +111,8 @@ const fieldLocations = [
     img: '/delta.png',
     size: '~2 hectares',
     capacity: 'Up to 400 players per slot',
-    desc: 'Ideal for small to medium groups and tournaments.',
-    mapQuery: 'Chill Shooters Airsoft, Salawag, Dasmariñas, Cavite',
+    desc: 'Home of Chill Shooters Airsoft Game Center and Delta Stronghold Airsoft Field, at Toledo Compound, Salawag. Enter through the Grey Gate, the farthest gate at the corner of the compound.',
+    mapQuery: 'Chill Shooters Airsoft Game Center, Toledo Compound, Salawag, Dasmariñas, Cavite',
   },
   {
     name: 'Chill Shooters (Langkaan)',
@@ -721,28 +721,56 @@ export function LandingPage() {
   const faqs: FAQ[] = useMemo(
     () => [
       {
+        q: 'Who can play?',
+        a: 'Everyone, whatever your experience or group size: first-time players, beginners, casual players, solo players joining public games, couples, families, organized teams, and barkadas. We ask every player to show respect, teamwork, and good sportsmanship on the field.',
+      },
+      {
         q: 'What is the age requirement to play?',
-        a: 'Players of any age may join. Minors must be accompanied by a parent or guardian and must present a valid school ID. All players are required to sign a consent form on site.',
+        a: 'Players aged 12 and up are welcome, as long as safety requirements are met. Minors must be accompanied by a parent or legal guardian and must present parental consent before playing. Every player, whatever their age, must complete and sign the consent and waiver form before playing.',
+      },
+      {
+        q: 'When are games held?',
+        a: 'Exclusive / private games run Monday to Friday, and regular / public games on Saturday and Sunday. Regular games run from 8:00 AM to 5:00 PM and night games from 5:00 PM to 10:00 PM. Night games depend on field availability and safety requirements. Please arrive early for registration, the safety orientation, and chronograph testing.',
+      },
+      {
+        q: 'How much does it cost?',
+        a: 'Players with their own guns pay the ₱150 entrance fee. The rental package is ₱750 per player: airsoft gun ₱500, mask ₱50, vest ₱50, and the ₱150 entrance fee. Equipment is limited, so rental gear must be reserved before the game.',
+      },
+      {
+        q: 'Can I get a refund or reschedule?',
+        a: 'Reservations are transferable but non-refundable. You can move your game to another date with prior notice. For group reservations, the full reserved number of players is still paid for, even if some members do not arrive. For example, a group that reserves equipment for 10 players but arrives with 8 still pays for all 10, because the equipment was set aside for the group. Please confirm everyone in your group before booking.',
+      },
+      {
+        q: 'What should I wear?',
+        a: 'Every player must wear a jacket or long-sleeved top, long pants, closed shoes or sturdy footwear, a cap or head protection, and gloves. If you have no gloves, you can buy tactical gloves at the field for ₱350. Players without the required clothing or protective gear may not be allowed to play.',
+      },
+      {
+        q: 'What should I bring?',
+        a: 'A valid ID. Minors can bring their latest school ID; everyone else needs a valid government ID.',
+      },
+      {
+        q: 'Can players bring their own airsoft guns?',
+        a: 'Yes. Every personal unit must pass chronograph testing before it is allowed on the field. The limits with 0.20 g BBs are 450 FPS for rifles and 550 FPS for BASR / sniper rifles. Units over the limit cannot be used until they are adjusted, and repeated violations or refusing chronograph testing can lead to disqualification.',
       },
       {
         q: 'Do you accept walk-in players?',
         a: 'Yes, walk-in players are accepted. However, due to limited equipment, advance reservation is highly recommended.',
       },
       {
-        q: 'Can beginners or first-time players join?',
-        a: 'Yes, the field is open to beginners, casual players, and experienced players. Game marshals are present to guide first-time players.',
+        q: 'What facilities are on the field?',
+        a: 'Parking for players and guests, a staging area for gear preparation, rest, and briefings, drinking water, comfort rooms, and chronograph testing. Certified game marshals run a safety orientation before every game, brief each scenario, and supervise play on the field.',
       },
       {
-        q: 'Is safety gear required?',
-        a: 'Yes, protective masks are required at all times during gameplay. Other safety rules will be discussed during the orientation.',
+        q: 'What are the field rules?',
+        a: 'Follow all field rules and marshal instructions. Respect every player, staff member, and marshal; rude or aggressive behavior is not tolerated. Practice CLAYGO (Clean As You Go) and respect the surrounding nature. Wear proper attire and protective gear at all times during games. Illegal substances and unsafe gun modifications are not allowed. Keep your belongings secure, as the field is not responsible for lost or damaged items.',
       },
       {
         q: 'What happens if it rains?',
-        a: 'Games may continue depending on weather conditions. In case of unsafe conditions, the field management will provide further instructions.',
+        a: 'We play rain or shine unless the marshals stop play for safety. If weather stops you from coming, contact us and staff can move your booking and payment to another date. Payments are not refundable.',
       },
       {
-        q: 'Can players bring their own airsoft guns?',
-        a: 'Yes, players who already have their own airsoft guns may use them, provided they pass the FPS and safety checks.',
+        q: 'How do I get to the Salawag field?',
+        a: 'Chill Shooters Airsoft Game Center and Delta Stronghold Airsoft Field are at Toledo Compound, Salawag, Dasmariñas City, Cavite. Enter through the Grey Gate, the farthest gate at the corner of the compound. On Google Maps, search for "Chill Shooters Airsoft Game Center" or "Delta Stronghold Airsoft Field".',
       },
     ],
     [],

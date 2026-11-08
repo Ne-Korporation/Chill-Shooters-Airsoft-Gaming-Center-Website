@@ -7,9 +7,9 @@ export type SlotName = 'morning' | 'afternoon' | 'evening'
 export type SlotHours = Record<SlotName, { start: string; end: string }>
 
 export const DEFAULT_SLOT_HOURS: SlotHours = {
-  morning: { start: '06:00', end: '12:00' },
-  afternoon: { start: '12:00', end: '18:00' },
-  evening: { start: '18:00', end: '23:00' },
+  morning: { start: '08:00', end: '12:00' },
+  afternoon: { start: '12:00', end: '17:00' },
+  evening: { start: '17:00', end: '22:00' },
 }
 
 let cached: Promise<SlotHours> | null = null
