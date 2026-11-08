@@ -1,4 +1,5 @@
 import React from 'react'
+import { useLiveRefresh } from '../../utils/liveUpdates'
 import { FiAlertTriangle, FiCheck, FiEye, FiRotateCcw, FiShield, FiSlash, FiX } from 'react-icons/fi'
 import toast from 'react-hot-toast'
 import { ActionGroup, Button } from '../../components/ui/Button'
@@ -37,8 +38,8 @@ export function PlayerManagementPage() {
   const [partnershipRequestsOpen, setPartnershipRequestsOpen] = React.useState(false)
   const [idRequestsOpen, setIdRequestsOpen] = React.useState(false)
 
-  const fetchUsers = React.useCallback(async () => {
-    setLoading(true)
+  const fetchUsers = React.useCallback(async (silent = false) => {
+    if (!silent) setLoading(true)
     setError(null)
     try {
       const [docs, levelsRes] = await Promise.all([
@@ -102,6 +103,7 @@ export function PlayerManagementPage() {
   }, [])
 
   React.useEffect(() => { fetchUsers() }, [fetchUsers])
+  useLiveRefresh(['accounts', 'waivers'], () => fetchUsers(true))
 
   const handleAddStaff = async () => {
     const trimmedName = newStaffName.trim()
@@ -588,7 +590,7 @@ export function PlayerManagementPage() {
         </Modal>
       ) : null}
       {selectedPlayer ? (
-        <div onClick={() => setSelectedPlayer(null)} className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/70 p-4">
+        <div onClick={() => setSelectedPlayer(null)} className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/70 p-3 sm:p-4">
           <div onClick={(e) => e.stopPropagation()} className="max-h-[90dvh] w-full max-w-3xl overflow-y-auto rounded-3xl border border-white/10 bg-background p-4 shadow-[0_30px_80px_rgba(0,0,0,0.75)]">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
               <div>

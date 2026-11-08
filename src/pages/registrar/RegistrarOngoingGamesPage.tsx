@@ -1,5 +1,6 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useLiveRefresh } from '../../utils/liveUpdates'
 import { FiArchive, FiCheck, FiChevronDown, FiChevronRight, FiEye, FiFolder, FiFolderMinus, FiMapPin, FiSearch, FiShield, FiX } from 'react-icons/fi'
 import { toast } from 'react-hot-toast'
 
@@ -331,6 +332,8 @@ export function RegistrarOngoingGamesPage({ embedded = false }: { embedded?: boo
       window.clearInterval(intervalId)
     }
   }, [refresh])
+
+  useLiveRefresh(['reservations', 'games', 'payments', 'gear'], () => refresh(true))
 
   const pageCount = Math.max(1, Math.ceil(total / DEFAULT_PAGE_SIZE))
 

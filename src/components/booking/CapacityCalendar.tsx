@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { useLiveRefresh } from '../../utils/liveUpdates'
 import toast from 'react-hot-toast'
 import { FiCalendar, FiChevronLeft, FiChevronRight, FiHeart, FiSlash, FiTrash2 } from 'react-icons/fi'
 import { apiPost, apiPut, getApiBase } from '../../utils/apiClient'
@@ -62,6 +63,7 @@ function useCapacityMonth(month: string) {
     const timer = window.setInterval(() => { void load() }, 120_000)
     return () => window.clearInterval(timer)
   }, [load])
+  useLiveRefresh(['reservations', 'slots'], load)
   return { ...state, reload: load }
 }
 

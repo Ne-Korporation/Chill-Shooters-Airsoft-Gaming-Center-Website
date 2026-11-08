@@ -123,11 +123,11 @@ export function AdminNotificationsPage() {
     <div className="space-y-4">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="text-3xl font-bold">Notifications</h1>
+          <h1 className="text-2xl font-bold sm:text-3xl">Notifications</h1>
           <p className="mt-1 text-sm text-muted">View your notifications and manage delivery only if you are an admin.</p>
         </div>
 
-        <div className="flex items-center gap-2 self-end">
+        <div className="flex flex-wrap items-center gap-2 sm:self-end">
           {!isAdmin ? (
             <>
               <Button size="sm" variant="ghost" onClick={() => user?.id ? markAllAsRead(user.id, user.role) : null}>Mark all as read</Button>
@@ -184,10 +184,10 @@ export function AdminNotificationsPage() {
         </div>
       </div>
 
-      <div className="rounded-3xl border border-white/5 bg-white/5 p-4">
+      <div className="rounded-3xl border border-white/5 bg-white/5 p-2 sm:p-4">
         <div className={isAdmin ? 'grid gap-4 lg:grid-cols-[1.15fr_0.85fr]' : 'grid gap-4'}>
           {isAdmin ? (
-            <div className="rounded-2xl border border-white/5 bg-background/70 p-4">
+            <div className="rounded-2xl border border-white/5 bg-background/70 p-3 sm:p-4">
               <div className="text-xs uppercase tracking-widest text-muted">Compose notification</div>
               <div className="mt-2 text-sm text-muted">Use this panel to prepare operating alerts for staff or players.</div>
 
@@ -286,7 +286,7 @@ export function AdminNotificationsPage() {
             </div>
           ) : null}
 
-          <div className="rounded-2xl border border-white/5 bg-background/70 p-4">
+          <div className="rounded-2xl border border-white/5 bg-background/70 p-3 sm:p-4">
             <div className="text-xs uppercase tracking-widest text-muted">Delivery feed</div>
             <div className="mt-2 text-sm text-muted">{isAdmin ? 'Filter by account type to review sent notifications.' : 'Your notifications from the system.'}</div>
 
@@ -305,7 +305,7 @@ export function AdminNotificationsPage() {
                   }}
                   className="cursor-pointer rounded-xl border border-white/5 bg-white/5/60 px-3 py-2 transition hover:bg-white/10"
                 >
-                  <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="truncate text-sm font-semibold">{draft.title}</div>
                       <div className="mt-1 text-xs text-muted">
@@ -314,14 +314,14 @@ export function AdminNotificationsPage() {
                     </div>
                     <span
                       className={[
-                        'inline-flex items-center rounded-full border px-3 py-1 text-[11px] font-semibold',
+                        'inline-flex shrink-0 items-center rounded-full border px-3 py-1 text-[11px] font-semibold',
                         draft.read ? 'bg-white/5 text-muted border-white/10' : 'bg-success/15 text-success border-success/30',
                       ].join(' ')}
                     >
                       {draft.read ? 'READ' : 'NEW'}
                     </span>
                   </div>
-                  <div className="mt-2 text-sm text-muted">{draft.message}</div>
+                  <div className="mt-2 whitespace-pre-wrap break-words text-sm text-muted">{draft.message}</div>
                   <div className="mt-2 flex justify-end">
                     {isAdmin ? (
                       <Button

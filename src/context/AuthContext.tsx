@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
 
-import { apiPost } from '../utils/apiClient'
+import { apiGet, apiPost } from '../utils/apiClient'
 import {
   AUTH_STORAGE_KEY,
   LAST_ACTIVITY_KEY,
@@ -132,6 +132,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     })
   }, [])
 
+  // The saved session sits in browser storage, where it can be edited. Once per sign-in, ask the
+  // server who this token really belongs to: a mismatched id or role (or a revoked token, which
+  // apiClient handles) ends the session, so editing storage can't unlock another role's pages.
+  const verifiedTokenRef = React.useRef('')
+  useEffect(() => {
+    if (!token || verifiedTokenRef.current === token) return
+    verifiedTokenRef.current = token
+    apiGet<{ ok: boolean; user?: { id?: string; role?: Role } }>('/api/auth/me')
+      .then((res) => {
+        const actual = res?.user
+        if (!actual?.id) return
+        if (String(actual.id) !== String(session?.user.id)) {
+          logout()
+          return
+        }
+        if (actual.role && actual.role !== session?.user.role) updateUser({ role: actual.role })
+      })
+      .catch(() => null)
+  }, [token, session?.user.id, session?.user.role, logout, updateUser])
+
   // Log out when the token itself expires.
   useEffect(() => {
     if (!token) return
@@ -257,7 +277,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     <AuthContext.Provider value={value}>
       {children}
       {idleWarning && user ? (
-        <div className="fixed inset-0 z-[100001] flex items-center justify-center bg-black/60 p-4" role="alertdialog" aria-modal="true" aria-labelledby="idle-warning-title">
+        <div className="fixed inset-0 z-[100001] flex items-center justify-center bg-black/60 p-3 sm:p-4" role="alertdialog" aria-modal="true" aria-labelledby="idle-warning-title">
           <div className="max-h-[90dvh] overflow-y-auto overscroll-contain w-full max-w-sm rounded-3xl border border-white/10 bg-background p-5 text-text shadow-soft">
             <div id="idle-warning-title" className="text-lg font-bold">Still there?</div>
             <p className="mt-2 text-sm text-muted">You haven't used the app for a while. For your security you'll be logged out in about a minute.</p>

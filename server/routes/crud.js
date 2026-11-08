@@ -2,7 +2,8 @@ import express from 'express'
 import { ObjectId } from 'mongodb'
 import { randomUUID } from 'crypto'
 import { getDb, startDbSession, toObjectId } from '../db/mongo.js'
-import { requireAuth, requireRole } from '../middleware/auth.js'
+import { forgetAccount, requireAuth, requireRole, revokeSessionsFields } from '../middleware/auth.js'
+import { blockedWriteFields, checkQueryFilter, dropIdFields, safeSort, secretAccountProjection, stripAccountSecrets } from '../utils/querySafety.js'
 import { ALLOWED_COLLECTIONS } from './collections.js'
 import { ACCEPTED_ID_TYPES } from '../utils/idTypes.js'
 import { getActorName } from '../utils/actors.js'
@@ -44,6 +45,7 @@ import {
   getBlockingSlotReservations,
   getSlotPlayerCount,
   normalizeLocationId,
+  slotConflict,
 } from '../utils/bookingSlots.js'
 
 const router = express.Router()
@@ -480,8 +482,17 @@ async function assertSlotAvailable({ db, session, locationId, reservationDate, r
     { session },
   ).toArray()
 
-  // Fields aren't exclusive: several groups can book the same location, field and time until the
-  // slot's player capacity is full. A field's minimum group size still applies.
+  // A private game takes the whole slot (location + date + time): once one is booked, or another
+  // player is in the middle of booking one, nobody else can book that slot. Public games are open
+  // play: groups share the slot until its player capacity is full, but a private game can't be
+  // booked on top of them. See slotConflict in utils/bookingSlots.js.
+  const conflict = slotConflict({ reservations: blockingReservations, holds, sessionType })
+  if (conflict) {
+    const taken = new Error(conflict.message)
+    taken.statusCode = 409
+    taken.slotTaken = conflict.reason
+    throw taken
+  }
   const bookedFieldIds = new Set()
   const capacity = getLocationCapacities()[locationId][reservationTime]
   const usedPlayers = getSlotPlayerCount(blockingReservations) + holds.reduce((sum, hold) => sum + Number(hold.players || 0), 0)
@@ -567,6 +578,7 @@ router.post('/slot-holds', requireAuth, requireRole('user'), async (req, res) =>
       return res.status(err.statusCode).json({
         ok: false,
         error: err.message,
+        ...(err.slotTaken ? { slotTaken: err.slotTaken } : {}),
         ...(err.conflictedFieldIds ? { conflictedFieldIds: err.conflictedFieldIds } : {}),
       })
     }
@@ -593,6 +605,21 @@ router.post('/slot-holds/mine/leave', requireAuth, requireRole('user'), async (r
   }
 })
 
+// GET /api/slot-holds/mine — the slot this player is holding (a booking in progress), if any.
+router.get('/slot-holds/mine', requireAuth, requireRole('user'), async (req, res) => {
+  try {
+    const db = await getDb()
+    const hold = await db.collection('slot_holds').findOne({ _id: `user:${req.user.id}`, expiresAt: { $gt: new Date() } })
+    if (!hold) return res.json({ ok: true, data: null })
+    const { _id, ...rest } = hold
+    return res.json({ ok: true, data: { ...rest, expiresAtISO: hold.expiresAt.toISOString() } })
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: String(err) })
+  }
+})
+
+// DELETE /api/slot-holds/mine — the player cancelled their booking in progress: the slot opens
+// for everyone right away instead of after the hold runs out.
 router.delete('/slot-holds/mine', requireAuth, requireRole('user'), async (req, res) => {
   try {
     const db = await getDb()
@@ -915,6 +942,18 @@ router.post('/reservations/:id/reschedule', requireAuth, requireRole('user', 'ad
         ).toArray()
         const blocking = getBlockingSlotReservations({ reservations: sameSlot, locationId, normalizeLocationId })
           .filter((other) => String(other.id || other._id) !== reservationId)
+        // Same private-game rule as a new booking: a private game (booked or being booked by someone
+        // else) closes the slot, and a private game can't move onto public players.
+        const otherHolds = await db.collection('slot_holds').find(
+          { locationId, reservationDate: newDate, reservationTime: newTime, expiresAt: { $gt: new Date() }, userId: { $ne: String(reservation.userId || '') } },
+          { session },
+        ).toArray()
+        const conflict = slotConflict({ reservations: blocking, holds: otherHolds, sessionType })
+        if (conflict) {
+          const taken = new Error(conflict.message)
+          taken.statusCode = 409
+          throw taken
+        }
 
         const capacity = getLocationCapacities()[locationId][newTime]
         const usedPlayers = getSlotPlayerCount(blocking)
@@ -1263,14 +1302,16 @@ router.get('/:collection', requireAuth, async (req, res) => {
     } catch {
       return res.status(400).json({ ok: false, error: 'invalid q JSON' })
     }
+    const problem = checkQueryFilter(filter)
+    if (problem) return res.status(400).json({ ok: false, error: problem })
   }
   // ?sort={"createdAtISO":-1} orders the results before paging; only plain field names with 1/-1.
   let sort = null
   if (req.query.sort) {
     try {
       const parsed = JSON.parse(String(req.query.sort))
-      sort = Object.fromEntries(Object.entries(parsed || {})
-        .filter(([field, dir]) => /^[A-Za-z0-9_.]+$/.test(field) && (dir === 1 || dir === -1)))
+      sort = safeSort(Object.fromEntries(Object.entries(parsed || {})
+        .filter(([field, dir]) => /^[A-Za-z0-9_.]+$/.test(field) && (dir === 1 || dir === -1))))
     } catch {
       return res.status(400).json({ ok: false, error: 'invalid sort JSON' })
     }
@@ -1289,7 +1330,7 @@ router.get('/:collection', requireAuth, async (req, res) => {
           { $or: [{ id: String(req.user.id) }, ...(objectId ? [{ _id: objectId }] : [])] },
           filter,
         ),
-        { projection: { password: 0, otpCode: 0, otpExpiresAt: 0, pendingEmailOtp: 0 } },
+        { projection: secretAccountProjection() },
       )
       // Players see their own submitted ID photos; nobody else's.
       if (docs) delete docs.email
@@ -1328,7 +1369,7 @@ router.get('/:collection', requireAuth, async (req, res) => {
     query = query.skip(skip).limit(limit)
 
     if (collection === 'user_accounts') {
-      const projection = { password: 0, otpCode: 0, otpExpiresAt: 0, pendingEmailOtp: 0 }
+      const projection = secretAccountProjection()
       if (req.user.role !== 'admin') {
         projection.identityDocumentUrl = 0
         projection.identityDocumentBackUrl = 0
@@ -1375,10 +1416,7 @@ router.get('/:collection/:id', requireAuth, async (req, res) => {
       return res.json({ ok: true, data: personalizeNotification(doc, req.user) })
     }
     if (collection === 'user_accounts') {
-      delete doc.password
-      delete doc.otpCode
-      delete doc.otpExpiresAt
-      delete doc.pendingEmailOtp
+      stripAccountSecrets(doc)
       // Only admins and the account's owner see the submitted ID photos.
       if (req.user.role !== 'admin' && String(doc.id || doc._id) !== String(req.user.id)) {
         delete doc.identityDocumentUrl
@@ -2201,6 +2239,13 @@ router.put('/:collection/:id', requireAuth, async (req, res) => {
   if (!allowedUpdateRoles[collection]?.includes(updateRole)) {
     return res.status(403).json({ ok: false, error: 'Forbidden: insufficient role permissions' })
   }
+  // Passwords and one-time codes change only through the auth flows (reset, set-password), which
+  // hash them and end old sessions; record ids never change.
+  dropIdFields(payload)
+  {
+    const blocked = blockedWriteFields(payload)
+    if (blocked.length) return res.status(403).json({ ok: false, error: `These fields can't be changed here: ${blocked.join(', ')}` })
+  }
   if (updateRole === 'user' && collection === 'user_accounts') {
     const changes = payload.$set || payload
     const usesUnsupportedOperator = Object.keys(payload).some((field) => field.startsWith('$') && field !== '$set')
@@ -2457,6 +2502,15 @@ router.put('/:collection/:id', requireAuth, async (req, res) => {
     // because MongoDB driver v6+ can return { value: null } even on success
     await db.collection(collection).updateOne(filter, update)
 
+    if (collection === 'user_accounts') {
+      const accountId = existing.id || existing._id
+      const after = await db.collection(collection).findOne(filter, { projection: { role: 1, status: 1 } })
+      if (after && String(after.role || 'user') !== String(existing.role || 'user')) {
+        await db.collection(collection).updateOne(filter, { $set: revokeSessionsFields() })
+      }
+      forgetAccount(accountId)
+    }
+
     const updatedDoc = await findDocumentById(db, collection, existing.id || id)
     if (!updatedDoc) return res.status(404).json({ ok: false, error: 'not found' })
 
@@ -2482,10 +2536,7 @@ router.put('/:collection/:id', requireAuth, async (req, res) => {
 
     // Same rules as reading an account: never send the password hash or OTP back.
     if (collection === 'user_accounts') {
-      delete updatedDoc.password
-      delete updatedDoc.otpCode
-      delete updatedDoc.otpExpiresAt
-      delete updatedDoc.pendingEmailOtp
+      stripAccountSecrets(updatedDoc)
       if (req.user.role !== 'admin' && String(updatedDoc.id || updatedDoc._id) !== String(req.user.id)) {
         delete updatedDoc.identityDocumentUrl
         delete updatedDoc.identityDocumentBackUrl

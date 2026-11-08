@@ -1,4 +1,5 @@
 import crypto from 'crypto'
+import { ObjectId } from 'mongodb'
 import { getUserAccountsCollection } from '../db/mongo.js'
 
 // Read on first use, not when this module loads: server/index.js imports this file before it
@@ -25,6 +26,7 @@ export function createAuthToken(user, { remember = false } = {}) {
     sub: user?.id || user?.email || 'unknown',
     email: user?.email || '',
     role: user?.role || 'user',
+    iat: Date.now(),
     exp: Date.now() + (remember ? REMEMBERED_SESSION_MS : STANDARD_SESSION_MS),
   }
 
@@ -58,30 +60,58 @@ export function verifyAuthToken(token) {
   return null
 }
 
-// Suspended players are refused even with a still-valid token. The answer is cached briefly
-// so this doesn't add a database read to every request.
+// Every request is checked against the live account, not just the token, so these take effect
+// immediately instead of when the token runs out (12 hours, or 30 days with "Remember me"):
+// - a suspended player is refused,
+// - a changed role (e.g. staff demoted to player) applies at once,
+// - a password reset ends older sessions (sessionsValidAfterISO),
+// - a deleted account can no longer use its token.
+// The answer is cached briefly so this doesn't add a database read to every request.
 export const SUSPENDED_ACCOUNT_ERROR = 'This account is suspended. Please contact Chill Shooters staff.'
-const SUSPENSION_CACHE_MS = 60 * 1000
-const suspensionCache = new Map()
+export const SESSION_ENDED_ERROR = 'Your session has ended. Please sign in again.'
+const ACCOUNT_CACHE_MS = 30 * 1000
+const accountCache = new Map()
 
 export function isSuspendedAccount(account) {
   return String(account?.status || '').toLowerCase() === 'suspended'
 }
 
-// Call after changing an account's status so the new state applies immediately.
-export function forgetSuspension(userId) {
-  suspensionCache.delete(String(userId))
+// Call after changing an account's status, role or password so the change applies immediately.
+export function forgetAccount(userId) {
+  accountCache.delete(String(userId))
+}
+// Kept for existing callers.
+export const forgetSuspension = forgetAccount
+
+// The fields to $set on an account to end every session issued before now.
+export function revokeSessionsFields() {
+  return { sessionsValidAfterISO: new Date().toISOString() }
 }
 
-async function isSuspendedUser(userId) {
+async function loadAccountState(userId) {
   const key = String(userId)
-  const cached = suspensionCache.get(key)
-  if (cached && Date.now() - cached.checkedAt < SUSPENSION_CACHE_MS) return cached.suspended
+  const cached = accountCache.get(key)
+  if (cached && Date.now() - cached.checkedAt < ACCOUNT_CACHE_MS) return cached.state
   const accounts = await getUserAccountsCollection()
-  const account = await accounts.findOne({ id: key }, { projection: { status: 1 } })
-  const suspended = isSuspendedAccount(account)
-  suspensionCache.set(key, { suspended, checkedAt: Date.now() })
-  return suspended
+  const objectId = /^[a-f0-9]{24}$/i.test(key) ? new ObjectId(key) : null
+  const account = await accounts.findOne(
+    { $or: [{ id: key }, ...(objectId ? [{ _id: objectId }] : [])] },
+    { projection: { status: 1, role: 1, sessionsValidAfterISO: 1 } },
+  )
+  const state = account
+    ? {
+      exists: true,
+      role: account.role || 'user',
+      suspended: isSuspendedAccount(account),
+      validAfter: account.sessionsValidAfterISO ? new Date(account.sessionsValidAfterISO).getTime() : 0,
+    }
+    : { exists: false }
+  accountCache.set(key, { state, checkedAt: Date.now() })
+  return state
+}
+
+function sessionEnded(res) {
+  return res.status(401).json({ ok: false, error: SESSION_ENDED_ERROR, sessionEnded: true })
 }
 
 export async function requireAuth(req, res, next) {
@@ -90,6 +120,8 @@ export async function requireAuth(req, res, next) {
   const payload = verifyAuthToken(token)
 
   if (!payload) {
+    // sessionEnded only when a token was sent, so the app signs out instead of retrying.
+    if (token) return sessionEnded(res)
     return res.status(401).json({ ok: false, error: 'Authentication required' })
   }
 
@@ -99,15 +131,19 @@ export async function requireAuth(req, res, next) {
     role: payload.role,
   }
 
-  if (payload.role === 'user') {
-    try {
-      if (await isSuspendedUser(payload.sub)) {
-        return res.status(403).json({ ok: false, error: SUSPENDED_ACCOUNT_ERROR, suspended: true })
-      }
-    } catch (err) {
-      // If the database is briefly unreachable, don't lock every player out; the route will fail on its own.
-      console.warn('Suspension check failed:', String(err))
+  try {
+    const account = await loadAccountState(payload.sub)
+    if (!account.exists) return sessionEnded(res)
+    // Tokens issued before a password reset no longer work.
+    if (account.validAfter && Number(payload.iat || 0) < account.validAfter) return sessionEnded(res)
+    // The stored role always wins over the one written in the token.
+    req.user.role = account.role
+    if (account.role === 'user' && account.suspended) {
+      return res.status(403).json({ ok: false, error: SUSPENDED_ACCOUNT_ERROR, suspended: true })
     }
+  } catch (err) {
+    // If the database is briefly unreachable, don't lock everyone out; the route will fail on its own.
+    console.warn('Account check failed:', String(err))
   }
 
   next()

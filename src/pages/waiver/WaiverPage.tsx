@@ -1040,7 +1040,7 @@ export function WaiverPage({
       ) : null}
 
       {viewWaiverOpen && submittedWaiver ? createPortal(
-        <div className="waiver-print-overlay fixed inset-0 z-[9999] grid place-items-center bg-black/60 p-4">
+        <div className="waiver-print-overlay fixed inset-0 z-[9999] grid place-items-center bg-black/60 p-3 sm:p-4">
           <div className="waiver-print-sheet flex max-h-[90dvh] w-full max-w-5xl flex-col overflow-hidden bg-white text-slate-950 dark:bg-slate-950 dark:text-white shadow-2xl">
             {/* The title row sits above the scrolling area, so the close button stays in reach and no text slides under it. */}
             <div className="flex shrink-0 flex-col gap-4 border-b border-slate-200/70 bg-white px-6 pb-4 pt-6 dark:bg-slate-950 sm:flex-row sm:items-center sm:justify-between">

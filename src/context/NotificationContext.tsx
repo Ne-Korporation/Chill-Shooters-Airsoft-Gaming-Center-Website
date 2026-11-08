@@ -1,4 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import { subscribeLiveUpdates } from '../utils/liveUpdates'
 import { apiDelete, apiGet, apiPost, apiPut } from '../utils/apiClient'
 import { useAuth } from './AuthContext'
 
@@ -142,12 +143,21 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     }
     void load()
     const timer = window.setInterval(() => { void load() }, 60_000)
+    // New notifications show within a few seconds of being sent (see utils/liveUpdates).
+    let debounce: number | undefined
+    const unsubscribeLive = subscribeLiveUpdates((topics) => {
+      if (!topics.has('notifications')) return
+      window.clearTimeout(debounce)
+      debounce = window.setTimeout(() => { void load() }, 400)
+    })
     const onVisible = () => { if (document.visibilityState === 'visible') void load() }
     document.addEventListener('visibilitychange', onVisible)
 
     return () => {
       active = false
       window.clearInterval(timer)
+      window.clearTimeout(debounce)
+      unsubscribeLive()
       document.removeEventListener('visibilitychange', onVisible)
     }
   }, [user?.id])

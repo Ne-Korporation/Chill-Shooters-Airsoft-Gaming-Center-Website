@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
+import { useLiveRefresh } from '../../utils/liveUpdates'
 import { FiCalendar, FiEye, FiRefreshCw, FiUsers } from 'react-icons/fi'
 import toast from 'react-hot-toast'
 
@@ -103,8 +104,8 @@ export function ReservationsByDate({ embedded = false }: { embedded?: boolean } 
       .catch(() => setDetailsPayments([]))
   }
 
-  const load = async () => {
-    setLoading(true)
+  const load = async (silent = false) => {
+    if (!silent) setLoading(true)
     try {
       const [reservationDocs, accountDocs] = await Promise.all([
         apiGetAll<ReservationDoc>('reservations'),
@@ -122,6 +123,7 @@ export function ReservationsByDate({ embedded = false }: { embedded?: boolean } 
   useEffect(() => {
     void load()
   }, [])
+  useLiveRefresh(['reservations', 'payments', 'accounts'], () => load(true))
 
   const accountById = useMemo(() => new Map(accounts.map((account) => [String(account.id || account._id || ''), account])), [accounts])
 

@@ -100,3 +100,56 @@ input[type='checkbox']:not(.sr-only):disabled {
   cursor: not-allowed;
   opacity: 0.5;
 }
+
+/* ---------- Phone-friendly defaults (applies to every page) ---------- */
+
+/* Media never pushes the page wider than the screen. */
+img,
+video,
+canvas,
+svg {
+  max-width: 100%;
+}
+
+/* Long words, IDs, emails and links wrap instead of forcing sideways scrolling. */
+h1,
+h2,
+h3,
+p {
+  overflow-wrap: break-word;
+}
+
+button,
+a,
+[role='button'] {
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (max-width: 639px) {
+  /* iOS zooms the page in when a field under 16px is focused; 16px keeps the layout put. */
+  input:not([type='checkbox']):not([type='radio']):not([type='range']),
+  select,
+  textarea {
+    font-size: 16px;
+  }
+
+  /* Big page titles are scaled down so they fit on one or two lines on a phone. */
+  h1.text-4xl,
+  h1.text-5xl {
+    font-size: 1.875rem;
+    line-height: 2.25rem;
+  }
+  h1.text-3xl {
+    font-size: 1.5rem;
+    line-height: 2rem;
+  }
+
+  /* Wide tables scroll inside their own box rather than stretching the page. */
+  table {
+    font-size: 0.8125rem;
+  }
+  /* Toasts use nearly the full width on phones. */
+  .app-toast {
+    max-width: calc(100vw - 24px);
+  }
+}

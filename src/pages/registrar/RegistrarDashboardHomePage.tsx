@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react'
+import { useLiveRefresh } from '../../utils/liveUpdates'
 import toast from 'react-hot-toast'
 import { Link } from 'react-router-dom'
 import { DashboardPostsPanel } from '../../components/dashboard/DashboardPostsPanel'
@@ -14,10 +15,13 @@ export function RegistrarDashboardHomePage() {
   const [pendingWaivers, setPendingWaivers] = useState(0)
   const [pendingPayments, setPendingPayments] = useState(0)
   const [loading, setLoading] = useState(true)
+  // Bumped when the data shown here changes on the server; re-runs the load below quietly.
+  const [liveTick, setLiveTick] = useState(0)
+  useLiveRefresh(['reservations', 'payments', 'waivers'], () => setLiveTick((tick) => tick + 1))
 
   useEffect(() => {
     const load = async () => {
-      setLoading(true)
+      if (liveTick === 0) setLoading(true)
       try {
         const [reservationsRes, waiversRes, paymentsRes] = await Promise.all([
           apiGet<{ ok: boolean; data: any[] }>('/api/reservations?limit=200'),
@@ -43,7 +47,7 @@ export function RegistrarDashboardHomePage() {
     }
 
     void load()
-  }, [])
+  }, [liveTick])
 
   const { user } = useAuth()
   const firstName = String(user?.name || 'there').trim().split(/\s+/)[0]
