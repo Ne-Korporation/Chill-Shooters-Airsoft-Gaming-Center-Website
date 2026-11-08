@@ -1049,7 +1049,7 @@ export function WaiverPage({
                 <h2 id="waiver-details-title" className="mt-1 text-2xl font-semibold">{submittedWaiver.fullName || 'Unnamed player'}</h2>
                 <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">This is your submitted waiver record.</p>
               </div>
-              <div className="waiver-print-controls flex items-center gap-2 self-start sm:self-auto">
+              <div className="waiver-print-controls flex shrink-0 items-center gap-2 self-start sm:self-auto">
                 <Button variant="secondary" onClick={printWaiver}>
                   <FiPrinter />
                   Print waiver
@@ -1057,7 +1057,7 @@ export function WaiverPage({
                 <button
                   type="button"
                   onClick={() => setViewWaiverOpen(false)}
-                  className="rounded-lg p-2 text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+                  className="shrink-0 rounded-lg p-2 text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
                   aria-label="Close waiver view"
                 >
                   <FiX />

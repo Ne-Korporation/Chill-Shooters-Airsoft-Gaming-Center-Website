@@ -75,7 +75,7 @@ export function ForgotPasswordPage() {
               <div className="pt-2 text-xs">
                 <button
                   type="button"
-                  className="text-muted hover:text-text transition"
+                  className="-my-2 py-2 text-muted hover:text-text transition"
                   onClick={() => navigate('/login')}
                 >
                   Back to login

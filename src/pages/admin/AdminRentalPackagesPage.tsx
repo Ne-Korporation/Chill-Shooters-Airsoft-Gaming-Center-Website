@@ -590,8 +590,8 @@ export function AdminRentalPackagesPage() {
         </div>
 
         <div className="mt-4 overflow-x-auto rounded-2xl border border-white/5">
-          <div className="min-w-[860px]">
-            <div className="grid grid-cols-12 bg-white/5 px-3 py-2 text-xs uppercase tracking-widest text-muted">
+          <div className="md:min-w-[860px]">
+            <div className="stack-head grid grid-cols-12 bg-white/5 px-3 py-2 text-xs uppercase tracking-widest text-muted">
               <div className="col-span-1">ID</div>
               <div className="col-span-2">Package</div>
               <div className="col-span-2 text-right">Discount rule</div>
@@ -622,20 +622,20 @@ export function AdminRentalPackagesPage() {
                         setSelectedPackageId(pkg.id)
                         setForm(formFromPackage(pkg))
                       }}
-                      className={`grid grid-cols-12 items-center px-3 py-3 cursor-pointer ${pkg.id === selectedPackageId ? 'bg-white/3' : ''}`}
+                      className={`stack-row grid grid-cols-12 items-center px-3 py-3 cursor-pointer ${pkg.id === selectedPackageId ? 'bg-white/3' : ''}`}
                     >
-                      <div className="col-span-1 text-sm font-semibold">{pkg.id}</div>
-                      <div className="col-span-2">
+                      <div data-label="ID" className="col-span-1 text-sm font-semibold">{pkg.id}</div>
+                      <div data-label="Package" className="col-span-2">
                         <div className="text-sm font-semibold">{pkg.name}</div>
                       </div>
-                      <div className="col-span-2 text-right text-xs text-muted">
+                      <div data-label="Discount rule" className="col-span-2 text-right text-xs text-muted">
                         <div>{discountSummary}</div>
                         <div className="text-[10px]">Entrance included{pkg.bbReloadGrams > 0 ? ` • ${pkg.bbReloadGrams}g BBs/refill` : ''}</div>
                       </div>
-                      <div className="col-span-1 text-right text-sm text-muted">
+                      <div data-label="Players" className="col-span-1 text-right text-sm text-muted">
                         {pkg.players > 0 ? `${pkg.players}` : `${pkg.minPlayers} min`}
                       </div>
-                      <div className="col-span-2 text-right">
+                      <div data-label="Settled amount" className="col-span-2 text-right">
                         {rowSettled ? (
                           <>
                             <div className="text-sm font-semibold text-accent">₱{rowSettled.total.toLocaleString()}</div>
@@ -647,11 +647,11 @@ export function AdminRentalPackagesPage() {
                           <div className="text-xs text-muted">Computed</div>
                         )}
                       </div>
-                      <div className="col-span-2 text-right text-sm text-muted">
+                      <div data-label="Includes" className="col-span-2 text-right text-sm text-muted">
                         <div>{pkg.weaponCount} weapon{pkg.weaponCount === 1 ? '' : 's'}</div>
                         <div className="text-[11px]">{pkg.equipmentCount} items</div>
                       </div>
-                      <div className="col-span-2 text-right">
+                      <div data-label="Status" className="stack-wide col-span-2 text-right">
                         <StatusPill status={pkg.status} />
                         <div className="mt-2 flex justify-end">
                           <Button

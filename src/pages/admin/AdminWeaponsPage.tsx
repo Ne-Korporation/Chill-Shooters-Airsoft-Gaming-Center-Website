@@ -515,7 +515,7 @@ function WeaponInventory() {
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
                 placeholder="ID, name, model, owner"
-                className="w-full min-w-[200px] rounded-full border border-white/10 bg-background px-4 py-2 text-sm text-text outline-none focus:ring-2 focus:ring-accent/40"
+                className="w-full sm:min-w-[200px] rounded-full border border-white/10 bg-background px-4 py-2 text-sm text-text outline-none focus:ring-2 focus:ring-accent/40"
               />
             </div>
             <div>
@@ -523,7 +523,7 @@ function WeaponInventory() {
               <select
                 value={category}
                 onChange={(event) => setCategory(event.target.value as WeaponCategory | 'all')}
-                className="min-w-[170px] rounded-full border border-white/10 bg-background px-3 py-2 text-sm text-text outline-none"
+                className="w-full sm:w-auto sm:min-w-[170px] rounded-full border border-white/10 bg-background px-3 py-2 text-sm text-text outline-none"
               >
                 <option value="all">All categories</option>
                 {categoryOptions.map((option) => (
@@ -539,7 +539,7 @@ function WeaponInventory() {
               <select
                 value={status}
                 onChange={(event) => setStatus(event.target.value as WeaponStatus | 'all')}
-                className="min-w-[170px] rounded-full border border-white/10 bg-background px-3 py-2 text-sm text-text outline-none"
+                className="w-full sm:w-auto sm:min-w-[170px] rounded-full border border-white/10 bg-background px-3 py-2 text-sm text-text outline-none"
               >
                 <option value="all">All statuses</option>
                 <option value="available">Available</option>
@@ -573,8 +573,8 @@ function WeaponInventory() {
         ) : null}
 
         <div className="mt-4 overflow-x-auto rounded-2xl border border-white/5">
-          <div className="min-w-[920px]">
-            <div className="grid grid-cols-12 gap-3 bg-white/5 px-3 py-2 text-xs uppercase tracking-widest text-muted">
+          <div className="md:min-w-[920px]">
+            <div className="stack-head grid grid-cols-12 gap-3 bg-white/5 px-3 py-2 text-xs uppercase tracking-widest text-muted">
               <div className="col-span-2">ID</div>
               <div className="col-span-3">Weapon</div>
               <div className="col-span-1 text-right">Piece</div>
@@ -590,12 +590,12 @@ function WeaponInventory() {
               <div className="p-6 text-sm text-muted">No weapons match this filter.</div>
             ) : (
               pageItems.map((weapon) => (
-                <div key={weapon.id} className={"grid grid-cols-12 items-center gap-3 px-3 py-3 " + (selectedWeaponId === weapon.id ? 'bg-white/6 ring-2 ring-white/10' : '')}>
-                  <div className="col-span-2 flex items-center gap-2 text-sm font-semibold">
+                <div key={weapon.id} className={"stack-row grid grid-cols-12 items-center gap-3 px-3 py-3 " + (selectedWeaponId === weapon.id ? 'bg-white/6 ring-2 ring-white/10' : '')}>
+                  <div data-label="ID" className="col-span-2 flex items-center gap-2 text-sm font-semibold">
                     {selecting ? <SelectBox checked={selectedIds.includes(weapon.id)} onChange={() => toggleSelected(weapon.id)} label={`Select ${weapon.id}`} /> : null}
                     {weapon.id}
                   </div>
-                  <div className="col-span-3">
+                  <div data-label="Weapon" className="stack-wide col-span-3">
                     <div className="flex flex-wrap items-center gap-2">
                       <div className="text-sm font-semibold">{weapon.name}</div>
                       {weapon.source === 'player' ? (
@@ -611,9 +611,9 @@ function WeaponInventory() {
                       </div>
                     ) : null}
                   </div>
-                  <div className="col-span-1 text-right text-sm font-semibold">{weapon.source === 'player' || !weapon.unitNumber ? '—' : `#${weapon.unitNumber}`}</div>
-                  <div className="col-span-1 text-right text-sm font-semibold text-muted">₱{weapon.price.toLocaleString()}</div>
-                  <div className="col-span-2 pl-4">
+                  <div data-label="Piece" className="col-span-1 text-right text-sm font-semibold">{weapon.source === 'player' || !weapon.unitNumber ? '—' : `#${weapon.unitNumber}`}</div>
+                  <div data-label="Price" className="col-span-1 text-right text-sm font-semibold text-muted">₱{weapon.price.toLocaleString()}</div>
+                  <div data-label="Status" className="col-span-2 pl-4">
                     <StatusBadge status={weapon.status} />
                     {/* The last chronograph reading for this gun. */}
                     {lastFps.get(weapon.id) ? (() => {
@@ -625,7 +625,7 @@ function WeaponInventory() {
                       )
                     })() : <div className="mt-1 text-[11px] text-muted">No FPS reading</div>}
                   </div>
-                  <div className="col-span-3">
+                  <div className="stack-wide col-span-3">
                     <ActionGroup>
                       <Button size="xs" variant="ghost" onClick={(e) => { e.stopPropagation(); setFpsFor(weapon); setFpsReading('') }}>
                         <FiCrosshair /> FPS

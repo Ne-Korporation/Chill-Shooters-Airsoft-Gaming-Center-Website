@@ -240,7 +240,7 @@ export function AdminAuditLogsPage() {
         </div>
 
         <div className="mt-4 overflow-hidden rounded-2xl border border-white/5">
-          <div className="grid grid-cols-12 bg-white/5 px-3 py-2 text-xs uppercase tracking-widest text-muted">
+          <div className="stack-head grid grid-cols-12 bg-white/5 px-3 py-2 text-xs uppercase tracking-widest text-muted">
             <div className="col-span-2">ID</div>
             <div className="col-span-2 text-left">Action</div>
             <div className="col-span-3">Summary</div>
@@ -258,17 +258,17 @@ export function AdminAuditLogsPage() {
             ) : (
               <Paged items={visible}>{(pageItems) => pageItems.map((log, index) => (
                 // Records without an id share a fallback like "EQ-UNKNOWN", so include the position.
-                <div key={`${log.id}-${log.action}-${index}`} className="grid grid-cols-12 items-center px-3 py-3">
-                  <div className="col-span-2 text-sm font-semibold">{log.id}</div>
-                  <div className="col-span-2 text-left text-sm text-muted">{log.action}</div>
-                  <div className="col-span-3">
+                <div key={`${log.id}-${log.action}-${index}`} className="stack-row grid grid-cols-12 items-center px-3 py-3">
+                  <div data-label="ID" className="col-span-2 text-sm font-semibold">{log.id}</div>
+                  <div data-label="Action" className="col-span-2 text-left text-sm text-muted">{log.action}</div>
+                  <div data-label="Summary" className="stack-wide col-span-3">
                     <div className="text-sm font-semibold">{log.summary}</div>
                     <div className="mt-1 text-xs text-muted">Actor: {log.actor}</div>
                   </div>
-                  <div className="col-span-2 text-right">
+                  <div data-label="Severity" className="col-span-2 text-right">
                     <SeverityPill severity={log.severity} />
                   </div>
-                  <div className="col-span-3 text-right">
+                  <div data-label="Meta" className="col-span-3 text-right">
                     <div className="text-sm text-muted">{log.meta}</div>
                   </div>
                 </div>

@@ -231,7 +231,7 @@ export function ReservationsByDate({ embedded = false }: { embedded?: boolean } 
                   <div className="text-xs text-muted">{bookings.length} booking{bookings.length === 1 ? '' : 's'} • {totalPlayers} players</div>
                 </div>
               </div>
-              <span className="text-xs text-muted">{isOpen ? 'Hide' : 'Show players'}</span>
+              <span className="shrink-0 whitespace-nowrap text-xs text-muted">{isOpen ? 'Hide' : 'Show players'}</span>
             </button>
 
             {isOpen ? (

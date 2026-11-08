@@ -182,7 +182,7 @@ export function PartnerLoansCard({ partners }: { partners: Array<{ id: string; n
 
       <div className="mt-4 grid gap-6 xl:grid-cols-[420px,1fr]">
         <form className="space-y-3" onSubmit={submit}>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid gap-2 sm:grid-cols-2">
             <select value={form.partnerId} onChange={(e) => setForm({ ...form, partnerId: e.target.value })} className={selectClass}>
               {partners.length === 0 ? <option value="">Add a partnership first</option> : null}
               {partners.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
@@ -192,7 +192,7 @@ export function PartnerLoansCard({ partners }: { partners: Array<{ id: string; n
               <option value="lent_to_partner">Lent to partner</option>
             </select>
           </div>
-          <div className="grid grid-cols-2 gap-2 text-xs text-muted">
+          <div className="grid gap-2 text-xs text-muted sm:grid-cols-2">
             <label>Handed over<input type="date" value={form.borrowedOn} onChange={(e) => setForm({ ...form, borrowedOn: e.target.value })} className={`${fieldClass} mt-1 text-text`} /></label>
             <label>Due back (optional)<input type="date" value={form.dueOn} min={form.borrowedOn} onChange={(e) => setForm({ ...form, dueOn: e.target.value })} className={`${fieldClass} mt-1 text-text`} /></label>
           </div>
@@ -205,21 +205,21 @@ export function PartnerLoansCard({ partners }: { partners: Array<{ id: string; n
                   <option value="">Not in our inventory (describe below)</option>
                   {inventory.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
                 </select>
-                <div className="grid grid-cols-[1fr,80px,auto] gap-2">
+                <div className="grid grid-cols-[minmax(0,1fr),80px,auto] gap-2">
                   {item.inventoryKey ? (
                     <div className="self-center text-xs text-muted">One linked piece</div>
                   ) : (
                     <input value={item.description} onChange={(e) => setItem(index, { description: e.target.value })} placeholder="e.g. M4 rifles (partner-owned)" className={fieldClass} />
                   )}
                   <input type="number" min={1} value={item.inventoryKey ? '1' : item.quantity} disabled={Boolean(item.inventoryKey)} onChange={(e) => setItem(index, { quantity: e.target.value })} className={fieldClass} aria-label="Quantity" />
-                  <button type="button" disabled={form.items.length === 1} onClick={() => setForm({ ...form, items: form.items.filter((_, i) => i !== index) })} className="px-1 text-muted hover:text-danger disabled:opacity-30" aria-label="Remove item">
+                  <button type="button" disabled={form.items.length === 1} onClick={() => setForm({ ...form, items: form.items.filter((_, i) => i !== index) })} className="px-2 text-muted hover:text-danger disabled:opacity-30" aria-label="Remove item">
                     <FiTrash2 />
                   </button>
                 </div>
                 <input value={item.condition} onChange={(e) => setItem(index, { condition: e.target.value })} placeholder="Condition when handed over" className={fieldClass} />
               </div>
             ))}
-            <button type="button" onClick={() => setForm({ ...form, items: [...form.items, { ...emptyItem }] })} className="inline-flex items-center gap-1 text-xs font-semibold text-accent">
+            <button type="button" onClick={() => setForm({ ...form, items: [...form.items, { ...emptyItem }] })} className="-my-1 inline-flex items-center gap-1 py-2 text-xs font-semibold text-accent">
               <FiPlus /> Add item
             </button>
           </div>
