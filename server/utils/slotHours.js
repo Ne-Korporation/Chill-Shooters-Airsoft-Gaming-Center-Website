@@ -6,9 +6,9 @@ export const SLOT_HOURS_ID = 'slot_hours'
 export const SLOT_ORDER = ['morning', 'afternoon', 'evening']
 
 export const DEFAULT_SLOT_HOURS = {
-  morning: { start: '06:00', end: '12:00' },
-  afternoon: { start: '12:00', end: '18:00' },
-  evening: { start: '18:00', end: '23:00' },
+  morning: { start: '08:00', end: '12:00' },
+  afternoon: { start: '12:00', end: '17:00' },
+  evening: { start: '17:00', end: '22:00' },
 }
 
 const TIME = /^([01]\d|2[0-3]):([0-5]\d)$/

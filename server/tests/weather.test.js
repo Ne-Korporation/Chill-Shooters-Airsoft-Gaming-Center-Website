@@ -48,11 +48,11 @@ test('strong wind is severe', () => {
 })
 
 test('only entries overlapping the slot count', () => {
-  // A storm in the evening does not affect the morning slot; the 03:00 block (03–06) ends at 06.
-  const entries = [entry('2026-11-01', 3, { id: 211 }), entry('2026-11-01', 20, { id: 211 }), entry('2026-11-01', 9)]
+  // A storm in the evening does not affect the morning slot; the 05:00 block (05–08) ends at 08.
+  const entries = [entry('2026-11-01', 5, { id: 211 }), entry('2026-11-01', 20, { id: 211 }), entry('2026-11-01', 9)]
   assert.equal(summarizeSlotForecast(entries, '2026-11-01', 'morning', config).severe, false)
-  // A storm block starting 05:00 overlaps the 06:00 start.
-  assert.equal(summarizeSlotForecast([entry('2026-11-01', 5, { id: 211 })], '2026-11-01', 'morning', config).severe, true)
+  // A storm block starting 07:00 overlaps the 08:00 start.
+  assert.equal(summarizeSlotForecast([entry('2026-11-01', 7, { id: 211 })], '2026-11-01', 'morning', config).severe, true)
 })
 
 test('no forecast yet for the date', () => {

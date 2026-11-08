@@ -50,11 +50,6 @@ function dayLabel(dateISO: string) {
 
 const capitalize = (value: string) => value.charAt(0).toUpperCase() + value.slice(1)
 
-// The rain-or-shine policy is shown once at the bottom of the pop-up, so older advisories that
-// repeated it in full are trimmed to the forecast itself.
-const POLICY_TAIL = / ?We play rain or shine unless the marshals stop play for safety\.(?: If weather stops you from coming, contact us and staff can move your booking and payment to another date(?:; payments are not refundable)?\.)?/
-const advisoryText = (message: string) => message.replace(POLICY_TAIL, ' We play rain or shine.').trim()
-
 const DAYS_SHOWN = 7
 
 // YYYY-MM-DD in Manila time, `offset` days from today.
@@ -117,8 +112,6 @@ export function WeatherAdvisoryWidget() {
   // today drops out once its slots are over). Before anything has loaded, today stays.
   const covered = allDays.filter((d) => d.forecast.length > 0 || d.advisories.length > 0)
   const days = covered.length ? covered : allDays.slice(0, 1)
-  // Advisories further out than the week still get listed under their own date.
-  const later = sorted.filter((a) => a.date > allDays[allDays.length - 1].iso)
   const [selectedDay, setSelectedDay] = useState<string>(days[0].iso)
   const selected = days.find((d) => d.iso === selectedDay) || days[0]
 
@@ -143,11 +136,6 @@ export function WeatherAdvisoryWidget() {
       >
         {hasAdvisory ? <FiCloudRain className="shrink-0 text-xl text-gold" /> : <FiSun className="shrink-0 text-xl text-gold" />}
         <span className="flex-1 text-left">{todayLabel}</span>
-        {hasAdvisory ? (
-          <span className="rounded-full bg-warning/20 px-2 py-0.5 text-[11px] font-semibold text-warning">
-            {sorted.length} advisor{sorted.length === 1 ? 'y' : 'ies'}
-          </span>
-        ) : null}
         <FiChevronRight className="shrink-0 text-muted" />
       </button>
 
@@ -198,7 +186,6 @@ export function WeatherAdvisoryWidget() {
               <div className="text-xs text-muted">Checking the forecast…</div>
             ) : (
               <div className="space-y-3">
-                {selected.advisories.length > 0 ? <AdvisoryList items={selected.advisories} /> : null}
                 {selected.forecast.length > 0 ? (
                   <DayForecastList items={selected.forecast} />
                 ) : (
@@ -210,13 +197,6 @@ export function WeatherAdvisoryWidget() {
               </div>
             )}
           </div>
-
-          {later.length > 0 ? (
-            <div className="mt-4">
-              <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted">Later</div>
-              <AdvisoryList items={later} showDate />
-            </div>
-          ) : null}
 
           <p className="mt-4 border-t border-white/10 pt-3 text-[11px] text-muted">
             We play rain or shine unless the marshals stop play for safety. If weather stops you from coming, contact us and staff can move your booking and payment to another date. Payments are not refundable.
@@ -311,29 +291,4 @@ function shortLocation(name: string) {
   if (inParens) return inParens[1]
   if (/binan/i.test(name)) return 'Biñan'
   return name
-}
-
-function AdvisoryList({ items, showDate = false }: { items: CurrentAdvisory[]; showDate?: boolean }) {
-  return (
-    <ul className="space-y-2">
-      {items.map((a) => (
-        <li
-          key={a.id}
-          className={['rounded-xl border px-3 py-2', a.mine ? 'border-warning/40 bg-warning/10' : 'border-white/10 bg-white/5'].join(' ')}
-        >
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs font-semibold">
-            <span className={a.mine ? 'text-warning' : 'text-text'}>
-              {showDate ? `${dayLabel(a.date)} · ` : ''}{a.slot ? capitalize(a.slot) : 'All slots'}
-            </span>
-            {a.mine ? <span className="rounded-full bg-warning/20 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-warning">Your game</span> : null}
-            {a.source === 'forecast' ? (
-              <span className="rounded-full bg-white/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-muted" title="Updated automatically from the weather forecast every hour">Forecast</span>
-            ) : null}
-          </div>
-          <div className="text-[11px] text-muted">{a.locationName}</div>
-          <p className="mt-1 text-xs text-text">{advisoryText(a.message)}</p>
-        </li>
-      ))}
-    </ul>
-  )
 }

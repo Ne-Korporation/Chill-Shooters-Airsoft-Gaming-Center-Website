@@ -2,7 +2,7 @@ import express from 'express'
 import { getDb } from '../db/mongo.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
 import { WEATHER_DAILY, WEATHER_OUTLOOK, forecastForDate, isWeatherConfigured, liveDailyForecast, locationCoords, refreshWeatherOutlook, sendAdvisory, sendWeatherAlerts } from '../utils/weather.js'
-import { SLOT_HOURS_ID, SLOT_ORDER, getSlotHours, validateSlotHours } from '../utils/slotHours.js'
+import { SLOT_HOURS_ID, SLOT_ORDER, getSlotHours, slotHasStarted, validateSlotHours } from '../utils/slotHours.js'
 import { manilaDateISO } from '../utils/reminders.js'
 
 // Game slot hours, the weather forecast for staff, manual advisories to booked players,
@@ -98,8 +98,12 @@ router.get('/weather-advisories/current', requireAuth, async (req, res) => {
     for (const d of dailyDocs) {
       for (const s of Array.isArray(d.slots) ? d.slots : []) liveSlot.set(`${d.locationId}|${d.date}|${s.slot}`, s)
     }
+    const { hours } = await getSlotHours(db)
     const latest = new Map()
     for (const doc of docs) {
+      // Today's slots that have already started are over as far as the advisory goes. The forecast
+      // no longer covers those hours, so the check below can't drop them on its own.
+      if (doc.slot && slotHasStarted(hours, doc.slot, doc.date, today)) continue
       const key = `${doc.locationId}|${doc.date}|${doc.slot || ''}`
       // An automatic advisory is a snapshot of an older forecast. Once the latest forecast for
       // that slot no longer shows rain, storms or strong wind, it is out of date and not shown.
@@ -111,6 +115,7 @@ router.get('/weather-advisories/current', requireAuth, async (req, res) => {
     // The automatic forecast outlook fills in every other rainy slot. An advisory already sent
     // for the same slot (or the whole day) takes its place.
     for (const doc of outlook) {
+      if (slotHasStarted(hours, doc.slot, doc.date, today)) continue
       const key = `${doc.locationId}|${doc.date}|${doc.slot}`
       if (latest.has(key) || latest.has(`${doc.locationId}|${doc.date}|`)) continue
       const current = liveSlot.get(key)

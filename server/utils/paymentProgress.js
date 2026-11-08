@@ -43,7 +43,8 @@ export async function getReservationPayments(db, reservation, session) {
     .toArray()
 }
 
-export async function notifyUser(db, { userId, targetRole, type, title, message, linkedResourceId }) {
+// `fields` adds extra fields to the stored notification (e.g. a key used to update it later).
+export async function notifyUser(db, { userId, targetRole, type, title, message, linkedResourceId, fields }) {
   try {
     await db.collection('notifications').insertOne({
       id: await nextShortId(db, 'notifications', 'N'),
@@ -53,6 +54,7 @@ export async function notifyUser(db, { userId, targetRole, type, title, message,
       title,
       message,
       ...(linkedResourceId ? { linkedResourceId: String(linkedResourceId) } : {}),
+      ...(fields || {}),
       read: false,
       createdAtISO: new Date().toISOString(),
     })
