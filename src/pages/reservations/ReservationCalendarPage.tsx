@@ -2721,7 +2721,7 @@ export function ReservationCalendarPage() {
               </div>
               <p className="mt-1 text-xs text-muted">Choose a pre-set package or pick individual items.</p>
 
-              <div className="mt-4 grid grid-cols-2 gap-3">
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
                 <button
                   type="button"
                   onClick={() => setSelectionMode('package')}
@@ -3420,9 +3420,9 @@ export function ReservationCalendarPage() {
                       <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Rental Weapons</div>
                       <div className="mt-2 space-y-2">
                         {reservationSummary.customWeapons.map((w) => (
-                          <div key={w.id} className="flex items-center justify-between text-sm">
-                            <span>{w.name}</span>
-                            <span className="text-accent">₱{w.price} each</span>
+                          <div key={w.id} className="flex items-center justify-between gap-3 text-sm">
+                            <span className="min-w-0">{w.name}</span>
+                            <span className="shrink-0 text-accent">₱{w.price} each</span>
                           </div>
                         ))}
                       </div>
@@ -3434,9 +3434,9 @@ export function ReservationCalendarPage() {
                       <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Rental Gear</div>
                       <div className="mt-2 space-y-2">
                         {reservationSummary.customEquipment.map((e) => (
-                          <div key={e.id} className="flex items-center justify-between text-sm">
-                            <span>{e.name}</span>
-                            <span className="text-accent">₱{e.price} each</span>
+                          <div key={e.id} className="flex items-center justify-between gap-3 text-sm">
+                            <span className="min-w-0">{e.name}</span>
+                            <span className="shrink-0 text-accent">₱{e.price} each</span>
                           </div>
                         ))}
                       </div>

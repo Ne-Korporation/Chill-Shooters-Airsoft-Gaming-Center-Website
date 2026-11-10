@@ -19,7 +19,7 @@ export function SelectBox({ checked, onChange, label }: { checked: boolean; onCh
         event.stopPropagation()
         onChange()
       }}
-      className={`grid h-5 w-5 flex-none place-items-center rounded-md border-2 transition ${checked ? 'border-success bg-success text-white' : 'border-white/25 hover:border-white/50'}`}
+      className={`relative grid h-5 w-5 flex-none place-items-center rounded-md border-2 transition after:absolute after:-inset-2.5 after:content-[''] ${checked ? 'border-success bg-success text-white' : 'border-white/25 hover:border-white/50'}`}
     >
       {checked ? <FiCheck className="text-xs" strokeWidth={3} /> : null}
     </button>

@@ -180,7 +180,7 @@ export function TopNav({
       <div className="mx-auto flex h-[72px] max-w-[1400px] items-center justify-between px-3 lg:px-6">
         <div className="flex items-center gap-2">
           <button
-            className="hover-row rounded-xl p-2 text-text lg:hidden"
+            className="hover-row rounded-xl p-2.5 text-text lg:hidden"
             onClick={onMenu}
             aria-label="Open menu"
           >
@@ -226,7 +226,7 @@ export function TopNav({
             <button
               type="button"
               onClick={() => setShowLogoutMenu((prev) => !prev)}
-              className="hover-row rounded-xl p-2 text-muted hover:text-text"
+              className="hover-row rounded-xl p-2.5 text-muted hover:text-text"
               aria-label="Log out"
               title="Log out"
             >

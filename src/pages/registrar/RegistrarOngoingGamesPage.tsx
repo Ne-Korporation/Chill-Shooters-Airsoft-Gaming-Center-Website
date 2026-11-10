@@ -563,7 +563,7 @@ export function RegistrarOngoingGamesPage({ embedded = false }: { embedded?: boo
           <span>{loading ? 'Loading…' : `${total} game${total === 1 ? '' : 's'} match`}</span>
           <div className="flex items-center gap-4">
             {!moreFiltersSet ? (
-              <button type="button" className="font-semibold text-accent hover:underline" onClick={() => setMoreFiltersOpen((v) => !v)}>
+              <button type="button" className="-my-2 py-2 font-semibold text-accent hover:underline" onClick={() => setMoreFiltersOpen((v) => !v)}>
                 {moreFiltersOpen ? 'Fewer filters' : 'More filters'}
               </button>
             ) : null}

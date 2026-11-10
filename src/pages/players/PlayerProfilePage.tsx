@@ -731,7 +731,7 @@ export function PlayerProfilePage() {
                 ) : null}
 
                 <div className="flex flex-col gap-2 sm:flex-row">
-                  <Button type="button" className="flex-1" onClick={submitIdentity} disabled={!idPhotosReady || uploading}>
+                  <Button type="button" className="sm:flex-1" onClick={submitIdentity} disabled={!idPhotosReady || uploading}>
                     {uploading ? 'Submitting…' : isVerified ? 'Submit new ID for verification' : 'Submit ID for verification'}
                   </Button>
                   {replacingId ? (
@@ -780,10 +780,10 @@ export function PlayerProfilePage() {
                     <div className="rounded-2xl border border-danger/20 bg-danger/10 p-3 text-sm text-danger">{error}</div>
                   ) : null}
                   <div className="flex flex-col gap-2 sm:flex-row">
-                    <Button type="button" className="flex-1" onClick={captureIdentityPhoto} disabled={scanStatus === 'scanning'}>
+                    <Button type="button" className="sm:flex-1" onClick={captureIdentityPhoto} disabled={scanStatus === 'scanning'}>
                       Capture {captureSide}
                     </Button>
-                    <Button type="button" variant="ghost" className="flex-1" onClick={stopCamera}>
+                    <Button type="button" variant="ghost" className="sm:flex-1" onClick={stopCamera}>
                       Cancel
                     </Button>
                   </div>
@@ -960,10 +960,10 @@ export function PlayerProfilePage() {
                           }}
                         />
                         <div className="flex flex-col gap-2 sm:flex-row">
-                          <Button type="button" className="flex-1" onClick={confirmEmailChange} disabled={emailChange.busy || emailChange.code.length !== 6}>
+                          <Button type="button" className="sm:flex-1" onClick={confirmEmailChange} disabled={emailChange.busy || emailChange.code.length !== 6}>
                             {emailChange.busy ? 'Verifying…' : 'Verify & change email'}
                           </Button>
-                          <Button type="button" variant="ghost" className="flex-1" onClick={sendEmailChangeCode} disabled={emailChange.busy}>Resend code</Button>
+                          <Button type="button" variant="ghost" className="sm:flex-1" onClick={sendEmailChangeCode} disabled={emailChange.busy}>Resend code</Button>
                           <Button type="button" variant="ghost" className="flex-1" onClick={resetEmailChange} disabled={emailChange.busy}>Cancel</Button>
                         </div>
                         <button
@@ -1004,10 +1004,10 @@ export function PlayerProfilePage() {
               {error ? <div className="rounded-2xl border border-danger/20 bg-danger/10 p-3 text-sm text-danger">{error}</div> : null}
 
               <div className="flex flex-col gap-2 sm:flex-row">
-                <Button type="submit" className="flex-1" disabled={savingProfile}>
+                <Button type="submit" className="sm:flex-1" disabled={savingProfile}>
                   {savingProfile ? 'Saving…' : 'Save changes'}
                 </Button>
-                <Button type="button" variant="ghost" className="flex-1" onClick={handlePasswordReset}>
+                <Button type="button" variant="ghost" className="sm:flex-1" onClick={handlePasswordReset}>
                   Change password
                 </Button>
               </div>
@@ -1039,14 +1039,14 @@ export function PlayerProfilePage() {
       <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
         <Card className="p-4">
           <div className="flex items-center gap-4">
-            <div className="h-16 w-16 overflow-hidden rounded-2xl border border-white/10 bg-white/5">
+            <div className="h-16 w-16 shrink-0 overflow-hidden rounded-2xl border border-white/10 bg-white/5">
               {player?.profileImageUrl ? (
                 <img src={player.profileImageUrl} alt={displayName} className="h-full w-full object-cover" />
               ) : (
                 <div className="flex h-full w-full items-center justify-center text-muted">IMG</div>
               )}
             </div>
-            <div>
+            <div className="min-w-0 flex-1">
               <div className="text-lg font-bold">
                 {displayName}
                 {player?.nickname ? <span className="ml-2 text-sm font-semibold text-accent">“{player.nickname}”</span> : null}

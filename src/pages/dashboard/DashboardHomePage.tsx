@@ -338,7 +338,7 @@ export function DashboardHomePage() {
                   <div className="text-[11px] text-muted">Waiver</div>
                   <div className="text-xs font-medium">{dashboard.waiverStatus}</div>
                 </div>
-                <Link to="/app/waiver" className="text-xs font-medium text-accent hover:underline">
+                <Link to="/app/waiver" className="-my-2 py-2 text-xs font-medium text-accent hover:underline">
                   {dashboard.waiverStatus === 'Not submitted' ? 'Sign now' : 'View'}
                 </Link>
               </div>

@@ -215,8 +215,8 @@ function PackagesSection({ onBook }: { onBook: () => void }) {
               transition={{ duration: 0.4, delay: idx * 0.05 }}
               className="surface flex flex-col rounded-2xl p-5"
             >
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex items-start gap-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="flex min-w-0 items-start gap-3">
                   <span className="chip-accent grid h-10 w-10 shrink-0 place-items-center rounded-xl">
                     <FiBox className="h-5 w-5" />
                   </span>
@@ -308,8 +308,8 @@ function LocationsMap() {
           <FiChevronRight className="h-5 w-5" />
         </button>
       </div>
-      <div className="flex items-center justify-between gap-3 px-5 py-3">
-        <div className="min-w-0" aria-live="polite">
+      <div className="flex flex-col items-start gap-2 px-5 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+        <div className="min-w-0 max-w-full" aria-live="polite">
           <div className="flex items-center gap-2 text-sm font-semibold">
             <FiMapPin className="h-4 w-4 shrink-0 text-accent" />
             <span className="truncate">{location.name}</span>
@@ -323,7 +323,7 @@ function LocationsMap() {
                 aria-selected={i === index}
                 aria-label={loc.name}
                 onClick={() => setIndex(i)}
-                className={`h-1.5 rounded-full transition-all ${i === index ? 'w-6 bg-[rgb(197,163,90)]' : 'w-1.5 bg-[rgba(var(--text),0.25)]'}`}
+                className={`relative h-1.5 rounded-full transition-all after:absolute after:-inset-x-1 after:-inset-y-3 after:content-[''] ${i === index ? 'w-6 bg-[rgb(197,163,90)]' : 'w-1.5 bg-[rgba(var(--text),0.25)]'}`}
               />
             ))}
           </div>
@@ -519,7 +519,7 @@ function MiniCalendar({
           aria-label="Previous month"
           disabled={!canGoPrev}
           onClick={() => shiftMonth(-1)}
-          className="grid h-6 w-6 text-sm place-items-center rounded-full text-[#3d4a1e] transition hover:bg-[#f0f0ea] disabled:opacity-30 disabled:hover:bg-transparent"
+          className="grid h-9 w-9 text-sm place-items-center rounded-full sm:h-6 sm:w-6 text-[#3d4a1e] transition hover:bg-[#f0f0ea] disabled:opacity-30 disabled:hover:bg-transparent"
         >
           <FiChevronLeft />
         </button>
@@ -531,7 +531,7 @@ function MiniCalendar({
           aria-label="Next month"
           disabled={!canGoNext}
           onClick={() => shiftMonth(1)}
-          className="grid h-6 w-6 text-sm place-items-center rounded-full text-[#3d4a1e] transition hover:bg-[#f0f0ea] disabled:opacity-30 disabled:hover:bg-transparent"
+          className="grid h-9 w-9 text-sm place-items-center rounded-full sm:h-6 sm:w-6 text-[#3d4a1e] transition hover:bg-[#f0f0ea] disabled:opacity-30 disabled:hover:bg-transparent"
         >
           <FiChevronRight />
         </button>
@@ -556,7 +556,7 @@ function MiniCalendar({
               aria-pressed={selected}
               aria-label={new Date(`${iso}T12:00:00`).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
               onClick={() => onChange(iso)}
-              className={`mx-auto grid h-7 w-7 place-items-center rounded-full text-xs transition ${
+              className={`mx-auto grid h-9 w-9 place-items-center rounded-full text-sm transition sm:h-7 sm:w-7 sm:text-xs ${
                 selected
                   ? 'bg-[#3d4a1e] font-semibold text-white'
                   : disabled
@@ -901,7 +901,7 @@ export function LandingPage() {
                 value={bookingDateLabel}
                 open={openMenu === 'date'}
                 onToggle={() => toggleMenu('date')}
-                popoverClassName="w-64"
+                popoverClassName="w-72 sm:w-64"
               >
                 <div className="p-2">
                   <MiniCalendar
@@ -924,7 +924,7 @@ export function LandingPage() {
                         }`}
                       >
                         {s.label}
-                        <span className="block text-[9px] font-normal opacity-80">{formatSlotRange(slotHours, s.id)}</span>
+                        <span className="block text-[10px] font-normal opacity-80 sm:text-[9px]">{formatSlotRange(slotHours, s.id)}</span>
                       </button>
                     ))}
                   </div>
@@ -1075,7 +1075,7 @@ export function LandingPage() {
                   </button>
                   <div
                     id={`faq-content-${idx}`}
-                    className={`overflow-hidden transition-all duration-200 ${open ? 'max-h-96 pb-4 opacity-100' : 'max-h-0 opacity-0'}`}
+                    className={`overflow-hidden transition-all duration-200 ${open ? 'max-h-[60rem] pb-4 opacity-100' : 'max-h-0 opacity-0'}`}
                   >
                     <p className="text-sm leading-relaxed text-muted">{f.a}</p>
                   </div>

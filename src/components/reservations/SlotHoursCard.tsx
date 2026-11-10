@@ -58,10 +58,10 @@ export function SlotHoursCard() {
       {open ? (
         <div className="mt-3 space-y-2">
           {SLOTS.map((slot) => (
-            <div key={slot} className="grid grid-cols-[100px,1fr,1fr] items-center gap-2 text-sm">
-              <span className="font-semibold capitalize">{slot}</span>
-              <input type="time" value={hours[slot].start} onChange={(e) => setTime(slot, 'start', e.target.value)} className="rounded-xl border border-white/10 bg-background px-3 py-2 text-sm" aria-label={`${slot} start`} />
-              <input type="time" value={hours[slot].end} onChange={(e) => setTime(slot, 'end', e.target.value)} className="rounded-xl border border-white/10 bg-background px-3 py-2 text-sm" aria-label={`${slot} end`} />
+            <div key={slot} className="grid grid-cols-2 items-center gap-2 text-sm sm:grid-cols-[100px,1fr,1fr]">
+              <span className="col-span-2 font-semibold capitalize sm:col-span-1">{slot}</span>
+              <input type="time" value={hours[slot].start} onChange={(e) => setTime(slot, 'start', e.target.value)} className="w-full min-w-0 rounded-xl border border-white/10 bg-background px-2 py-2 text-sm sm:px-3" aria-label={`${slot} start`} />
+              <input type="time" value={hours[slot].end} onChange={(e) => setTime(slot, 'end', e.target.value)} className="w-full min-w-0 rounded-xl border border-white/10 bg-background px-2 py-2 text-sm sm:px-3" aria-label={`${slot} end`} />
             </div>
           ))}
           <p className="text-xs text-muted">Players see these times when they book, and the weather check reads the forecast for these hours.</p>

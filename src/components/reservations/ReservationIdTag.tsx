@@ -53,7 +53,7 @@ export function CopyIdButton({ value, label = 'Reservation ID' }: { value: strin
       onClick={copy}
       aria-label={copied ? `${label} copied` : `Copy ${label.toLowerCase()} ${value}`}
       title={`Copy ${label.toLowerCase()}`}
-      className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-white/5 px-2 py-0.5 text-[11px] font-semibold text-muted transition hover:border-accent/40 hover:text-text"
+      className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-[11px] lg:py-0.5 font-semibold text-muted transition hover:border-accent/40 hover:text-text"
     >
       {copied ? <FiCheck className="text-success" /> : <FiCopy />} {copied ? 'Copied' : 'Copy'}
     </button>

@@ -36,7 +36,7 @@ export function FilterTabs<T extends string>({
             onClick={() => onChange(option.value)}
             className={[
               'inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border font-semibold transition focus:outline-none focus:ring-2 focus:ring-accent/40',
-              size === 'sm' ? 'px-3 py-1 text-xs' : 'px-4 py-1.5 text-sm',
+              size === 'sm' ? 'px-3 py-1.5 text-xs lg:py-1' : 'px-4 py-2 text-sm lg:py-1.5',
               active ? 'border-accent/40 bg-accent/15 text-accent' : 'surface text-muted hover:text-text',
             ].join(' ')}
           >

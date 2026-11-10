@@ -283,7 +283,7 @@ export function RegisterPage() {
                   <button
                     type="button"
                     onClick={() => setShowPassword((v) => !v)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted hover:text-text transition"
+                    className="absolute right-1 top-1/2 -translate-y-1/2 p-2 text-muted hover:text-text transition"
                     tabIndex={-1}
                   >
                     {showPassword ? <FiEyeOff size={18} /> : <FiEye size={18} />}
@@ -333,14 +333,14 @@ export function RegisterPage() {
               <div className="flex items-center justify-between pt-2 text-xs">
                 <button
                   type="button"
-                  className="text-muted hover:text-text transition"
+                  className="-my-2 py-2 text-muted hover:text-text transition"
                   onClick={() => navigate('/login')}
                 >
                   Back to login
                 </button>
                 <button
                   type="button"
-                  className="text-muted hover:text-text transition"
+                  className="-my-2 py-2 text-muted hover:text-text transition"
                   onClick={() => navigate('/forgot-password')}
                 >
                   Need reset?

@@ -229,7 +229,7 @@ export function ReachNetRevenuePanel({ onAllocated }: { onAllocated: () => void 
                 <div className="flex items-center gap-2">
                   <span>{formatPHP(expense.amount)}</span>
                   {!locked ? (
-                    <button type="button" onClick={() => removeExpense(expense)} className="text-muted hover:text-danger" aria-label="Delete expense"><FiTrash2 /></button>
+                    <button type="button" onClick={() => removeExpense(expense)} className="-m-2 p-2 text-muted hover:text-danger" aria-label="Delete expense"><FiTrash2 /></button>
                   ) : null}
                 </div>
               </li>

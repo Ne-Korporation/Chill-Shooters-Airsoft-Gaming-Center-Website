@@ -327,7 +327,7 @@ export function AdminWaiversPage() {
                 <h2 id="waiver-details-title" className="mt-1 text-2xl font-semibold">{selectedWaiver.fullName || 'Unnamed player'}</h2>
                 <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">What the participant submitted. Staff can approve or deny it but not change it.</p>
               </div>
-              <button type="button" aria-label="Close waiver details" onClick={() => setSelectedWaiver(null)} className="rounded-lg p-2 text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"><FiX /></button>
+              <button type="button" aria-label="Close waiver details" onClick={() => setSelectedWaiver(null)} className="shrink-0 rounded-lg p-2 text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"><FiX /></button>
             </div>
 
             <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 pb-6">

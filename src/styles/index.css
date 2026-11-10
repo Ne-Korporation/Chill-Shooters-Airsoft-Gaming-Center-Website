@@ -119,10 +119,58 @@ p {
   overflow-wrap: break-word;
 }
 
+body {
+  overflow-wrap: break-word;
+}
+
 button,
 a,
 [role='button'] {
   -webkit-tap-highlight-color: transparent;
+}
+
+/* Column lists built on a 12-column grid: below md the header row goes away and each row becomes
+   a two-column card, with every cell labelled from its data-label. */
+@media (max-width: 767px) {
+  /* Grid items may shrink to the column, so one long value can't widen the whole layout.
+     :where() keeps this at zero specificity; a min-width class on an item still applies. */
+  :where(.grid) > * {
+    min-width: 0;
+  }
+  .stack-head {
+    display: none;
+  }
+  .stack-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-auto-flow: dense;
+    align-items: start;
+    gap: 0.75rem;
+  }
+  .stack-row > * {
+    grid-column: auto;
+    min-width: 0;
+    padding-left: 0;
+    text-align: left;
+  }
+  .stack-row > .stack-wide {
+    grid-column: 1 / -1;
+  }
+  .stack-row > [data-label].flex {
+    display: block;
+  }
+  .stack-row > [data-label]::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 0.125rem;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    opacity: 0.6;
+  }
+  .stack-row .justify-end {
+    justify-content: flex-start;
+  }
 }
 
 @media (max-width: 639px) {

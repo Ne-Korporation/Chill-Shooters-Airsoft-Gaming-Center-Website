@@ -59,7 +59,7 @@ export function GuardianConfirmPage() {
                 {data.guardianName ? `${data.guardianName}, you` : 'You'} added <span className="font-semibold">{data.childName}</span> as a minor on your
                 Chill Shooters account. Players under 18 play under a parent or legal guardian.
               </p>
-              <Button disabled={saving} onClick={confirm}>
+              <Button disabled={saving} onClick={confirm} className="!h-auto min-h-[3rem] w-full !whitespace-normal py-2 sm:w-auto">
                 <FiCheckCircle /> {saving ? 'Confirming…' : `Yes, I am ${data.childName}'s parent or guardian`}
               </Button>
               <p className="text-xs text-muted">If you didn't add this child, you can close this page.</p>
