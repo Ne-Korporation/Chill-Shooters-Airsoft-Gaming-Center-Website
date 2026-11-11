@@ -1,7 +1,8 @@
 import express from 'express'
 import { ObjectId } from 'mongodb'
 import { getDb } from '../db/mongo.js'
-import { requireAuth } from '../middleware/auth.js'
+import { requireAuth, requireRole } from '../middleware/auth.js'
+import { askGemini, buildPrompt, checkSuggestions, gatherSuggestionContext } from '../utils/packageSuggestions.js'
 import { calculateBookingPrice } from '../utils/bookingPricing.js'
 import { getBookingInventoryRequirements, getHeldQuantities } from '../utils/inventoryHolds.js'
 
@@ -146,6 +147,43 @@ router.post('/package-recommendations', requireAuth, async (req, res) => {
     })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
+  }
+})
+
+// Each Gemini call costs quota, so each admin gets a limited number per hour.
+const SUGGESTION_LIMIT_PER_HOUR = 10
+const suggestionCalls = new Map()
+export function takeSuggestionCall(userId, now = Date.now(), calls = suggestionCalls) {
+  const recent = (calls.get(userId) || []).filter((at) => now - at < 3_600_000)
+  if (recent.length >= SUGGESTION_LIMIT_PER_HOUR) {
+    calls.set(userId, recent)
+    return { ok: false, retryInMinutes: Math.max(1, Math.ceil((recent[0] + 3_600_000 - now) / 60_000)) }
+  }
+  recent.push(now)
+  calls.set(userId, recent)
+  return { ok: true }
+}
+
+// POST /api/admin/package-suggestions  { focus? }
+// New package ideas from Gemini, checked against current inventory. Nothing is saved here:
+// the admin accepts a suggestion on the packages page, which creates it as a normal package.
+router.post('/admin/package-suggestions', requireAuth, requireRole('admin'), async (req, res) => {
+  const focus = String(req.body?.focus || '').replace(/\s+/g, ' ').trim().slice(0, 200)
+  const allowed = takeSuggestionCall(String(req.user.id))
+  if (!allowed.ok) {
+    return res.status(429).json({ ok: false, error: `Too many AI requests. Try again in ${allowed.retryInMinutes} minute(s).` })
+  }
+  try {
+    const db = await getDb()
+    const context = await gatherSuggestionContext(db)
+    if (!context.weaponModels.length) {
+      return res.status(400).json({ ok: false, error: 'Add rental weapons to inventory first; the AI builds packages from them.' })
+    }
+    const raw = await askGemini(buildPrompt(context, { focus }))
+    const { suggestions, dropped } = checkSuggestions(raw, context)
+    return res.json({ ok: true, data: suggestions, dropped, bookingsConsidered: context.bookings.total })
+  } catch (err) {
+    return res.status(err?.statusCode || 500).json({ ok: false, error: err?.message || String(err) })
   }
 })
 

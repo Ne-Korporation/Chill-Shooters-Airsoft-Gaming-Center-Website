@@ -147,10 +147,10 @@ export function CapacityCalendar({
               const closed = closedByDate[dateISO]
               const past = dateISO < todayISO
               const tone = capacity && !closed ? fillTone(capacity.booked, capacity.capacity) : null
-              // Private days open for info unless fully booked (past ones only if something was booked).
-              const clickable = Boolean(
-                capacity || cause || closed || (editable && !past)
-                || (privateDay && !privateFull && (!past || privateGroups)),
+              // Past days never open. Private days open for info unless fully booked.
+              const clickable = !past && Boolean(
+                capacity || cause || closed || editable
+                || (privateDay && !privateFull),
               )
               const hint = closed ? closedDayMessage(closed) : [
                 cause ? causeDayMessage(cause) : '',

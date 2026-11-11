@@ -37,6 +37,9 @@ services:
       # The frontend also needs VITE_STRIPE_PUBLISHABLE_KEY=pk_test_… on Vercel.
       - key: STRIPE_SECRET_KEY
         sync: false
+      # AI package suggestions for admins (Google Gemini, aistudio.google.com).
+      - key: GEMINI_API_KEY
+        sync: false
       # Online payment through Xendit (test mode only, xnd_development_…); see .env.example.
       - key: XENDIT_SECRET_KEY
         sync: false
