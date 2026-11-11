@@ -1,4 +1,5 @@
 import React from 'react'
+import { confirmDialog } from '../../components/ui/ConfirmDialog'
 import { FiCheck, FiEdit2, FiPlus, FiTrash2, FiX } from 'react-icons/fi'
 import toast from 'react-hot-toast'
 import { ActionGroup, Button } from '../../components/ui/Button'
@@ -234,7 +235,7 @@ export function AdminEquipmentPage() {
 
   const handleRemove = async (id: string) => {
     const name = inventory.find((item) => item.id === id)?.name || id
-    if (!window.confirm(`Remove "${name}" from the gear list? This cannot be undone.`)) return
+    if (!(await confirmDialog({ title: `Remove "${name}"?`, message: 'It will be removed from the gear list. This cannot be undone.', confirmLabel: 'Remove', danger: true }))) return
     try {
       await apiDelete(`/api/equipments/${encodeURIComponent(id)}`)
       toast.success('Gear removed')
@@ -278,7 +279,7 @@ export function AdminEquipmentPage() {
   }
 
   const removeBulk = async () => {
-    if (!window.confirm(`Remove ${selectedIds.length} item${selectedIds.length === 1 ? '' : 's'} from the gear list? This cannot be undone.`)) return
+    if (!(await confirmDialog({ title: `Remove ${selectedIds.length} item${selectedIds.length === 1 ? '' : 's'}?`, message: 'They will be removed from the gear list. This cannot be undone.', confirmLabel: 'Remove', danger: true }))) return
     setBulkBusy(true)
     const failed = await forEachPiece(selectedIds, (id) => apiDelete(`/api/equipments/${encodeURIComponent(id)}`))
     setBulkBusy(false)

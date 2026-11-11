@@ -1,12 +1,14 @@
 import React from 'react'
 import { FiEdit2, FiZap } from 'react-icons/fi'
 import toast from 'react-hot-toast'
-import { AiPackageSuggestions, type AiPackageSuggestion } from '../../components/packages/AiPackageSuggestions'
+import { AiPackageSuggestions, hasRunningSuggestions, type AiPackageSuggestion } from '../../components/packages/AiPackageSuggestions'
 import { ActionGroup, Button } from '../../components/ui/Button'
+import { confirmDialog } from '../../components/ui/ConfirmDialog'
 import { FilterTabs, titleCaseLabel } from '../../components/ui/FilterTabs'
 import { Card } from '../../components/ui/Card'
+import { Modal } from '../../components/ui/Modal'
 import { apiGet, apiPost, apiPut, apiDelete } from '../../utils/apiClient'
-import { formatDiscountTargetLabel, MAX_EQUIPMENT_PER_PLAYER, packageEquipmentQty, resolvePackageDiscountConfig, type PackageDiscountMode, type PackageDiscountTarget } from '../../utils/packagePricing'
+import { calculatePackagePricing, formatDiscountTargetLabel, MAX_EQUIPMENT_PER_PLAYER, PACKAGE_ENTRANCE_FEE_PER_PLAYER, packageRegularTotal, type PackageLike, packageEquipmentQty, resolvePackageDiscountConfig, type PackageDiscountMode, type PackageDiscountTarget } from '../../utils/packagePricing'
 import { isAmmo, modelOf, summarizeModels } from '../../utils/inventoryModels'
 
 type PackageStatus = 'active' | 'draft' | 'archived'
@@ -26,6 +28,9 @@ type RentalPackage = {
   equipmentIds: string[]
   basePrice: number
   minPlayers: number
+  // Bookings made with this package (any status); undefined when the count couldn't be loaded.
+  // Only a package with none can be deleted.
+  bookings?: number
   // Number of players this package is priced for (0 = not fixed)
   players: number
   // Fixed total (before discount) for `players` players (0 = computed pricing)
@@ -180,7 +185,9 @@ function formFromSuggestion(s: AiPackageSuggestion): FormState {
     settledAmount: String(s.price),
     players: String(s.players),
     minPlayers: String(s.minPlayers),
-    weaponCount: String(s.players > 1 ? s.players : 1),
+    // Weapons per player, not for the whole group: a 20-player package gives each player one gun
+    // (20 in all). Using the group size here reserved players × players guns.
+    weaponCount: '1',
     weaponIds: s.weapons.map((w) => w.pieceId),
     equipmentIds: s.gear.map((g) => g.pieceId),
     equipmentQuantities: Object.fromEntries(s.gear.map((g) => [g.pieceId, g.perPlayer])),
@@ -189,7 +196,8 @@ function formFromSuggestion(s: AiPackageSuggestion): FormState {
 }
 
 export function AdminRentalPackagesPage() {
-  const [aiOpen, setAiOpen] = React.useState(false)
+  // Opens by itself when the admin comes back while Gemini is still working on suggestions.
+  const [aiOpen, setAiOpen] = React.useState(hasRunningSuggestions)
   const aiOpened = React.useRef(false)
   if (aiOpen) aiOpened.current = true
   const [status, setStatus] = React.useState<PackageStatus | 'all'>('all')
@@ -212,11 +220,14 @@ export function AdminRentalPackagesPage() {
     setLoading(true)
     setInventoryLoading(true)
     try {
-      const [pkgRes, wepRes, eqRes] = await Promise.all([
+      const [pkgRes, wepRes, eqRes, countsRes] = await Promise.all([
         apiGet<{ ok: boolean; data: any[] }>('/api/packages?limit=200'),
         apiGet<{ ok: boolean; data: any[] }>('/api/weapons?limit=200'),
         apiGet<{ ok: boolean; data: any[] }>('/api/equipments?limit=200'),
+        // Without the counts, Delete stays hidden (Archive still works).
+        apiGet<{ ok: boolean; data: Record<string, number> }>('/api/packages/booking-counts').catch(() => null),
       ])
+      const bookingCounts = countsRes?.ok && countsRes.data ? countsRes.data : null
 
       // Normalize packages
       const pkgDocs = Array.isArray(pkgRes?.data) ? pkgRes.data : []
@@ -248,6 +259,7 @@ export function AdminRentalPackagesPage() {
           equipmentIds: Array.isArray(d.equipmentIds) ? d.equipmentIds : [],
           basePrice: typeof d.basePrice === 'number' ? d.basePrice : 0,
           minPlayers: typeof d.minPlayers === 'number' ? d.minPlayers : 1,
+          bookings: bookingCounts ? bookingCounts[String(d.id ?? d._id)] || 0 : undefined,
           players: typeof d.players === 'number' ? d.players : 0,
           settledAmount: typeof d.settledAmount === 'number' ? d.settledAmount : 0,
           weaponCount: typeof d.weaponCount === 'number' && d.weaponCount > 0 ? d.weaponCount : weaponIds.length,
@@ -315,7 +327,12 @@ export function AdminRentalPackagesPage() {
     }
   }, [selectedPackageId, isAdding])
 
-  const editorRef = React.useRef<HTMLDivElement | null>(null)
+  // The package editor is a pop-up: open while adding or managing a package.
+  const closeEditor = React.useCallback(() => {
+    setIsAdding(false)
+    setSelectedPackageId(null)
+    setErrors({})
+  }, [])
 
   // Use _id for API calls to avoid "not found" due to ID formatting
   function getApiId(pkg: RentalPackage): string {
@@ -346,9 +363,6 @@ export function AdminRentalPackagesPage() {
       newErrors.discountValue = 'Fixed discount cannot be more than the settled amount.'
     }
 
-    const weaponCount = Number(form.weaponCount)
-    if (!Number.isInteger(weaponCount) || weaponCount < 0) newErrors.weaponCount = 'Enter a whole number.'
-
     const bbReloadGrams = Number(form.bbReloadGrams)
     if (!Number.isFinite(bbReloadGrams) || bbReloadGrams < 0) newErrors.bbReloadGrams = 'Enter the grams of BBs per refill (0 if none).'
 
@@ -359,7 +373,6 @@ export function AdminRentalPackagesPage() {
   const buildPayload = (f: FormState = form) => {
     const discountValue = Number(f.discountValue)
     const totalItems = f.weaponIds.length + f.equipmentIds.length
-    const typedWeaponCount = Math.round(Number(f.weaponCount)) || 0
     return {
       name: f.name.trim(),
       discountPct: f.discountMode === 'percent' && f.discountTargets.includes('package_total') ? Math.round(discountValue) || 0 : 0,
@@ -376,7 +389,8 @@ export function AdminRentalPackagesPage() {
       players: Math.round(Number(f.players)) || 0,
       settledAmount: f.discountMode === 'settled' ? Math.round(discountValue) || 0 : 0,
       // If left at 0, fall back to the number of weapons picked from inventory
-      weaponCount: typedWeaponCount > 0 ? typedWeaponCount : f.weaponIds.length,
+      // Every player gets one of each weapon picked.
+      weaponCount: f.weaponIds.length,
       weaponIds: f.weaponIds,
       equipmentIds: f.equipmentIds,
       equipmentQuantities: Object.fromEntries(f.equipmentIds.map((id) => [id, packageEquipmentQty(f, id)])),
@@ -419,13 +433,6 @@ export function AdminRentalPackagesPage() {
     setSelectedPackageId(null)
     setForm(formFromSuggestion(s))
     setErrors({})
-    setTimeout(() => {
-      try {
-        editorRef?.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-      } catch (e) {
-        // ignore in non-DOM environments
-      }
-    }, 60)
   }
 
   const handleSave = async () => {
@@ -444,7 +451,7 @@ export function AdminRentalPackagesPage() {
       await apiPut<any>(`/api/packages/${getApiId(selectedPackage)}`, payload)
 
       toast.success('Package saved')
-      setErrors({})
+      closeEditor()
       await refresh()
     } catch (e: any) {
       toast.error(String(e?.message || e))
@@ -458,13 +465,6 @@ export function AdminRentalPackagesPage() {
     setSelectedPackageId(null)
     setForm({ ...EMPTY_FORM, discountTargets: ['package_total'], weaponIds: [], equipmentIds: [] })
     setErrors({})
-    setTimeout(() => {
-      try {
-        editorRef?.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-      } catch (e) {
-        // ignore in non-DOM environments
-      }
-    }, 60)
   }
 
   const handleCreatePackage = async () => {
@@ -489,13 +489,7 @@ export function AdminRentalPackagesPage() {
       toast.success(`Package "${form.name.trim()}" created`)
       await refresh()
       setStatus('all')
-      setIsAdding(false)
-      setErrors({})
-
-      // Select the newly created package
-      if (res.data?.id) {
-        setSelectedPackageId(res.data.id)
-      }
+      closeEditor()
     } catch (e: any) {
       toast.error(String(e?.message || e))
     } finally {
@@ -503,19 +497,18 @@ export function AdminRentalPackagesPage() {
     }
   }
 
-  const handleCancelAdd = () => {
-    setIsAdding(false)
-    setSelectedPackageId(packages[0]?.id ?? null)
-    setErrors({})
-  }
-
+  // Only for packages that were never booked; the server refuses the rest.
   const handleDelete = async (pkg: RentalPackage) => {
+    if (!(await confirmDialog({
+      title: `Delete "${pkg.name}"?`,
+      message: "It has never been booked, so it will be removed for good. This can't be undone.",
+      confirmLabel: 'Delete',
+      danger: true,
+    }))) return
     try {
       await apiDelete(`/api/packages/${getApiId(pkg)}`)
       toast.success('Package deleted')
-      if (selectedPackageId === pkg.id) {
-        setSelectedPackageId(null)
-      }
+      closeEditor()
       await refresh()
     } catch (e: any) {
       toast.error(String(e?.message || e))
@@ -523,13 +516,19 @@ export function AdminRentalPackagesPage() {
   }
 
   const handleArchive = async (pkg: RentalPackage) => {
-    if (!window.confirm(`Archive "${pkg.name}"? Players will no longer be able to book it.`)) return
+    if (!(await confirmDialog({
+      title: `Archive "${pkg.name}"?`,
+      message: 'Players will no longer be able to book it.',
+      confirmLabel: 'Archive',
+      danger: true,
+    }))) return
     try {
       await apiPut<any>(`/api/packages/${getApiId(pkg)}`, {
         status: 'archived',
         updatedAtISO: new Date().toISOString(),
       })
       toast.success('Package archived')
+      closeEditor()
       await refresh()
     } catch (e: any) {
       toast.error(String(e?.message || e))
@@ -579,24 +578,34 @@ export function AdminRentalPackagesPage() {
   // Get equipment details from the equipment array
   const getEquipmentById = (id: string) => equipment.find((e) => e.id === id)
 
+  // Every player gets one of each weapon picked.
   const pickedWeaponCount = form.weaponIds.length
-  const typedWeaponCount = Math.round(Number(form.weaponCount)) || 0
-  const effectiveWeaponCount = typedWeaponCount > 0 ? typedWeaponCount : pickedWeaponCount
+  const effectiveWeaponCount = pickedWeaponCount
 
   // Calculate total price from selected inventory items (prices come from weapons/equipment modules)
   const totalItemPrice = React.useMemo(() => {
-    const selectedWeaponTotal = form.weaponIds.reduce((sum, wid) => {
+    const weaponTotal = form.weaponIds.reduce((sum, wid) => {
       const weapon = getWeaponById(wid)
       return sum + (weapon?.price || 0)
     }, 0)
-    const averageWeaponPrice = pickedWeaponCount > 0 ? selectedWeaponTotal / pickedWeaponCount : 0
-    const weaponTotal = averageWeaponPrice * effectiveWeaponCount
     const equipmentTotal = form.equipmentIds.reduce((sum, eid) => {
       const eq = getEquipmentById(eid)
       return sum + (eq?.price || 0) * packageEquipmentQty(form, eid)
     }, 0)
     return weaponTotal + equipmentTotal
-  }, [form.weaponIds, form.equipmentIds, form.equipmentQuantities, weapons, equipment, pickedWeaponCount, effectiveWeaponCount])
+  }, [form.weaponIds, form.equipmentIds, form.equipmentQuantities, weapons, equipment])
+
+  // The package price against renting the same items at inventory prices (what the crossed-out
+  // price on the landing and booking pages is based on), for the package's own group size.
+  const inventoryComparison = (() => {
+    if (!form.weaponIds.length && !form.equipmentIds.length) return null
+    const players = Math.max(1, Math.round(Number(form.players)) || Math.round(Number(form.minPlayers)) || 1)
+    const pkg = buildPayload() as PackageLike
+    const pricing = calculatePackagePricing({ pkg, players, sessionMultiplier: 1, weapons, equipment, entranceFeePerPlayer: PACKAGE_ENTRANCE_FEE_PER_PLAYER })
+    const regular = packageRegularTotal({ pkg, players, weapons, equipment, entranceFeePerPlayer: PACKAGE_ENTRANCE_FEE_PER_PLAYER })
+    const regularPerPlayer = Math.round(regular / players)
+    return { regularPerPlayer, packagePerPlayer: pricing.perPlayer, savings: regularPerPlayer - pricing.perPlayer }
+  })()
 
   const setEquipmentQty = (equipmentId: string, value: string) => {
     const qty = Math.min(MAX_EQUIPMENT_PER_PLAYER, Math.max(1, Math.round(Number(value)) || 1))
@@ -742,12 +751,53 @@ export function AdminRentalPackagesPage() {
           </div>
         </div>
 
-        {(isAdding || selectedPackageId) && (
-        <div className="mt-4 grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
-          <div ref={editorRef}>
+        {(isAdding || selectedPackage) && (
+        <Modal
+          size="lg"
+          eyebrow={isAdding ? 'Add package' : `Manage package · ${selectedPackage?.id}`}
+          title={isAdding ? (form.name.trim() || 'New package') : (selectedPackage?.name || 'Package')}
+          onClose={closeEditor}
+          footer={isAdding ? (
+            <ActionGroup>
+              <Button size="sm" variant="ghost" onClick={closeEditor} disabled={saving}>Cancel</Button>
+              <Button size="sm" onClick={handleCreatePackage} disabled={saving}>
+                {saving ? 'Creating…' : 'Create package'}
+              </Button>
+            </ActionGroup>
+          ) : (
+            <div className="flex w-full flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="danger-soft"
+                  onClick={() => { if (selectedPackage) void handleArchive(selectedPackage) }}
+                  disabled={saving || selectedPackage?.status === 'archived'}
+                >
+                  {selectedPackage?.status === 'archived' ? 'Archived' : 'Archive'}
+                </Button>
+                {selectedPackage?.bookings === 0 ? (
+                  <Button size="sm" variant="danger" onClick={() => void handleDelete(selectedPackage)} disabled={saving}>
+                    Delete
+                  </Button>
+                ) : selectedPackage?.bookings ? (
+                  <span className="text-[11px] text-muted">
+                    {selectedPackage.bookings} booking{selectedPackage.bookings === 1 ? '' : 's'}: archive only
+                  </span>
+                ) : null}
+              </div>
+              <ActionGroup>
+                <Button size="sm" variant="ghost" onClick={closeEditor} disabled={saving}>Cancel</Button>
+                <Button size="sm" onClick={handleSave} disabled={saving}>
+                  {saving ? 'Saving…' : 'Save package'}
+                </Button>
+              </ActionGroup>
+            </div>
+          )}
+        >
+        <div className="grid gap-4">
+          <div>
             <Card className="p-4 bg-white/5/60">
-              <div className="text-xs uppercase tracking-widest text-muted">{isAdding ? 'Adding' : 'Package details editor'}</div>
-              <div className="mt-2 text-sm text-muted">{isAdding ? 'Set up the new package, its players, settled amount and weapons.' : 'Fine-tune the selected package name, players, settled amount, discount, and weapons.'}</div>
+              <div className="text-sm text-muted">{isAdding ? 'Set up the new package, its players, settled amount and weapons.' : 'Fine-tune the package name, players, settled amount, discount, and weapons.'}</div>
 
               <div className="mt-4 grid gap-3">
                 <label className="block">
@@ -888,22 +938,13 @@ export function AdminRentalPackagesPage() {
                       className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-text"
                     />
                   </label>
-                  <label className="block">
+                  <div className="block">
                     <div className="mb-2 text-sm font-semibold text-text">Weapons per player</div>
-                    <input
-                      type="number"
-                      min="0"
-                      step="1"
-                      value={form.weaponCount}
-                      onChange={(event) => setForm((prev) => ({ ...prev, weaponCount: event.target.value }))}
-                      className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-text"
-                    />
+                    <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-text">{pickedWeaponCount}</div>
                     <div className="mt-1 text-[11px] text-muted">
-                      How many rental weapons each player gets (usually 1). A booking for 10 players at 1 per player
-                      needs 10 units in stock across the weapons picked below. Leave at 0 to use {pickedWeaponCount}.
+                      Every player gets one of each weapon picked below. A booking for 10 players needs 10 of each in stock.
                     </div>
-                    {errors.weaponCount ? <div className="mt-1 text-xs text-danger">{errors.weaponCount}</div> : null}
-                  </label>
+                  </div>
                 </div>
 
                 <label className="block">
@@ -1025,39 +1066,6 @@ export function AdminRentalPackagesPage() {
                 )}
               </div>
 
-              <div className="mt-4">
-                {isAdding ? (
-                  <ActionGroup>
-                    <Button size="sm" variant="ghost" onClick={handleCancelAdd}>Cancel</Button>
-                    <Button size="sm" onClick={handleCreatePackage} disabled={saving}>
-                      {saving ? 'Creating…' : 'Create package'}
-                    </Button>
-                  </ActionGroup>
-                ) : (
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <Button
-                      size="sm"
-                      variant="danger-soft"
-                      onClick={() => {
-                        if (selectedPackage) {
-                          handleArchive(selectedPackage)
-                        }
-                      }}
-                      disabled={saving}
-                    >
-                      Archive
-                    </Button>
-                    <ActionGroup>
-                      <Button size="sm" variant="ghost" onClick={() => setSelectedPackageId(null)}>
-                        Cancel
-                      </Button>
-                      <Button size="sm" onClick={handleSave} disabled={saving}>
-                        {saving ? 'Saving…' : 'Save package'}
-                      </Button>
-                    </ActionGroup>
-                  </div>
-                )}
-              </div>
             </Card>
           </div>
 
@@ -1121,6 +1129,32 @@ export function AdminRentalPackagesPage() {
                   </div>
                 )}
               </div>
+
+              {/* The discount players see: the package price against renting the same items at inventory prices. */}
+              {inventoryComparison ? (
+                <div className="mt-3 rounded-lg border border-white/10 bg-white/5 px-3 py-3 text-xs">
+                  <div className="text-[11px] uppercase tracking-widest text-muted">Discount players see</div>
+                  <div className="mt-2 flex items-center justify-between text-muted">
+                    <span>Rented separately (inventory prices)</span>
+                    <span className={inventoryComparison.savings > 0 ? 'line-through' : ''}>₱{inventoryComparison.regularPerPlayer.toLocaleString()} per player</span>
+                  </div>
+                  <div className="mt-1 flex items-center justify-between text-muted">
+                    <span>This package</span>
+                    <span className="font-semibold text-text">₱{inventoryComparison.packagePerPlayer.toLocaleString()} per player</span>
+                  </div>
+                  {inventoryComparison.savings > 0 ? (
+                    <div className="mt-2 border-t border-white/10 pt-2 font-semibold text-success">
+                      Players save ₱{inventoryComparison.savings.toLocaleString()} per player. The crossed-out price shows on the landing and booking pages.
+                    </div>
+                  ) : inventoryComparison.savings < 0 ? (
+                    <div className="mt-2 border-t border-white/10 pt-2 font-semibold text-warning">
+                      This package costs ₱{Math.abs(inventoryComparison.savings).toLocaleString()} more per player than renting the same items separately, so no discount is shown. Lower the price, or tick "Every player gets all the weapons" if each player gets every weapon listed.
+                    </div>
+                  ) : (
+                    <div className="mt-2 border-t border-white/10 pt-2 text-muted">Same as renting separately, so no discount is shown.</div>
+                  )}
+                </div>
+              ) : null}
 
               {/* Weapons section */}
               <div className="mt-4">
@@ -1214,6 +1248,7 @@ export function AdminRentalPackagesPage() {
             </div>
           </Card>
         </div>
+        </Modal>
         )}
       </Card>
     </div>

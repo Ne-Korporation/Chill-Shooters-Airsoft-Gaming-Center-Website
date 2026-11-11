@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { askGemini, buildPrompt, checkSuggestions, geminiConfig, summarizeBookings, summarizeRentalModels } from '../utils/packageSuggestions.js'
-import { takeSuggestionCall } from '../routes/recommendations.js'
+import { runSuggestionJob, takeSuggestionCall } from '../routes/recommendations.js'
 
 const weapons = [
   { id: 'W1', model: 'M4 Rifle', category: 'rifles', price: 500, status: 'available' },
@@ -143,4 +143,50 @@ test('Gemini is asked to think minimally, and asked again without it if the mode
 test('a Gemini timeout gives a "try again" message', async () => {
   const http = async () => { throw Object.assign(new Error('aborted'), { name: 'TimeoutError' }) }
   await assert.rejects(askGemini('hi', { env: { GEMINI_API_KEY: 'k' }, http }), (err) => err.statusCode === 504 && /too long/.test(err.message))
+})
+
+test('Stop cancels the Gemini call right away', async () => {
+  const stop = new AbortController()
+  // A Gemini call that only ends when it is cancelled.
+  const http = (_url, { signal }) => new Promise((_resolve, reject) => {
+    signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })))
+  })
+  const asking = askGemini('hi', { env: { GEMINI_API_KEY: 'k' }, http, signal: stop.signal })
+  stop.abort()
+  await assert.rejects(asking, (err) => err.stopped === true && err.statusCode === 499)
+})
+
+// Suggestions run as a background job the page checks on, so long Gemini waits don't time out.
+const newJob = () => ({ status: 'running', controller: new AbortController(), result: null, error: '' })
+const gather = async () => context
+
+test('a suggestion job finishes with the checked suggestions', async () => {
+  const job = newJob()
+  await runSuggestionJob(job, 'groups', { gather, ask: async () => ({ suggestions: [good] }) })
+  assert.equal(job.status, 'done')
+  assert.equal(job.result.data.length, 1)
+  assert.equal(job.result.data[0].name, 'Squad of 5')
+})
+
+test('a suggestion job that Gemini fails keeps the error for the page', async () => {
+  const job = newJob()
+  await runSuggestionJob(job, '', { gather, ask: async () => { throw new Error('Gemini could not make suggestions: quota') } })
+  assert.equal(job.status, 'failed')
+  assert.match(job.error, /quota/)
+})
+
+test('stopping a suggestion job cancels the Gemini call and keeps it stopped', async () => {
+  const job = newJob()
+  let cancelled = false
+  const ask = (_prompt, { signal }) => new Promise((_resolve, reject) => {
+    signal.addEventListener('abort', () => { cancelled = true; reject(Object.assign(new Error('Stopped.'), { stopped: true })) })
+  })
+  const running = runSuggestionJob(job, '', { gather, ask })
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  job.status = 'stopped'
+  job.controller.abort()
+  await running
+  assert.equal(cancelled, true)
+  assert.equal(job.status, 'stopped')
+  assert.equal(job.result, null)
 })

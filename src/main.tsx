@@ -6,6 +6,7 @@ import App from './App'
 import './styles/index.css'
 import { AuthProvider } from './context/AuthContext'
 import { ThemeProvider } from './context/ThemeContext'
+import { DialogHost } from './components/ui/ConfirmDialog'
 
 // Every toast uses the app's card look (see .app-toast in styles/theme.css), in light and dark mode.
 // Icons use the app's success green and danger red; the inner colour matches the card behind them.
@@ -34,6 +35,8 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       <AuthProvider>
         <ThemeProvider>
           <App />
+          {/* In-app confirm / reason pop-ups (confirmDialog, promptDialog): never the browser's own boxes. */}
+          <DialogHost />
           {/* Above every pop-up (the highest go up to 100002), so messages are never hidden behind one. */}
           <Toaster position={isPhone ? 'top-center' : 'top-right'} toastOptions={toastOptions} containerStyle={{ zIndex: 200000, top: isPhone ? 80 : 16, left: 12, right: 12 }} />
         </ThemeProvider>

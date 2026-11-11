@@ -21,28 +21,29 @@ async function listPieces(_db, collection, model) {
   return records[collection].filter((record) => record.model === model)
 }
 
-test('package weapons are drawn across models and skip pieces already held in the slot', async () => {
+test('every player gets one of each package weapon model, skipping pieces already held in the slot', async () => {
   const held = new Map([['weapons:A-1', 1], ['weapons:A-2', 1]])
   const requirements = await getBookingInventoryRequirements({
     db: {},
     payload: { selectionMode: 'package', selectedPackageId: 'pkg' },
-    players: 8,
+    players: 4,
     findDocumentById,
     listPieces,
     heldQuantities: held,
   })
+  // 4 players: 4 of Rifle A (A-1 and A-2 are held) and 4 of Rifle B
   assert.deepEqual(requirements.map(({ itemId }) => itemId), ['A-3', 'A-4', 'A-5', 'A-6', 'B-1', 'B-2', 'B-3', 'B-4'])
 
   await assert.rejects(
     getBookingInventoryRequirements({
       db: {},
       payload: { selectionMode: 'package', selectedPackageId: 'pkg' },
-      players: 9,
+      players: 5,
       findDocumentById,
       listPieces,
       heldQuantities: held,
     }),
-    /needs 9 rental weapon\(s\) but only 8 are free/,
+    /not enough Rifle A stock for this booking: it needs 5 but only 4 are free/,
   )
 })
 

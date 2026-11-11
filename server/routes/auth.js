@@ -2,7 +2,8 @@ import express from 'express'
 import bcrypt from 'bcrypt'
 import { createHash, randomBytes, randomInt } from 'crypto'
 import transporter from '../services/mailService.js'
-import { getDb, getUserAccountsCollection, USER_ACCOUNTS_COLLECTION } from '../db/mongo.js'
+import { getDb, getUserAccountsCollection, startDbSession, USER_ACCOUNTS_COLLECTION } from '../db/mongo.js'
+import { closeAccount, previewAccountClosure, summarizePlan } from '../utils/accountClosure.js'
 import { SUSPENDED_ACCOUNT_ERROR, createAuthToken, forgetAccount, forgetSuspension, isSuspendedAccount, requireAuth, requireRole, revokeSessionsFields } from '../middleware/auth.js'
 import { nextShortId } from '../utils/shortIds.js'
 import { canonicalEmail, normalizeEmail, sameEmailFilter } from '../utils/emails.js'
@@ -521,6 +522,9 @@ router.put('/admin/players/:id/status', requireAuth, requireRole('admin'), async
     if (String(player.role || 'user').toLowerCase() !== 'user') {
       return res.status(400).json({ ok: false, error: 'Only player accounts can be suspended here.' })
     }
+    if (player.erasedAtISO) {
+      return res.status(400).json({ ok: false, error: "This player's data was erased, so the account can't be reinstated." })
+    }
 
     const nowISO = new Date().toISOString()
     const event = { status: nextStatus, reason, actorId: String(req.user.id), atISO: nowISO }
@@ -550,6 +554,74 @@ router.put('/admin/players/:id/status', requireAuth, requireRole('admin'), async
     return res.json({ ok: true, data: { id: player.id, status: nextStatus, suspensionReason: nextStatus === 'suspended' ? reason : '' } })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
+  }
+})
+
+// --- Admin: close a player's account (or erase their personal data) ---
+// Accounts on any booking are never deleted (bookings are game and payment records). Closing stops
+// the account and settles its upcoming bookings: a teammate takes over as captain, or the booking is
+// cancelled under the normal rules; on teammates' bookings the player is taken off the team.
+// See utils/accountClosure.js.
+async function findPlayerForClosure(req, res) {
+  const userAccounts = await getUserAccountsCollection()
+  const player = await userAccounts.findOne({ id: String(req.params.id) })
+  if (!player) {
+    res.status(404).json({ ok: false, error: 'Player not found' })
+    return null
+  }
+  if (String(player.role || 'user').toLowerCase() !== 'user') {
+    res.status(400).json({ ok: false, error: 'Only player accounts can be closed here.' })
+    return null
+  }
+  return player
+}
+
+// GET /api/auth/admin/players/:id/closure-preview → what closing would do to their bookings.
+router.get('/admin/players/:id/closure-preview', requireAuth, requireRole('admin'), async (req, res) => {
+  try {
+    const player = await findPlayerForClosure(req, res)
+    if (!player) return undefined
+    const db = await getDb()
+    const { plan } = await previewAccountClosure(db, player.id)
+    return res.json({ ok: true, data: { status: player.status || 'active', erased: Boolean(player.erasedAtISO), ...summarizePlan(plan) } })
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: String(err) })
+  }
+})
+
+// POST /api/auth/admin/players/:id/close { reason, erase }
+router.post('/admin/players/:id/close', requireAuth, requireRole('admin'), async (req, res) => {
+  const reason = String(req.body?.reason || '').trim().slice(0, 300)
+  const erase = req.body?.erase === true
+  if (!reason) return res.status(400).json({ ok: false, error: 'Give a reason for closing the account.' })
+  try {
+    const player = await findPlayerForClosure(req, res)
+    if (!player) return undefined
+    if (player.erasedAtISO) return res.status(409).json({ ok: false, error: "This player's data was already erased." })
+    if (String(player.status || '').toLowerCase() === 'closed' && !erase) {
+      return res.status(409).json({ ok: false, error: 'This account is already closed.' })
+    }
+    const db = await getDb()
+    const result = await closeAccount(db, player, {
+      actor: { id: String(req.user.id), role: req.user.role },
+      reason,
+      erase,
+      startSession: startDbSession,
+    })
+    forgetSuspension(player.id)
+    await db.collection('audit_logs').insertOne({
+      action: erase ? 'player_data_erased' : 'player_account_closed',
+      resourceType: 'user_accounts',
+      resourceId: String(player.id),
+      actorId: String(req.user.id),
+      actorRole: req.user.role,
+      // After an erase the log keeps only the account id, not the name or email.
+      details: { reason, ...(erase ? {} : { playerName: player.name || '', playerEmail: player.email || '' }), ...result },
+      createdAtISO: new Date().toISOString(),
+    }).catch((err) => console.error('Failed to write account closure audit log', err))
+    return res.json({ ok: true, data: result })
+  } catch (err) {
+    return res.status(err?.statusCode || 500).json({ ok: false, error: err?.message || String(err) })
   }
 })
 

@@ -1,4 +1,5 @@
 import React from 'react'
+import { confirmDialog } from '../../components/ui/ConfirmDialog'
 import { FiAlertTriangle, FiCheck, FiCrosshair, FiEdit2, FiPlus, FiTool, FiTrash2 } from 'react-icons/fi'
 import { useSearchParams } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
@@ -358,7 +359,7 @@ function WeaponInventory() {
 
   const handleRemove = async (id: string) => {
     const name = weapons.find((weapon) => weapon.id === id)?.name || id
-    if (!window.confirm(`Remove "${name}" from the weapon list? This cannot be undone.`)) return
+    if (!(await confirmDialog({ title: `Remove "${name}"?`, message: 'It will be removed from the weapon list. This cannot be undone.', confirmLabel: 'Remove', danger: true }))) return
     try {
       await apiDelete(`/api/weapons/${encodeURIComponent(id)}`)
       toast.success('Weapon removed')
@@ -402,7 +403,7 @@ function WeaponInventory() {
   }
 
   const removeBulk = async () => {
-    if (!window.confirm(`Remove ${selectedIds.length} weapon${selectedIds.length === 1 ? '' : 's'} from the list? This cannot be undone.`)) return
+    if (!(await confirmDialog({ title: `Remove ${selectedIds.length} weapon${selectedIds.length === 1 ? '' : 's'}?`, message: 'They will be removed from the weapon list. This cannot be undone.', confirmLabel: 'Remove', danger: true }))) return
     setBulkBusy(true)
     const failed = await forEachPiece(selectedIds, (id) => apiDelete(`/api/weapons/${encodeURIComponent(id)}`))
     setBulkBusy(false)

@@ -8,9 +8,44 @@ import { closedDayMessage, type ClosedDay } from '../../utils/closedDays'
 import { Modal } from '../ui/Modal'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
-import { Bar, DaySlotsTable, fillTone, isPublicDay, type WeekendDay } from './WeekendCapacity'
+import { Bar, DaySlotsTable, fillTone, isPublicDay, SHORT_LOCATION, type LocationCapacity, type WeekendDay } from './WeekendCapacity'
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+// The location picked in the calendar, remembered per browser. 'all' shows every location.
+const LOCATION_KEY = 'capacityCalendar.location'
+const ALL = 'all'
+
+function readSavedLocation() {
+  try { return window.localStorage.getItem(LOCATION_KEY) || ALL } catch { return ALL }
+}
+
+function hasSavedLocation() {
+  try { return window.localStorage.getItem(LOCATION_KEY) !== null } catch { return false }
+}
+
+function saveLocation(locationId: string) {
+  try { window.localStorage.setItem(LOCATION_KEY, locationId) } catch { /* storage blocked: just don't remember */ }
+}
+
+function locationLabel(location: { id: string; name: string }) {
+  return SHORT_LOCATION[location.id] || location.name
+}
+
+// One location's share of a day, in the same shape as a whole day, so the cells and the day
+// table show only that location. 'all' keeps the whole day.
+function dayAtLocation(day: WeekendDay | undefined, locationId: string): WeekendDay | undefined {
+  if (!day || locationId === ALL) return day
+  const location = day.locations.find((entry) => entry.id === locationId)
+  if (!location) return undefined
+  return { ...day, capacity: location.capacity, booked: location.booked, groups: location.groups || 0, locations: [location] }
+}
+
+// For "All locations": the least-full location, so a day reads as open while any location has room.
+function leastFull(day: WeekendDay): LocationCapacity | undefined {
+  const ratio = (location: LocationCapacity) => (location.capacity > 0 ? location.booked / location.capacity : 1)
+  return day.locations.reduce<LocationCapacity | undefined>((best, location) => (!best || ratio(location) < ratio(best) ? location : best), undefined)
+}
 
 function manilaToday() {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(new Date())
@@ -76,6 +111,7 @@ export function CapacityCalendar({
   compact = false,
   mini = false,
   action,
+  defaultLocation,
 }: {
   title?: string
   subtitle?: string
@@ -84,11 +120,26 @@ export function CapacityCalendar({
   // Small version for the sidebar: dates with a status dot; tap a day for details.
   mini?: boolean
   action?: React.ReactNode
+  // Location to start on when the viewer hasn't picked one yet (e.g. a player's last booking).
+  defaultLocation?: string
 }) {
   const [month, setMonth] = useState(() => manilaToday().slice(0, 7))
   const { loading, days, causeDays, closedDays, todayISO, reload } = useCapacityMonth(month)
   const [openDate, setOpenDate] = useState<string | null>(null)
-  const capacityByDate = useMemo(() => Object.fromEntries(days.map((day) => [day.dateISO, day])), [days])
+  // A pick the viewer made wins; otherwise the default (which may arrive after a fetch), else all.
+  const [pickedLocation, setPickedLocation] = useState<string | null>(() => (hasSavedLocation() ? readSavedLocation() : null))
+  const locations = useMemo(() => days.find((day) => day.locations.length)?.locations || [], [days])
+  const wanted = pickedLocation ?? defaultLocation ?? ALL
+  // Fall back to all locations if the saved one no longer exists (only once the data is in).
+  const location = wanted === ALL || !locations.length || locations.some((entry) => entry.id === wanted) ? wanted : ALL
+  const pickLocation = (locationId: string) => {
+    setPickedLocation(locationId)
+    saveLocation(locationId)
+  }
+  const capacityByDate = useMemo(
+    () => Object.fromEntries(days.map((day) => [day.dateISO, dayAtLocation(day, location)])) as Record<string, WeekendDay | undefined>,
+    [days, location],
+  )
   const causeByDate = useMemo(() => Object.fromEntries(causeDays.map((cause) => [cause.dateISO, cause])), [causeDays])
   const closedByDate = useMemo(() => Object.fromEntries(closedDays.map((day) => [day.dateISO, day])), [closedDays])
   const weeks = useMemo(() => monthGrid(month), [month])
@@ -109,6 +160,40 @@ export function CapacityCalendar({
         {action}
       </div>
       )}
+
+      {locations.length > 1 ? (
+        mini ? (
+          <select
+            aria-label="Location"
+            value={location}
+            onChange={(e) => pickLocation(e.target.value)}
+            className="mt-2 w-full rounded-lg border border-[rgba(var(--text),0.12)] bg-background px-2 py-1 text-xs text-text focus:outline-none focus:ring-2 focus:ring-accent/60"
+          >
+            <option value={ALL}>All locations</option>
+            {locations.map((entry) => <option key={entry.id} value={entry.id}>{locationLabel(entry)}</option>)}
+          </select>
+        ) : (
+          <div role="tablist" aria-label="Location" className={`${compact ? 'mt-3' : 'mt-4'} flex flex-wrap gap-1.5`}>
+            {[{ id: ALL, label: 'All locations', title: 'All locations' }, ...locations.map((entry) => ({ id: entry.id, label: locationLabel(entry), title: entry.name }))].map((entry) => (
+              <button
+                key={entry.id}
+                type="button"
+                role="tab"
+                aria-selected={location === entry.id}
+                title={entry.title}
+                onClick={() => pickLocation(entry.id)}
+                className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
+                  location === entry.id
+                    ? 'border-accent bg-accent/15 text-accent'
+                    : 'border-[rgba(var(--text),0.12)] text-muted hover:border-accent/50 hover:text-text'
+                }`}
+              >
+                {entry.label}
+              </button>
+            ))}
+          </div>
+        )
+      ) : null}
 
       <div className={`${mini ? 'mt-2' : 'mt-4'} flex items-center justify-between gap-2 rounded-xl bg-[rgba(var(--text),0.04)] p-1`}>
         <Button size="sm" variant="ghost" aria-label="Previous month" disabled={month <= currentMonth} onClick={() => setMonth((m) => shiftMonth(m, -1))}>
@@ -146,7 +231,10 @@ export function CapacityCalendar({
               const cause = causeByDate[dateISO]
               const closed = closedByDate[dateISO]
               const past = dateISO < todayISO
-              const tone = capacity && !closed ? fillTone(capacity.booked, capacity.capacity) : null
+              // "All locations" colours a public day by its least-full location: open while any has room.
+              const best = capacity && location === ALL ? leastFull(capacity) : undefined
+              const shown = best || capacity
+              const tone = shown && !closed ? fillTone(shown.booked, shown.capacity) : null
               // Past days never open. Private days open for info unless fully booked.
               const clickable = !past && Boolean(
                 capacity || cause || closed || editable
@@ -155,7 +243,9 @@ export function CapacityCalendar({
               const hint = closed ? closedDayMessage(closed) : [
                 cause ? causeDayMessage(cause) : '',
                 capacity
-                  ? `Public game · ${capacity.booked} of ${capacity.capacity} spots booked`
+                  ? location === ALL
+                    ? `Public game · ${capacity.locations.map((entry) => `${locationLabel(entry)} ${Math.max(0, entry.capacity - entry.booked)} left`).join(', ')}`
+                    : `Public game · ${capacity.booked} of ${capacity.capacity} spots booked`
                   : privateFull ? 'Private games · fully booked'
                   : privateGroups ? `Private games · ${privateGroups} booked` : 'Private games · open to book',
               ].filter(Boolean).join(' · ')
@@ -201,9 +291,9 @@ export function CapacityCalendar({
                   ) : capacity ? (
                     <span className="mt-auto">
                       <span className={`block truncate text-[10px] font-semibold ${past ? 'text-muted' : tone?.text}`}>
-                        {past ? 'Done' : `${Math.max(0, capacity.capacity - capacity.booked)} left`}
+                        {past ? 'Done' : best ? tone?.label : `${Math.max(0, capacity.capacity - capacity.booked)} left`}
                       </span>
-                      <Bar booked={capacity.booked} capacity={capacity.capacity} className="mt-0.5 h-1" />
+                      {shown ? <Bar booked={shown.booked} capacity={shown.capacity} className="mt-0.5 h-1" /> : null}
                     </span>
                   ) : cause ? (
                     <span className="mt-auto truncate text-[10px] font-semibold text-rose-500">Cause</span>

@@ -6,8 +6,9 @@ function normalizeApiBase(value?: string) {
 
 export function getApiBase() {
   const configured = normalizeApiBase((import.meta as any).env?.VITE_API_URL)
+  // Without VITE_API_URL, calls go to /api on the site's own address (in dev, the Vite proxy
+  // forwards them to the API server on port 3001; see vite.config.ts).
   if (configured) return configured
-  if (import.meta.env.DEV) return 'http://localhost:3001'
   return ''
 }
 
@@ -56,7 +57,7 @@ export async function apiGet<T>(path: string) {
   const json = await res.json().catch(() => null)
   if (!res.ok) {
     endSuspendedSession(res.status, json)
-    throw new Error(json?.error || json?.message || `GET ${path} failed`)
+    throw new ApiError(json?.error || json?.message || `GET ${path} failed`, res.status, json)
   }
   return json as T
 }
@@ -86,11 +87,13 @@ export class ApiError extends Error {
   }
 }
 
-export async function apiPost<T>(path: string, body: unknown) {
+// `signal` lets the caller cancel the request (e.g. a Stop button); fetch then rejects with an AbortError.
+export async function apiPost<T>(path: string, body: unknown, options: { signal?: AbortSignal } = {}) {
   const res = await fetch(`${apiBase}${path}`, {
     method: 'POST',
     headers: buildHeaders(true),
     body: JSON.stringify(body),
+    signal: options.signal,
   })
   const json = await res.json().catch(() => null)
   if (!res.ok) {

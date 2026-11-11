@@ -50,7 +50,7 @@ async function listModelPieces(db, collection, model) {
 
 // Bookings reserve specific pieces (one unit each) for their date and slot.
 // Custom selections name the exact pieces. Packages name models: each player gets one piece of
-// every equipment model and `weaponCount` weapons (minus verified own weapons); the player's own
+// every equipment model and one of every weapon model (verified own guns replace the first); the player's own
 // picks (payload.selectedUnitIds) are used first and the rest are assigned automatically.
 export async function getBookingInventoryRequirements({
   db,
@@ -152,22 +152,18 @@ export async function getBookingInventoryRequirements({
   }
 
   const weaponModels = await modelsOf('weapons', pkg.weaponIds)
-  const neededWeapons = weaponModels.length
-    ? Math.max(0, Math.round(Number(pkg.weaponCount || weaponModels.length)) * players - ownWeaponCount)
-    : 0
-  let remaining = neededWeapons
-  let freeWeapons = 0
-  for (const model of weaponModels) {
+  // Every player gets one of each listed weapon (e.g. a rifle and grenades): a piece of every
+  // model per player. An approved own gun replaces the first (main) one.
+  for (const [index, model] of weaponModels.entries()) {
+    const needed = Math.max(0, players - (index === 0 ? Math.min(ownWeaponCount, players) : 0))
     const free = await freePiecesOf('weapons', model)
-    freeWeapons += free.length
-    for (const piece of free.slice(0, remaining)) {
+    if (free.length < needed) {
+      throw new Error(`There is not enough ${model} stock for this booking: it needs ${needed} but only ${free.length} are free for this slot. Reduce the number of players or choose another package or slot.`)
+    }
+    for (const piece of free.slice(0, needed)) {
       taken.add(String(piece.id))
       requirements.push(requirement(piece, 'weapons'))
-      remaining -= 1
     }
-  }
-  if (remaining > 0) {
-    throw new Error(`There is not enough available weapon stock for this booking: it needs ${neededWeapons} rental weapon(s) but only ${freeWeapons} are free for this slot. Reduce the number of players or choose another package or slot.`)
   }
 
   return requirements

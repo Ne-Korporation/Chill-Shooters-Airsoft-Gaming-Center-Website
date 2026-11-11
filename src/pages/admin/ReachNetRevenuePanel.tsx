@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react'
+import { confirmDialog } from '../../components/ui/ConfirmDialog'
 import toast from 'react-hot-toast'
 import { FiTrash2 } from 'react-icons/fi'
 import { Card } from '../../components/ui/Card'
@@ -109,7 +110,7 @@ export function ReachNetRevenuePanel({ onAllocated }: { onAllocated: () => void 
   }
 
   const removeExpense = async (expense: Expense) => {
-    if (!window.confirm(`Delete expense ${expense.id} (${formatPHP(expense.amount)})?`)) return
+    if (!(await confirmDialog({ title: `Delete expense ${expense.id}?`, message: `${formatPHP(expense.amount)} will be removed from the expenses.`, confirmLabel: 'Delete', danger: true }))) return
     try {
       await apiDelete(`/api/operating-expenses/${encodeURIComponent(expense.id)}`)
       await load()

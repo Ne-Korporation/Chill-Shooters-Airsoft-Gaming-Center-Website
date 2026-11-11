@@ -25,7 +25,7 @@ async function listPieces(_db, collection, model) {
 
 const ids = (requirements) => requirements.map((r) => r.itemId)
 
-test('packages reserve one piece per player for equipment and weaponCount per player for weapons', async () => {
+test('packages reserve one piece per player of every equipment and weapon model', async () => {
   const requirements = await getBookingInventoryRequirements({
     db: {},
     payload: { selectionMode: 'package', selectedPackageId: 'package', ownWeapons: 999 },
@@ -34,21 +34,23 @@ test('packages reserve one piece per player for equipment and weaponCount per pl
     listPieces,
   })
 
-  assert.deepEqual(ids(requirements), ['VS-1', 'VS-2', 'VS-3', 'RF-1', 'RF-2', 'RF-3', 'RF-4', 'RF-5', 'RF-6'])
+  // One rifle model listed: one rifle per player, whatever the stored weaponCount says. An
+  // unverified own-weapon claim (ownWeapons) changes nothing.
+  assert.deepEqual(ids(requirements), ['VS-1', 'VS-2', 'VS-3', 'RF-1', 'RF-2', 'RF-3'])
   assert.ok(requirements.every((r) => r.quantity === 1 && r.capacity === 1))
 })
 
 test('packages use the pieces the player picked first, skip held pieces, and deduct own weapons', async () => {
   const requirements = await getBookingInventoryRequirements({
     db: {},
-    payload: { selectionMode: 'package', selectedPackageId: 'package', selectedUnitIds: ['RF-8', 'VS-4'], verifiedOwnWeaponCount: 3 },
+    payload: { selectionMode: 'package', selectedPackageId: 'package', selectedUnitIds: ['RF-8', 'VS-4'], verifiedOwnWeaponCount: 1 },
     players: 2,
     findDocumentById,
     listPieces,
     heldQuantities: new Map([['weapons:RF-1', 1]]),
   })
 
-  // 2 players × 2 weapons − 3 own = 1 rifle, the chosen RF-8; vests: chosen VS-4, then VS-1
+  // 2 players − 1 own gun = 1 rifle, the chosen RF-8; vests: chosen VS-4, then VS-1
   assert.deepEqual(ids(requirements), ['VS-4', 'VS-1', 'RF-8'])
 })
 

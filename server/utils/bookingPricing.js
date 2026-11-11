@@ -185,14 +185,16 @@ export async function calculateBookingPrice({ db, payload, players, findDocument
       }
       // Piece availability for the slot is checked when the booking reserves its pieces.
 
-      const listedWeaponPrice = weapons.reduce((sum, item) => sum + numberOrZero(item.price, 'Weapon'), 0)
-      const averageWeaponPrice = weapons.length ? listedWeaponPrice / weapons.length : 0
-      const packageWeaponCount = Math.max(
-        0,
-        Math.round(Number(pkg.weaponCount || weaponIds.length)),
-      )
-      const rentedWeaponCount = Math.max(0, packageWeaponCount * players - ownWeaponCount)
-      const weaponsTotal = Math.round(averageWeaponPrice * rentedWeaponCount * sessionMultiplier)
+      // Mirrors packageWeaponRental in src/utils/packagePricing.ts.
+      const weaponPrices = weapons.map((item) => numberOrZero(item.price, 'Weapon'))
+      const listedWeaponPrice = weaponPrices.reduce((sum, price) => sum + price, 0)
+      // Every player gets one of each listed weapon (a rifle and grenades = 2); an approved own
+      // gun replaces the first (main) one.
+      const packageWeaponCount = weaponPrices.length
+      const replaced = packageWeaponCount ? Math.min(ownWeaponCount, players) : 0
+      const rentedWeaponCount = packageWeaponCount * players - replaced
+      const weaponRentalTotal = packageWeaponCount ? listedWeaponPrice * players - weaponPrices[0] * replaced : 0
+      const weaponsTotal = Math.round(weaponRentalTotal * sessionMultiplier)
       const equipmentTotal = Math.round(
         equipment.reduce((sum, item, index) => sum + numberOrZero(item.price, 'Equipment') * packageEquipmentQty(pkg, equipmentIds[index]), 0)
           * players * sessionMultiplier,

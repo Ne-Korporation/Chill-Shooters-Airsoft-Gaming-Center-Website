@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react'
+import { confirmDialog } from '../ui/ConfirmDialog'
 import toast from 'react-hot-toast'
 import { FiCheck, FiExternalLink } from 'react-icons/fi'
 
@@ -63,7 +64,11 @@ export function PaymentCompletePanel({ hideWhenEmpty = false }: { hideWhenEmpty?
   const approve = async (id: string) => {
     const item = items.find((entry) => entry.reservation.id === id)
     const unverified = item?.payments.filter((payment) => !['paid', 'confirmed', 'verified', 'approved'].includes(String(payment.paymentStatus).toLowerCase())) ?? []
-    if (unverified.length && !window.confirm(`Approve this reservation and verify its ${unverified.length} unverified payment proof${unverified.length === 1 ? '' : 's'}? Check the proofs first.`)) return
+    if (unverified.length && !(await confirmDialog({
+      title: 'Approve this reservation?',
+      message: `This also verifies its ${unverified.length} unverified payment proof${unverified.length === 1 ? '' : 's'}. Check the proofs first.`,
+      confirmLabel: 'Approve and verify',
+    }))) return
     setApprovingId(id)
     try {
       await apiPut(`/api/reservations/${encodeURIComponent(id)}/status`, { reservationStatus: 'confirmed' })

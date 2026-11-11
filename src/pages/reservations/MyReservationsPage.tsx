@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { confirmDialog } from '../../components/ui/ConfirmDialog'
 import { useLiveRefresh } from '../../utils/liveUpdates'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
@@ -175,7 +176,13 @@ export function MyReservationsPage() {
   // A booking can be cancelled by its captain until any payment is made; the slot opens again.
   const [cancellingId, setCancellingId] = useState<string | null>(null)
   const cancelReservation = async (id: string, label: string) => {
-    if (!window.confirm(`Cancel your reservation for ${label}? The slot opens for anyone to book. This can't be undone.`)) return
+    if (!(await confirmDialog({
+      title: 'Cancel this reservation?',
+      message: `Your reservation for ${label} will be cancelled and the slot opens for anyone to book. This can't be undone.`,
+      confirmLabel: 'Cancel reservation',
+      cancelLabel: 'Keep it',
+      danger: true,
+    }))) return
     setCancellingId(id)
     try {
       await apiPost(`/api/reservations/${encodeURIComponent(id)}/cancel`, {})

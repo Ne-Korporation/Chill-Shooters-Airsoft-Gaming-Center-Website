@@ -62,18 +62,19 @@ export function verifyAuthToken(token) {
 
 // Every request is checked against the live account, not just the token, so these take effect
 // immediately instead of when the token runs out (12 hours, or 30 days with "Remember me"):
-// - a suspended player is refused,
+// - a suspended or closed player is refused,
 // - a changed role (e.g. staff demoted to player) applies at once,
 // - a password reset ends older sessions (sessionsValidAfterISO),
 // - a deleted account can no longer use its token.
 // The answer is cached briefly so this doesn't add a database read to every request.
-export const SUSPENDED_ACCOUNT_ERROR = 'This account is suspended. Please contact Chill Shooters staff.'
+export const SUSPENDED_ACCOUNT_ERROR = 'This account is suspended or closed. Please contact Chill Shooters staff.'
 export const SESSION_ENDED_ERROR = 'Your session has ended. Please sign in again.'
 const ACCOUNT_CACHE_MS = 30 * 1000
 const accountCache = new Map()
 
+// Suspended (can be reinstated) or closed (the player left; see utils/accountClosure.js): no logins.
 export function isSuspendedAccount(account) {
-  return String(account?.status || '').toLowerCase() === 'suspended'
+  return ['suspended', 'closed'].includes(String(account?.status || '').toLowerCase())
 }
 
 // Call after changing an account's status, role or password so the change applies immediately.

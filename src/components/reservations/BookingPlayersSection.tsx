@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { FiUsers } from 'react-icons/fi'
-import { apiGet, apiGetAll } from '../../utils/apiClient'
+import { ApiError, apiGet, apiGetAll } from '../../utils/apiClient'
 import { reservationStatusLabel } from '../../utils/reservationStatus'
 import { ReservationIdTag } from './ReservationIdTag'
 import { ReservationChargesSections, type Payment, type ReservationDetails } from './ReservationDetailsDialog'
@@ -10,6 +10,9 @@ import { bookingRoles } from '../../utils/bookingRoles'
 type Booking = Omit<ReservationDetails, 'teamMembers'> & {
   id?: string
   userId?: string
+  // Saved on the booking when it was made, so the booker still shows after their account is deleted.
+  bookerName?: string
+  bookerEmail?: string
   reservationDate?: string
   dateISO?: string
   reservationTime?: string
@@ -43,7 +46,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 // staff see everything about the reservation from the game itself.
 export function BookingPlayersSection({ reservationId, detailed = false }: { reservationId?: string; detailed?: boolean }) {
   const slotHours = useSlotHours()
-  const [state, setState] = useState<{ loading: boolean; booking?: Booking; captain?: Account; payments?: Payment[] | null; error?: string }>({ loading: true })
+  const [state, setState] = useState<{ loading: boolean; booking?: Booking; captain?: Account | null; payments?: Payment[] | null; error?: string }>({ loading: true })
 
   useEffect(() => {
     if (!reservationId) {
@@ -59,7 +62,9 @@ export function BookingPlayersSection({ reservationId, detailed = false }: { res
         const ids = [booking?.id, booking?._id, reservationId].filter(Boolean).map(String)
         const [captain, payments] = await Promise.all([
           booking?.userId && !booking.walkIn
-            ? apiGet<{ ok: boolean; data: Account }>(`/api/user_accounts/${encodeURIComponent(booking.userId)}`).then((r) => r.data).catch(() => undefined)
+            ? apiGet<{ ok: boolean; data: Account }>(`/api/user_accounts/${encodeURIComponent(booking.userId)}`).then((r) => r.data)
+              // null: the account was deleted (404); undefined: it just couldn't be loaded right now.
+              .catch((e) => (e instanceof ApiError && e.status === 404 ? null : undefined))
             : Promise.resolve(undefined),
           // Roles that can't read payments get null, and the charges are left out instead of showing ₱0 paid.
           detailed
@@ -85,7 +90,10 @@ export function BookingPlayersSection({ reservationId, detailed = false }: { res
   const players = booking.walkIn
     ? [{ name: booking.walkInName || 'Walk-in guest', detail: 'Walk-in' }]
     : [
-      { name: state.captain?.name || roles.booker, detail: [roles.booker, state.captain?.email].filter(Boolean).join(' · ') },
+      state.captain === null
+        // The booker's account was deleted: show the name saved on the booking, if any.
+        ? { name: booking.bookerName || 'Deleted account', detail: [roles.booker, booking.bookerEmail, 'account deleted'].filter(Boolean).join(' · ') }
+        : { name: state.captain?.name || booking.bookerName || roles.booker, detail: [roles.booker, state.captain?.email || booking.bookerEmail].filter(Boolean).join(' · ') },
       ...(booking.teamMembers || []).map((member) => ({
         name: member.name || member.id || roles.member,
         detail: [member.isMinor ? 'Minor' : roles.member, member.email].filter(Boolean).join(' · '),

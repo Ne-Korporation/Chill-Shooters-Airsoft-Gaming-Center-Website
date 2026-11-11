@@ -1,4 +1,5 @@
 import React from 'react'
+import { confirmDialog } from '../../components/ui/ConfirmDialog'
 import { useLiveRefresh } from '../../utils/liveUpdates'
 import { createPortal } from 'react-dom'
 import { FiArchive, FiEye, FiPrinter, FiRefreshCw, FiRotateCcw, FiShield, FiX } from 'react-icons/fi'
@@ -178,10 +179,15 @@ export function AdminWaiversPage() {
     if (!selectedWaiver) return
     const waiverId = selectedWaiver.id || selectedWaiver._id
     if (!waiverId) return
-    const prompt = archived
-      ? `Archive waiver ${waiverId}?\n\nThe record is kept, but it no longer counts as the player's waiver. If it was their current waiver they will need to submit a new one.`
-      : `Restore waiver ${waiverId} from the archive?`
-    if (!window.confirm(prompt)) return
+    const confirmed = await confirmDialog(archived
+      ? {
+        title: `Archive waiver ${waiverId}?`,
+        message: "The record is kept, but it no longer counts as the player's waiver. If it was their current waiver they will need to submit a new one.",
+        confirmLabel: 'Archive',
+        danger: true,
+      }
+      : { title: `Restore waiver ${waiverId} from the archive?`, confirmLabel: 'Restore' })
+    if (!confirmed) return
 
     setSavingStatus(true)
     try {

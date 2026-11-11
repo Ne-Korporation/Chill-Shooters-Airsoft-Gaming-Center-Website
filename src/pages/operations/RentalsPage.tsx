@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { promptDialog } from '../../components/ui/ConfirmDialog'
 import toast from 'react-hot-toast'
 import { FiAlertTriangle, FiCheck, FiLogOut, FiX } from 'react-icons/fi'
 
@@ -61,8 +62,11 @@ type Condition = 'ok' | 'damaged' | 'missing'
 async function checkInRental(rental: Rental, condition: Condition) {
   let note = ''
   if (condition !== 'ok') {
-    note = window.prompt(condition === 'damaged' ? 'What is damaged?' : 'Any details about the missing item?') ?? ''
-    if (condition === 'damaged' && !note.trim()) return false
+    const answer = await promptDialog(condition === 'damaged'
+      ? { title: 'What is damaged?', confirmLabel: 'Check in as damaged', danger: true, required: true, multiline: true }
+      : { title: 'Check in as missing?', label: 'Any details about the missing item? (optional)', confirmLabel: 'Check in as missing', danger: true, multiline: true })
+    if (answer === null) return false
+    note = answer
   }
   try {
     const res = await apiPut<{ damageReport?: { id: string } }>(`/api/rentals/${encodeURIComponent(rental.id)}/return`, { condition, note })

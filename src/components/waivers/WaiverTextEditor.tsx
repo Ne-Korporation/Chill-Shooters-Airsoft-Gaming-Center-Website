@@ -1,4 +1,5 @@
 import React, { useState } from 'react'
+import { confirmDialog } from '../ui/ConfirmDialog'
 import toast from 'react-hot-toast'
 import { FiEdit2 } from 'react-icons/fi'
 import { Card } from '../ui/Card'
@@ -79,7 +80,9 @@ export function WaiverTextEditor() {
             <Button
               variant="ghost"
               disabled={saving || !updatedAtISO}
-              onClick={() => window.confirm('Go back to the official Chill Shooters waiver text for new waivers?') && void save({ reset: true })}
+              onClick={async () => {
+                if (await confirmDialog({ title: 'Reset to the official waiver text?', message: 'New waivers will use the official Chill Shooters text. Waivers already signed keep their text.', confirmLabel: 'Reset' })) void save({ reset: true })
+              }}
             >
               Reset to official text
             </Button>

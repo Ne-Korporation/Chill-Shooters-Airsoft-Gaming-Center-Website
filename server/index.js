@@ -36,6 +36,8 @@ const { expireOverdueReservations, sendSplitPaymentWarnings } = await import('./
 const { expireOldIdentities } = await import('./utils/identityValidity.js')
 const { sendDueReminders } = await import('./utils/reminders.js')
 const { checkAmmoStock } = await import('./utils/ammoStock.js')
+const { closePastGames } = await import('./utils/pastGames.js')
+const { startDueGames } = await import('./utils/dueGames.js')
 const { refreshWeatherOutlook, sendWeatherAlerts } = await import('./utils/weather.js')
 const { backfillGameplayLocations } = await import('./utils/reservationGameplay.js')
 const { parseAddress } = await import('./services/mailService.js')
@@ -134,9 +136,25 @@ setInterval(() => {
       await sendDueReminders(db, { force: true })
       // BB ammo low-stock notice, also caught here after a restock or a stock edit.
       await checkAmmoStock(db).catch((err) => console.warn('Ammo stock check failed:', String(err)))
+      // Games left Scheduled or Ongoing after their day are closed (Completed, or Cancelled).
+      await closePastGames(db).catch((err) => console.warn('Closing past games failed:', String(err)))
     })
     .catch((err) => console.warn('Reminder sweep failed:', String(err)))
 }, 30 * 60_000).unref()
+// Also right after start-up, so games from earlier days don't wait for the first sweep.
+setTimeout(() => {
+  getDb().then((db) => closePastGames(db)).catch((err) => console.warn('Closing past games failed:', String(err)))
+}, 25_000).unref()
+
+// Games whose slot has begun: started automatically when every gun passed today's FPS check,
+// otherwise marked "due to start" and the marshals are told (utils/dueGames.js).
+function runDueGames() {
+  getDb()
+    .then((db) => startDueGames(db))
+    .catch((err) => console.warn('Starting due games failed:', String(err)))
+}
+setInterval(runDueGames, 5 * 60_000).unref()
+setTimeout(runDueGames, 30_000).unref()
 setTimeout(() => {
   getDb().then((db) => checkAmmoStock(db)).catch((err) => console.warn('Ammo stock check failed:', String(err)))
 }, 20_000).unref()
