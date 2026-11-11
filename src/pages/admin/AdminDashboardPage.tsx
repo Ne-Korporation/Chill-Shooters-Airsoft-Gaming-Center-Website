@@ -6,6 +6,7 @@ import { useAuth } from '../../context/AuthContext'
 import { PaymentCompletePanel } from '../../components/dashboard/PaymentCompletePanel'
 import { ActionRow, ActivityList, DashboardHeader, Panel, StatTile, type ActivityTone } from '../../components/dashboard/DashboardParts'
 import { apiGet } from '../../utils/apiClient'
+import { useAutoRefresh } from '../../hooks/useAutoRefresh'
 import { equipmentAlerts } from '../../utils/inventoryModels'
 import { WeatherAdvisoryWidget } from '../../components/dashboard/WeatherAdvisoryWidget'
 
@@ -57,12 +58,20 @@ export function AdminDashboardPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
+  // Bumped every few seconds so new bookings and payments show without reloading.
+  const [refreshTick, setRefreshTick] = useState(0)
+  useAutoRefresh(() => setRefreshTick((tick) => tick + 1))
+
   useEffect(() => {
     let isMounted = true
+    // Background refreshes keep what's on screen instead of showing loading or errors.
+    const silent = refreshTick > 0
 
     const load = async () => {
-      setLoading(true)
-      setError(null)
+      if (!silent) {
+        setLoading(true)
+        setError(null)
+      }
 
       try {
         const [reservationsRes, paymentsRes, usersRes, equipmentRes, waiversRes] = await Promise.all([
@@ -138,7 +147,7 @@ export function AdminDashboardPage() {
           setDashboard(nextState)
         }
       } catch (err: any) {
-        if (isMounted) {
+        if (isMounted && !silent) {
           setError(err?.message || 'Unable to load dashboard data')
           setDashboard(defaultState)
         }
@@ -153,7 +162,7 @@ export function AdminDashboardPage() {
     return () => {
       isMounted = false
     }
-  }, [])
+  }, [refreshTick])
 
   const { user } = useAuth()
   const firstName = String(user?.name || 'there').trim().split(/\s+/)[0]

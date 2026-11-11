@@ -8,6 +8,7 @@ import { Input } from '../ui/Input'
 import { FilterTabs } from '../ui/FilterTabs'
 import { DEFAULT_PAGE_SIZE, Pagination, usePagination } from '../ui/Pagination'
 import { apiGetAll } from '../../utils/apiClient'
+import { useAutoRefresh } from '../../hooks/useAutoRefresh'
 import { reservationStatusLabel } from '../../utils/reservationStatus'
 import { useSlotHours } from '../../utils/slotHours'
 import { ReservationIdTag } from './ReservationIdTag'
@@ -103,8 +104,9 @@ export function ReservationsByDate({ embedded = false }: { embedded?: boolean } 
       .catch(() => setDetailsPayments([]))
   }
 
-  const load = async () => {
-    setLoading(true)
+  // `silent`: a background refresh, without the loading state or error pop-ups.
+  const load = async (silent = false) => {
+    if (!silent) setLoading(true)
     try {
       const [reservationDocs, accountDocs] = await Promise.all([
         apiGetAll<ReservationDoc>('reservations'),
@@ -113,15 +115,17 @@ export function ReservationsByDate({ embedded = false }: { embedded?: boolean } 
       setReservations(reservationDocs)
       setAccounts(accountDocs)
     } catch (e: any) {
-      toast.error(String(e?.message || e))
+      if (!silent) toast.error(String(e?.message || e))
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }
 
   useEffect(() => {
     void load()
   }, [])
+  // New bookings show up without reloading the page.
+  useAutoRefresh(() => load(true))
 
   const accountById = useMemo(() => new Map(accounts.map((account) => [String(account.id || account._id || ''), account])), [accounts])
 
