@@ -904,16 +904,16 @@ export function CounterPage() {
           </p>
         </div>
         <form
-          className="flex gap-2"
+          className="flex w-full gap-2 sm:w-auto"
           onSubmit={(e) => { e.preventDefault(); if (lookup.trim()) setOpen({ reservationId: lookup.trim() }) }}
         >
-          <div className="relative">
+          <div className="relative min-w-0 flex-1 sm:flex-none">
             <FiSearch className="absolute left-3 top-3 h-4 w-4 text-muted" />
             <input
               value={lookup}
               onChange={(e) => setLookup(e.target.value)}
               placeholder="Open by reservation ID (R-…)"
-              className="h-10 w-64 rounded-2xl border border-white/10 bg-white/5 pl-9 pr-3 text-sm outline-none focus:border-accent/40"
+              className="h-10 w-full rounded-2xl border sm:w-64 border-white/10 bg-white/5 pl-9 pr-3 text-sm outline-none focus:border-accent/40"
             />
           </div>
           <Button type="submit" variant="ghost">Open</Button>

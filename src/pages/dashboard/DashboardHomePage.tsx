@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react'
+import { useLiveRefresh } from '../../utils/liveUpdates'
 import toast from 'react-hot-toast'
 import { DashboardPostsPanel } from '../../components/dashboard/DashboardPostsPanel'
 import { CapacityCalendar } from '../../components/booking/CapacityCalendar'
@@ -74,12 +75,15 @@ export function DashboardHomePage() {
   const { user } = useAuth()
   const [dashboard, setDashboard] = useState<DashboardState>(defaultState)
   const [loading, setLoading] = useState(true)
+  // Bumped when the data shown here changes on the server; re-runs the load below quietly.
+  const [liveTick, setLiveTick] = useState(0)
+  useLiveRefresh(['reservations', 'payments', 'waivers', 'accounts', 'content'], () => setLiveTick((tick) => tick + 1))
 
   useEffect(() => {
     let isMounted = true
 
     const load = async () => {
-      setLoading(true)
+      if (liveTick === 0) setLoading(true)
 
       if (!user?.id) {
         if (isMounted) {
@@ -247,7 +251,7 @@ export function DashboardHomePage() {
     return () => {
       isMounted = false
     }
-  }, [user?.id])
+  }, [user?.id, liveTick])
 
   const firstName = String(user?.name || 'player').trim().split(/\s+/)[0]
   const waiverApproved = dashboard.waiverStatus === 'Approved'
@@ -334,7 +338,7 @@ export function DashboardHomePage() {
                   <div className="text-[11px] text-muted">Waiver</div>
                   <div className="text-xs font-medium">{dashboard.waiverStatus}</div>
                 </div>
-                <Link to="/app/waiver" className="text-xs font-medium text-accent hover:underline">
+                <Link to="/app/waiver" className="-my-2 py-2 text-xs font-medium text-accent hover:underline">
                   {dashboard.waiverStatus === 'Not submitted' ? 'Sign now' : 'View'}
                 </Link>
               </div>

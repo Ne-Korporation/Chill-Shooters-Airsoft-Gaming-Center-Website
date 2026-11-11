@@ -1040,7 +1040,7 @@ export function WaiverPage({
       ) : null}
 
       {viewWaiverOpen && submittedWaiver ? createPortal(
-        <div className="waiver-print-overlay fixed inset-0 z-[9999] grid place-items-center bg-black/60 p-4">
+        <div className="waiver-print-overlay fixed inset-0 z-[9999] grid place-items-center bg-black/60 p-3 sm:p-4">
           <div className="waiver-print-sheet flex max-h-[90dvh] w-full max-w-5xl flex-col overflow-hidden bg-white text-slate-950 dark:bg-slate-950 dark:text-white shadow-2xl">
             {/* The title row sits above the scrolling area, so the close button stays in reach and no text slides under it. */}
             <div className="flex shrink-0 flex-col gap-4 border-b border-slate-200/70 bg-white px-6 pb-4 pt-6 dark:bg-slate-950 sm:flex-row sm:items-center sm:justify-between">
@@ -1049,7 +1049,7 @@ export function WaiverPage({
                 <h2 id="waiver-details-title" className="mt-1 text-2xl font-semibold">{submittedWaiver.fullName || 'Unnamed player'}</h2>
                 <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">This is your submitted waiver record.</p>
               </div>
-              <div className="waiver-print-controls flex items-center gap-2 self-start sm:self-auto">
+              <div className="waiver-print-controls flex shrink-0 items-center gap-2 self-start sm:self-auto">
                 <Button variant="secondary" onClick={printWaiver}>
                   <FiPrinter />
                   Print waiver
@@ -1057,7 +1057,7 @@ export function WaiverPage({
                 <button
                   type="button"
                   onClick={() => setViewWaiverOpen(false)}
-                  className="rounded-lg p-2 text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+                  className="shrink-0 rounded-lg p-2 text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
                   aria-label="Close waiver view"
                 >
                   <FiX />

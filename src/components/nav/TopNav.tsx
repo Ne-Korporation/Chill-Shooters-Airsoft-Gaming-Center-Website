@@ -21,16 +21,23 @@ function NotificationBell({ userId, role }: { userId: string; role?: string }) {
   const userNotifications = roleNotifs.slice(0, 20)
   const now = new Date()
 
-  // Close on click outside
+  // Close on click/tap outside or Escape
   React.useEffect(() => {
     if (!open) return
-    const handleClick = (e: MouseEvent) => {
+    const handleClick = (e: PointerEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
         setOpen(false)
       }
     }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('pointerdown', handleClick)
+    document.addEventListener('keydown', handleKey)
+    return () => {
+      document.removeEventListener('pointerdown', handleClick)
+      document.removeEventListener('keydown', handleKey)
+    }
   }, [open])
 
   return (
@@ -38,8 +45,9 @@ function NotificationBell({ userId, role }: { userId: string; role?: string }) {
       <button
         type="button"
         onClick={() => setOpen((prev) => !prev)}
-        className="hover-row relative rounded-xl p-2 text-text"
+        className="hover-row relative rounded-xl p-2.5 text-text"
         aria-label="Notifications"
+        aria-expanded={open}
       >
         <FiBell className="text-lg" />
         {count > 0 && (
@@ -56,9 +64,11 @@ function NotificationBell({ userId, role }: { userId: string; role?: string }) {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -8, scale: 0.96 }}
             transition={{ duration: 0.15 }}
-            className="surface absolute right-0 top-full mt-3 w-80 rounded-2xl p-3 shadow-xl"
+            // Phones: pinned under the header, full width with a small gutter, so it never runs off-screen.
+            // sm and up: a dropdown anchored to the bell.
+            className="surface fixed inset-x-3 top-[80px] z-50 flex max-h-[calc(100dvh-96px)] flex-col rounded-2xl p-3 shadow-xl sm:absolute sm:inset-x-auto sm:right-0 sm:top-full sm:mt-3 sm:max-h-none sm:w-96"
           >
-            <div className="flex items-center justify-between px-1 pb-3">
+            <div className="flex shrink-0 items-center justify-between px-1 pb-3">
               <div className="text-sm font-semibold text-text">Notifications</div>
               {count > 0 && (
                 <button
@@ -66,7 +76,7 @@ function NotificationBell({ userId, role }: { userId: string; role?: string }) {
                   onClick={() => {
                     markAllAsRead(userId, role)
                   }}
-                  className="text-xs text-accent hover:underline"
+                  className="-my-1 rounded-lg px-2 py-1 text-xs text-accent hover:underline"
                 >
                   Mark all read
                 </button>
@@ -76,7 +86,7 @@ function NotificationBell({ userId, role }: { userId: string; role?: string }) {
             {userNotifications.length === 0 ? (
               <div className="py-6 text-center text-xs text-muted">No notifications yet</div>
             ) : (
-              <div className="-mx-1 max-h-[min(360px,60vh)] space-y-0.5 overflow-y-auto overscroll-contain px-1">
+              <div className="-mx-1 min-h-0 flex-1 space-y-0.5 overflow-y-auto overscroll-contain px-1 sm:max-h-[min(420px,60vh)]">
                 {userNotifications.map((n) => {
                   const Icon = kindOf(n).icon
                   return (
@@ -91,17 +101,18 @@ function NotificationBell({ userId, role }: { userId: string; role?: string }) {
                         else navigate('/app/notifications')
                         setOpen(false)
                       }}
-                      className={`hover-row flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2 text-left ${!n.read ? 'bg-accent/10' : ''}`}
+                      className={`hover-row flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2.5 text-left ${!n.read ? 'bg-accent/10' : ''}`}
                     >
-                      <span className={`mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-lg ${n.read ? 'bg-[rgba(var(--text),0.06)] text-muted' : 'bg-accent/15 text-accent'}`}>
-                        <Icon className="h-3.5 w-3.5" />
+                      <span className={`mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg ${n.read ? 'bg-[rgba(var(--text),0.06)] text-muted' : 'bg-accent/15 text-accent'}`}>
+                        <Icon className="h-4 w-4" />
                       </span>
                       <span className="min-w-0 flex-1">
-                        <span className="flex items-center gap-2">
-                          <span className={`truncate text-[13px] text-text ${n.read ? 'font-medium' : 'font-semibold'}`}>{n.title}</span>
-                          <span className="ml-auto shrink-0 text-[10px] text-muted">{timeLabel(n.createdAtISO, now)}</span>
+                        <span className="flex items-baseline gap-2">
+                          <span className={`min-w-0 flex-1 truncate text-[13px] text-text ${n.read ? 'font-medium' : 'font-semibold'}`}>{n.title}</span>
+                          <span className="shrink-0 text-[10px] text-muted">{timeLabel(n.createdAtISO, now)}</span>
                         </span>
-                        <span className="block truncate text-xs text-muted">{n.message}</span>
+                        {/* Two lines instead of one so the message is readable on narrow screens. */}
+                        <span className="mt-0.5 line-clamp-2 break-words text-xs text-muted">{n.message}</span>
                       </span>
                       {!n.read && <span className="mt-2 h-2 w-2 shrink-0 rounded-full bg-accent" aria-label="Unread" />}
                     </button>
@@ -110,14 +121,14 @@ function NotificationBell({ userId, role }: { userId: string; role?: string }) {
               </div>
             )}
 
-            <div className="divider mt-3 border-t pt-3">
+            <div className="divider mt-3 shrink-0 border-t pt-3">
               <button
                 type="button"
                 onClick={() => {
                   navigate('/app/notifications')
                   setOpen(false)
                 }}
-                className="hover-row w-full rounded-xl px-3 py-2 text-center text-sm font-medium text-text"
+                className="hover-row w-full rounded-xl px-3 py-2.5 text-center text-sm font-medium text-text"
               >
                 View all notifications
               </button>
@@ -169,7 +180,7 @@ export function TopNav({
       <div className="mx-auto flex h-[72px] max-w-[1400px] items-center justify-between px-3 lg:px-6">
         <div className="flex items-center gap-2">
           <button
-            className="hover-row rounded-xl p-2 text-text lg:hidden"
+            className="hover-row rounded-xl p-2.5 text-text lg:hidden"
             onClick={onMenu}
             aria-label="Open menu"
           >
@@ -215,7 +226,7 @@ export function TopNav({
             <button
               type="button"
               onClick={() => setShowLogoutMenu((prev) => !prev)}
-              className="hover-row rounded-xl p-2 text-muted hover:text-text"
+              className="hover-row rounded-xl p-2.5 text-muted hover:text-text"
               aria-label="Log out"
               title="Log out"
             >

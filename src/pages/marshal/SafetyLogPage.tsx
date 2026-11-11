@@ -261,7 +261,7 @@ export function SafetyLogPage({ embedded = false, tab: tabFromPage, onRepairOpen
           {!fpsFormOpen ? (
             <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
               <span>Test guns from their FPS button in Inventory, or from a game's FPS check before it starts.</span>
-              <button type="button" onClick={() => setFpsFormOpen(true)} className="flex items-center gap-1.5 font-semibold text-accent hover:underline">
+              <button type="button" onClick={() => setFpsFormOpen(true)} className="-my-2 flex items-center gap-1.5 py-2 text-left font-semibold text-accent hover:underline">
                 <FiCrosshair /> Test a gun that isn't in the inventory
               </button>
             </div>

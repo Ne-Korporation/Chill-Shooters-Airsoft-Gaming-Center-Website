@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { useLiveRefresh } from '../../utils/liveUpdates'
 import toast from 'react-hot-toast'
 import { FiCheck, FiClock, FiUsers } from 'react-icons/fi'
 
@@ -195,6 +196,8 @@ export function SplitPaymentPage() {
       setLoading(false)
     }
   }, [])
+
+  useLiveRefresh(['reservations', 'payments'], () => load(true))
 
   useEffect(() => {
     void load()
