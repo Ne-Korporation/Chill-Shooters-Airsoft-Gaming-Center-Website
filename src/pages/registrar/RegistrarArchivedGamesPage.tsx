@@ -1,13 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { FiArchive, FiArrowLeft, FiSearch, FiShield, FiX } from 'react-icons/fi'
+import { FiArchive, FiArrowLeft, FiChevronDown, FiFolder, FiFolderMinus, FiSearch, FiShield, FiX } from 'react-icons/fi'
 import { toast } from 'react-hot-toast'
 
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { apiGetAll } from '../../utils/apiClient'
 import { Pagination, usePagination } from '../../components/ui/Pagination'
-import { formatSchedule, locationName } from './RegistrarOngoingGamesPage'
+import { DAYS_PER_PAGE, folderLabel, gameDayOf, locationName, slotOf } from './RegistrarOngoingGamesPage'
 
 type GameplayStatus = 'Scheduled' | 'Ongoing' | 'Completed' | 'Cancelled' | 'Archived'
 
@@ -121,7 +121,22 @@ export function RegistrarArchivedGamesPage({ embedded = false }: { embedded?: bo
     })
   }, [archivedItems, query])
 
-  const { page, setPage, pageCount, pageItems, total } = usePagination(filtered, undefined, query)
+  // One folder per game day (newest first, as loaded), paged by day like the game queue so a day's
+  // games are never split across pages.
+  const folders = useMemo(() => {
+    const byDay = new Map<string, GameplayDoc[]>()
+    for (const doc of filtered) {
+      const day = gameDayOf(doc)
+      byDay.set(day, [...(byDay.get(day) || []), doc])
+    }
+    return [...byDay.entries()].map(([day, games]) => ({ day, games }))
+  }, [filtered])
+  const { page, setPage, pageCount, pageItems: pageFolders, total } = usePagination(folders, DAYS_PER_PAGE, query)
+
+  // The newest day starts open; searching opens every matching day.
+  const [folderToggles, setFolderToggles] = useState<Record<string, boolean>>({})
+  const folderOpen = (day: string) => folderToggles[day] ?? (Boolean(query.trim()) || day === folders[0]?.day)
+  const toggleFolder = (day: string) => setFolderToggles((current) => ({ ...current, [day]: !folderOpen(day) }))
 
   return (
     <div className="space-y-4">
@@ -173,65 +188,55 @@ export function RegistrarArchivedGamesPage({ embedded = false }: { embedded?: bo
           </div>
         </div>
 
-        <div className="mt-5 overflow-x-auto">
-          <table className="min-w-full text-sm">
-            <thead>
-              <tr className="text-left text-xs uppercase tracking-widest text-muted">
-                <th className="py-2 pr-3">ID</th>
-                <th className="py-2 pr-3">Schedule</th>
-                <th className="py-2 pr-3">Location</th>
-                <th className="py-2 pr-3">Mode</th>
-                <th className="py-2 pr-3">Group</th>
-                <th className="py-2 pr-3">Package</th>
-                <th className="py-2 pr-3">Archived At</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr>
-                  <td colSpan={7} className="py-6 text-sm text-muted">
-                    Loading archived games…
-                  </td>
-                </tr>
-              ) : filtered.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="py-6 text-sm text-muted">
-                    {query.trim() ? 'No archived games match your search.' : 'No archived games yet. Complete and archive games from the ongoing view.'}
-                  </td>
-                </tr>
-              ) : (
-                pageItems.map((doc) => {
-                  return (
-                    <tr key={rowId(doc)} className="border-t border-white/5">
-                      <td className="py-3 pr-3">
-                        <div className="font-bold">{rowId(doc) || '—'}</div>
-                      </td>
-                      <td className="py-3 pr-3">
-                        <div className="font-bold">{formatSchedule(doc)}</div>
-                      </td>
-                      <td className="py-3 pr-3">
-                        <div className="font-semibold">{locationName(doc)}</div>
-                      </td>
-                      <td className="py-3 pr-3">
-                        <div className="font-bold">{doc.Mode || '—'}</div>
-                      </td>
-                      <td className="py-3 pr-3">
-                        <div className="font-bold">{doc.Group || '—'}</div>
-                      </td>
-                      <td className="py-3 pr-3">
-                        <div className="font-bold">{doc.Package || '—'}</div>
-                      </td>
-                      <td className="py-3 pr-3">
-                        <div className="text-xs text-muted">{doc.archivedAtISO ? new Date(doc.archivedAtISO).toLocaleString() : '—'}</div>
-                      </td>
-                    </tr>
-                  )
-                })
-              )}
-            </tbody>
-          </table>
+        {/* Archived games grouped into a folder per game date. */}
+        <div className="mt-5 space-y-2">
+          {loading ? (
+            <div className="py-6 text-sm text-muted">Loading archived games…</div>
+          ) : folders.length === 0 ? (
+            <div className="py-6 text-sm text-muted">
+              {query.trim() ? 'No archived games match your search.' : 'No archived games yet. Complete and archive games from the ongoing view.'}
+            </div>
+          ) : (
+            pageFolders.map((folder) => {
+              const isOpen = folderOpen(folder.day)
+              return (
+                <div key={folder.day || 'none'} className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.03]">
+                  <button
+                    type="button"
+                    onClick={() => toggleFolder(folder.day)}
+                    aria-expanded={isOpen}
+                    className="flex w-full items-center gap-3 px-4 py-3 text-left transition hover:bg-white/5"
+                  >
+                    {isOpen ? <FiFolderMinus className="shrink-0 text-lg text-gold" /> : <FiFolder className="shrink-0 text-lg text-gold" />}
+                    <div className="min-w-0 flex-1">
+                      <div className="font-bold">{folderLabel(folder.day)}</div>
+                      <div className="text-xs text-muted">{folder.games.length} archived game{folder.games.length === 1 ? '' : 's'}</div>
+                    </div>
+                    <FiChevronDown className={['shrink-0 text-muted transition-transform', isOpen ? 'rotate-180' : ''].join(' ')} />
+                  </button>
+                  {isOpen ? (
+                    <ul className="divide-y divide-white/5 border-t border-white/10">
+                      {folder.games.map((doc) => (
+                        <li key={rowId(doc)} className="flex flex-col gap-1 px-4 py-3 sm:flex-row sm:items-center sm:gap-4">
+                          <div className="min-w-0 flex-1">
+                            <div className="font-semibold">{slotOf(doc)} · {locationName(doc)}</div>
+                            <div className="text-xs text-muted">
+                              {[rowId(doc) || '—', doc.Mode, doc.Group, doc.Package].filter((value) => value && value !== '—').join(' · ')}
+                            </div>
+                          </div>
+                          <div className="text-xs text-muted sm:text-right">
+                            Archived {doc.archivedAtISO ? new Date(doc.archivedAtISO).toLocaleString() : '—'}
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
+              )
+            })
+          )}
         </div>
-        <Pagination page={page} pageCount={pageCount} total={total} onPageChange={setPage} />
+        <Pagination page={page} pageCount={pageCount} total={total} pageSize={DAYS_PER_PAGE} noun="days" onPageChange={setPage} />
       </Card>
     </div>
   )

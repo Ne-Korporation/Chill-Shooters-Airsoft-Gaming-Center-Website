@@ -22,7 +22,8 @@ export type PackageLike = {
   players?: number
   // Fixed total (before discount) for `players` players (0 / undefined = computed pricing)
   settledAmount?: number
-  // Number of weapons the package gives (0 / undefined = count of weaponIds)
+  // Stored count of weapons per player. Every player gets one of each listed weapon, so pricing and
+  // reservations use the number of weaponIds; this is only a fallback for a package with none listed.
   weaponCount?: number
   // Pieces of each equipment item every player gets, keyed by equipment id (default 1)
   equipmentQuantities?: Record<string, number>
@@ -106,11 +107,25 @@ export function packageEquipmentQty(pkg: Pick<PackageLike, 'equipmentQuantities'
   return Number.isFinite(raw) && raw >= 1 ? Math.min(raw, MAX_EQUIPMENT_PER_PLAYER) : 1
 }
 
-/** Number of weapons a package offers: the typed weaponCount, else the count of picked weapons. */
+/** Weapons each player gets: one of each weapon listed in the package (a rifle and grenades = 2). */
 export function getPackageWeaponCount(pkg: PackageLike): number {
-  const typed = Math.round(Number(pkg.weaponCount ?? 0))
-  if (Number.isFinite(typed) && typed > 0) return typed
   return (pkg.weaponIds || []).length
+}
+
+/**
+ * Rental weapons a package gives a group and what they cost at inventory prices. Every player gets
+ * one of each listed weapon; an approved own gun replaces the first (main) one.
+ * Mirrors server/utils/bookingPricing.js.
+ */
+export function packageWeaponRental(pkg: PackageLike, weapons: PricedItem[], players: number, ownWeapons = 0) {
+  const prices = (pkg.weaponIds || [])
+    .map((weaponId) => weapons.find((weapon) => weapon.id === weaponId))
+    .filter(Boolean)
+    .map((weapon) => Number(weapon?.price || 0))
+  if (!prices.length) return { rented: 0, total: 0, perPlayerCount: 0 }
+  const replaced = Math.min(Math.max(0, Math.round(ownWeapons)), players)
+  const sum = prices.reduce((total, price) => total + price, 0)
+  return { rented: prices.length * players - replaced, total: sum * players - prices[0] * replaced, perPlayerCount: prices.length }
 }
 
 /** True when the package has a settled (fixed) amount that is set for a number of players. */
@@ -156,6 +171,32 @@ function buildDiscountTexts(discountRule: PackageDiscountConfig) {
     : `₱${Math.round(discountRule.value).toLocaleString()}`
   const label = `${valueText} off ${formatDiscountTargetLabel(discountRule.targets)}`
   return { label, summary: label }
+}
+
+// What the same things cost rented one by one: the entrance fee plus each included gun and piece of
+// gear at its normal rental price, for the same group. Packages show it crossed out next to their
+// price, so players see how much the package saves them.
+export function packageRegularTotal({
+  pkg,
+  players,
+  ownWeapons = 0,
+  weapons,
+  equipment,
+  entranceFeePerPlayer,
+}: {
+  pkg: PackageLike
+  players: number
+  ownWeapons?: number
+  weapons: PricedItem[]
+  equipment: PricedItem[]
+  entranceFeePerPlayer: number
+}) {
+  const weaponRental = packageWeaponRental(pkg, weapons, players, ownWeapons)
+  const gearPerPlayer = (pkg.equipmentIds || [])
+    .map((equipmentId) => ({ item: equipment.find((item) => item.id === equipmentId), qty: packageEquipmentQty(pkg, equipmentId) }))
+    .filter(({ item }) => Boolean(item))
+    .reduce((sum, { item, qty }) => sum + Number(item?.price || 0) * qty, 0)
+  return Math.round(weaponRental.total + (gearPerPlayer + entranceFeePerPlayer) * players)
 }
 
 export function calculatePackagePricing({
@@ -219,15 +260,9 @@ export function calculatePackagePricing({
   // ---------------------------------------------------------------------
   // Computed pricing (per-player base + gear + entrance)
   // ---------------------------------------------------------------------
-  const selectedWeaponPrices = (pkg.weaponIds || [])
-    .map((weaponId) => weapons.find((weapon) => weapon.id === weaponId))
-    .filter(Boolean)
-    .map((weapon) => Number(weapon?.price || 0))
-
-  const packageWeaponCount = getPackageWeaponCount(pkg)
-  const weaponUnitTotal = selectedWeaponPrices.reduce((sum, price) => sum + price, 0)
-  const averageWeaponPrice = selectedWeaponPrices.length > 0 ? weaponUnitTotal / selectedWeaponPrices.length : 0
-  const rentedWeaponCount = Math.max(0, packageWeaponCount * players - Math.max(0, Math.round(ownWeapons)))
+  const weaponRental = packageWeaponRental(pkg, weapons, players, ownWeapons)
+  const packageWeaponCount = weaponRental.perPlayerCount
+  const rentedWeaponCount = weaponRental.rented
 
   const equipmentUnitTotal = (pkg.equipmentIds || [])
     .map((equipmentId) => ({ item: equipment.find((item) => item.id === equipmentId), qty: packageEquipmentQty(pkg, equipmentId) }))
@@ -235,7 +270,7 @@ export function calculatePackagePricing({
     .reduce((sum, { item, qty }) => sum + Number(item?.price || 0) * qty, 0)
 
   const basePriceTotal = Number(pkg.basePrice || 0) * players * sessionMultiplier
-  const weaponsTotal = averageWeaponPrice * rentedWeaponCount * sessionMultiplier
+  const weaponsTotal = weaponRental.total * sessionMultiplier
   const equipmentTotal = equipmentUnitTotal * players * sessionMultiplier
   const entranceFeeTotal = entranceFeePerPlayer * players * sessionMultiplier
   const preDiscountTotal = Math.round(basePriceTotal + weaponsTotal + equipmentTotal + entranceFeeTotal)

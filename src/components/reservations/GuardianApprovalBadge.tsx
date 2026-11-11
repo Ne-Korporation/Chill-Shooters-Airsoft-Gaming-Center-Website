@@ -1,4 +1,5 @@
 import React, { useState } from 'react'
+import { promptDialog } from '../ui/ConfirmDialog'
 import toast from 'react-hot-toast'
 import { apiGet, apiPut } from '../../utils/apiClient'
 
@@ -53,7 +54,13 @@ export function GuardianApprovalBadge({
   }
 
   const recordInPerson = async (approval: Approval) => {
-    const note = window.prompt(`How did ${approval.guardianName || 'the guardian'} approve ${approval.minorName}? (e.g. "Mother present, showed driver's license")`)
+    const note = await promptDialog({
+      title: 'Record in-person approval',
+      message: `How did ${approval.guardianName || 'the guardian'} approve ${approval.minorName}?`,
+      placeholder: "e.g. Mother present, showed driver's license",
+      confirmLabel: 'Record approval',
+      required: true,
+    })
     if (!note?.trim()) return
     setSavingId(approval.id)
     try {

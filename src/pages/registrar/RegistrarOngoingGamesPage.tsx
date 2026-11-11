@@ -5,9 +5,10 @@ import { toast } from 'react-hot-toast'
 
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
+import { confirmDialog } from '../../components/ui/ConfirmDialog'
 import { Modal } from '../../components/ui/Modal'
 import { apiGet, apiPut } from '../../utils/apiClient'
-import { DEFAULT_PAGE_SIZE, Pagination } from '../../components/ui/Pagination'
+import { Pagination } from '../../components/ui/Pagination'
 import { useAuth } from '../../context/AuthContext'
 import { LOCATIONS } from '../operations/shared'
 import { BookingPlayersSection } from '../../components/reservations/BookingPlayersSection'
@@ -31,7 +32,15 @@ type GameplayDoc = {
   Status?: GameplayStatus | string
   createdAtISO?: string
   updatedAtISO?: string
+  // Set by the server when the slot began (server/utils/dueGames.js): started automatically, or
+  // still Scheduled because some guns haven't passed today's FPS check (the reason says which).
+  autoStartedBy?: string
+  dueToStartAtISO?: string
+  autoStartBlockedReason?: string
 }
+
+// A Scheduled game whose slot has begun but that can't start yet.
+const isDueToStart = (doc: GameplayDoc) => normalizeStatus(doc.Status) === 'Scheduled' && Boolean(doc.dueToStartAtISO) && gameDayOf(doc) === manilaToday()
 
 const normalizeStatus = (value: any): GameplayStatus => {
   const raw = String(value || '').trim().toLowerCase()
@@ -43,7 +52,7 @@ const normalizeStatus = (value: any): GameplayStatus => {
 }
 
 // Game day from a "YYYY-MM-DD • slot" schedule, or '' when it can't be read.
-const gameDayOf = (doc: { Schedule?: string }) => {
+export const gameDayOf = (doc: { Schedule?: string }) => {
   const day = String(doc.Schedule || '').slice(0, 10)
   return /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : ''
 }
@@ -60,7 +69,7 @@ export const formatSchedule = (doc: { Schedule?: string }) => {
 }
 
 // Folder heading for a game date: "Today · Sat, Nov 7", "Tomorrow · …", or "Mon, Nov 9, 2026".
-const folderLabel = (day: string) => {
+export const folderLabel = (day: string) => {
   if (!day) return 'No date'
   const today = manilaToday()
   const label = new Date(`${day}T12:00:00Z`).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
@@ -71,10 +80,13 @@ const folderLabel = (day: string) => {
 }
 
 // "2026-11-03 • morning" → "Morning".
-const slotOf = (doc: { Schedule?: string }) => {
+export const slotOf = (doc: { Schedule?: string }) => {
   const slot = String(doc.Schedule || '').split('•')[1]?.trim() || ''
   return slot ? `${slot.charAt(0).toUpperCase()}${slot.slice(1)}` : 'No slot'
 }
+
+// Day folders per page of the game queue.
+export const DAYS_PER_PAGE = 5
 
 const STATUS_ORDER: GameplayStatus[] = ['Ongoing', 'Scheduled', 'Completed', 'Cancelled', 'Archived']
 
@@ -259,18 +271,30 @@ export function RegistrarOngoingGamesPage({ embedded = false }: { embedded?: boo
   const moreFiltersSet = Boolean(filters.slot || filters.mode || filters.sort !== DEFAULT_FILTERS.sort)
   const showMoreFilters = moreFiltersOpen || moreFiltersSet
 
-  // Latest filters/page for the background refresh.
-  const latest = React.useRef({ filters, page })
-  latest.current = { filters, page }
+  // Latest filters for the background refresh.
+  const latest = React.useRef({ filters })
+  latest.current = { filters }
+
+  // Every matching game is loaded (200 at a time) and the list pages by day folder, so a day's
+  // games are never split across pages.
+  const loadAllGames = async (q: unknown, sort: unknown) => {
+    const all: GameplayDoc[] = []
+    const base = `q=${encodeURIComponent(JSON.stringify(q))}&sort=${encodeURIComponent(JSON.stringify(sort))}`
+    for (let skip = 0; ; skip += 200) {
+      const res = await apiGet<{ ok: boolean; data: GameplayDoc[] }>(`/api/gameplay?${base}&limit=200&skip=${skip}`)
+      const batch = Array.isArray(res?.data) ? res.data : []
+      all.push(...batch)
+      if (batch.length < 200) return { data: all, total: all.length }
+    }
+  }
 
   const refresh = React.useCallback(async (silent = false) => {
     if (!silent) setLoading(true)
-    const { filters: current, page: currentPage } = latest.current
+    const { filters: current } = latest.current
     const { q, sort } = buildGameQuery(current)
-    const params = `q=${encodeURIComponent(JSON.stringify(q))}&sort=${encodeURIComponent(JSON.stringify(sort))}&limit=${DEFAULT_PAGE_SIZE}&skip=${(currentPage - 1) * DEFAULT_PAGE_SIZE}&withTotal=1`
     try {
       const [res, ...statusTotals] = await Promise.all([
-        apiGet<{ ok: boolean; data: GameplayDoc[]; total?: number }>(`/api/gameplay?${params}`),
+        loadAllGames(q, sort),
         ...(['Scheduled', 'Ongoing', 'Completed', 'Cancelled', 'Archived'] as const).map((status) =>
           apiGet<{ ok: boolean; total?: number }>(`/api/gameplay?q=${encodeURIComponent(JSON.stringify({ Status: { $regex: `^${status.slice(0, 4)}`, $options: 'i' } }))}&limit=1&withTotal=1`)
             .then((r) => Number(r?.total || 0)).catch(() => 0)),
@@ -304,7 +328,7 @@ export function RegistrarOngoingGamesPage({ embedded = false }: { embedded?: boo
   useEffect(() => {
     const timer = window.setTimeout(() => void refresh(), filters.search ? 300 : 0)
     return () => window.clearTimeout(timer)
-  }, [filters, page, refresh])
+  }, [filters, refresh])
 
   useEffect(() => {
 
@@ -332,10 +356,8 @@ export function RegistrarOngoingGamesPage({ embedded = false }: { embedded?: boo
     }
   }, [refresh])
 
-  const pageCount = Math.max(1, Math.ceil(total / DEFAULT_PAGE_SIZE))
-
-  // This page's games in one folder per game date, in the order the server sorted them.
-  const folders = useMemo(() => {
+  // The matching games in one folder per game date, in the order the server sorted them.
+  const allFolders = useMemo(() => {
     const byDay = new Map<string, GameplayDoc[]>()
     for (const doc of items) {
       const day = gameDayOf(doc)
@@ -350,6 +372,38 @@ export function RegistrarOngoingGamesPage({ embedded = false }: { embedded?: boo
       return { day, games, statusCounts }
     })
   }, [items])
+
+  // Pages hold whole days (DAYS_PER_PAGE folders each), never part of a day.
+  const pageCount = Math.max(1, Math.ceil(allFolders.length / DAYS_PER_PAGE))
+  useEffect(() => {
+    if (page > pageCount) setPage(pageCount)
+  }, [page, pageCount])
+  const folders = allFolders.slice((page - 1) * DAYS_PER_PAGE, page * DAYS_PER_PAGE)
+
+  // Archives every completed game of a day in one go; games that aren't completed stay.
+  const [archivingDay, setArchivingDay] = useState<string | null>(null)
+  const archiveDay = async (folder: { day: string; games: GameplayDoc[] }) => {
+    const completed = folder.games.filter((doc) => normalizeStatus(doc.Status) === 'Completed' && rowId(doc))
+    if (!completed.length) return
+    const others = folder.games.length - completed.length
+    const confirmed = await confirmDialog({
+      title: `Archive ${completed.length} completed game${completed.length === 1 ? '' : 's'}?`,
+      message: `From ${folderLabel(folder.day)}. They will move to the game history.`
+        + (others ? ` ${others} game${others === 1 ? ' that isn\'t' : 's that aren\'t'} completed will stay.` : ''),
+      confirmLabel: 'Archive day',
+    })
+    if (!confirmed) return
+    setArchivingDay(folder.day)
+    const nowISO = new Date().toISOString()
+    const results = await Promise.allSettled(completed.map((doc) => apiPut(`/api/gameplay/${encodeURIComponent(rowId(doc))}`, {
+      $set: { Status: 'Archived', archivedAtISO: nowISO, updatedAtISO: nowISO },
+    })))
+    const failed = results.filter((result) => result.status === 'rejected').length
+    if (failed) toast.error(`${completed.length - failed} archived, ${failed} could not be archived. Try again.`)
+    else toast.success(`${completed.length} game${completed.length === 1 ? '' : 's'} archived`)
+    setArchivingDay(null)
+    await refresh()
+  }
 
   // Today's folder (or the first one when there are no games today) starts open; any folder
   // can be opened or closed, and that choice is kept while the list refreshes.
@@ -389,7 +443,11 @@ export function RegistrarOngoingGamesPage({ embedded = false }: { embedded?: boo
     const id = rowId(doc)
     if (!id) return toast.error('Missing gameplay id')
 
-    const confirmed = window.confirm('Archive this completed game? It will move to the game history.')
+    const confirmed = await confirmDialog({
+      title: 'Archive this completed game?',
+      message: 'It will move to the game history.',
+      confirmLabel: 'Archive',
+    })
     if (!confirmed) return
 
     try {
@@ -583,22 +641,35 @@ export function RegistrarOngoingGamesPage({ embedded = false }: { embedded?: boo
               const isOpen = folderOpen(folder.day)
               return (
                 <div key={folder.day || 'none'} className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.03]">
-                  <button
-                    type="button"
-                    onClick={() => toggleFolder(folder.day)}
-                    aria-expanded={isOpen}
-                    className="flex w-full items-center gap-3 px-4 py-3 text-left transition hover:bg-white/5"
-                  >
-                    {isOpen ? <FiFolderMinus className="shrink-0 text-lg text-gold" /> : <FiFolder className="shrink-0 text-lg text-gold" />}
-                    <div className="min-w-0 flex-1">
-                      <div className="font-bold">{folderLabel(folder.day)}</div>
-                      <div className="text-xs text-muted">
-                        {folder.games.length} game{folder.games.length === 1 ? '' : 's'}
-                        {STATUS_ORDER.filter((s) => folder.statusCounts[s]).map((s) => ` · ${folder.statusCounts[s]} ${s.toLowerCase()}`).join('')}
+                  <div className="flex items-center gap-2 pr-3 transition hover:bg-white/5">
+                    <button
+                      type="button"
+                      onClick={() => toggleFolder(folder.day)}
+                      aria-expanded={isOpen}
+                      className="flex min-w-0 flex-1 items-center gap-3 px-4 py-3 text-left"
+                    >
+                      {isOpen ? <FiFolderMinus className="shrink-0 text-lg text-gold" /> : <FiFolder className="shrink-0 text-lg text-gold" />}
+                      <div className="min-w-0 flex-1">
+                        <div className="font-bold">{folderLabel(folder.day)}</div>
+                        <div className="text-xs text-muted">
+                          {folder.games.length} game{folder.games.length === 1 ? '' : 's'}
+                          {STATUS_ORDER.filter((s) => folder.statusCounts[s]).map((s) => ` · ${folder.statusCounts[s]} ${s.toLowerCase()}`).join('')}
+                        </div>
                       </div>
-                    </div>
-                    <FiChevronDown className={['shrink-0 text-muted transition-transform', isOpen ? 'rotate-180' : ''].join(' ')} />
-                  </button>
+                      <FiChevronDown className={['shrink-0 text-muted transition-transform', isOpen ? 'rotate-180' : ''].join(' ')} />
+                    </button>
+                    {folder.statusCounts.Completed ? (
+                      <Button
+                        size="xs"
+                        variant="ghost"
+                        disabled={archivingDay !== null}
+                        onClick={() => void archiveDay(folder)}
+                        title={`Archive the ${folder.statusCounts.Completed} completed game${folder.statusCounts.Completed === 1 ? '' : 's'} of this day`}
+                      >
+                        <FiArchive /> {archivingDay === folder.day ? 'Archiving…' : 'Archive day'}
+                      </Button>
+                    ) : null}
+                  </div>
                   {isOpen ? (
                     <ul className="divide-y divide-white/5 border-t border-white/10">
                       {folder.games.map((doc) => (
@@ -607,10 +678,22 @@ export function RegistrarOngoingGamesPage({ embedded = false }: { embedded?: boo
                             <div className="font-semibold">
                               {slotOf(doc)} · {locationName(doc)}
                             </div>
-                            <div className="text-xs text-muted">{rowId(doc) || '—'}{doc.Group ? ` · ${doc.Group}` : ''}</div>
+                            <div className="text-xs text-muted">
+                              {rowId(doc) || '—'}{doc.Group ? ` · ${doc.Group}` : ''}
+                              {doc.autoStartedBy && normalizeStatus(doc.Status) !== 'Scheduled' ? ' · started automatically at slot time' : ''}
+                            </div>
+                            {isDueToStart(doc) ? (
+                              <div className="mt-1 text-xs text-warning">Can't start yet: {doc.autoStartBlockedReason || 'checks are missing.'} It starts by itself once every gun passes.</div>
+                            ) : null}
                           </div>
                           <div className="flex items-center justify-between gap-3 sm:justify-end">
-                            <StatusBadge status={normalizeStatus(doc.Status)} />
+                            {isDueToStart(doc) ? (
+                              <span className="rounded-full border border-warning/40 bg-warning/15 px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-warning" title={doc.autoStartBlockedReason || undefined}>
+                                Due to start
+                              </span>
+                            ) : (
+                              <StatusBadge status={normalizeStatus(doc.Status)} />
+                            )}
                             <Button size="sm" variant="ghost" onClick={() => openDetails(doc)}>
                               <FiEye /> Game details
                             </Button>
@@ -624,7 +707,7 @@ export function RegistrarOngoingGamesPage({ embedded = false }: { embedded?: boo
             })
           )}
         </div>
-        <Pagination page={page} pageCount={pageCount} total={total} onPageChange={setPage} />
+        <Pagination page={page} pageCount={pageCount} total={allFolders.length} pageSize={DAYS_PER_PAGE} noun="days" onPageChange={setPage} />
 
         <div className="mt-5 rounded-2xl border border-white/10 bg-black/15 p-4">
           <div className="flex items-start gap-3">
@@ -716,7 +799,7 @@ function GameDetailsDialog({
   )
 
   return (
-    <Modal eyebrow={`Game ${rowId(doc)}`} title={formatSchedule(doc)} onClose={onClose} footer={actions}>
+    <Modal eyebrow={`Game ${rowId(doc)}`} title={formatSchedule(doc)} onClose={onClose} footer={actions} confirmDiscard={false}>
       {/* Who is playing, and when: from the booking behind this game. */}
       <BookingPlayersSection reservationId={doc.reservationId} detailed />
       <div className="mt-5 grid gap-4 md:grid-cols-2">

@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
+import { promptDialog } from '../../components/ui/ConfirmDialog'
 import { FiCheck, FiCornerUpLeft, FiFileText, FiFlag } from 'react-icons/fi'
 import { ActionGroup, Button } from '../../components/ui/Button'
 import { FilterTabs, titleCaseLabel } from '../../components/ui/FilterTabs'
@@ -182,14 +183,19 @@ export function AdminPaymentsPage() {
     }
   }
 
-  const sendBack = (payment: PaymentItem) => {
-    const reason = window.prompt('Why is this payment being sent back? The player sees this reason and can pay again online.')
-    if (reason === null) return
-    if (!reason.trim()) {
-      toast.error('Enter a reason so the player knows what to fix.')
-      return
-    }
-    void updateStatus(payment.id, 'failed', reason.trim())
+  const sendBack = async (payment: PaymentItem) => {
+    const reason = await promptDialog({
+      title: 'Send this payment back?',
+      message: 'The player sees this reason and can pay again online.',
+      label: 'Reason',
+      placeholder: 'e.g. The reference number does not match',
+      confirmLabel: 'Send back',
+      danger: true,
+      required: true,
+      multiline: true,
+    })
+    if (!reason) return
+    void updateStatus(payment.id, 'failed', reason)
   }
 
 

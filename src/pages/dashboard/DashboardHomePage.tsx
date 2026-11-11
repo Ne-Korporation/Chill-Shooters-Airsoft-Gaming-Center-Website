@@ -8,6 +8,7 @@ import { FiCalendar, FiPlus, FiShield } from 'react-icons/fi'
 import { ActivityList, DashboardHeader, Panel, StatTile, type ActivityTone } from '../../components/dashboard/DashboardParts'
 import { apiGet } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
+import { useLastBookedLocation } from '../../hooks/useLastBookedLocation'
 import { WeatherAdvisoryWidget } from '../../components/dashboard/WeatherAdvisoryWidget'
 
 
@@ -72,6 +73,8 @@ function matchesUserRecord(record: unknown, userId?: string) {
 
 export function DashboardHomePage() {
   const { user } = useAuth()
+  // The games calendar starts on the location of the player's last booking.
+  const lastLocation = useLastBookedLocation(user?.id)
   const [dashboard, setDashboard] = useState<DashboardState>(defaultState)
   const [loading, setLoading] = useState(true)
 
@@ -278,7 +281,7 @@ export function DashboardHomePage() {
             initialCount={3}
           />
           {/* On desktop the calendar sits under the sidebar menu instead. */}
-          <div className="lg:hidden"><CapacityCalendar /></div>
+          <div className="lg:hidden"><CapacityCalendar defaultLocation={lastLocation} /></div>
         </div>
 
         <aside className="order-first space-y-3 lg:order-none lg:col-start-2 lg:row-start-1">

@@ -18,11 +18,14 @@ const records = {
       weaponCount: 1,
     },
     // Two gloves per player, one mask (the default)
+    // Every player gets one of each listed weapon: a rifle AND grenades
+    { id: 'grenadier', name: 'Grenadier', status: 'active', settledAmount: 0, basePrice: 0, weaponIds: ['M4-1', 'GRENADE-1'], weaponCount: 1, equipmentIds: [] },
     { id: 'gloves-pack', name: 'Gloves Pack', status: 'active', settledAmount: 0, basePrice: 0, weaponIds: [], equipmentIds: ['MASK-1', 'VEST-1'], equipmentQuantities: { 'VEST-1': 2 } },
   ],
   weapons: [
     { id: 'rifle', name: 'Rifle', price: 500, status: 'available' },
     { id: 'M4-1', name: 'M4 Rifle #1', model: 'M4 Rifle', price: 500, status: 'available' },
+    { id: 'GRENADE-1', name: 'Grenades #1', model: 'Grenades', price: 200, status: 'available' },
   ],
   equipments: [
     { id: 'vest', name: 'Vest', price: 50, qty: 10, status: 'available' },
@@ -248,4 +251,19 @@ test('extra ammo reloads are added at the reload price and capped', async () => 
   const huge = await calculateBookingPrice({ db: {}, payload: { ...base, extraAmmoReloads: 9999 }, players: 1, findDocumentById, userId: 'player' })
   assert.equal(huge.totalAmount, without.totalAmount + 50 * 50)
   assert.ok(without.pricingBreakdown.some((line) => line.label === 'BB reloads included (2) — free' && line.amount === 0))
+})
+
+test('an all-weapons package charges every listed weapon per player; own guns replace the main one', async () => {
+  const price = (players, verifiedOwnWeaponCount = 0) => calculateBookingPrice({
+    db: {},
+    payload: { selectionMode: 'package', selectedPackageId: 'grenadier', sessionType: 'public', verifiedOwnWeaponCount },
+    players,
+    findDocumentById,
+    userId: 'player',
+  })
+  // rifle 500 + grenades 200 + entrance 150, per player
+  assert.equal((await price(1)).totalAmount, 850)
+  assert.equal((await price(10)).totalAmount, 8500)
+  // 2 players bring their own gun: they still rent grenades
+  assert.equal((await price(3, 2)).totalAmount, 3 * 850 - 2 * 500)
 })

@@ -4,6 +4,7 @@ import { NavLink, useLocation } from 'react-router-dom'
 import type { IconType } from 'react-icons'
 import { GiAk47 } from 'react-icons/gi'
 import { useAuth } from '../../context/AuthContext'
+import { useLastBookedLocation } from '../../hooks/useLastBookedLocation'
 import { apiGet } from '../../utils/apiClient'
 import { isLowOnAmmo } from '../../utils/inventoryModels'
 import { SPLIT_PAYMENTS_CHANGED_EVENT } from '../../pages/payments/SplitPaymentPage'
@@ -203,6 +204,8 @@ export function AppSidebar({
   const { pathname } = useLocation()
   const profilePath = user?.id ? `/app/players/${encodeURIComponent(user.id)}` : '/app/players/1'
   const hasOpenSplitPayment = useHasOpenSplitPayment(role === 'user' && !!user?.id)
+  // Players' games calendar starts on the location of their last booking.
+  const lastLocation = useLastBookedLocation(role === 'user' ? user?.id : null)
   const profile: Item = { label: 'Profile', to: profilePath, icon: FiUser }
 
   const playerItems: Item[] = [
@@ -248,7 +251,7 @@ export function AppSidebar({
         </nav>
         {role === 'user' ? (
           <div className="divider mt-3 border-t pt-3">
-            <CapacityCalendar mini />
+            <CapacityCalendar mini defaultLocation={lastLocation} />
           </div>
         ) : null}
         {role === 'marshal' ? (

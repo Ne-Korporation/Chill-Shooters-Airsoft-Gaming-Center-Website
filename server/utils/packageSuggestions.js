@@ -191,12 +191,13 @@ export function thinkingLevel(env = process.env) {
   return ['minimal', 'low', 'medium', 'high'].includes(level) ? level : 'minimal'
 }
 
-export async function askGemini(prompt, { env = process.env, http = fetch } = {}) {
+// `signal` cancels the call early (the admin pressed Stop); the timeout still applies.
+export async function askGemini(prompt, { env = process.env, http = fetch, signal } = {}) {
   const { apiKey, model } = geminiConfig(env)
   if (!apiKey) throw Object.assign(new Error('AI suggestions are not set up. Add GEMINI_API_KEY to the server environment.'), { statusCode: 503 })
   const call = (thinkingConfig) => http(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
     method: 'POST',
-    signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(GEMINI_TIMEOUT_MS)]) : AbortSignal.timeout(GEMINI_TIMEOUT_MS),
     headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
     body: JSON.stringify({
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
@@ -220,6 +221,7 @@ export async function askGemini(prompt, { env = process.env, http = fetch } = {}
       body = await res.json().catch(() => null)
     }
   } catch (err) {
+    if (signal?.aborted) throw Object.assign(new Error('Stopped.'), { statusCode: 499, stopped: true })
     if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
       throw Object.assign(new Error('Gemini took too long to answer (it may be busy). Try again in a minute.'), { statusCode: 504 })
     }

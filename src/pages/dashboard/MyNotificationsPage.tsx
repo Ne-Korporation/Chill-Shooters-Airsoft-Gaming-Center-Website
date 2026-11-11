@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react'
+import { confirmDialog } from '../../components/ui/ConfirmDialog'
 import toast from 'react-hot-toast'
 import { FiArrowLeft, FiBell, FiCheck, FiChevronRight, FiTrash2, FiX } from 'react-icons/fi'
 import { useNavigate } from 'react-router-dom'
@@ -54,7 +55,7 @@ export function MyNotificationsPage() {
   // this account; the server keeps them for everyone else.
   const [clearing, setClearing] = useState(false)
   const clearAll = async () => {
-    if (!window.confirm(`Remove all ${all.length} notification${all.length === 1 ? '' : 's'}? This can't be undone.`)) return
+    if (!(await confirmDialog({ title: `Remove all ${all.length} notification${all.length === 1 ? '' : 's'}?`, message: "This can't be undone.", confirmLabel: 'Remove all', danger: true }))) return
     setClearing(true)
     try {
       await clearNotificationsByIds(all.map((item) => item.id))

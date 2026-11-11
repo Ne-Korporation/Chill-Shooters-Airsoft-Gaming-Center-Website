@@ -127,7 +127,7 @@ export function isPublicDay(day: WeekendDay) {
 }
 
 const SLOT_NAMES: Record<string, string> = { morning: 'Morning', afternoon: 'Afternoon', evening: 'Evening' }
-const SHORT_LOCATION: Record<string, string> = { salawag: 'Salawag', langkaan: 'Langkaan', binan: 'Biñan' }
+export const SHORT_LOCATION: Record<string, string> ={ salawag: 'Salawag', langkaan: 'Langkaan', binan: 'Biñan' }
 
 // One day at a glance: a row per location, a column per time slot. Public days show spots left;
 // private days show how many groups have booked each slot.
@@ -185,7 +185,7 @@ export function DaySlotsTable({ day, past, note = true }: { day: WeekendDay; pas
                   const tone = fillTone(slot.booked, slot.capacity)
                   return (
                     <td key={slot.slot} className={`whitespace-nowrap px-1.5 py-2 text-center align-middle font-semibold tabular-nums ${past ? 'text-muted' : tone.text}`} title={`${slot.booked} of ${slot.capacity} booked`}>
-                      {past ? slot.booked : slot.remaining === 0 ? 'Full' : slot.remaining}
+                      {past ? `${slot.booked} played` : slot.remaining === 0 ? 'Full' : `${slot.remaining.toLocaleString()} left`}
                     </td>
                   )
                 })}

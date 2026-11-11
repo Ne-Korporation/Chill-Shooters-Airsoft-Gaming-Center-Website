@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
+import { confirmDialog } from '../../components/ui/ConfirmDialog'
 import { FiCheck, FiChevronRight, FiArchive, FiX } from 'react-icons/fi'
 import { toast } from 'react-hot-toast'
 
@@ -139,7 +140,7 @@ export function AdminGameplayPage() {
       const id = rowId(doc)
       if (!id) throw new Error('Missing gameplay id')
 
-      const confirmed = window.confirm('Archive this gameplay? It will remain in the archive view and can be restored later.')
+      const confirmed = await confirmDialog({ title: 'Archive this game?', message: 'It stays in the archive view and can be restored later.', confirmLabel: 'Archive' })
       if (!confirmed) return
 
       await apiPut(`/api/gameplay/${id}`, {

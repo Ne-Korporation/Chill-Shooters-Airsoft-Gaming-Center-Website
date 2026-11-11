@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
+import { confirmDialog } from '../ui/ConfirmDialog'
 import { createPortal } from 'react-dom'
 import toast from 'react-hot-toast'
 import { FiEdit2, FiImage, FiPlus, FiTrash2, FiUpload, FiX } from 'react-icons/fi'
@@ -220,7 +221,7 @@ useEffect(() => {
 
   const handleDelete = async (post: DashboardPost) => {
     if (!post.id) return
-    if (!window.confirm('Delete this dashboard post?')) return
+    if (!(await confirmDialog({ title: 'Delete this dashboard post?', confirmLabel: 'Delete', danger: true }))) return
 
     setError(null)
 

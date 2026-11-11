@@ -1,5 +1,6 @@
 import React from 'react'
-import { FiAlertTriangle, FiCheck, FiEye, FiRotateCcw, FiShield, FiSlash, FiX } from 'react-icons/fi'
+import { confirmDialog, promptDialog } from '../../components/ui/ConfirmDialog'
+import { FiAlertTriangle, FiCheck, FiEye, FiRotateCcw, FiShield, FiSlash, FiUserX, FiX } from 'react-icons/fi'
 import toast from 'react-hot-toast'
 import { ActionGroup, Button } from '../../components/ui/Button'
 import { FilterTabs } from '../../components/ui/FilterTabs'
@@ -8,6 +9,7 @@ import { Modal } from '../../components/ui/Modal'
 import { apiGet, apiGetAll, apiPost, apiPut } from '../../utils/apiClient'
 import { Paged } from '../../components/ui/Pagination'
 import { PlayerStatsCard } from '../../components/players/PlayerStatsCard'
+import { CloseAccountDialog } from './CloseAccountDialog'
 
 export function PlayerManagementPage() {
   const [activeView, setActiveView] = React.useState<'players' | 'staff'>('players')
@@ -28,7 +30,9 @@ export function PlayerManagementPage() {
   const [playerSearch, setPlayerSearch] = React.useState('')
   const [playerLevelFilter, setPlayerLevelFilter] = React.useState<'all' | 'Beginner' | 'Intermediate' | 'Experienced'>('all')
   const [playerVerificationFilter, setPlayerVerificationFilter] = React.useState<'all' | 'verified' | 'pending_review' | 'not_submitted' | 'rejected' | 'expired'>('all')
-  const [playerAccountFilter, setPlayerAccountFilter] = React.useState<'all' | 'active' | 'suspended'>('all')
+  const [playerAccountFilter, setPlayerAccountFilter] = React.useState<'all' | 'active' | 'suspended' | 'closed'>('all')
+  // The player whose account is being closed (or whose data is being erased), if any.
+  const [closing, setClosing] = React.useState<{ player: any; eraseOnly: boolean } | null>(null)
   const [statusChangingId, setStatusChangingId] = React.useState<string | null>(null)
   const [staffSearch, setStaffSearch] = React.useState('')
   const [staffFilter, setStaffFilter] = React.useState<'all' | 'Marshal' | 'Admin' | 'Registrar'>('all')
@@ -70,7 +74,9 @@ export function PlayerManagementPage() {
             identityIdType: doc.identityIdType || '',
             identitySubmittedAtISO: doc.identityVerificationUpdatedAt || '',
             birthDate: doc.birthDate || '',
-            accountStatus: String(doc.status || '').toLowerCase() === 'suspended' ? 'suspended' : 'active',
+            accountStatus: ['suspended', 'closed'].includes(String(doc.status || '').toLowerCase()) ? String(doc.status).toLowerCase() : 'active',
+            erased: Boolean(doc.erasedAtISO),
+            closedReason: doc.closedReason || '',
             suspensionReason: doc.suspensionReason || '',
             partnershipInstitution: doc.partnershipInstitution || '',
             partnershipEligibilityStatus: String(doc.partnershipEligibilityStatus || ''),
@@ -128,7 +134,7 @@ export function PlayerManagementPage() {
   }
 
   const handleResetPassword = async (staffId: string) => {
-    if (!window.confirm('Reset this account to a new default password? They will be emailed the new password and their current one stops working.')) return
+    if (!(await confirmDialog({ title: 'Reset this password?', message: 'They will be emailed a new default password, and their current one stops working.', confirmLabel: 'Reset password', danger: true }))) return
     setResettingId(staffId)
     try {
       const res = await apiPost<any>('/api/auth/admin/reset-password', { userId: staffId })
@@ -184,14 +190,18 @@ export function PlayerManagementPage() {
   const handleSetAccountStatus = async (player: any, status: 'suspended' | 'active') => {
     let reason = ''
     if (status === 'suspended') {
-      const answer = window.prompt(`Suspend ${player.name}? They won't be able to log in or book until reinstated.\n\nReason (shown in the audit log):`)
-      if (answer === null) return
-      reason = answer.trim()
-      if (!reason) {
-        toast.error('Enter a reason for the suspension.')
-        return
-      }
-    } else if (!window.confirm(`Reinstate ${player.name}? They will be able to log in and book again.`)) {
+      const answer = await promptDialog({
+        title: `Suspend ${player.name}?`,
+        message: "They won't be able to log in or book until reinstated.",
+        label: 'Reason (shown in the audit log)',
+        confirmLabel: 'Suspend',
+        danger: true,
+        required: true,
+        multiline: true,
+      })
+      if (!answer) return
+      reason = answer
+    } else if (!(await confirmDialog({ title: `Reinstate ${player.name}?`, message: 'They will be able to log in and book again.', confirmLabel: 'Reinstate' }))) {
       return
     }
     setStatusChangingId(player.id)
@@ -207,15 +217,33 @@ export function PlayerManagementPage() {
     }
   }
 
-  const accountButton = (pl: any, size: 'xs' | 'sm' = 'xs') => pl.accountStatus === 'suspended' ? (
-    <Button variant="accent-soft" size={size} disabled={statusChangingId === pl.id} onClick={() => handleSetAccountStatus(pl, 'active')}>
-      <FiRotateCcw /> {statusChangingId === pl.id ? 'Updating…' : 'Reinstate'}
-    </Button>
-  ) : (
-    <Button variant="danger-soft" size={size} disabled={statusChangingId === pl.id} onClick={() => handleSetAccountStatus(pl, 'suspended')}>
-      <FiSlash /> {statusChangingId === pl.id ? 'Updating…' : 'Suspend'}
-    </Button>
-  )
+  // Suspend / reinstate, plus closing the account (accounts on bookings are closed, never deleted)
+  // and erasing a closed account's personal data on request. An erased account has no actions left.
+  const accountButton = (pl: any, size: 'xs' | 'sm' = 'xs') => {
+    if (pl.erased || pl.role !== 'user') return null
+    return (
+      <>
+        {pl.accountStatus === 'active' ? (
+          <Button variant="danger-soft" size={size} disabled={statusChangingId === pl.id} onClick={() => handleSetAccountStatus(pl, 'suspended')}>
+            <FiSlash /> {statusChangingId === pl.id ? 'Updating…' : 'Suspend'}
+          </Button>
+        ) : (
+          <Button variant="accent-soft" size={size} disabled={statusChangingId === pl.id} onClick={() => handleSetAccountStatus(pl, 'active')}>
+            <FiRotateCcw /> {statusChangingId === pl.id ? 'Updating…' : pl.accountStatus === 'closed' ? 'Reopen' : 'Reinstate'}
+          </Button>
+        )}
+        {pl.accountStatus === 'closed' ? (
+          <Button variant="danger-soft" size={size} onClick={() => setClosing({ player: pl, eraseOnly: true })}>
+            <FiUserX /> Erase data
+          </Button>
+        ) : (
+          <Button variant="danger-soft" size={size} onClick={() => setClosing({ player: pl, eraseOnly: false })}>
+            <FiUserX /> Close account
+          </Button>
+        )}
+      </>
+    )
+  }
 
   // Filters search every account before paging, 10 per page.
   const filteredPlayers = players.filter((pl) => {
@@ -238,7 +266,11 @@ export function PlayerManagementPage() {
           <div className="text-sm font-semibold">{pl.name}</div>
           <div className="mt-1 text-xs text-muted">{pl.email}</div>
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            {pl.accountStatus === 'suspended' ? (
+            {pl.erased ? (
+              <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] font-semibold text-muted" title={pl.closedReason || undefined}>Closed · data erased</span>
+            ) : pl.accountStatus === 'closed' ? (
+              <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] font-semibold text-muted" title={pl.closedReason || undefined}>Closed</span>
+            ) : pl.accountStatus === 'suspended' ? (
               <span className="rounded-full border border-danger/30 bg-danger/15 px-3 py-1 text-[11px] font-semibold text-danger" title={pl.suspensionReason || undefined}>Suspended</span>
             ) : (
               <span className="rounded-full border border-accent/30 bg-accent/20 px-3 py-1 text-[11px] font-semibold text-accent">{pl.status}</span>
@@ -311,7 +343,7 @@ export function PlayerManagementPage() {
   const reviewPartnership = async (playerId: string, decision: 'verified' | 'rejected') => {
     let reason = ''
     if (decision === 'rejected') {
-      reason = window.prompt('Reason for rejecting this discount request?')?.trim() || ''
+      reason = (await promptDialog({ title: 'Reject this discount request?', label: 'Reason', confirmLabel: 'Reject', danger: true, required: true, multiline: true })) || ''
       if (!reason) return
     }
     setVerifyingId(playerId)
@@ -408,6 +440,7 @@ export function PlayerManagementPage() {
                     <option value="all">All accounts</option>
                     <option value="active">Active</option>
                     <option value="suspended">Suspended</option>
+                    <option value="closed">Closed</option>
                   </select>
                 </div>
                 <div>
@@ -678,6 +711,14 @@ export function PlayerManagementPage() {
             </div>
           </div>
         </div>
+      ) : null}
+      {closing ? (
+        <CloseAccountDialog
+          player={closing.player}
+          eraseOnly={closing.eraseOnly}
+          onClose={() => setClosing(null)}
+          onDone={() => { setSelectedPlayer(null); void fetchUsers() }}
+        />
       ) : null}
     </div>
   )

@@ -60,12 +60,13 @@ export function verifyAuthToken(token) {
 
 // Suspended players are refused even with a still-valid token. The answer is cached briefly
 // so this doesn't add a database read to every request.
-export const SUSPENDED_ACCOUNT_ERROR = 'This account is suspended. Please contact Chill Shooters staff.'
+export const SUSPENDED_ACCOUNT_ERROR = 'This account is suspended or closed. Please contact Chill Shooters staff.'
 const SUSPENSION_CACHE_MS = 60 * 1000
 const suspensionCache = new Map()
 
+// Suspended (can be reinstated) or closed (the player left; see utils/accountClosure.js): no logins.
 export function isSuspendedAccount(account) {
-  return String(account?.status || '').toLowerCase() === 'suspended'
+  return ['suspended', 'closed'].includes(String(account?.status || '').toLowerCase())
 }
 
 // Call after changing an account's status so the new state applies immediately.

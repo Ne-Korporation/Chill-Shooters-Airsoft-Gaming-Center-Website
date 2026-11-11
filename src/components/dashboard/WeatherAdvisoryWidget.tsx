@@ -213,6 +213,8 @@ export function WeatherAdvisoryWidget() {
             void load()
           }}
           size="xl"
+          // A workspace whose actions save as they go, so there's nothing unsaved to lose.
+          confirmDiscard={false}
         >
           <WeatherPanel />
         </Modal>

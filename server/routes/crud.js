@@ -19,6 +19,7 @@ import { getSlotHours, slotHasStarted } from '../utils/slotHours.js'
 import { summarizeWeekendCapacity, weekendDatesOf } from '../utils/weekendCapacity.js'
 import { listActiveCauseDays, weekendDatesInMonth } from '../utils/causeDays.js'
 import { closedDayError, findClosedDay, listClosedDays } from '../utils/closedDays.js'
+import { countAccountBookings } from '../utils/accountClosure.js'
 import { hasValidIdentity, identityVerifiedFields, validIdentityFilter, verifiedIdDocument } from '../utils/identityValidity.js'
 
 // ID type recorded on a child's waiver: the parent attaches any valid ID or school ID.
@@ -48,10 +49,12 @@ import {
 
 const router = express.Router()
 const SLOT_NAMES = ['morning', 'afternoon', 'evening']
+// Most players per slot; every slot of a location takes the same number. Keep in sync with
+// locationMaxPlayers in src/pages/reservations/ReservationCalendarPage.tsx and the landing page.
 const DEFAULT_LOCATION_CAPACITIES = {
-  salawag: { morning: 400, afternoon: 380, evening: 360 },
-  langkaan: { morning: 400, afternoon: 380, evening: 360 },
-  binan: { morning: 600, afternoon: 570, evening: 540 },
+  salawag: { morning: 400, afternoon: 400, evening: 400 },
+  langkaan: { morning: 400, afternoon: 400, evening: 400 },
+  binan: { morning: 600, afternoon: 600, evening: 600 },
 }
 
 function getLocationCapacities() {
@@ -221,6 +224,40 @@ router.get('/public/packages', async (_req, res) => {
     const data = docs.map((doc) => ({ ...doc, bookings: bookingsById.get(String(doc.id)) || 0 }))
 
     return res.json({ ok: true, data, weapons: weapons.map(publicItem), equipment: equipment.map(publicItem) })
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: String(err) })
+  }
+})
+
+// Reservations of any status (cancelled ones too: they keep their package for history) per
+// package, keyed by the package's id. Reservations store the package's `id`, or its `_id` for
+// packages saved without one.
+async function packageBookingCounts(db, packages) {
+  const keyOf = new Map()
+  for (const pkg of packages) {
+    const key = String(pkg.id ?? pkg._id)
+    keyOf.set(key, key)
+    if (pkg._id) keyOf.set(String(pkg._id), key)
+  }
+  const rows = await db.collection('reservations').aggregate([
+    { $match: { selectedPackageId: { $in: [...keyOf.keys()] } } },
+    { $group: { _id: '$selectedPackageId', count: { $sum: 1 } } },
+  ]).toArray()
+  const counts = {}
+  for (const row of rows) {
+    const key = keyOf.get(String(row._id))
+    counts[key] = (counts[key] || 0) + row.count
+  }
+  return counts
+}
+
+// Admin: how many bookings each package has, so the packages page offers Delete only for packages
+// that were never booked.
+router.get('/packages/booking-counts', requireAuth, requireRole('admin'), async (_req, res) => {
+  try {
+    const db = await getDb()
+    const packages = await db.collection('packages').find({}, { projection: { id: 1 } }).toArray()
+    return res.json({ ok: true, data: await packageBookingCounts(db, packages) })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
   }
@@ -1932,6 +1969,17 @@ router.post('/:collection', requireAuth, async (req, res) => {
       if (!doc.fieldId && doc.fieldIds.length > 0) {
         doc.fieldId = doc.fieldIds[0]
       }
+      // The booker's name and email are kept on the booking, so it still shows who booked after
+      // their account is deleted. Taken from the account, never from what the browser sent.
+      delete doc.bookerName
+      delete doc.bookerEmail
+      if (doc.userId) {
+        const booker = await findDocumentById(db, 'user_accounts', String(doc.userId)).catch(() => null)
+        if (booker) {
+          doc.bookerName = String(booker.name || '').trim()
+          doc.bookerEmail = String(booker.email || '').trim()
+        }
+      }
     }
 
     if (isDashboardPostCollection(collection)) {
@@ -2551,6 +2599,28 @@ router.delete('/:collection/:id', requireAuth, async (req, res) => {
     }
     if (deleteRole !== 'admin' && collection !== 'notifications') {
       return res.status(404).json({ ok: false, error: 'not found' })
+    }
+    // Bookings look their package up again (pricing, gear holds, reports), so only a package that
+    // was never booked can be deleted; any other is archived instead.
+    if (collection === 'packages') {
+      const booked = (await packageBookingCounts(db, [existing]))[String(existing.id ?? existing._id)] || 0
+      if (booked > 0) {
+        return res.status(409).json({
+          ok: false,
+          error: `This package has ${booked} booking${booked === 1 ? '' : 's'}, so it can't be deleted. Archive it instead.`,
+        })
+      }
+    }
+    // Bookings are game and payment records, so an account on any booking (as booker or teammate)
+    // is closed or has its data erased instead of being deleted (utils/accountClosure.js).
+    if (collection === 'user_accounts') {
+      const booked = await countAccountBookings(db, String(existing.id ?? existing._id))
+      if (booked > 0) {
+        return res.status(409).json({
+          ok: false,
+          error: `This account is on ${booked} booking${booked === 1 ? '' : 's'}, so it can't be deleted. Close the account (or erase their personal data) instead.`,
+        })
+      }
     }
 
     const delFilter = existing._id && typeof existing._id === 'object'

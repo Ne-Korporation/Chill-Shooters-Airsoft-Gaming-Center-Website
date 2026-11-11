@@ -669,7 +669,7 @@ function GameDialog({ reservationId, game, canTakePayment, canGroupTeams, onClos
       : null)
 
   return (
-    <Modal eyebrow={`${game?.id ? `Game ${game.id} · ` : ''}${reservationId}`} title={title} size="xl" onClose={onClose}>
+    <Modal eyebrow={`${game?.id ? `Game ${game.id} · ` : ''}${reservationId}`} title={title} size="xl" onClose={onClose} confirmDiscard={false}>
       <div className="mb-4 flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted">
         {subtitle ? <span className="inline-flex items-center gap-1"><FiClock /> {subtitle}</span> : null}
         <span className="inline-flex items-center gap-1"><FiMapPin /> {game ? locationName(game) : r?.locationName || '—'}</span>

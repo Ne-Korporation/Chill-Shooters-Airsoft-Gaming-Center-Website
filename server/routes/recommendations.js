@@ -1,4 +1,5 @@
 import express from 'express'
+import { randomUUID } from 'crypto'
 import { ObjectId } from 'mongodb'
 import { getDb } from '../db/mongo.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
@@ -164,27 +165,100 @@ export function takeSuggestionCall(userId, now = Date.now(), calls = suggestionC
   return { ok: true }
 }
 
+// Gemini can take a minute or more, longer than tunnels and proxies keep a request open, so the
+// work runs in the background as a job: POST starts it and answers at once, the page checks on it
+// with short GETs, and can leave and come back (it keeps the job id) or stop it. Jobs live in
+// memory for JOB_TTL_MS; a server restart drops them and the page says to try again.
+const JOB_TTL_MS = 30 * 60_000
+const suggestionJobs = new Map()
+
+function dropOldJobs(now = Date.now()) {
+  for (const [id, job] of suggestionJobs) {
+    if (now - job.startedAt > JOB_TTL_MS) {
+      job.controller.abort()
+      suggestionJobs.delete(id)
+    }
+  }
+}
+
+// What the page sees of a job.
+function jobView(id, job) {
+  return {
+    ok: true,
+    jobId: id,
+    status: job.status, // running | done | failed | stopped
+    startedAt: new Date(job.startedAt).toISOString(),
+    ...(job.status === 'done' ? job.result : {}),
+    ...(job.status === 'failed' ? { error: job.error } : {}),
+  }
+}
+
+// The admin's own job, or null.
+function ownJob(req) {
+  dropOldJobs()
+  const job = suggestionJobs.get(String(req.params.jobId || ''))
+  return job && job.userId === String(req.user.id) ? job : null
+}
+
+export async function runSuggestionJob(job, focus, { db, ask = askGemini, gather = gatherSuggestionContext } = {}) {
+  try {
+    const context = await gather(db)
+    if (!context.weaponModels.length) throw new Error('Add rental weapons to inventory first; the AI builds packages from them.')
+    const raw = await ask(buildPrompt(context, { focus }), { signal: job.controller.signal })
+    if (job.status !== 'running') return
+    const { suggestions, dropped } = checkSuggestions(raw, context)
+    job.result = { data: suggestions, dropped, bookingsConsidered: context.bookings.total }
+    job.status = 'done'
+  } catch (err) {
+    if (job.status !== 'running') return
+    job.status = job.controller.signal.aborted ? 'stopped' : 'failed'
+    job.error = err?.message || String(err)
+  }
+}
+
 // POST /api/admin/package-suggestions  { focus? }
-// New package ideas from Gemini, checked against current inventory. Nothing is saved here:
-// the admin accepts a suggestion on the packages page, which creates it as a normal package.
+// Starts finding new package ideas from Gemini, checked against current inventory. Nothing is
+// saved: the admin accepts a suggestion on the packages page, which creates a normal package.
+// An admin already waiting on a job gets that job back instead of starting (and paying for) another.
 router.post('/admin/package-suggestions', requireAuth, requireRole('admin'), async (req, res) => {
+  dropOldJobs()
+  const userId = String(req.user.id)
+  for (const [id, job] of suggestionJobs) {
+    if (job.userId === userId && job.status === 'running') return res.status(202).json(jobView(id, job))
+  }
   const focus = String(req.body?.focus || '').replace(/\s+/g, ' ').trim().slice(0, 200)
-  const allowed = takeSuggestionCall(String(req.user.id))
+  const allowed = takeSuggestionCall(userId)
   if (!allowed.ok) {
     return res.status(429).json({ ok: false, error: `Too many AI requests. Try again in ${allowed.retryInMinutes} minute(s).` })
   }
   try {
     const db = await getDb()
-    const context = await gatherSuggestionContext(db)
-    if (!context.weaponModels.length) {
-      return res.status(400).json({ ok: false, error: 'Add rental weapons to inventory first; the AI builds packages from them.' })
-    }
-    const raw = await askGemini(buildPrompt(context, { focus }))
-    const { suggestions, dropped } = checkSuggestions(raw, context)
-    return res.json({ ok: true, data: suggestions, dropped, bookingsConsidered: context.bookings.total })
+    const id = randomUUID()
+    const job = { userId, status: 'running', startedAt: Date.now(), controller: new AbortController(), result: null, error: '' }
+    suggestionJobs.set(id, job)
+    void runSuggestionJob(job, focus, { db })
+    return res.status(202).json(jobView(id, job))
   } catch (err) {
-    return res.status(err?.statusCode || 500).json({ ok: false, error: err?.message || String(err) })
+    return res.status(500).json({ ok: false, error: err?.message || String(err) })
   }
+})
+
+// GET /api/admin/package-suggestions/:jobId  → the job's status, and its suggestions once done.
+router.get('/admin/package-suggestions/:jobId', requireAuth, requireRole('admin'), (req, res) => {
+  const job = ownJob(req)
+  if (!job) return res.status(404).json({ ok: false, error: 'That suggestion request is gone (the server may have restarted). Try again.' })
+  return res.json(jobView(req.params.jobId, job))
+})
+
+// POST /api/admin/package-suggestions/:jobId/stop  → stops the job and the Gemini call.
+router.post('/admin/package-suggestions/:jobId/stop', requireAuth, requireRole('admin'), (req, res) => {
+  const job = ownJob(req)
+  if (!job) return res.json({ ok: true })
+  if (job.status === 'running') {
+    job.status = 'stopped'
+    job.controller.abort()
+  }
+  return res.json(jobView(req.params.jobId, job))
 })
 
 export default router

@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react'
+import { confirmDialog } from '../../components/ui/ConfirmDialog'
 import { FiTrash2 } from 'react-icons/fi'
 import { useNavigate } from 'react-router-dom'
 import { Button } from '../../components/ui/Button'
@@ -103,8 +104,8 @@ export function AdminNotificationsPage() {
     toast.success(`Broadcast notification sent to ${targets.map((item) => item.toUpperCase()).join(', ')}.`)
   }
 
-  const handleDeleteNotification = (id: string) => {
-    if (!window.confirm('Delete this notification?')) return
+  const handleDeleteNotification = async (id: string) => {
+    if (!(await confirmDialog({ title: 'Delete this notification?', confirmLabel: 'Delete', danger: true }))) return
     deleteNotification(id)
     toast.success('Notification deleted.')
   }
@@ -136,7 +137,7 @@ export function AdminNotificationsPage() {
                 size="sm"
                 variant="danger-soft"
                 onClick={async () => {
-                  if (!window.confirm('Clear all notifications visible to you? This cannot be undone.')) return
+                  if (!(await confirmDialog({ title: 'Clear all notifications visible to you?', message: 'This cannot be undone.', confirmLabel: 'Clear all', danger: true }))) return
 
                   try {
                     await clearNotificationsByIds(roleNotifications.map((notification) => notification.id))
@@ -167,7 +168,7 @@ export function AdminNotificationsPage() {
                 size="sm"
                 variant="danger-soft"
                 onClick={async () => {
-                  if (window.confirm('Clear all notifications from the database? This cannot be undone.')) {
+                  if (await confirmDialog({ title: 'Clear all notifications from the database?', message: 'Every account loses them. This cannot be undone.', confirmLabel: 'Clear database', danger: true })) {
                     try {
                       await clearAllNotifications()
                       toast.success('All notifications cleared.')

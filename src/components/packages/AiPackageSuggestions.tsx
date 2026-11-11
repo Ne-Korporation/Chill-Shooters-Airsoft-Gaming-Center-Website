@@ -1,7 +1,7 @@
 import React from 'react'
 import toast from 'react-hot-toast'
-import { FiCheck, FiEdit2, FiRefreshCw, FiX, FiZap } from 'react-icons/fi'
-import { apiPost } from '../../utils/apiClient'
+import { FiCheck, FiEdit2, FiRefreshCw, FiSquare, FiX, FiZap } from 'react-icons/fi'
+import { ApiError, apiGet, apiPost } from '../../utils/apiClient'
 import { Button } from '../ui/Button'
 import { Card } from '../ui/Card'
 
@@ -25,17 +25,38 @@ type Dropped = { name: string; why: string }
 
 const peso = (value: number) => `₱${Math.round(value).toLocaleString()}`
 
-// The last results are kept for this browser tab, so closing and reopening the panel (or
-// leaving the page) doesn't mean waiting for Gemini again.
+// The last results, and the request Gemini is still working on, are kept for this browser tab:
+// closing the panel or leaving the page doesn't lose them. The server runs the request in the
+// background, so coming back picks up where it left off.
 const SAVED_KEY = 'ai-package-suggestions'
-type Saved = { focus: string; suggestions: AiPackageSuggestion[]; dropped: Dropped[]; bookings: number }
+type Job = { id: string; startedAt: number }
+type Saved = { focus: string; suggestions: AiPackageSuggestion[] | null; dropped: Dropped[]; bookings: number; job: Job | null }
 function readSaved(): Saved | null {
   try {
     const saved = JSON.parse(sessionStorage.getItem(SAVED_KEY) || 'null')
-    return saved && Array.isArray(saved.suggestions) ? saved : null
+    return saved && (Array.isArray(saved.suggestions) || saved.job?.id) ? saved : null
   } catch {
     return null
   }
+}
+
+type JobResponse = {
+  ok: boolean
+  jobId: string
+  status: 'running' | 'done' | 'failed' | 'stopped'
+  startedAt: string
+  data?: AiPackageSuggestion[]
+  dropped?: Dropped[]
+  bookingsConsidered?: number
+  error?: string
+}
+
+const POLL_MS = 2000
+
+// True while a request started in this tab is still being worked on, so the page can reopen the
+// panel when the admin comes back to it.
+export function hasRunningSuggestions() {
+  return Boolean(readSaved()?.job?.id)
 }
 function writeSaved(saved: Saved) {
   try {
@@ -54,7 +75,10 @@ export function AiPackageSuggestions({ onAccept, onEdit, onClose }: {
 }) {
   const [saved] = React.useState(readSaved)
   const [focus, setFocus] = React.useState(saved?.focus || '')
-  const [loading, setLoading] = React.useState(false)
+  // The request Gemini is working on (in the background on the server), if any.
+  const [job, setJob] = React.useState<Job | null>(saved?.job || null)
+  const loading = Boolean(job)
+  const [starting, setStarting] = React.useState(false)
   const [error, setError] = React.useState('')
   const [suggestions, setSuggestions] = React.useState<AiPackageSuggestion[] | null>(saved?.suggestions || null)
   const [dropped, setDropped] = React.useState<Dropped[]>(saved?.dropped || [])
@@ -63,35 +87,75 @@ export function AiPackageSuggestions({ onAccept, onEdit, onClose }: {
   const [elapsed, setElapsed] = React.useState(0)
 
   React.useEffect(() => {
-    if (suggestions) writeSaved({ focus, suggestions, dropped, bookings })
-  }, [suggestions, dropped, bookings])
+    if (suggestions || job) writeSaved({ focus, suggestions, dropped, bookings, job })
+  }, [suggestions, dropped, bookings, job])
 
-  // Seconds waited, shown while Gemini works (it can take up to a minute when busy).
+  // Seconds since the request started (it can take a minute or more when Gemini is busy),
+  // counted from when the server started it, so it stays right after leaving and coming back.
   React.useEffect(() => {
-    if (!loading) return
-    setElapsed(0)
-    const started = Date.now()
-    const timer = window.setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 1000)
+    if (!job) return
+    const tick = () => setElapsed(Math.max(0, Math.floor((Date.now() - job.startedAt) / 1000)))
+    tick()
+    const timer = window.setInterval(tick, 1000)
     return () => window.clearInterval(timer)
-  }, [loading])
+  }, [job])
+
+  // Check on the request every few seconds until it's done, failed or stopped.
+  React.useEffect(() => {
+    if (!job) return
+    let alive = true
+    let failures = 0
+    const check = async () => {
+      try {
+        const res = await apiGet<JobResponse>(`/api/admin/package-suggestions/${encodeURIComponent(job.id)}`)
+        if (!alive || res.status === 'running') return
+        if (res.status === 'done') {
+          setSuggestions(res.data || [])
+          setDropped(res.dropped || [])
+          setBookings(res.bookingsConsidered || 0)
+          toast.success(`AI package suggestions are ready (${(res.data || []).length})`)
+        } else if (res.status === 'failed') {
+          setError(res.error || 'Could not get suggestions')
+        }
+        setJob(null)
+      } catch (e: any) {
+        if (!alive) return
+        // The request is gone (server restarted) or keeps failing: stop waiting and say so.
+        failures += 1
+        if ((e instanceof ApiError && e.status === 404) || failures >= 5) {
+          setError(String(e?.message || 'Lost track of the suggestion request. Try again.'))
+          setJob(null)
+        }
+      }
+    }
+    void check()
+    const timer = window.setInterval(() => { void check() }, POLL_MS)
+    return () => {
+      alive = false
+      window.clearInterval(timer)
+    }
+  }, [job])
 
   const generate = async () => {
-    setLoading(true)
+    setStarting(true)
     setError('')
     try {
-      const res = await apiPost<{ ok: boolean; data?: AiPackageSuggestion[]; dropped?: Dropped[]; bookingsConsidered?: number; error?: string }>(
-        '/api/admin/package-suggestions',
-        { focus },
-      )
-      if (!res?.ok) throw new Error(res?.error || 'Could not get suggestions')
-      setSuggestions(res.data || [])
-      setDropped(res.dropped || [])
-      setBookings(res.bookingsConsidered || 0)
+      const res = await apiPost<JobResponse>('/api/admin/package-suggestions', { focus })
+      if (!res?.ok || !res.jobId) throw new Error(res?.error || 'Could not start suggestions')
+      setJob({ id: res.jobId, startedAt: Date.parse(res.startedAt) || Date.now() })
     } catch (e: any) {
       setError(String(e?.message || e))
     } finally {
-      setLoading(false)
+      setStarting(false)
     }
+  }
+
+  // Stops the request on the server too, so Gemini stops working on it.
+  const stop = () => {
+    const stopping = job
+    setJob(null)
+    toast('Stopped. Your previous suggestions are kept.', { icon: '⏹️' })
+    if (stopping) void apiPost(`/api/admin/package-suggestions/${encodeURIComponent(stopping.id)}/stop`, {}).catch(() => {})
   }
 
   const remove = (name: string) => setSuggestions((list) => (list || []).filter((s) => s.name !== name))
@@ -125,21 +189,27 @@ export function AiPackageSuggestions({ onAccept, onEdit, onClose }: {
           value={focus}
           maxLength={200}
           onChange={(e) => setFocus(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && !loading) void generate() }}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !loading && !starting) void generate() }}
           placeholder="Optional focus, e.g. barkada groups of 5, budget players, students"
           className="w-full flex-1 rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm text-text"
         />
-        <Button size="sm" variant="primary" disabled={loading} onClick={generate}>
-          {suggestions ? <FiRefreshCw /> : <FiZap />} {loading ? 'Thinking…' : suggestions ? 'Suggest again' : 'Get suggestions'}
-        </Button>
+        {loading ? (
+          <Button size="sm" variant="danger-soft" onClick={stop} title="Stop Gemini">
+            <FiSquare /> Stop
+          </Button>
+        ) : (
+          <Button size="sm" variant="primary" disabled={starting} onClick={generate}>
+            {suggestions ? <FiRefreshCw /> : <FiZap />} {starting ? 'Starting…' : suggestions ? 'Suggest again' : 'Get suggestions'}
+          </Button>
+        )}
       </div>
 
       {error ? <div className="mt-3 rounded-xl border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">{error}</div> : null}
 
       {loading ? (
         <div className="mt-3 text-xs text-muted">
-          Gemini is looking at your inventory and bookings… {elapsed}s
-          {elapsed >= 15 ? ' · this can take up to a minute when Gemini is busy. You can close this panel and keep working on this page; the results will be here when you reopen it.' : ''}
+          Gemini is looking at your inventory and bookings… {elapsed}s · press Stop to cancel.
+          {elapsed >= 15 ? ' This can take a minute or more when Gemini is busy. You can close this panel or go to another page; it keeps working, and the results will be here when you come back.' : ''}
         </div>
       ) : null}
 

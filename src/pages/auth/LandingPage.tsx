@@ -28,7 +28,7 @@ import { CapacityCalendar } from '../../components/booking/CapacityCalendar'
 import { useAuth } from '../../context/AuthContext'
 import { getApiBase } from '../../utils/apiClient'
 import { DEFAULT_SLOT_HOURS, formatSlotRange, manilaTodayISO, slotHasStarted, useSlotHours } from '../../utils/slotHours'
-import { PACKAGE_ENTRANCE_FEE_PER_PLAYER, calculatePackagePricing, packageEquipmentQty, type PackageLike } from '../../utils/packagePricing'
+import { PACKAGE_ENTRANCE_FEE_PER_PLAYER, calculatePackagePricing, packageEquipmentQty, packageRegularTotal, type PackageLike } from '../../utils/packagePricing'
 
 type FAQ = {
   q: string
@@ -198,18 +198,28 @@ function PackagesSection({ onBook }: { onBook: () => void }) {
       equipment,
       entranceFeePerPlayer: PACKAGE_ENTRANCE_FEE_PER_PLAYER,
     })
+    // Renting the same things one by one costs this; shown crossed out when the package is cheaper.
+    const regularTotal = packageRegularTotal({
+      pkg,
+      players,
+      weapons,
+      equipment,
+      entranceFeePerPlayer: PACKAGE_ENTRANCE_FEE_PER_PLAYER,
+    })
+    const savingsPerPlayer = regularTotal > pricing.total ? Math.round((regularTotal - pricing.total) / players) : 0
+    const regularPerPlayer = pricing.perPlayer + savingsPerPlayer
     const weaponNames = [...new Set((pkg.weaponIds || []).map((id) => weapons.find((item) => item.id === id)?.name).filter(Boolean))] as string[]
     const gear = (pkg.equipmentIds || [])
       .map((id) => ({ name: equipment.find((item) => item.id === id)?.name, qty: packageEquipmentQty(pkg, id) }))
       .filter((row): row is { name: string; qty: number } => Boolean(row.name))
-    return { pkg, players, pricing, weaponNames, gear }
+    return { pkg, players, pricing, weaponNames, gear, savingsPerPlayer, regularPerPlayer }
   }), [ordered, weapons, equipment])
 
   return (
     <section id="packages" className="mx-auto max-w-[1200px] scroll-mt-24 px-4 pb-16 md:px-6">
       <SectionTitle
         eyebrow="Packages"
-        title="Rental packages for every squad"
+        title="Rental Packages for Every Squad"
         subtitle={`Gear, weapons and entrance in one price. Every package includes the ₱${PACKAGE_ENTRANCE_FEE_PER_PLAYER} entrance fee per player.`}
       />
       {loading ? (
@@ -222,7 +232,7 @@ function PackagesSection({ onBook }: { onBook: () => void }) {
         </div>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {cards.map(({ pkg, players, pricing, weaponNames, gear }, idx) => (
+          {cards.map(({ pkg, players, pricing, weaponNames, gear, savingsPerPlayer, regularPerPlayer }, idx) => (
             <motion.div
               key={pkg.id}
               initial={{ opacity: 0, y: 12 }}
@@ -262,7 +272,7 @@ function PackagesSection({ onBook }: { onBook: () => void }) {
                 {weaponNames.length > 0 ? (
                   <li className="flex items-start gap-2">
                     <FiTarget className="mt-0.5 h-4 w-4 shrink-0 text-accent" />
-                    <span>{weaponNames.join(' or ')}</span>
+                    <span>{weaponNames.join(' + ')}</span>
                   </li>
                 ) : null}
                 {gear.map((row) => (
@@ -277,13 +287,41 @@ function PackagesSection({ onBook }: { onBook: () => void }) {
                     <span>{pkg.bbReloadGrams} g of BBs per reload</span>
                   </li>
                 ) : null}
+                <li className="flex items-start gap-2">
+                  <FiCheck className="mt-0.5 h-4 w-4 shrink-0 text-accent" />
+                  <span>Entrance fee included (₱{PACKAGE_ENTRANCE_FEE_PER_PLAYER})</span>
+                </li>
               </ul>
 
               <div className="mt-auto pt-5">
                 <div className="divider flex items-end justify-between gap-3 border-t pt-4">
                   <div>
-                    <div className="text-2xl font-bold">₱{pricing.perPlayer.toLocaleString()}</div>
-                    <div className="text-xs text-muted">per player · ₱{pricing.total.toLocaleString()} for {players}</div>
+                    {/* Group packages (a set price for N players) lead with the whole-group price. */}
+                    {Number(pkg.players) > 1 ? (
+                      <>
+                        <div className="flex items-baseline gap-2">
+                          {savingsPerPlayer > 0 ? (
+                            <span className="text-sm text-muted line-through" title="Price when renting the same items separately">
+                              ₱{(regularPerPlayer * players).toLocaleString()}
+                            </span>
+                          ) : null}
+                          <span className="text-2xl font-bold">₱{pricing.total.toLocaleString()}</span>
+                        </div>
+                        <div className="text-xs text-muted">for {players} players · ₱{pricing.perPlayer.toLocaleString()} per player</div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="flex items-baseline gap-2">
+                          {savingsPerPlayer > 0 ? (
+                            <span className="text-sm text-muted line-through" title="Price when renting the same items separately">
+                              ₱{regularPerPlayer.toLocaleString()}
+                            </span>
+                          ) : null}
+                          <span className="text-2xl font-bold">₱{pricing.perPlayer.toLocaleString()}</span>
+                        </div>
+                        <div className="text-xs text-muted">per player{players > 1 ? ` · ₱${pricing.total.toLocaleString()} for ${players}` : ''}</div>
+                      </>
+                    )}
                   </div>
                   <Button size="sm" variant="primary" onClick={onBook}>Book this</Button>
                 </div>
@@ -1042,12 +1080,12 @@ export function LandingPage() {
 
       {/* How full the coming public games are, and which days are games for a cause */}
       <section className="mx-auto max-w-[1200px] px-4 pt-14 md:px-6 md:pt-10">
-        <CapacityCalendar />
+        <CapacityCalendar title="Games Calendar" />
       </section>
 
       {/* How it works */}
       <section id="about" className="mx-auto max-w-[1200px] scroll-mt-24 px-4 pb-16 pt-14 md:px-6 md:pt-10">
-        <SectionTitle eyebrow="How it works" title="From booking to battle in four steps" />
+        <SectionTitle eyebrow="How it works" title="From Booking to Battle in Four Steps" />
         <ol className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {howItWorks.map((step, idx) => (
             <motion.li
@@ -1078,7 +1116,7 @@ export function LandingPage() {
         <div className="grid gap-8 lg:grid-cols-[1fr_2fr]">
           <SectionTitle
             eyebrow="Guidelines"
-            title="Good to know before you play"
+            title="Good to Know Before You Play"
             subtitle="Still unsure? Send us a message below and we'll get back to you."
           />
           <div className="surface divider divide-y rounded-2xl px-5">
@@ -1112,7 +1150,7 @@ export function LandingPage() {
       <section id="location" className="mx-auto max-w-[1200px] scroll-mt-24 px-4 pb-16 md:px-6">
         <SectionTitle
           eyebrow="Our Locations"
-          title="Three distinct spaces for every playstyle"
+          title="Three Distinct Spaces for Every Playstyle"
         />
 
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -1155,7 +1193,7 @@ export function LandingPage() {
           <div className="surface rounded-2xl p-6">
             <SectionTitle
               eyebrow="Contact us"
-              title="Questions? We're here to help"
+              title="Questions? We're Here to Help"
               subtitle="Send us a message and we'll reply as soon as we can."
             />
             <form onSubmit={handleContactSubmit} className="space-y-3">

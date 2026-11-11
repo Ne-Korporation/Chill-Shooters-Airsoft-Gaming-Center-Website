@@ -55,6 +55,7 @@ export function Pagination({
   pageSize = DEFAULT_PAGE_SIZE,
   onPageChange,
   className = '',
+  noun,
 }: {
   page: number
   pageCount: number
@@ -62,6 +63,8 @@ export function Pagination({
   pageSize?: number
   onPageChange: (page: number) => void
   className?: string
+  // What is counted, e.g. "days" for "Showing 1–5 of 8 days".
+  noun?: string
 }) {
   if (total <= pageSize) return null
   const first = (page - 1) * pageSize + 1
@@ -72,7 +75,7 @@ export function Pagination({
   return (
     <nav aria-label="Pagination" className={['flex items-center justify-between gap-3 px-1 py-3 text-xs text-muted', className].join(' ')}>
       <span>
-        Showing {first}–{last} of {total}
+        Showing {first}–{last} of {total}{noun ? ` ${noun}` : ''}
       </span>
       <div className="flex items-center gap-2">
         <button type="button" className={buttonClass} disabled={page <= 1} onClick={() => onPageChange(page - 1)} aria-label="Previous page">

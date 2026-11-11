@@ -33,7 +33,7 @@ import { Card } from '../../components/ui/Card'
 import { Input } from '../../components/ui/Input'
 import { Button } from '../../components/ui/Button'
 import { Modal } from '../../components/ui/Modal'
-import { calculatePackagePricing, packageEquipmentQty, packageNotForGroup } from '../../utils/packagePricing'
+import { calculatePackagePricing, packageEquipmentQty, packageNotForGroup, packageRegularTotal } from '../../utils/packagePricing'
 import { formatDiscountTargetLabel, resolvePackageDiscountConfig } from '../../utils/packagePricing'
 import { loadPackagePrefill } from '../../utils/packagePrefill'
 import { isAmmo, modelOf } from '../../utils/inventoryModels'
@@ -190,16 +190,15 @@ const locationFields: Record<LocationOption, Field[]> = {
 }
 
 // Most players a location takes in one slot. Matches the landing page and the server's
-// DEFAULT_LOCATION_CAPACITIES (server/routes/crud.js); later slots take slightly fewer.
+// DEFAULT_LOCATION_CAPACITIES (server/routes/crud.js); every slot takes the same number.
 const locationMaxPlayers: Record<LocationOption, number> = {
   salawag: 400,
   langkaan: 400,
   binan: 600,
 }
 
-function locationCapacityPerSlot(location: LocationOption, slot: TimeSlot): number {
-  const mult = slot === 'morning' ? 1.0 : slot === 'afternoon' ? 0.95 : 0.9
-  return Math.floor(locationMaxPlayers[location] * mult)
+function capacityFor(location: LocationOption, _slot: TimeSlot) {
+  return locationMaxPlayers[location]
 }
 
 type SlotCapacities = Record<LocationOption, Record<TimeSlot, number>>
@@ -274,10 +273,6 @@ function getDatesUntilEndOfNextMonth(from: Date): string[] {
     current.setDate(current.getDate() + 1)
   }
   return dates
-}
-
-function capacityFor(location: LocationOption, slot: TimeSlot) {
-  return locationCapacityPerSlot(location, slot)
 }
 
 function slotSort(a: TimeSlot, b: TimeSlot) {
@@ -974,14 +969,16 @@ export function ReservationCalendarPage() {
     [...new Set(ids.map((id) => items.find((item) => item.id === id)?.model).filter(Boolean) as string[])],
   [])
 
-  // Mirrors the server: a package rents weaponCount × players weapons (minus verified own
-  // weapons) from the free pieces of its weapon models.
+  // Mirrors the server: each player gets one of every weapon model in the package (an approved
+  // own gun replaces the first, main one), from the free pieces of each model.
   const packageWeaponStock = useCallback((pkg: RentalPackage) => {
     const models = modelsOfIds(rentalWeapons, pkg.weaponIds)
-    const needed = models.length ? Math.max(0, Math.round(pkg.weaponCount || models.length) * players - verifiedOwnWeaponCount) : 0
+    const needs = models.map((_, index) => Math.max(0, players - (index === 0 ? Math.min(verifiedOwnWeaponCount, players) : 0)))
+    const needed = needs.reduce((sum, n) => sum + n, 0)
     if (!slotStock) return { needed, available: null as number | null, ok: true }
-    const available = models.reduce((sum, model) => sum + freeOfModel(weaponGroups, model), 0)
-    return { needed, available, ok: available >= needed }
+    const free = models.map((model) => freeOfModel(weaponGroups, model))
+    const available = free.reduce((sum, n, index) => sum + Math.min(n, needs[index]), 0)
+    return { needed, available, ok: free.every((n, index) => n >= needs[index]) }
   }, [modelsOfIds, rentalWeapons, players, verifiedOwnWeaponCount, slotStock, freeOfModel, weaponGroups])
 
   // Only packages that fit the headcount can be picked (a group package fits exactly its size).
@@ -1045,11 +1042,21 @@ export function ReservationCalendarPage() {
         entranceFeePerPlayer: ENTRANCE_FEE_PER_PLAYER,
         ownWeapons: verifiedOwnWeaponCount,
       })
+      // Renting the same things one by one; shown crossed out when the package is cheaper.
+      const regularTotal = packageRegularTotal({
+        pkg,
+        players,
+        weapons,
+        equipment,
+        entranceFeePerPlayer: ENTRANCE_FEE_PER_PLAYER,
+        ownWeapons: verifiedOwnWeaponCount,
+      })
+      const savingsPerPlayer = regularTotal > price.total ? Math.round((regularTotal - price.total) / Math.max(1, players)) : 0
       // A group package (set price for N players) only fits exactly N players.
       const groupSize = packageNotForGroup(pkg, players)
       const fitsGroup = groupSize === null && players >= pkg.minPlayers
       const overBudgetBy = budget !== null ? Math.max(0, price.total - budget) : 0
-      return { pkg, price, groupSize, fitsGroup, overBudgetBy, recommended: budget !== null && fitsGroup && overBudgetBy === 0, index }
+      return { pkg, price, savingsPerPlayer, groupSize, fitsGroup, overBudgetBy, recommended: budget !== null && fitsGroup && overBudgetBy === 0, index }
     })
     if (budget === null) return rows
     return [...rows].sort((a, b) => {
@@ -2785,7 +2792,7 @@ export function ReservationCalendarPage() {
                     <div className="mt-4 text-sm text-muted">No packages available yet. Ask admin to create rental packages.</div>
                   ) : (
                     <div className="mt-4 grid gap-3 lg:grid-cols-2">
-                      {rankedPackages.map(({ pkg, price, groupSize, recommended, overBudgetBy }) => {
+                      {rankedPackages.map(({ pkg, price, savingsPerPlayer, groupSize, recommended, overBudgetBy }) => {
                         const active = pkg.id === selectedPackageId
                         return (
                           <button
@@ -2807,7 +2814,7 @@ export function ReservationCalendarPage() {
                                 ...modelsOfIds(rentalWeapons, pkg.weaponIds),
                                 ...modelsOfIds(rentalEquipment.filter((item) => !isAmmo(item)), pkg.equipmentIds),
                                 `${INCLUDED_RELOADS_PER_PLAYER} BB reloads`,
-                                'Entrance fee',
+                                `Entrance fee (${formatCurrency(ENTRANCE_FEE_PER_PLAYER)})`,
                               ]
                               return (
                                 <>
@@ -2828,8 +2835,16 @@ export function ReservationCalendarPage() {
                                         <div className="text-xs font-semibold text-muted">For {groupSize} players only</div>
                                       ) : (
                                         <>
+                                          {savingsPerPlayer > 0 ? (
+                                            <div className="text-[11px] text-muted line-through" title="Price when renting the same items separately">
+                                              {formatCurrency(price.perPlayer + savingsPerPlayer)}
+                                            </div>
+                                          ) : null}
                                           <div className="text-base font-bold text-accent">{formatCurrency(price.perPlayer)}</div>
                                           <div className="text-[11px] text-muted">per player</div>
+                                          {savingsPerPlayer > 0 ? (
+                                            <div className="mt-0.5 text-[11px] font-semibold text-success">Save {formatCurrency(savingsPerPlayer)}</div>
+                                          ) : null}
                                           {budget !== null ? (
                                             <div className="mt-0.5 text-[11px] text-muted">{formatCurrency(price.total)} total</div>
                                           ) : null}
