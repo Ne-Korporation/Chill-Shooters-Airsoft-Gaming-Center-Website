@@ -60,16 +60,22 @@ export function RegistrarArchivedGamesPage({ embedded = false }: { embedded?: bo
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
 
+  // Only the first load shows "Loading"; the 10-second refreshes update the list quietly
+  // (they used to flash the loading state and pop up an error on every failed try).
+  const loadedOnce = React.useRef(false)
   const refresh = async () => {
-    setLoading(true)
+    const silent = loadedOnce.current
+    if (!silent) setLoading(true)
     try {
       const docs = await apiGetAll<GameplayDoc>('gameplay', 'sort=' + encodeURIComponent(JSON.stringify({ Schedule: -1 })))
       setItems(docs)
+      loadedOnce.current = true
     } catch (e: any) {
+      if (silent) return
       toast.error(String(e?.message || e))
       setItems([])
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }
 

@@ -152,6 +152,8 @@ export function PlayerProfilePage() {
   React.useEffect(() => {
     const lookupId = playerId || user?.id
     if (!lookupId) return
+    // Marshals can't read waivers (the server refuses), so they don't ask.
+    if (user?.role === 'marshal') return
     let alive = true
     const query = encodeURIComponent(JSON.stringify({ userId: String(lookupId), archived: { $ne: true } }))
     apiGet<{ ok: boolean; data: ProfileWaiver[] }>(`/api/waivers?q=${query}&limit=50`)
@@ -168,7 +170,7 @@ export function PlayerProfilePage() {
     return () => {
       alive = false
     }
-  }, [playerId, user?.id])
+  }, [playerId, user?.id, user?.role])
 
   // Fill the edit form from the saved profile, but not while it's open: saving a new photo updates
   // the profile and must not wipe details typed but not saved yet.

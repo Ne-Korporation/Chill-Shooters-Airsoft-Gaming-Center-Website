@@ -1,6 +1,7 @@
 import React from 'react'
 import { FiAlertTriangle, FiCheck, FiCrosshair, FiEdit2, FiPlus, FiTool, FiTrash2 } from 'react-icons/fi'
 import { useSearchParams } from 'react-router-dom'
+import { useAuth } from '../../context/AuthContext'
 import toast from 'react-hot-toast'
 import { ActionGroup, Button } from '../../components/ui/Button'
 import { FilterTabs } from '../../components/ui/FilterTabs'
@@ -110,14 +111,18 @@ function WeaponInventory() {
 
   const [partners, setPartners] = React.useState<Array<{ id: string; name: string }>>([])
 
+  const { user } = useAuth()
+  const isAdmin = user?.role === 'admin'
   React.useEffect(() => {
-    // Only admins can read partnerships; other roles just see center-owned items.
+    // Only admins can read partnerships; other roles just see center-owned items, so they
+    // don't ask (asking only got a "Forbidden" error).
+    if (!isAdmin) return
     apiGet<{ ok: boolean; data: any[] }>('/api/partnerships?limit=200')
       .then((res) => setPartners((res.data || [])
         .filter((p: any) => p.type === 'equipment_partner')
         .map((p: any) => ({ id: String(p.id || p._id), name: String(p.name || 'Partner') }))))
       .catch(() => setPartners([]))
-  }, [])
+  }, [isAdmin])
 
   const refresh = React.useCallback(async () => {
     setLoading(true)

@@ -8,6 +8,7 @@ import { useAuth } from '../../context/AuthContext'
 import { ActionRow, DashboardHeader, Panel, StatTile } from '../../components/dashboard/DashboardParts'
 import { FiCalendar, FiShield, FiShoppingBag, FiCreditCard, FiZap } from 'react-icons/fi'
 import { apiGet } from '../../utils/apiClient'
+import { useAutoRefresh } from '../../hooks/useAutoRefresh'
 import { WeatherAdvisoryWidget } from '../../components/dashboard/WeatherAdvisoryWidget'
 
 export function RegistrarDashboardHomePage() {
@@ -19,9 +20,16 @@ export function RegistrarDashboardHomePage() {
   const [liveTick, setLiveTick] = useState(0)
   useLiveRefresh(['reservations', 'payments', 'waivers'], () => setLiveTick((tick) => tick + 1))
 
+  // Bumped every few seconds so new bookings, waivers and payments show without reloading.
+  const [refreshTick, setRefreshTick] = useState(0)
+  useAutoRefresh(() => setRefreshTick((tick) => tick + 1))
+
   useEffect(() => {
+    let active = true
+    // Background refreshes keep what's on screen instead of showing loading or errors.
+    const silent = refreshTick > 0
     const load = async () => {
-      if (liveTick === 0) setLoading(true)
+      if (!silent) setLoading(true)
       try {
         const [reservationsRes, waiversRes, paymentsRes] = await Promise.all([
           apiGet<{ ok: boolean; data: any[] }>('/api/reservations?limit=200'),
@@ -29,6 +37,7 @@ export function RegistrarDashboardHomePage() {
           apiGet<{ ok: boolean; data: any[] }>('/api/payments?limit=200'),
         ])
 
+        if (!active) return
         const reservations = Array.isArray(reservationsRes?.data) ? reservationsRes.data : []
         const waivers = Array.isArray(waiversRes?.data) ? waiversRes.data : []
         const payments = Array.isArray(paymentsRes?.data) ? paymentsRes.data : []
@@ -40,14 +49,15 @@ export function RegistrarDashboardHomePage() {
           return status === 'pending' || status === 'submitted' || status === 'review'
         }).length)
       } catch (e: any) {
-        toast.error(String(e?.message || e))
+        if (!silent) toast.error(String(e?.message || e))
       } finally {
-        setLoading(false)
+        if (active) setLoading(false)
       }
     }
 
     void load()
-  }, [liveTick])
+    return () => { active = false }
+  }, [refreshTick])
 
   const { user } = useAuth()
   const firstName = String(user?.name || 'there').trim().split(/\s+/)[0]

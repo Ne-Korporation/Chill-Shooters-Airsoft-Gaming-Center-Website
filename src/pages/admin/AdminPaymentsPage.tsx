@@ -6,6 +6,7 @@ import { FilterTabs, titleCaseLabel } from '../../components/ui/FilterTabs'
 import { Card } from '../../components/ui/Card'
 import toast from 'react-hot-toast'
 import { apiGetAll, apiPut } from '../../utils/apiClient'
+import { useAutoRefresh } from '../../hooks/useAutoRefresh'
 import { Pagination, usePagination } from '../../components/ui/Pagination'
 import { useAuth } from '../../context/AuthContext'
 import { sendRoleNotifications, useNotifications } from '../../context/NotificationContext'
@@ -89,8 +90,9 @@ export function AdminPaymentsPage() {
     })
   }
 
-  const load = async () => {
-    setLoading(true)
+  // `silent`: a background refresh, without the loading state or error pop-ups.
+  const load = async (silent = false) => {
+    if (!silent) setLoading(true)
     try {
       const [docs, reservations, accounts] = await Promise.all([
         apiGetAll<any>('payments'),
@@ -129,10 +131,12 @@ export function AdminPaymentsPage() {
         }).sort((a, b) => String(b.date).localeCompare(String(a.date)))
       )
     } catch (e: any) {
+      // A failed background refresh keeps the list on screen.
+      if (silent) return
       toast.error(String(e?.message || e))
       setPayments([])
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }
 
@@ -140,7 +144,8 @@ export function AdminPaymentsPage() {
     load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-  useLiveRefresh(['payments', 'reservations'], () => load())
+  // New payments and bookings show up without reloading the page.
+  useAutoRefresh(() => load(true))
 
   const filtered = useMemo(
     () => payments.filter((payment) => (active === 'all' ? true : payment.status === active)),

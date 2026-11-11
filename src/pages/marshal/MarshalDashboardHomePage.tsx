@@ -6,6 +6,7 @@ import { CapacityCalendar } from '../../components/booking/CapacityCalendar'
 import { useAuth } from '../../context/AuthContext'
 import { DashboardHeader, StatTile } from '../../components/dashboard/DashboardParts'
 import { apiGet } from '../../utils/apiClient'
+import { useAutoRefresh } from '../../hooks/useAutoRefresh'
 import { FiZap } from 'react-icons/fi'
 import { WeatherAdvisoryWidget } from '../../components/dashboard/WeatherAdvisoryWidget'
 
@@ -25,11 +26,17 @@ export function MarshalDashboardHomePage() {
   const [stats, setStats] = useState<DashboardState>(defaultState)
   const [loading, setLoading] = useState(true)
 
+  // Bumped every few seconds so new bookings and games show without reloading.
+  const [refreshTick, setRefreshTick] = useState(0)
+  useAutoRefresh(() => setRefreshTick((tick) => tick + 1))
+
   useEffect(() => {
     let active = true
+    // Background refreshes keep what's on screen instead of showing loading or errors.
+    const silent = refreshTick > 0
 
     const load = async () => {
-      setLoading(true)
+      if (!silent) setLoading(true)
       try {
         const [reservationsRes, usersRes, gameplayRes] = await Promise.all([
           apiGet<{ ok: boolean; data: any[] }>('/api/reservations?limit=200'),
@@ -66,7 +73,7 @@ export function MarshalDashboardHomePage() {
           })
         }
       } catch (error: any) {
-        if (active) {
+        if (active && !silent) {
           toast.error(String(error?.message || error))
           setStats(defaultState)
         }
@@ -79,7 +86,7 @@ export function MarshalDashboardHomePage() {
 
     void load()
     return () => { active = false }
-  }, [])
+  }, [refreshTick])
 
   const { user } = useAuth()
   const firstName = String(user?.name || 'there').trim().split(/\s+/)[0]
