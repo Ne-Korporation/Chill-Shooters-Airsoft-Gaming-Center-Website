@@ -1,4 +1,5 @@
 import React, { useMemo, useState, useEffect, useCallback, useRef } from 'react'
+import { useLiveRefresh } from '../../utils/liveUpdates'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import toast from 'react-hot-toast'
@@ -555,6 +556,9 @@ export function ReservationCalendarPage() {
     }, every)
     return () => window.clearInterval(interval)
   }, [fetchReservations, step])
+
+  // A slot booked, held or released anywhere shows up here within a few seconds.
+  useLiveRefresh(['reservations', 'slots'], () => fetchReservations(true))
 
   // Refresh reservations if flagged (e.g., after returning from payment)
   useEffect(() => {
@@ -1159,8 +1163,27 @@ export function ReservationCalendarPage() {
     })
   }, [autoFieldIds])
 
-  // Check if a specific slot is fully booked for ALL fields at this location
+  // Why a slot can't be booked, matching the server's slotConflict check:
+  // - a private game is booked there, or another player is booking one right now;
+  // - picking a private game where public players are already booked.
+  // (`reservations` already leaves out this player's own hold.)
+  const getSlotBlockReason = (slotToCheck: TimeSlot): 'private_booked' | 'being_booked' | 'public_booked' | null => {
+    const inSlot = reservations.filter((r) => r.dateISO === dateISO && r.slot === slotToCheck && r.locationId === selectedLocation)
+    const isPrivateGame = (r: { sessionType?: string }) => String(r.sessionType || '').toLowerCase() === 'private'
+    if (inSlot.some((r) => r.reservationStatus !== 'held' && isPrivateGame(r))) return 'private_booked'
+    if (inSlot.some((r) => r.reservationStatus === 'held' && isPrivateGame(r))) return 'being_booked'
+    if (sessionType === 'private' && inSlot.some((r) => r.reservationStatus !== 'held')) return 'public_booked'
+    return null
+  }
+  const slotBlockLabels = {
+    private_booked: 'Booked for a private game',
+    being_booked: 'Another player is booking this slot',
+    public_booked: 'Public players already booked this slot',
+  } as const
+
+  // Check if a specific slot can't take a booking (taken, or fully booked for ALL fields at this location)
   const isSlotFullyBooked = (slotToCheck: TimeSlot): boolean => {
+    if (getSlotBlockReason(slotToCheck)) return true
     // Any day: the slot is full once its player capacity is used up.
     const cap = serverCapacities?.[selectedLocation]?.[slotToCheck] ?? capacityFor(selectedLocation, slotToCheck)
     const used = reservations
@@ -2029,7 +2052,10 @@ export function ReservationCalendarPage() {
                             return
                           }
                           if (isSlotFull) {
-                            setSlotError(`All fields are booked for ${slotLabels[s]}. Pick another slot or day.`)
+                            const blocked = getSlotBlockReason(s)
+                            setSlotError(blocked
+                              ? `${slotLabels[s]}: ${slotBlockLabels[blocked].toLowerCase()}. Pick another slot or day.`
+                              : `All fields are booked for ${slotLabels[s]}. Pick another slot or day.`)
                             return
                           }
                           setFullDay(false)
@@ -2071,14 +2097,14 @@ export function ReservationCalendarPage() {
                                 {started || isSlotFull || unavailableFields.length > 0 ? (
                                   <div className="mt-1 text-xs flex items-center gap-2 text-danger">
                                     <FiClock />
-                                    <span>{started ? 'Already started today' : isSlotFull ? 'Fully booked' : `Unavailable: ${unavailableFields.map((f) => f.name).join(', ')}`}</span>
+                                    <span>{started ? 'Already started today' : isSlotFull ? (getSlotBlockReason(s) ? slotBlockLabels[getSlotBlockReason(s)!] : 'Fully booked') : `Unavailable: ${unavailableFields.map((f) => f.name).join(', ')}`}</span>
                                   </div>
                                 ) : null}
                               </div>
                               {started ? (
                                 <div className="rounded-2xl px-3 py-1 text-xs font-bold bg-[rgba(var(--text),0.08)] text-muted">STARTED</div>
                               ) : isSlotFull ? (
-                                <div className="rounded-2xl px-3 py-1 text-xs font-bold bg-danger/15 text-danger">FULL</div>
+                                <div className="rounded-2xl px-3 py-1 text-xs font-bold bg-danger/15 text-danger">{getSlotBlockReason(s) === 'being_booked' ? 'ON HOLD' : getSlotBlockReason(s) ? 'BOOKED' : 'FULL'}</div>
                               ) : (
                                 <div className="rounded-2xl px-3 py-1 text-xs font-bold bg-success/15 text-success">AVAILABLE</div>
                               )}
@@ -2702,7 +2728,7 @@ export function ReservationCalendarPage() {
               </div>
               <p className="mt-1 text-xs text-muted">Choose a pre-set package or pick individual items.</p>
 
-              <div className="mt-4 grid grid-cols-2 gap-3">
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
                 <button
                   type="button"
                   onClick={() => setSelectionMode('package')}
@@ -3409,9 +3435,9 @@ export function ReservationCalendarPage() {
                       <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Rental Weapons</div>
                       <div className="mt-2 space-y-2">
                         {reservationSummary.customWeapons.map((w) => (
-                          <div key={w.id} className="flex items-center justify-between text-sm">
-                            <span>{w.name}</span>
-                            <span className="text-accent">₱{w.price} each</span>
+                          <div key={w.id} className="flex items-center justify-between gap-3 text-sm">
+                            <span className="min-w-0">{w.name}</span>
+                            <span className="shrink-0 text-accent">₱{w.price} each</span>
                           </div>
                         ))}
                       </div>
@@ -3423,9 +3449,9 @@ export function ReservationCalendarPage() {
                       <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Rental Gear</div>
                       <div className="mt-2 space-y-2">
                         {reservationSummary.customEquipment.map((e) => (
-                          <div key={e.id} className="flex items-center justify-between text-sm">
-                            <span>{e.name}</span>
-                            <span className="text-accent">₱{e.price} each</span>
+                          <div key={e.id} className="flex items-center justify-between gap-3 text-sm">
+                            <span className="min-w-0">{e.name}</span>
+                            <span className="shrink-0 text-accent">₱{e.price} each</span>
                           </div>
                         ))}
                       </div>
@@ -3672,7 +3698,7 @@ export function ReservationCalendarPage() {
       ) : null}
 
       {noWeaponWarning ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4" role="dialog" aria-modal="true" aria-labelledby="no-weapon-title">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-3 sm:px-4" role="dialog" aria-modal="true" aria-labelledby="no-weapon-title">
           <Card className="max-h-[90dvh] w-full max-w-md overflow-y-auto overscroll-contain p-5">
             <div className="flex items-start gap-3">
               <FiAlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-warning" />

@@ -70,8 +70,12 @@ router.get('/files/:id', async (req, res) => {
     const file = await db.collection('uploaded_files').findOne({ _id: String(req.params.id) })
     if (!file) return res.status(404).json({ ok: false, error: 'file not found' })
     res.set('Content-Type', file.contentType)
-    res.set('Cache-Control', 'public, max-age=31536000, immutable')
+    // Private: uploads include ID photos, so shared caches (CDNs, proxies) must not keep them.
+    res.set('Cache-Control', 'private, max-age=31536000, immutable')
     res.set('X-Content-Type-Options', 'nosniff')
+    // Opened directly, a file can't run scripts or act as a page of this site.
+    res.set('Content-Security-Policy', "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox")
+    if (!String(file.contentType || '').startsWith('image/')) res.set('Content-Disposition', 'attachment')
     return res.send(Buffer.from(file.data.buffer))
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })

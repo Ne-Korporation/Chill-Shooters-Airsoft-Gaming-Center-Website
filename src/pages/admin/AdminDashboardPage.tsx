@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react'
+import { useLiveRefresh } from '../../utils/liveUpdates'
 import { FiCalendar, FiCheck, FiClock, FiCreditCard, FiShield, FiTool } from 'react-icons/fi'
 import { Link } from 'react-router-dom'
 import { CapacityCalendar } from '../../components/booking/CapacityCalendar'
@@ -56,6 +57,9 @@ function formatRelativeTime(value?: string) {
 export function AdminDashboardPage() {
   const [dashboard, setDashboard] = useState<DashboardState>(defaultState)
   const [loading, setLoading] = useState(true)
+  // Bumped when the data shown here changes on the server; re-runs the load below quietly.
+  const [liveTick, setLiveTick] = useState(0)
+  useLiveRefresh(['reservations', 'payments', 'waivers', 'accounts', 'games'], () => setLiveTick((tick) => tick + 1))
   const [error, setError] = useState<string | null>(null)
 
   // Bumped every few seconds so new bookings and payments show without reloading.

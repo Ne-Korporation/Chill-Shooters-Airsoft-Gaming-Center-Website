@@ -146,6 +146,7 @@ export function ReachNetRevenuePanel({ onAllocated }: { onAllocated: () => void 
 
       <div className="mt-4 grid gap-6 lg:grid-cols-2">
         <div>
+          <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <tbody className="divide-y divide-white/5">
               {rows.map(([label, amount, hint]) => (
@@ -177,6 +178,7 @@ export function ReachNetRevenuePanel({ onAllocated }: { onAllocated: () => void 
               ) : null}
             </tbody>
           </table>
+          </div>
           <div className="mt-3">
             {locked ? (
               <div className="text-xs text-success">
@@ -228,7 +230,7 @@ export function ReachNetRevenuePanel({ onAllocated }: { onAllocated: () => void 
                 <div className="flex items-center gap-2">
                   <span>{formatPHP(expense.amount)}</span>
                   {!locked ? (
-                    <button type="button" onClick={() => removeExpense(expense)} className="text-muted hover:text-danger" aria-label="Delete expense"><FiTrash2 /></button>
+                    <button type="button" onClick={() => removeExpense(expense)} className="-m-2 p-2 text-muted hover:text-danger" aria-label="Delete expense"><FiTrash2 /></button>
                   ) : null}
                 </div>
               </li>

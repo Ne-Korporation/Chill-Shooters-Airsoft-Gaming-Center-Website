@@ -136,7 +136,7 @@ export function OtpVerificationPage() {
                 Didn’t receive it?{' '}
                 <button
                   type="button"
-                  className="text-accent hover:text-text transition"
+                  className="-my-2 py-2 text-accent hover:text-text transition"
                   onClick={handleResend}
                   disabled={resending}
                 >

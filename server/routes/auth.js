@@ -1,10 +1,10 @@
 import express from 'express'
 import bcrypt from 'bcrypt'
-import { createHash, randomBytes } from 'crypto'
+import { createHash, randomBytes, randomInt } from 'crypto'
 import transporter from '../services/mailService.js'
 import { getDb, getUserAccountsCollection, startDbSession, USER_ACCOUNTS_COLLECTION } from '../db/mongo.js'
 import { closeAccount, previewAccountClosure, summarizePlan } from '../utils/accountClosure.js'
-import { SUSPENDED_ACCOUNT_ERROR, createAuthToken, forgetSuspension, isSuspendedAccount, requireAuth, requireRole } from '../middleware/auth.js'
+import { SUSPENDED_ACCOUNT_ERROR, createAuthToken, forgetAccount, forgetSuspension, isSuspendedAccount, requireAuth, requireRole, revokeSessionsFields } from '../middleware/auth.js'
 import { nextShortId } from '../utils/shortIds.js'
 import { canonicalEmail, normalizeEmail, sameEmailFilter } from '../utils/emails.js'
 import { verifyFirebaseIdToken } from '../utils/firebaseTokens.js'
@@ -173,7 +173,7 @@ async function createGoogleAccount(userAccounts, normalizedEmail, name) {
 }
 
 function generateOtp() {
-  return String(Math.floor(100000 + Math.random() * 900000))
+  return String(randomInt(100000, 1000000))
 }
 
 async function sendOtpEmail(email, code, name = 'there') {
@@ -311,8 +311,8 @@ router.post('/change-email/verify', requireAuth, async (req, res) => {
 })
 
 // --- Default password generation ---
-// Generates: first letter of each name part (firstname, M.I., lastname) + 4 random digits
-// e.g. "Juan M. Santos" -> "jms8273"
+// Generates: first letter of each name part (firstname, M.I., lastname) + 8 random letters/digits
+// from a cryptographic source, e.g. "Juan M. Santos" -> "jms7k2q9x4p"
 function generateDefaultPassword(name) {
   const parts = (name || '').trim().split(/\s+/)
   const initials = parts
@@ -320,8 +320,10 @@ function generateDefaultPassword(name) {
     .filter(p => p.length > 0)
     .map(p => p[0].toLowerCase())
     .join('')
-  const randomDigits = String(Math.floor(1000 + Math.random() * 9000))
-  return initials + randomDigits
+  const alphabet = 'abcdefghjkmnpqrstuvwxyz23456789'
+  let random = ''
+  for (let i = 0; i < 8; i += 1) random += alphabet[randomInt(alphabet.length)]
+  return initials + random
 }
 
 router.get('/me', requireAuth, async (req, res) => {
@@ -460,8 +462,9 @@ router.post('/admin/reset-password', requireAuth, requireRole('admin', 'marshal'
 
     await userAccounts.updateOne(
       { _id: user._id },
-      { $set: { password: hashedPassword, updatedAtISO: new Date().toISOString() } },
+      { $set: { password: hashedPassword, updatedAtISO: new Date().toISOString(), ...revokeSessionsFields() } },
     )
+    forgetAccount(user.id || user._id)
 
     // Send email with new password
     try {
@@ -938,7 +941,7 @@ router.post('/reset-password', async (req, res) => {
     await userAccounts.updateOne(
       { _id: user._id },
       {
-        $set: { password: await bcrypt.hash(password, 10), emailVerified: true, updatedAtISO: new Date().toISOString() },
+        $set: { password: await bcrypt.hash(password, 10), emailVerified: true, updatedAtISO: new Date().toISOString(), ...revokeSessionsFields() },
         $unset: {
           resetTokenHash: '', resetTokenExpiresAt: '',
           otpCode: '', otpExpiresAt: '',
@@ -1178,13 +1181,14 @@ router.post('/social-login', (req, res) => handleGoogleAuth(req, res, 'Google si
 router.post('/social-register', (req, res) => handleGoogleAuth(req, res, 'Google sign-up could not be verified. Please try again.'))
 
 // POST /api/auth/test-email { to: 'recipient@example.com', subject?: '...', html?: '...' }
-router.post('/test-email', async (req, res) => {
+// Admins only, and the message is fixed: this used to be public and send any HTML to any address.
+router.post('/test-email', requireAuth, requireRole('admin'), async (req, res) => {
   const body = req.body || {}
-  const to = String(body.to || body.email || '').trim()
-  const subject = String(body.subject || 'Test email from Chill Shooters')
-  const html = String(body.html || `<p>This is a test email from Chill Shooters at ${new Date().toISOString()}</p>`)
+  const to = normalizeEmail(String(body.to || body.email || req.user.email || ''))
+  const subject = 'Test email from Chill Shooters'
+  const html = `<p>This is a test email from Chill Shooters at ${new Date().toISOString()}</p>`
 
-  if (!to) return res.status(400).json({ ok: false, error: 'to is required' })
+  if (!/^[^s@]+@[^s@]+.[^s@]+$/.test(to)) return res.status(400).json({ ok: false, error: 'A valid "to" address is required' })
 
   try {
     if (!transporter) return res.status(500).json({ ok: false, error: 'mail transporter not configured' })
@@ -1192,7 +1196,7 @@ router.post('/test-email', async (req, res) => {
     const from = process.env.EMAIL_USER ? `Chill Shooters <${process.env.EMAIL_USER}>` : 'Chill Shooters <no-reply@chillshooters.local>'
     const info = await transporter.sendMail({ from, to, subject, html })
     console.log('Test email sent', { to, messageId: info?.messageId })
-    return res.json({ ok: true, info })
+    return res.json({ ok: true, messageId: info?.messageId || '' })
   } catch (err) {
     console.error('Test email failed', err && (err.stack || err.message || err))
     return res.status(500).json({ ok: false, error: String(err && (err.message || err)) })
@@ -1278,7 +1282,7 @@ router.post('/set-password', async (req, res) => {
     await userAccounts.updateOne(
       { _id: user._id },
       {
-        $set: { password: await bcrypt.hash(password, 10), emailVerified: true, updatedAtISO: new Date().toISOString() },
+        $set: { password: await bcrypt.hash(password, 10), emailVerified: true, updatedAtISO: new Date().toISOString(), ...revokeSessionsFields() },
         $unset: { passwordSetupRequired: '', passwordSetupTokenHash: '', passwordSetupExpiresAt: '' },
       },
     )

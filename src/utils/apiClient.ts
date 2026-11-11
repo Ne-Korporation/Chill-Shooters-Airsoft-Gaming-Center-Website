@@ -37,10 +37,13 @@ function buildHeaders(includeJsonBody = false) {
   return headers
 }
 
-// The API answers 403 { suspended: true } once an admin suspends a signed-in player: end the
-// session and send them to the login page, which then shows why they can't sign in.
+// The API answers 403 { suspended: true } once an admin suspends a signed-in player, and
+// 401 { sessionEnded: true } when the session was revoked (password reset, role change, deleted
+// account, tampered or expired token): end the session and send them to the login page.
 function endSuspendedSession(status: number, json: any) {
-  if (status !== 403 || json?.suspended !== true) return
+  const suspended = status === 403 && json?.suspended === true
+  const ended = status === 401 && json?.sessionEnded === true
+  if (!suspended && !ended) return
   clearStoredSession()
   if (!window.location.pathname.startsWith('/login')) window.location.assign('/login')
 }

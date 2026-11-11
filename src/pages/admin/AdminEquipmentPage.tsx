@@ -467,7 +467,7 @@ export function AdminEquipmentPage() {
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
                 placeholder="ID, name, or model"
-                className="w-full min-w-[200px] rounded-full border border-white/10 bg-background px-4 py-2 text-sm text-text outline-none focus:ring-2 focus:ring-accent/40"
+                className="w-full sm:min-w-[200px] rounded-full border border-white/10 bg-background px-4 py-2 text-sm text-text outline-none focus:ring-2 focus:ring-accent/40"
               />
             </div>
             <div>
@@ -475,7 +475,7 @@ export function AdminEquipmentPage() {
               <select
                 value={activeCategory}
                 onChange={(event) => setActiveCategory(event.target.value as EquipmentCategory | 'all')}
-                className="min-w-[170px] rounded-full border border-white/10 bg-background px-3 py-2 text-sm text-text outline-none"
+                className="w-full sm:w-auto sm:min-w-[170px] rounded-full border border-white/10 bg-background px-3 py-2 text-sm text-text outline-none"
               >
                 <option value="all">All categories</option>
                 {(Object.keys(categoryMeta) as EquipmentCategory[]).map((cat) => (
@@ -491,7 +491,7 @@ export function AdminEquipmentPage() {
               <select
                 value={status}
                 onChange={(event) => setStatus(event.target.value as EquipmentStatus | 'all')}
-                className="min-w-[170px] rounded-full border border-white/10 bg-background px-3 py-2 text-sm text-text outline-none"
+                className="w-full sm:w-auto sm:min-w-[170px] rounded-full border border-white/10 bg-background px-3 py-2 text-sm text-text outline-none"
               >
                 <option value="all">All statuses</option>
                 <option value="available">Available</option>
@@ -516,8 +516,8 @@ export function AdminEquipmentPage() {
             <div className="mt-3 grid gap-2 md:grid-cols-2">
               {pendingPlayerItems.map((item) => (
                 <div key={item.id} className="rounded-xl border border-white/10 bg-background/50 p-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="text-sm font-semibold">{item.name}</div>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="min-w-0 text-sm font-semibold">{item.name}</div>
                     <ActionGroup>
                       <Button size="xs" variant="success-soft" onClick={(e) => { e.stopPropagation(); handleApprovePlayerItem(item.id) }}>
                         <FiCheck /> Approve
@@ -550,7 +550,7 @@ export function AdminEquipmentPage() {
         ) : null}
 
         <div className="mt-4 overflow-hidden rounded-2xl border border-white/5">
-          <div className="grid grid-cols-12 gap-3 bg-white/5 px-3 py-2 text-xs uppercase tracking-widest text-muted">
+          <div className="stack-head grid grid-cols-12 gap-3 bg-white/5 px-3 py-2 text-xs uppercase tracking-widest text-muted">
             <div className="col-span-2">ID</div>
             <div className="col-span-3">Gear</div>
             <div className="col-span-1 text-right">Piece</div>
@@ -566,12 +566,12 @@ export function AdminEquipmentPage() {
               <div className="p-6 text-sm text-muted">No gear matches this filter.</div>
             ) : (
               pageItems.map((item) => (
-                <div key={item.id} className={"grid grid-cols-12 items-center gap-3 px-3 py-3 " + (selectedItemId === item.id ? 'bg-white/6 ring-2 ring-white/10' : '')}>
-                  <div className="col-span-2 flex items-center gap-2 text-sm font-semibold">
+                <div key={item.id} className={"stack-row grid grid-cols-12 items-center gap-3 px-3 py-3 " + (selectedItemId === item.id ? 'bg-white/6 ring-2 ring-white/10' : '')}>
+                  <div data-label="ID" className="col-span-2 flex items-center gap-2 text-sm font-semibold">
                     {selecting ? <SelectBox checked={selectedIds.includes(item.id)} onChange={() => toggleSelected(item.id)} label={`Select ${item.id}`} /> : null}
                     {item.id}
                   </div>
-                  <div className="col-span-3 min-w-0">
+                  <div data-label="Gear" className="stack-wide col-span-3 min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <div className="text-sm font-semibold">{item.name}</div>
                       <span className="rounded-full bg-white/10 px-2 py-1 text-[10px] uppercase tracking-[0.15em] text-muted">
@@ -588,17 +588,17 @@ export function AdminEquipmentPage() {
                         </span>
                       ) : null}
                     </div>
-                    <div className="mt-1 truncate text-xs text-muted">{item.description || item.note}</div>
+                    <div className="mt-1 text-xs text-muted md:truncate">{item.description || item.note}</div>
                   </div>
-                  <div className="col-span-1 text-right text-sm font-semibold">
+                  <div data-label="Piece" className="col-span-1 text-right text-sm font-semibold">
                     {isAmmo(item) ? `${item.stockGrams.toLocaleString()} g` : item.source === 'player' || !item.unitNumber ? '—' : `#${item.unitNumber}`}
                     {isLowOnAmmo(item) ? <span className="mt-0.5 block text-[10px] font-semibold uppercase text-danger">Low stock</span> : null}
                   </div>
-                  <div className="col-span-1 text-right text-sm text-accent">₱{item.price}{isAmmo(item) ? <span className="block text-[10px] text-muted">per refill</span> : null}</div>
-                  <div className="col-span-2 pl-4">
+                  <div data-label="Price" className="col-span-1 text-right text-sm text-accent">₱{item.price}{isAmmo(item) ? <span className="block text-[10px] text-muted">per refill</span> : null}</div>
+                  <div data-label="Status" className="col-span-2 pl-4">
                     <StatusBadge status={item.status} />
                   </div>
-                  <div className="col-span-3">
+                  <div className="stack-wide col-span-3">
                     <ActionGroup>
                       <Button size="xs" variant="ghost" onClick={(e) => { e.stopPropagation(); handleSelect(item) }}>
                         <FiEdit2 /> Edit
@@ -815,7 +815,7 @@ export function AdminEquipmentPage() {
         </div>
       </Card>
       {rejectionTargetId ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" role="dialog" aria-modal="true" aria-labelledby="equipment-rejection-title">
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-3 sm:p-4" role="dialog" aria-modal="true" aria-labelledby="equipment-rejection-title">
           <div className="max-h-[90dvh] overflow-y-auto overscroll-contain w-full max-w-lg rounded-2xl border border-white/10 bg-background p-5 shadow-2xl">
             <div id="equipment-rejection-title" className="text-lg font-bold">Reject player gear</div>
             <p className="mt-1 text-sm text-muted">Add a comment explaining why this submission was rejected.</p>

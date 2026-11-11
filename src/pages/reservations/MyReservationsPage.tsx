@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { confirmDialog } from '../../components/ui/ConfirmDialog'
+import { useLiveRefresh } from '../../utils/liveUpdates'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { FiAlertCircle, FiCalendar, FiEye, FiFileText, FiRefreshCw, FiXCircle } from 'react-icons/fi'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
-import { apiGet, apiPost } from '../../utils/apiClient'
+import { apiDelete, apiGet, apiPost } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
 import { isVerifiedPayment, type ReceiptPayment } from '../../utils/receiptPrint'
 import { ReceiptModal } from '../../components/payments/ReceiptModal'
@@ -156,6 +157,8 @@ export function MyReservationsPage() {
     }
   }, [])
 
+  useLiveRefresh(['reservations', 'payments'], () => load(true))
+
   // Payment status changes as teammates pay their shares, so keep it current while open.
   useEffect(() => {
     void load()
@@ -222,6 +225,41 @@ export function MyReservationsPage() {
     }, 400)
     return () => window.clearTimeout(timer)
   }, [user?.id])
+  // The server's view: a slot still held for this player (booking started on another device, or
+  // the draft here was already cleared). Shown so it can be cancelled without waiting.
+  type HeldSlot = { locationId: string; reservationDate: string; reservationTime: string; sessionType: string; expiresAtISO: string }
+  const [heldSlot, setHeldSlot] = useState<HeldSlot | null>(null)
+  const loadHeldSlot = useCallback(() => {
+    apiGet<{ ok: boolean; data: HeldSlot | null }>('/api/slot-holds/mine')
+      .then((res) => setHeldSlot(res?.data || null))
+      .catch(() => setHeldSlot(null))
+  }, [])
+  useEffect(() => { loadHeldSlot() }, [loadHeldSlot])
+  useLiveRefresh(['slots'], loadHeldSlot)
+
+  // Cancel a booking left part-way (before any reservation or payment): the slot opens for
+  // everyone now instead of when the hold times out. A reservation already created at the
+  // payment step is listed below with its own Cancel button.
+  const [cancellingDraft, setCancellingDraft] = useState(false)
+  const cancelUnfinishedBooking = async () => {
+    if (!window.confirm('Cancel this unfinished booking? The slot will be opened for other players.')) return
+    setCancellingDraft(true)
+    try {
+      await apiDelete('/api/slot-holds/mine')
+      clearBookingDraft(user?.id)
+      // The unsent booking details go too. A reservation already created keeps its id: it is
+      // listed below and cancelled with its own button.
+      localStorage.removeItem('pending_reservation')
+      setDraft(null)
+      setHeldSlot(null)
+      toast.success('Booking cancelled. The slot is open again.')
+    } catch (err: any) {
+      toast.error(err?.message || 'Could not cancel the booking')
+    } finally {
+      setCancellingDraft(false)
+    }
+  }
+
   useEffect(() => {
     if (!draft) return
     const timer = window.setInterval(() => {
@@ -339,9 +377,30 @@ export function MyReservationsPage() {
             <div className="mt-1 text-sm text-muted">{draft.label}</div>
             <div className="mt-1 text-xs text-warning">Your slot is kept for {draftSecondsLeft} more second{draftSecondsLeft === 1 ? '' : 's'}, then it opens up for other players.</div>
           </div>
-          <Button variant="primary" onClick={() => navigate(draft.path)}>
-            <FiRefreshCw /> Continue booking reservation
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="danger-soft" disabled={cancellingDraft} onClick={cancelUnfinishedBooking}>
+              <FiXCircle /> {cancellingDraft ? 'Cancelling…' : 'Cancel booking'}
+            </Button>
+            <Button variant="primary" onClick={() => navigate(draft.path)}>
+              <FiRefreshCw /> Continue booking reservation
+            </Button>
+          </div>
+        </Card>
+      ) : heldSlot ? (
+        <Card className="flex flex-col gap-3 border-accent/40 p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <div className="font-semibold">A slot is being held for your unfinished booking</div>
+            <div className="mt-1 text-sm capitalize text-muted">{heldSlot.reservationDate} · {heldSlot.reservationTime} · {heldSlot.locationId} · {heldSlot.sessionType}</div>
+            <div className="mt-1 text-xs text-warning">Held until {new Date(heldSlot.expiresAtISO).toLocaleTimeString('en-PH', { timeZone: 'Asia/Manila', hour: 'numeric', minute: '2-digit' })}. Cancel it to open the slot for other players now.</div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="danger-soft" disabled={cancellingDraft} onClick={cancelUnfinishedBooking}>
+              <FiXCircle /> {cancellingDraft ? 'Cancelling…' : 'Cancel booking'}
+            </Button>
+            <Button variant="primary" onClick={() => navigate('/app/reservations')}>
+              <FiRefreshCw /> Continue booking
+            </Button>
+          </div>
         </Card>
       ) : null}
 

@@ -176,8 +176,8 @@ export function AdminGameplayPage() {
 
       <Card className="p-4 overflow-hidden">
         <div className="overflow-x-auto">
-          <div className="min-w-[980px]">
-            <div className="grid grid-cols-12 gap-0 bg-white/5 px-3 py-2 text-xs uppercase tracking-widest text-muted">
+          <div className="md:min-w-[980px]">
+            <div className="stack-head grid grid-cols-12 gap-0 bg-white/5 px-3 py-2 text-xs uppercase tracking-widest text-muted">
               <div className="col-span-2">Game</div>
               <div className="col-span-2">Schedule</div>
               <div className="col-span-1">Mode</div>
@@ -196,16 +196,16 @@ export function AdminGameplayPage() {
                 filtered.map((doc) => {
                   const st = normalizeStatus(doc.Status)
                   return (
-                    <div key={doc._id ? String(doc._id) : doc.reservationId} className="grid grid-cols-12 items-center px-3 py-3">
-                      <div className="col-span-2 text-sm font-semibold">{doc.Game || '—'}</div>
-                      <div className="col-span-2 text-sm text-muted">{doc.Schedule || doc.createdAtISO || '—'}</div>
-                      <div className="col-span-1 text-sm text-muted">{doc.Mode || '—'}</div>
-                      <div className="col-span-2 text-sm text-muted">{doc.Group || '—'}</div>
-                      <div className="col-span-1 text-sm text-muted">{doc.Package || '—'}</div>
-                      <div className="col-span-1">
+                    <div key={doc._id ? String(doc._id) : doc.reservationId} className="stack-row grid grid-cols-12 items-center px-3 py-3">
+                      <div data-label="Game" className="col-span-2 text-sm font-semibold">{doc.Game || '—'}</div>
+                      <div data-label="Schedule" className="col-span-2 text-sm text-muted">{doc.Schedule || doc.createdAtISO || '—'}</div>
+                      <div data-label="Mode" className="col-span-1 text-sm text-muted">{doc.Mode || '—'}</div>
+                      <div data-label="Group" className="col-span-2 text-sm text-muted">{doc.Group || '—'}</div>
+                      <div data-label="Package" className="col-span-1 text-sm text-muted">{doc.Package || '—'}</div>
+                      <div data-label="Status" className="col-span-1">
                         <StatusBadge status={st} />
                       </div>
-                      <div className="col-span-3 text-right">
+                      <div className="stack-wide col-span-3 text-right">
                         <ActionGroup>
                           <select
                             value={st}

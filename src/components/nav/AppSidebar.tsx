@@ -171,7 +171,7 @@ function SidebarLink({ item, onNavigate, nested = false }: { item: Item; onNavig
       onClick={onNavigate}
       end
       className={({ isActive }) =>
-        `flex items-center gap-3 rounded-xl py-2 text-sm transition ${nested ? 'pl-6 pr-3' : 'px-3'} ` +
+        `flex items-center gap-3 rounded-xl py-2.5 text-sm transition lg:py-2 ${nested ? 'pl-6 pr-3' : 'px-3'} ` +
         (isActive ? 'nav-active font-medium' : 'hover-row text-muted hover:text-text')
       }
     >
@@ -291,7 +291,7 @@ export function AppSidebar({
                 type="button"
                 onClick={() => toggleGroup(section)}
                 aria-expanded={open}
-                className={`hover-row flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm ${holdsCurrentPage ? 'font-medium text-text' : 'text-muted hover:text-text'}`}
+                className={`hover-row flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left text-sm lg:py-2 ${holdsCurrentPage ? 'font-medium text-text' : 'text-muted hover:text-text'}`}
               >
                 <span>{section}</span>
                 <FiChevronDown className={`h-4 w-4 transition ${open ? 'rotate-180' : ''}`} />

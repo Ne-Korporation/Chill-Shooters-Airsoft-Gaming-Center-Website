@@ -26,6 +26,9 @@ const toastOptions = {
   },
 }
 
+// On phones toasts sit centered just under the 72px top bar instead of covering the bell and menu.
+const isPhone = typeof window !== 'undefined' && window.matchMedia('(max-width: 639px)').matches
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <BrowserRouter>
@@ -35,7 +38,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           {/* In-app confirm / reason pop-ups (confirmDialog, promptDialog): never the browser's own boxes. */}
           <DialogHost />
           {/* Above every pop-up (the highest go up to 100002), so messages are never hidden behind one. */}
-          <Toaster position="top-right" toastOptions={toastOptions} containerStyle={{ zIndex: 200000 }} />
+          <Toaster position={isPhone ? 'top-center' : 'top-right'} toastOptions={toastOptions} containerStyle={{ zIndex: 200000, top: isPhone ? 80 : 16, left: 12, right: 12 }} />
         </ThemeProvider>
       </AuthProvider>
     </BrowserRouter>

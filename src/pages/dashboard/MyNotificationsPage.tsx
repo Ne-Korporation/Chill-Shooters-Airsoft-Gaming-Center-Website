@@ -80,7 +80,7 @@ export function MyNotificationsPage() {
         </button>
         <div className="mt-2 flex flex-wrap items-end justify-between gap-3">
           <div>
-            <h1 className="text-3xl font-bold">Notifications</h1>
+            <h1 className="text-2xl font-bold sm:text-3xl">Notifications</h1>
             <p className="mt-1 text-sm text-muted">
               {loading ? 'Loading…' : unread ? `You have ${unread} unread.` : "You're all caught up."}
             </p>
@@ -135,19 +135,19 @@ export function MyNotificationsPage() {
                     const isExpanded = expanded === item.id
                     return (
                       <li key={item.id} className={`group relative rounded-xl transition ${item.read ? '' : 'bg-accent/10'}`}>
-                        <button type="button" onClick={() => open(item)} className="hover-row flex w-full items-start gap-3 rounded-xl px-3 py-3 pr-10 text-left">
+                        <button type="button" onClick={() => open(item)} className="hover-row flex w-full items-start gap-3 rounded-xl px-2.5 py-3 pr-11 text-left sm:px-3">
                           <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl ${item.read ? 'bg-[rgba(var(--text),0.06)] text-muted' : 'bg-accent/15 text-accent'}`}>
                             <Icon className="h-4 w-4" />
                           </span>
                           <span className="min-w-0 flex-1">
-                            <span className="flex items-center gap-2 text-[11px] text-muted">
+                            <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-muted">
                               <span className="font-semibold">{kind.label}</span>
                               <span>·</span>
                               <span>{timeLabel(item.createdAtISO, now)}</span>
                               {!item.read ? <span className="h-2 w-2 rounded-full bg-accent" aria-label="Unread" /> : null}
                             </span>
-                            <span className={`mt-0.5 block text-sm ${item.read ? 'font-medium' : 'font-semibold'}`}>{item.title}</span>
-                            <span className={`mt-0.5 block whitespace-pre-wrap text-sm text-muted ${isExpanded ? '' : 'line-clamp-2'}`}>{item.message}</span>
+                            <span className={`mt-0.5 block break-words text-sm ${item.read ? 'font-medium' : 'font-semibold'}`}>{item.title}</span>
+                            <span className={`mt-0.5 block whitespace-pre-wrap break-words text-sm text-muted ${isExpanded ? '' : 'line-clamp-2'}`}>{item.message}</span>
                           </span>
                           {goesSomewhere ? <FiChevronRight className="mt-3 h-4 w-4 shrink-0 text-muted" aria-hidden /> : null}
                         </button>
@@ -156,7 +156,7 @@ export function MyNotificationsPage() {
                           onClick={() => dismiss(item)}
                           aria-label="Remove notification"
                           title="Remove"
-                          className="absolute right-2 top-2 rounded-lg p-1.5 text-muted opacity-60 transition hover:bg-[rgba(var(--text),0.08)] hover:text-text hover:opacity-100"
+                          className="absolute right-1.5 top-1.5 rounded-lg p-2 text-muted opacity-80 transition sm:opacity-60 hover:bg-[rgba(var(--text),0.08)] hover:text-text hover:opacity-100"
                         >
                           <FiX className="h-3.5 w-3.5" />
                         </button>

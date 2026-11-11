@@ -38,8 +38,8 @@ type ApprovalData = {
 function Row({ label, value, highlight = false }: { label: string; value: React.ReactNode; highlight?: boolean }) {
   return (
     <div className={`flex items-start justify-between gap-4 py-2 text-sm ${highlight ? 'font-semibold text-gold' : ''}`}>
-      <span className="text-muted">{label}</span>
-      <span className="text-right">{value || '—'}</span>
+      <span className="shrink-0 text-muted">{label}</span>
+      <span className="min-w-0 text-right">{value || '—'}</span>
     </div>
   )
 }
@@ -179,8 +179,8 @@ export function GuardianApprovalPage() {
                   />
                 </label>
                 <div className="flex flex-col gap-2 sm:flex-row">
-                  <Button variant="ghost" className="flex-1" disabled={submitting} onClick={() => decide('declined')}><FiXCircle /> Decline</Button>
-                  <Button className="flex-1" disabled={submitting || !confirmed} onClick={() => decide('approved')}><FiCheckCircle /> Approve booking</Button>
+                  <Button variant="ghost" className="sm:flex-1" disabled={submitting} onClick={() => decide('declined')}><FiXCircle /> Decline</Button>
+                  <Button className="sm:flex-1" disabled={submitting || !confirmed} onClick={() => decide('approved')}><FiCheckCircle /> Approve booking</Button>
                 </div>
               </Card>
             ) : null}

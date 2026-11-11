@@ -84,7 +84,7 @@ export function ReachProgramsCard({ programs, onChanged }: { programs: ReachProg
       <div className="mt-4 grid gap-6 xl:grid-cols-[380px,1fr]">
         <form className="space-y-2" onSubmit={submit}>
           <Input label="Program" placeholder="e.g. Barangay youth safety day" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid gap-2 sm:grid-cols-2">
             <Input label="Date" type="date" value={form.dateISO} onChange={(e) => setForm({ ...form, dateISO: e.target.value })} />
             <label className="block">
               <div className="mb-2 text-sm font-semibold text-text">Status</div>
@@ -101,7 +101,7 @@ export function ReachProgramsCard({ programs, onChanged }: { programs: ReachProg
           </div>
           <Input label="Venue" value={form.venue} onChange={(e) => setForm({ ...form, venue: e.target.value })} />
           <Input label="Beneficiaries" placeholder="e.g. Grade 10 students of Salawag NHS" value={form.beneficiaries} onChange={(e) => setForm({ ...form, beneficiaries: e.target.value })} />
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid gap-2 sm:grid-cols-2">
             <Input label="People reached" type="number" min={0} value={form.participants} onChange={(e) => setForm({ ...form, participants: e.target.value })} />
             <Input label="Partner (optional)" value={form.partnerOrganization} onChange={(e) => setForm({ ...form, partnerOrganization: e.target.value })} />
           </div>
@@ -137,7 +137,7 @@ export function ReachProgramsCard({ programs, onChanged }: { programs: ReachProg
                 <div>Fund spent: <span className="text-danger">{formatPHP(program.spent)}</span></div>
               </div>
               {program.description ? <div className="mt-2 text-xs text-muted">{program.description}</div> : null}
-              <button type="button" onClick={() => edit(program)} className="mt-2 text-[11px] font-semibold text-accent hover:underline">Edit</button>
+              <button type="button" onClick={() => edit(program)} className="mt-0.5 py-2 text-[11px] font-semibold text-accent hover:underline">Edit</button>
             </div>
           ))}
         </div>

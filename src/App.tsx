@@ -52,6 +52,7 @@ import { MarshalDashboardHomePage } from './pages/marshal/MarshalDashboardHomePa
 import { PlayerFeedbackPage } from './pages/players/PlayerFeedbackPage'
 
 import { RequireRole } from './routes/RequireRole'
+import { RequireOwnProfile } from './routes/RequireOwnProfile'
 import { NotificationProvider } from './context/NotificationContext'
 import { useAuth } from './context/AuthContext'
 
@@ -155,8 +156,8 @@ export default function App() {
         <Route path="split-payments" element={<RequireRole roles={['user']}><SplitPaymentPage /></RequireRole>} />
         <Route path="feedback" element={<RequireRole roles={['user']}><PlayerFeedbackPage /></RequireRole>} />
         <Route path="notifications" element={<RequireRole roles={['user', 'admin', 'registrar', 'marshal']}><NotificationsPageForRole /></RequireRole>} />
-        <Route path="players/:playerId" element={<PlayerProfilePage />} />
-        <Route path="players/:playerId/weapons-and-equipment" element={<MyWeaponsAndEquipmentPage />} />
+        <Route path="players/:playerId" element={<RequireOwnProfile><PlayerProfilePage /></RequireOwnProfile>} />
+        <Route path="players/:playerId/weapons-and-equipment" element={<RequireOwnProfile suffix="/weapons-and-equipment"><MyWeaponsAndEquipmentPage /></RequireOwnProfile>} />
         <Route
           path="games"
           element={
@@ -239,7 +240,7 @@ export default function App() {
         <Route path="admin/notifications" element={<AdminPageWrapper><AdminNotificationsPage /></AdminPageWrapper>} />
         <Route path="admin/audit-logs" element={<AdminPageWrapper><AdminAuditLogsPage /></AdminPageWrapper>} />
 
-        <Route path="registrar" element={<RegistrarDashboardHomePage />} />
+        <Route path="registrar" element={<RequireRole roles={['registrar', 'admin']}><RegistrarDashboardHomePage /></RequireRole>} />
         <Route path="registrar/reservations" element={<RegistrarReservationsPageWrapper />} />
         <Route path="registrar/games" element={<RegistrarOngoingGamesPageWrapper />} />
         {/* Availed Packages was removed (it showed made-up gear statuses); real gear status is on Weapons and each game's Rentals tab. */}

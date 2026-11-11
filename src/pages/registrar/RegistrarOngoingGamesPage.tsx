@@ -1,5 +1,6 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useLiveRefresh } from '../../utils/liveUpdates'
 import { FiArchive, FiCheck, FiChevronDown, FiChevronRight, FiEye, FiFolder, FiFolderMinus, FiMapPin, FiSearch, FiShield, FiX } from 'react-icons/fi'
 import { toast } from 'react-hot-toast'
 
@@ -356,6 +357,8 @@ export function RegistrarOngoingGamesPage({ embedded = false }: { embedded?: boo
     }
   }, [refresh])
 
+  useLiveRefresh(['reservations', 'games', 'payments', 'gear'], () => refresh(true))
+
   // The matching games in one folder per game date, in the order the server sorted them.
   const allFolders = useMemo(() => {
     const byDay = new Map<string, GameplayDoc[]>()
@@ -618,7 +621,7 @@ export function RegistrarOngoingGamesPage({ embedded = false }: { embedded?: boo
           <span>{loading ? 'Loading…' : `${total} game${total === 1 ? '' : 's'} match`}</span>
           <div className="flex items-center gap-4">
             {!moreFiltersSet ? (
-              <button type="button" className="font-semibold text-accent hover:underline" onClick={() => setMoreFiltersOpen((v) => !v)}>
+              <button type="button" className="-my-2 py-2 font-semibold text-accent hover:underline" onClick={() => setMoreFiltersOpen((v) => !v)}>
                 {moreFiltersOpen ? 'Fewer filters' : 'More filters'}
               </button>
             ) : null}

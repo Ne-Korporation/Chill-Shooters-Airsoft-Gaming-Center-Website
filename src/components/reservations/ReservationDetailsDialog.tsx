@@ -81,8 +81,8 @@ export function ReservationDetailsDialog({
   const fields = reservation.fieldNames || (reservation.fieldIds || []).map(fieldLabel).join(', ')
 
   return createPortal(
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true" aria-labelledby="reservation-details-title" onClick={onClose}>
-      <div className="max-h-[90dvh] w-full max-w-2xl overflow-y-auto rounded-3xl border border-white/10 bg-background p-5 shadow-soft" onClick={(event) => event.stopPropagation()}>
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/70 p-3 sm:p-4" role="dialog" aria-modal="true" aria-labelledby="reservation-details-title" onClick={onClose}>
+      <div className="max-h-[90dvh] w-full max-w-2xl overflow-y-auto rounded-3xl border border-white/10 bg-background p-4 shadow-soft sm:p-5" onClick={(event) => event.stopPropagation()}>
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="text-xs uppercase tracking-widest text-muted">Reservation details</div>
