@@ -1,6 +1,7 @@
 import React from 'react'
-import { FiEdit2 } from 'react-icons/fi'
+import { FiEdit2, FiZap } from 'react-icons/fi'
 import toast from 'react-hot-toast'
+import { AiPackageSuggestions, type AiPackageSuggestion } from '../../components/packages/AiPackageSuggestions'
 import { ActionGroup, Button } from '../../components/ui/Button'
 import { FilterTabs, titleCaseLabel } from '../../components/ui/FilterTabs'
 import { Card } from '../../components/ui/Card'
@@ -166,7 +167,31 @@ function formFromPackage(pkg: RentalPackage): FormState {
   }
 }
 
+// An AI suggestion as a settled-price package: its price is the whole package price for its
+// players (entrance included), one weapon per player.
+function formFromSuggestion(s: AiPackageSuggestion): FormState {
+  return {
+    ...EMPTY_FORM,
+    name: s.name,
+    description: s.description,
+    discountMode: 'settled',
+    discountValue: String(s.price),
+    discountTargets: ['package_total'],
+    settledAmount: String(s.price),
+    players: String(s.players),
+    minPlayers: String(s.minPlayers),
+    weaponCount: String(s.players > 1 ? s.players : 1),
+    weaponIds: s.weapons.map((w) => w.pieceId),
+    equipmentIds: s.gear.map((g) => g.pieceId),
+    equipmentQuantities: Object.fromEntries(s.gear.map((g) => [g.pieceId, g.perPlayer])),
+    bbReloadGrams: String(s.bbReloadGrams),
+  }
+}
+
 export function AdminRentalPackagesPage() {
+  const [aiOpen, setAiOpen] = React.useState(false)
+  const aiOpened = React.useRef(false)
+  if (aiOpen) aiOpened.current = true
   const [status, setStatus] = React.useState<PackageStatus | 'all'>('all')
   const [packages, setPackages] = React.useState<RentalPackage[]>([])
   const [loading, setLoading] = React.useState(true)
@@ -331,33 +356,76 @@ export function AdminRentalPackagesPage() {
   }
 
   // Shared payload for create + save
-  const buildPayload = () => {
-    const discountValue = Number(form.discountValue)
-    const totalItems = form.weaponIds.length + form.equipmentIds.length
-    const typedWeaponCount = Math.round(Number(form.weaponCount)) || 0
+  const buildPayload = (f: FormState = form) => {
+    const discountValue = Number(f.discountValue)
+    const totalItems = f.weaponIds.length + f.equipmentIds.length
+    const typedWeaponCount = Math.round(Number(f.weaponCount)) || 0
     return {
-      name: form.name.trim(),
-      discountPct: form.discountMode === 'percent' && form.discountTargets.includes('package_total') ? Math.round(discountValue) || 0 : 0,
-      discountMode: form.discountMode,
-      discountValue: form.discountMode === 'settled'
+      name: f.name.trim(),
+      discountPct: f.discountMode === 'percent' && f.discountTargets.includes('package_total') ? Math.round(discountValue) || 0 : 0,
+      discountMode: f.discountMode,
+      discountValue: f.discountMode === 'settled'
         ? Math.round(discountValue) || 0
-        : form.discountMode === 'amount'
+        : f.discountMode === 'amount'
           ? Math.round(discountValue) || 0
           : Math.round(discountValue * 100) / 100,
-      discountTargets: form.discountMode === 'settled' ? ['package_total'] : form.discountTargets,
-      description: form.description.trim(),
-      basePrice: Number(form.basePrice) || 0,
-      minPlayers: Number(form.minPlayers) || 1,
-      players: Math.round(Number(form.players)) || 0,
-      settledAmount: form.discountMode === 'settled' ? Math.round(discountValue) || 0 : 0,
+      discountTargets: f.discountMode === 'settled' ? ['package_total'] : f.discountTargets,
+      description: f.description.trim(),
+      basePrice: Number(f.basePrice) || 0,
+      minPlayers: Number(f.minPlayers) || 1,
+      players: Math.round(Number(f.players)) || 0,
+      settledAmount: f.discountMode === 'settled' ? Math.round(discountValue) || 0 : 0,
       // If left at 0, fall back to the number of weapons picked from inventory
-      weaponCount: typedWeaponCount > 0 ? typedWeaponCount : form.weaponIds.length,
-      weaponIds: form.weaponIds,
-      equipmentIds: form.equipmentIds,
-      equipmentQuantities: Object.fromEntries(form.equipmentIds.map((id) => [id, packageEquipmentQty(form, id)])),
+      weaponCount: typedWeaponCount > 0 ? typedWeaponCount : f.weaponIds.length,
+      weaponIds: f.weaponIds,
+      equipmentIds: f.equipmentIds,
+      equipmentQuantities: Object.fromEntries(f.equipmentIds.map((id) => [id, packageEquipmentQty(f, id)])),
       equipmentCount: totalItems,
-      bbReloadGrams: Math.max(0, Math.round(Number(form.bbReloadGrams) || 0)),
+      bbReloadGrams: Math.max(0, Math.round(Number(f.bbReloadGrams) || 0)),
     }
+  }
+
+  // Next sequential PKG-XXXX id.
+  const nextPackageId = () => {
+    let maxSeq = 0
+    for (const pkg of packages) {
+      if (pkg.id && pkg.id.startsWith('PKG-')) {
+        const num = parseInt(pkg.id.replace('PKG-', ''), 10)
+        if (Number.isFinite(num) && num > maxSeq) maxSeq = num
+      }
+    }
+    return `PKG-${String(maxSeq + 1).padStart(4, '0')}`
+  }
+
+  // Accepting an AI suggestion creates it as an active package straight away.
+  const acceptSuggestion = async (s: AiPackageSuggestion) => {
+    const payload = {
+      id: nextPackageId(),
+      ...buildPayload(formFromSuggestion(s)),
+      status: 'active',
+      aiSuggested: true,
+      createdAtISO: new Date().toISOString(),
+    }
+    const res = await apiPost<{ ok: boolean; data?: any; error?: string }>('/api/packages', payload)
+    if (!res?.ok) throw new Error(res?.error || 'Failed to create package')
+    toast.success(`Package "${s.name}" added`)
+    await refresh()
+    setStatus('all')
+  }
+
+  // "Edit first" opens the suggestion in the add-package editor.
+  const editSuggestion = (s: AiPackageSuggestion) => {
+    setIsAdding(true)
+    setSelectedPackageId(null)
+    setForm(formFromSuggestion(s))
+    setErrors({})
+    setTimeout(() => {
+      try {
+        editorRef?.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      } catch (e) {
+        // ignore in non-DOM environments
+      }
+    }, 60)
   }
 
   const handleSave = async () => {
@@ -408,18 +476,8 @@ export function AdminRentalPackagesPage() {
 
     setSaving(true)
     try {
-      // Generate sequential PKG-XXXX ID
-      let maxSeq = 0
-      for (const pkg of packages) {
-        if (pkg.id && pkg.id.startsWith('PKG-')) {
-          const num = parseInt(pkg.id.replace('PKG-', ''), 10)
-          if (Number.isFinite(num) && num > maxSeq) maxSeq = num
-        }
-      }
-      const newId = `PKG-${String(maxSeq + 1).padStart(4, '0')}`
-
       const payload = {
-        id: newId,
+        id: nextPackageId(),
         ...buildPayload(),
         status: 'active',
         createdAtISO: new Date().toISOString(),
@@ -564,9 +622,17 @@ export function AdminRentalPackagesPage() {
         </div>
 
         <div className="flex items-center gap-2">
+          <Button onClick={() => setAiOpen((open) => !open)} variant="accent-soft" size="sm"><FiZap /> AI suggestions</Button>
           <Button onClick={handleAddPackage} variant="primary" size="sm">+ Add package</Button>
         </div>
       </div>
+
+      {/* Stays mounted once opened, so closing it doesn't drop a request Gemini is still answering. */}
+      {aiOpened.current ? (
+        <div hidden={!aiOpen}>
+          <AiPackageSuggestions onAccept={acceptSuggestion} onEdit={editSuggestion} onClose={() => setAiOpen(false)} />
+        </div>
+      ) : null}
 
       <Card className="p-4">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">

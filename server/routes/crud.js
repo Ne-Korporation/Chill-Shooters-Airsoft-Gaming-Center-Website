@@ -211,7 +211,16 @@ router.get('/public/packages', async (_req, res) => {
       price: Number(item.price) || 0,
     })
 
-    return res.json({ ok: true, data: docs, weapons: weapons.map(publicItem), equipment: equipment.map(publicItem) })
+    // How many bookings (not cancelled) chose each package, so the landing page can show the
+    // most booked ones. Only the counts are sent.
+    const booked = await db.collection('reservations').aggregate([
+      { $match: { selectionMode: 'package', selectedPackageId: { $in: docs.map((doc) => String(doc.id)) }, reservationStatus: { $ne: 'cancelled' } } },
+      { $group: { _id: '$selectedPackageId', count: { $sum: 1 } } },
+    ]).toArray()
+    const bookingsById = new Map(booked.map((row) => [String(row._id), row.count]))
+    const data = docs.map((doc) => ({ ...doc, bookings: bookingsById.get(String(doc.id)) || 0 }))
+
+    return res.json({ ok: true, data, weapons: weapons.map(publicItem), equipment: equipment.map(publicItem) })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
   }

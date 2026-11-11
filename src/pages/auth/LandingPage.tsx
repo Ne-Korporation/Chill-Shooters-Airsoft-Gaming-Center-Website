@@ -2,6 +2,7 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 're
 import { Link, useNavigate } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
+  FiAward,
   FiBox,
   FiCalendar,
   FiCheck,
@@ -138,7 +139,14 @@ type PublicPackage = PackageLike & {
   description?: string
   minPlayers?: number
   bbReloadGrams?: number
+  // Bookings (not cancelled) that chose this package
+  bookings?: number
 }
+
+const LANDING_PACKAGE_COUNT = 3
+// The default package, called "Normal" (or described as "Default Package").
+const isDefaultPackage = (pkg: PublicPackage) =>
+  pkg.name.trim().toLowerCase() === 'normal' || /default package/i.test(pkg.description || '')
 type PublicItem = { id: string; name: string; price: number }
 
 // Active rental packages, read without signing in (GET /api/public/packages).
@@ -171,7 +179,15 @@ function usePublicPackages() {
 function PackagesSection({ onBook }: { onBook: () => void }) {
   const { loading, packages, weapons, equipment } = usePublicPackages()
 
-  const cards = useMemo(() => packages.map((pkg) => {
+  // Three packages: the default ("Normal") one first, marked as the best seller, then the two
+  // other packages booked most often.
+  const ordered = useMemo(() => {
+    const byBookings = [...packages].sort((a, b) => (Number(b.bookings) || 0) - (Number(a.bookings) || 0))
+    const best = byBookings.find(isDefaultPackage)
+    return (best ? [best, ...byBookings.filter((pkg) => pkg !== best)] : byBookings).slice(0, LANDING_PACKAGE_COUNT)
+  }, [packages])
+
+  const cards = useMemo(() => ordered.map((pkg) => {
     // Priced for the package's own headcount, or its minimum group size.
     const players = Number(pkg.players) > 0 ? Number(pkg.players) : Math.max(1, Number(pkg.minPlayers) || 1)
     const pricing = calculatePackagePricing({
@@ -187,7 +203,7 @@ function PackagesSection({ onBook }: { onBook: () => void }) {
       .map((id) => ({ name: equipment.find((item) => item.id === id)?.name, qty: packageEquipmentQty(pkg, id) }))
       .filter((row): row is { name: string; qty: number } => Boolean(row.name))
     return { pkg, players, pricing, weaponNames, gear }
-  }), [packages, weapons, equipment])
+  }), [ordered, weapons, equipment])
 
   return (
     <section id="packages" className="mx-auto max-w-[1200px] scroll-mt-24 px-4 pb-16 md:px-6">
@@ -213,7 +229,7 @@ function PackagesSection({ onBook }: { onBook: () => void }) {
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true, amount: 0.15 }}
               transition={{ duration: 0.4, delay: idx * 0.05 }}
-              className="surface flex flex-col rounded-2xl p-5"
+              className={`surface flex flex-col rounded-2xl p-5 ${isDefaultPackage(pkg) ? 'ring-1 ring-accent/50' : ''}`}
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="flex items-start gap-3">
@@ -228,9 +244,16 @@ function PackagesSection({ onBook }: { onBook: () => void }) {
                     </div>
                   </div>
                 </div>
-                {pricing.discountAmount > 0 ? (
-                  <span className="shrink-0 rounded-full bg-success/15 px-2.5 py-1 text-[11px] font-semibold text-success">{pricing.discountSummary}</span>
-                ) : null}
+                <div className="flex shrink-0 flex-col items-end gap-1.5">
+                  {isDefaultPackage(pkg) ? (
+                    <span className="flex items-center gap-1 rounded-full bg-accent px-2.5 py-1 text-[11px] font-bold text-black">
+                      <FiAward className="h-3.5 w-3.5" /> Best seller
+                    </span>
+                  ) : null}
+                  {pricing.discountAmount > 0 ? (
+                    <span className="rounded-full bg-success/15 px-2.5 py-1 text-[11px] font-semibold text-success">{pricing.discountSummary}</span>
+                  ) : null}
+                </div>
               </div>
 
               {pkg.description ? <p className="mt-3 text-sm leading-relaxed text-muted">{pkg.description}</p> : null}
@@ -781,7 +804,7 @@ export function LandingPage() {
       <header className="sticky top-0 z-50 bg-[#5b6b3a] text-white shadow-[0_2px_12px_rgba(0,0,0,0.25)] bg-[url('/NavBar-BG.webp')] bg-cover bg-center">
         <div className="mx-auto flex max-w-[1400px] items-center justify-between px-4 py-3 md:px-8">
           <Link to="/" className="flex items-center" aria-label="Chill Shooters home">
-            <img src="/logingweb.png" alt="Chill Shooters" className="h-12 w-auto object-contain md:h-12" />
+            <img src="/logingweb.png" alt="Chill Shooters" className="h-14 w-auto object-contain md:h-16" />
           </Link>
 
           <nav className="hidden items-center gap-10 lg:flex">
