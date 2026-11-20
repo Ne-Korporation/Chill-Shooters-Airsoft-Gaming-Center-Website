@@ -30,6 +30,7 @@ import { useAuth } from '../../context/AuthContext'
 import { getApiBase } from '../../utils/apiClient'
 import { DEFAULT_SLOT_HOURS, formatSlotRange, manilaTodayISO, slotHasStarted, useSlotHours } from '../../utils/slotHours'
 import { PACKAGE_ENTRANCE_FEE_PER_PLAYER, calculatePackagePricing, packageEquipmentQty, packageRegularTotal, type PackageLike } from '../../utils/packagePricing'
+import { addDaysISO, BOOKING_WINDOW_DAYS } from '../../utils/bookingWindow'
 
 type FAQ = {
   q: string
@@ -704,10 +705,8 @@ export function LandingPage() {
   }, [])
 
   // Same booking window as ReservationCalendarPage: through the end of next month.
-  const maxDateISO = useMemo(() => {
-    const now = new Date()
-    return toISODate(new Date(now.getFullYear(), now.getMonth() + 2, 0))
-  }, [])
+  // Same booking window as the Book a game page: up to a year ahead.
+  const maxDateISO = useMemo(() => addDaysISO(toISODate(new Date()), BOOKING_WINDOW_DAYS), [])
 
   const [booking, setBooking] = useState<LandingReservationPrefill>({
     location: 'salawag',

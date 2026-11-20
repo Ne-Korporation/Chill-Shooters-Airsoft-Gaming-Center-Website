@@ -8,6 +8,7 @@ import {
   FiCalendar,
   FiAlertCircle,
   FiCheck,
+  FiChevronLeft,
   FiChevronRight,
   FiClock,
   FiCrosshair,
@@ -46,6 +47,7 @@ import { DEFAULT_SLOT_HOURS, formatSlotRange, manilaTodayISO, slotHasStarted, us
 import { causeDayMessage, useCauseDays } from '../../utils/causeDays'
 import { closedDayMessage, useClosedDays } from '../../utils/closedDays'
 import { bookingRoles } from '../../utils/bookingRoles'
+import { addDaysISO, BOOKING_WINDOW_DAYS, monthsBetween } from '../../utils/bookingWindow'
 import { pieceAtBranch } from '../../utils/branches'
 
 // Slot holds last 15 minutes on the server; refresh well before that while the player is booking.
@@ -414,10 +416,16 @@ export function ReservationCalendarPage() {
   // Status of the logged-in user's own waiver: none = never submitted
   const [currentWaiverStatus, setCurrentWaiverStatus] = useState<'none' | 'pending' | 'approved' | 'denied'>('none')
 
+  // Players can book up to a year ahead. The calendar shows two months at a time; the arrows page
+  // through from this month to the month of the last bookable date.
+  const lastBookableISO = addDaysISO(manilaTodayISO(), BOOKING_WINDOW_DAYS)
+  const maxMonthOffset = Math.max(0, monthsBetween(manilaTodayISO(), lastBookableISO) - 1)
+  const [monthOffset, setMonthOffset] = useState(0)
+
   const monthCalendars = useMemo(() => {
     const monthStarts = [
-      new Date(today.getFullYear(), today.getMonth(), 1),
-      new Date(today.getFullYear(), today.getMonth() + 1, 1),
+      new Date(today.getFullYear(), today.getMonth() + monthOffset, 1),
+      new Date(today.getFullYear(), today.getMonth() + monthOffset + 1, 1),
     ]
 
     return monthStarts.map((start) => {
@@ -444,7 +452,7 @@ export function ReservationCalendarPage() {
         weeks,
       }
     })
-  }, [today])
+  }, [today, monthOffset])
   // Games for a cause in the months shown: marked on the date and explained on hover.
   const causeDays = useCauseDays(
     monthCalendars[0] ? `${monthCalendars[0].key}-01` : '',
@@ -479,7 +487,17 @@ export function ReservationCalendarPage() {
   // ISO dates compare correctly as strings; ignore a prefilled date that has already passed.
   const startDateISO =
     landingPrefill?.dateISO && landingPrefill.dateISO >= initialDateISO ? landingPrefill.dateISO : initialDateISO
-  const [dateISO, setDateISO] = useState<string>(() => (draftState.dateISO >= initialDateISO ? draftState.dateISO : startDateISO))
+  const [dateISO, setDateISO] = useState<string>(() => {
+    const wanted = draftState.dateISO >= initialDateISO ? draftState.dateISO : startDateISO
+    return wanted > lastBookableISO ? initialDateISO : wanted
+  })
+  // Open the calendar on the months holding the picked date (e.g. a saved draft months ahead).
+  useEffect(() => {
+    const offset = monthsBetween(todayDateISO, dateISO)
+    setMonthOffset((current) => (offset < current || offset > current + 1 ? Math.min(Math.max(0, offset), maxMonthOffset) : current))
+    // Only when the date changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dateISO])
   const [slot, setSlot] = useState<TimeSlot>(() => draftState.slot ?? landingPrefill?.slot ?? 'morning')
   // One slot per booking. Drafts saved before this could hold several; keep the one being booked.
   const [selectedSlots, setSelectedSlots] = useState<TimeSlot[]>(() => {
@@ -1988,7 +2006,31 @@ export function ReservationCalendarPage() {
 
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
                 <div>
-                  <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Date</div>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Date</div>
+                    {/* Two months at a time, up to a year ahead. */}
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        aria-label="Earlier months"
+                        disabled={monthOffset === 0}
+                        onClick={() => setMonthOffset((o) => Math.max(0, o - 1))}
+                        className="grid h-7 w-7 place-items-center rounded-lg border border-white/10 text-muted transition hover:text-text disabled:opacity-30"
+                      >
+                        <FiChevronLeft className="h-4 w-4" />
+                      </button>
+                      <button
+                        type="button"
+                        aria-label="Later months"
+                        disabled={monthOffset >= maxMonthOffset}
+                        onClick={() => setMonthOffset((o) => Math.min(maxMonthOffset, o + 1))}
+                        className="grid h-7 w-7 place-items-center rounded-lg border border-white/10 text-muted transition hover:text-text disabled:opacity-30"
+                      >
+                        <FiChevronRight className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="mt-1 text-[11px] text-muted">Book up to 1 year ahead (until {new Date(`${lastBookableISO}T12:00:00`).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' })}).</div>
                   <div className="mt-2 space-y-4 max-h-96 overflow-y-auto pr-1">
                     {monthCalendars.map((month) => (
                       <div key={month.key} className="rounded-2xl border border-white/10 bg-black/20 p-3">
@@ -2013,7 +2055,9 @@ export function ReservationCalendarPage() {
                                 const isWd = isWeekday(iso)
                                 const closedDay = closedDays[iso]
                                 const cause = closedDay ? undefined : causeDays[iso]
-                                const unavailable = isPastOrToday || Boolean(closedDay)
+                                // Beyond the one-year booking window.
+                                const tooFar = iso > lastBookableISO
+                                const unavailable = isPastOrToday || tooFar || Boolean(closedDay)
 
                                 return (
                                   <button

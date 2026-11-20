@@ -9,6 +9,7 @@ import { getDb, getUserAccountsCollection } from '../db/mongo.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
 import { findIdentityIdType } from '../utils/idTypes.js'
 import { hasValidIdentity } from '../utils/identityValidity.js'
+import { signFileLink, verifyFileLink } from '../utils/fileLinks.js'
 
 const router = express.Router()
 
@@ -43,8 +44,9 @@ function publicBaseUrl(req) {
 }
 
 // Without Cloudinary credentials, keep the image in MongoDB and serve it from
-// GET /api/files/:id so uploads still work on a fresh deployment.
-async function storeInDatabase(req, fileBuffer, filename, mimetype) {
+// GET /api/files/:id so uploads still work on a fresh deployment. `isPrivate` files (ID photos)
+// only open through a signed link (utils/fileLinks.js).
+async function storeInDatabase(req, fileBuffer, filename, mimetype, isPrivate = false) {
   const db = await getDb()
   const id = randomUUID()
   await db.collection('uploaded_files').insertOne({
@@ -54,13 +56,14 @@ async function storeInDatabase(req, fileBuffer, filename, mimetype) {
     size: fileBuffer.length,
     data: new Binary(fileBuffer),
     uploadedBy: String(req.user?.id || ''),
+    ...(isPrivate ? { private: true } : {}),
     createdAtISO: new Date().toISOString(),
   })
   return `${publicBaseUrl(req)}/api/files/${id}`
 }
 
-async function storeUpload(req, fileBuffer, filename, mimetype) {
-  if (!isCloudinaryConfigured()) return storeInDatabase(req, fileBuffer, filename, mimetype)
+async function storeUpload(req, fileBuffer, filename, mimetype, { isPrivate = false } = {}) {
+  if (!isCloudinaryConfigured()) return storeInDatabase(req, fileBuffer, filename, mimetype, isPrivate)
   return uploadToCloudinary(fileBuffer, filename)
 }
 
@@ -69,9 +72,13 @@ router.get('/files/:id', async (req, res) => {
     const db = await getDb()
     const file = await db.collection('uploaded_files').findOne({ _id: String(req.params.id) })
     if (!file) return res.status(404).json({ ok: false, error: 'file not found' })
+    // ID photos open only through a fresh signed link, never from the bare address.
+    if (file.private && !verifyFileLink(file._id, req.query.exp, req.query.sig)) {
+      return res.status(403).json({ ok: false, error: 'This link has expired. Reload the page to see the file.' })
+    }
     res.set('Content-Type', file.contentType)
     // Private: uploads include ID photos, so shared caches (CDNs, proxies) must not keep them.
-    res.set('Cache-Control', 'private, max-age=31536000, immutable')
+    res.set('Cache-Control', file.private ? 'private, max-age=3600' : 'private, max-age=31536000, immutable')
     res.set('X-Content-Type-Options', 'nosniff')
     // Opened directly, a file can't run scripts or act as a page of this site.
     res.set('Content-Security-Policy', "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox")
@@ -135,7 +142,9 @@ router.post('/upload-image', requireAuth, (req, res, next) => {
   }
 
   try {
-    const url = await storeUpload(req, req.file.buffer, req.file.originalname || 'upload', req.file.mimetype)
+    // ?private=1 for personal documents (e.g. a school ID as discount proof): signed links only.
+    const isPrivate = req.query.private === '1'
+    const url = await storeUpload(req, req.file.buffer, req.file.originalname || 'upload', req.file.mimetype, { isPrivate })
     return res.json({ ok: true, url })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
@@ -242,11 +251,13 @@ router.post('/scan-id', requireAuth, (req, res, next) => {
         }
       : {}
 
-    const frontUrl = await storeUpload(req, front.buffer, front.originalname || 'id-front', front.mimetype)
+    const frontUrl = await storeUpload(req, front.buffer, front.originalname || 'id-front', front.mimetype, { isPrivate: true })
     const backUrl = idType.sides === 'front_back'
-      ? await storeUpload(req, back.buffer, back.originalname || 'id-back', back.mimetype)
+      ? await storeUpload(req, back.buffer, back.originalname || 'id-back', back.mimetype, { isPrivate: true })
       : ''
-    const scanResult = await scanIdImage(frontUrl)
+    // The scanner downloads the photo itself, so it gets a signed link to the private file.
+    const fileId = (frontUrl.match(/\/api\/files\/([0-9a-f-]{36})/i) || [])[1]
+    const scanResult = await scanIdImage(fileId ? `${frontUrl}?${signFileLink(fileId)}` : frontUrl)
 
     const updateResult = await collection.findOneAndUpdate(
       { _id: account._id },

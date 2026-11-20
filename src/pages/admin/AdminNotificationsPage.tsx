@@ -1,6 +1,6 @@
-import React, { useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { confirmDialog } from '../../components/ui/ConfirmDialog'
-import { FiCheck, FiSend, FiTrash2, FiUser, FiUsers } from 'react-icons/fi'
+import { FiArchive, FiArrowLeft, FiCheck, FiRotateCcw, FiSend, FiUser, FiUsers } from 'react-icons/fi'
 import { useNavigate } from 'react-router-dom'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
@@ -11,6 +11,8 @@ import { resolveNotificationRoute } from '../../utils/notificationRoutes'
 import { kindOf, timeLabel } from '../../utils/notificationDisplay'
 import toast from 'react-hot-toast'
 import { Paged } from '../../components/ui/Pagination'
+import { apiGet } from '../../utils/apiClient'
+import { useLiveRefresh } from '../../utils/liveUpdates'
 
 type Role = 'user' | 'registrar' | 'marshal' | 'admin'
 type FeedFilter = 'all' | Role
@@ -26,9 +28,17 @@ const ROLE_LABEL: Record<string, string> = { user: 'Players', registrar: 'Regist
 
 const fieldClass = 'w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-text placeholder:text-muted'
 
-function recipientsOf(item: NotificationItem) {
-  if (item.userId !== 'broadcast') return 'One person'
+// A sent notification, with the recipient's name when it went to one person.
+type SentNotification = NotificationItem & { recipientName?: string; recipientRole?: string }
+
+function recipientsOf(item: SentNotification) {
+  if (item.userId !== 'broadcast') return item.recipientName || 'One person'
   return ROLE_LABEL[String(item.targetRole || 'all')] || 'Everyone'
+}
+
+// Which role a notification went to: the group it was broadcast to, or the person's role.
+function roleOf(item: SentNotification) {
+  return item.userId === 'broadcast' ? String(item.targetRole || 'all') : String(item.recipientRole || 'user')
 }
 
 // Admin notifications: send an announcement on the left, review everything sent on the right.
@@ -36,7 +46,7 @@ function recipientsOf(item: NotificationItem) {
 export function AdminNotificationsPage() {
   const { user } = useAuth()
   const navigate = useNavigate()
-  const { addNotification, deleteNotification, getAllNotifications, markAsRead, clearAllNotifications } = useNotifications()
+  const { addNotification, markAsRead, archiveNotifications, restoreNotifications } = useNotifications()
 
   const [sendTo, setSendTo] = useState<'everyone' | 'roles' | 'person'>('roles')
   const [roles, setRoles] = useState<Role[]>(['user'])
@@ -44,21 +54,41 @@ export function AdminNotificationsPage() {
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
   const [feedFilter, setFeedFilter] = useState<FeedFilter>('all')
+  // Notifications are archived, never cleared: the Archived view lists them and can restore them.
+  const [showArchived, setShowArchived] = useState(false)
   const now = new Date()
 
-  const allSent = useMemo(
-    () => [...getAllNotifications()].sort((a, b) => new Date(b.createdAtISO).getTime() - new Date(a.createdAtISO).getTime()),
-    [getAllNotifications],
+  // Everything the system has sent, to anyone (the bell only shows the admin's own).
+  const [allSent, setAllSent] = useState<SentNotification[]>([])
+  const [archivedCount, setArchivedCount] = useState(0)
+  const [loadingList, setLoadingList] = useState(true)
+  const loadSent = useCallback(async () => {
+    try {
+      const res = await apiGet<{ ok: boolean; data: SentNotification[]; archivedCount: number }>(`/api/notifications/sent${showArchived ? '?archived=1' : ''}`)
+      setAllSent(Array.isArray(res.data) ? res.data : [])
+      setArchivedCount(Number(res.archivedCount) || 0)
+    } catch (error: any) {
+      toast.error(error?.message || 'Unable to load sent notifications')
+    } finally {
+      setLoadingList(false)
+    }
+  }, [showArchived])
+  useEffect(() => {
+    setLoadingList(true)
+    void loadSent()
+  }, [loadSent])
+  useLiveRefresh(['notifications'], () => loadSent())
+
+  // The admin's own notifications (sent to admins, everyone, or them): read state is theirs to change.
+  const isMine = (item: SentNotification) =>
+    item.userId === String(user?.id) || (item.userId === 'broadcast' && ['admin', 'all'].includes(String(item.targetRole || 'all')))
+
+  const countFor = (filter: FeedFilter) => (filter === 'all' ? allSent.length : allSent.filter((item) => roleOf(item) === filter).length)
+  const visible = useMemo(
+    () => (feedFilter === 'all' ? allSent : allSent.filter((item) => roleOf(item) === feedFilter)),
+    [allSent, feedFilter],
   )
-  const countFor = (filter: FeedFilter) =>
-    filter === 'all' ? allSent.length
-    : allSent.filter((item) => (filter === 'user' ? item.targetRole === 'user' || (!item.targetRole && item.userId !== 'broadcast') : item.targetRole === filter)).length
-  const visible = useMemo(() => {
-    if (feedFilter === 'all') return allSent
-    if (feedFilter === 'user') return allSent.filter((item) => item.targetRole === 'user' || (!item.targetRole && item.userId !== 'broadcast'))
-    return allSent.filter((item) => item.targetRole === feedFilter)
-  }, [allSent, feedFilter])
-  const unread = allSent.filter((item) => !item.read).length
+  const unread = allSent.filter((item) => isMine(item) && !item.read).length
 
   const toggleRole = (role: Role) =>
     setRoles((current) => (current.includes(role) ? current.filter((item) => item !== role) : [...current, role]))
@@ -83,24 +113,44 @@ export function AdminNotificationsPage() {
     setTargetUserId('')
   }
 
-  const handleDelete = async (id: string) => {
-    if (!(await confirmDialog({ title: 'Delete this notification?', message: 'It is removed for everyone who received it.', confirmLabel: 'Delete', danger: true }))) return
-    deleteNotification(id)
-    toast.success('Notification deleted.')
-  }
-
-  const handleClearAll = async () => {
-    if (!(await confirmDialog({ title: 'Clear every notification?', message: 'Every account loses all of its notifications. This cannot be undone.', confirmLabel: 'Clear all', danger: true }))) return
+  // Archiving takes a notification off this list (it stays on record, and the people who got it keep it).
+  const handleArchive = async (item: NotificationItem) => {
     try {
-      await clearAllNotifications()
-      toast.success('All notifications cleared.')
+      await archiveNotifications([item.id])
+      toast.success('Notification archived.')
+      void loadSent()
     } catch (error: any) {
-      toast.error(error?.message || 'Unable to clear notifications')
+      toast.error(error?.message || 'Unable to archive it')
     }
   }
 
-  const openNotification = (item: NotificationItem) => {
-    markAsRead(item.id)
+  const handleRestore = async (item: NotificationItem) => {
+    try {
+      await restoreNotifications([item.id])
+      toast.success('Notification restored.')
+      void loadSent()
+    } catch (error: any) {
+      toast.error(error?.message || 'Unable to restore it')
+    }
+  }
+
+  const handleArchiveAll = async () => {
+    if (!(await confirmDialog({
+      title: 'Archive all notifications?',
+      message: 'They move to Archived and can be restored any time. Nothing is deleted, and the people who received them keep theirs.',
+      confirmLabel: 'Archive all',
+    }))) return
+    try {
+      const archived = await archiveNotifications()
+      toast.success(`Archived ${archived} notification${archived === 1 ? '' : 's'}.`)
+      void loadSent()
+    } catch (error: any) {
+      toast.error(error?.message || 'Unable to archive notifications')
+    }
+  }
+
+  const openNotification = (item: SentNotification) => {
+    if (isMine(item)) markAsRead(item.id)
     const destination = resolveNotificationRoute(item, user?.role, user?.id)
     if (destination) navigate(destination)
   }
@@ -124,8 +174,8 @@ export function AdminNotificationsPage() {
           <p className="mt-1 text-sm text-muted">Send announcements to players and staff, and review every notification the system has sent.</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button size="sm" variant="danger-soft" disabled={allSent.length === 0} onClick={handleClearAll}>
-            <FiTrash2 /> Clear all
+          <Button size="sm" variant="ghost" disabled={showArchived || allSent.length === 0} onClick={handleArchiveAll}>
+            <FiArchive /> Archive all
           </Button>
         </div>
       </div>
@@ -199,8 +249,22 @@ export function AdminNotificationsPage() {
         {/* Sent notifications */}
         <Card className="p-4 md:p-5">
           <div className="flex flex-wrap items-baseline justify-between gap-2">
-            <h2 className="text-lg font-bold">Sent notifications</h2>
-            <span className="text-xs text-muted">{unread > 0 ? `${unread} unread · ` : ''}{allSent.length} total</span>
+            <h2 className="flex items-center gap-2 text-lg font-bold">
+              {showArchived ? (
+                <button type="button" onClick={() => setShowArchived(false)} aria-label="Back to sent notifications" className="grid h-7 w-7 place-items-center rounded-lg text-muted hover:bg-white/5 hover:text-text">
+                  <FiArrowLeft className="h-4 w-4" />
+                </button>
+              ) : null}
+              {showArchived ? 'Archived notifications' : 'Sent notifications'}
+            </h2>
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-muted">{!showArchived && unread > 0 ? `${unread} unread · ` : ''}{allSent.length} total</span>
+              {!showArchived ? (
+                <button type="button" onClick={() => setShowArchived(true)} className="inline-flex items-center gap-1.5 rounded-full border border-white/10 px-3 py-1 text-xs font-semibold text-muted transition hover:text-text">
+                  <FiArchive className="h-3.5 w-3.5" /> Archived{archivedCount ? ` (${archivedCount})` : ''}
+                </button>
+              ) : null}
+            </div>
           </div>
           <FilterTabs
             className="mt-3"
@@ -237,8 +301,8 @@ export function AdminNotificationsPage() {
                   </span>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-start justify-between gap-2">
-                      <div className={`min-w-0 text-sm ${item.read ? 'font-semibold' : 'font-bold'}`}>
-                        {!item.read ? <span aria-label="Unread" className="mr-1.5 inline-block h-2 w-2 rounded-full bg-accent align-middle" /> : null}
+                      <div className={`min-w-0 text-sm ${item.read || !isMine(item) ? 'font-semibold' : 'font-bold'}`}>
+                        {!item.read && isMine(item) ? <span aria-label="Unread" className="mr-1.5 inline-block h-2 w-2 rounded-full bg-accent align-middle" /> : null}
                         {item.title}
                       </div>
                       <span className="shrink-0 text-xs text-muted">{timeLabel(item.createdAtISO, now)}</span>
@@ -248,20 +312,21 @@ export function AdminNotificationsPage() {
                   </div>
                   <button
                     type="button"
-                    aria-label={`Delete ${item.title}`}
-                    title="Delete"
+                    aria-label={`${showArchived ? 'Restore' : 'Archive'} ${item.title}`}
+                    title={showArchived ? 'Restore' : 'Archive'}
                     onClick={(event) => {
                       event.stopPropagation()
-                      void handleDelete(item.id)
+                      void (showArchived ? handleRestore(item) : handleArchive(item))
                     }}
-                    className="grid h-8 w-8 shrink-0 place-items-center self-center rounded-lg text-muted transition hover:bg-danger/10 hover:text-danger sm:opacity-0 sm:focus:opacity-100 sm:group-hover:opacity-100"
+                    className="grid h-8 w-8 shrink-0 place-items-center self-center rounded-lg text-muted transition hover:bg-white/10 hover:text-text sm:opacity-0 sm:focus:opacity-100 sm:group-hover:opacity-100"
                   >
-                    <FiTrash2 className="h-4 w-4" />
+                    {showArchived ? <FiRotateCcw className="h-4 w-4" /> : <FiArchive className="h-4 w-4" />}
                   </button>
                 </div>
               )
             })}</Paged>
-            {visible.length === 0 ? <div className="py-8 text-center text-sm text-muted">No notifications here.</div> : null}
+            {loadingList ? <div className="py-8 text-center text-sm text-muted">Loading…</div>
+              : visible.length === 0 ? <div className="py-8 text-center text-sm text-muted">{showArchived ? 'No archived notifications.' : 'No notifications here.'}</div> : null}
           </div>
         </Card>
       </div>

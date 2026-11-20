@@ -7,7 +7,11 @@ import type { NotificationItem } from '../context/NotificationContext'
 // What a notification is about, from its type: an icon and a short label.
 export function kindOf(item: NotificationItem): { icon: IconType; label: string } {
   const type = String(item.type || '').toLowerCase()
-  if (type === 'announcement' || item.userId === 'broadcast') return { icon: FiVolume2, label: 'Announcement' }
+  // The server only ever broadcasts announcements to players / everyone (older ones were saved with
+  // another type). Broadcasts to staff roles are system notices, labelled by their type below.
+  if (type === 'announcement' || (item.userId === 'broadcast' && ['user', 'all'].includes(String(item.targetRole || 'all')))) {
+    return { icon: FiVolume2, label: 'Announcement' }
+  }
   if (type.startsWith('split_payment_') || type.startsWith('payment_') || type === 'reservation_payment_finalized') return { icon: FiCreditCard, label: 'Payment' }
   if (type.startsWith('reservation_')) return { icon: FiCalendar, label: 'Booking' }
   if (type.startsWith('waiver_')) return { icon: FiShield, label: 'Waiver' }

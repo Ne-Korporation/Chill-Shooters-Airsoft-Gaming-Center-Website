@@ -147,9 +147,17 @@ export function ReservationDetailsDialog({
 export function ReservationChargesSections({ reservation, payments }: { reservation: ReservationDetails; payments: Payment[] }) {
   const rentals = (reservation.pricingBreakdown || []).filter((line) => !/entrance fee|discount/i.test(String(line.label || '')))
   const otherLines = (reservation.pricingBreakdown || []).filter((line) => /entrance fee|discount/i.test(String(line.label || '')))
-  const paid = payments
+  const paidFromRecords = payments
     .filter((payment) => !['failed', 'rejected', 'cancelled'].includes(String(payment.paymentStatus || '').toLowerCase()))
     .reduce((sum, payment) => sum + Number(payment.amount || 0), 0)
+  // A teammate doesn't receive the captain's payment records; the booking's own payment state
+  // still says whether the online amount is fully in ("finalized").
+  const paid = payments.length
+    ? paidFromRecords
+    : reservation.paymentState === 'finalized' ? Number(reservation.depositAmount || 0) : 0
+  const total = Number(reservation.totalAmount || 0)
+  // Paid in full online, or a down payment now and the rest on game day.
+  const fullOnline = Number(reservation.depositAmount || 0) >= total && total > 0
 
   return (
     <>
@@ -174,10 +182,10 @@ export function ReservationChargesSections({ reservation, payments }: { reservat
         <div className="mt-1">
           {otherLines.map((line, index) => <Row key={`${line.label}-${index}`} label={String(line.label || '')}>{peso(line.amount)}</Row>)}
           <Row label="Total">{peso(reservation.totalAmount)}</Row>
-          <Row label="Online deposit">{peso(reservation.depositAmount)}</Row>
+          <Row label={fullOnline ? 'Online payment (full amount)' : 'Down payment (online)'}>{peso(reservation.depositAmount)}</Row>
           <Row label="Paid so far">{peso(paid)}</Row>
-          <Row label="Balance due on game day">{peso(Math.max(0, Number(reservation.totalAmount || 0) - Math.max(paid, 0)))}</Row>
-          <Row label="Payment">{reservation.paymentMode === 'split' ? 'Split with the team' : 'Single payer'}</Row>
+          <Row label="Balance due on game day">{peso(Math.max(0, total - Math.max(paid, 0)))}</Row>
+          <Row label="Who pays">{reservation.paymentMode === 'split' ? 'Split: each player pays their share' : 'The captain paid'}</Row>
         </div>
         {payments.length ? (
           <ul className="mt-2 space-y-1 text-xs text-muted">

@@ -3,6 +3,7 @@ import { FiChevronLeft, FiChevronRight } from 'react-icons/fi'
 import { apiGet } from '../../utils/apiClient'
 import { formatSlotRange, type SlotHours } from '../../utils/slotHours'
 import { closedDayMessage, useClosedDays } from '../../utils/closedDays'
+import { lastRescheduleDateISO, RESCHEDULE_WINDOW_DAYS } from '../../utils/bookingWindow'
 
 const SLOTS = ['morning', 'afternoon', 'evening'] as const
 const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -110,7 +111,9 @@ export function RescheduleSlotPicker({
     return { available: true, remaining, reason: '' }
   }
 
-  const dateAllowed = (dateISO: string) => dateISO > todayISO && isWeekdayISO(dateISO) === weekdayBooking && !closedDays[dateISO]
+  // A booking can move to any day from tomorrow up to RESCHEDULE_WINDOW_DAYS (60) days after its original date.
+  const lastDateISO = target.originalDate ? lastRescheduleDateISO(target.originalDate, todayISO) : addDaysISO(todayISO, RESCHEDULE_WINDOW_DAYS)
+  const dateAllowed = (dateISO: string) => dateISO > todayISO && dateISO <= lastDateISO && isWeekdayISO(dateISO) === weekdayBooking && !closedDays[dateISO]
   const dateHasOpenSlot = (dateISO: string) => SLOTS.some((name) => slotState(dateISO, name).available)
 
   const days = useMemo(() => {
@@ -129,6 +132,7 @@ export function RescheduleSlotPicker({
     setMonth(next.toISOString().slice(0, 7))
   }
   const canGoBack = month > todayISO.slice(0, 7)
+  const canGoForward = month < lastDateISO.slice(0, 7)
   const monthLabel = new Date(`${month}-01T12:00:00Z`).toLocaleDateString('en-PH', { month: 'long', year: 'numeric', timeZone: 'UTC' })
 
   return (
@@ -139,7 +143,7 @@ export function RescheduleSlotPicker({
             <FiChevronLeft />
           </button>
           <div className="text-sm font-semibold">{monthLabel}</div>
-          <button type="button" onClick={() => shiftMonth(1)} className="surface hover-row rounded-lg p-1.5" aria-label="Next month">
+          <button type="button" onClick={() => shiftMonth(1)} disabled={!canGoForward} className="surface hover-row rounded-lg p-1.5 disabled:opacity-30" aria-label="Next month">
             <FiChevronRight />
           </button>
         </div>
@@ -183,6 +187,7 @@ export function RescheduleSlotPicker({
           <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded bg-success/40" /> Open</span>
           <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded ring-1 ring-accent/60" /> Current date</span>
           <span>{weekdayBooking ? 'Weekdays only (booked on a weekday)' : 'Weekends only (booked on a weekend)'}</span>
+          <span>Up to {RESCHEDULE_WINDOW_DAYS} days after the original date (until {new Date(`${lastDateISO}T12:00:00Z`).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', timeZone: 'UTC' })})</span>
         </div>
       </div>
 

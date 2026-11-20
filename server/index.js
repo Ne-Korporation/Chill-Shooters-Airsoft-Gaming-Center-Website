@@ -8,6 +8,7 @@ import { getDb, startDbSession } from './db/mongo.js'
 import { ensureDatabaseSetup } from './db/setup.js'
 import { requireAuth, requireRole } from './middleware/auth.js'
 import { configuredAppUrl, rememberAppOrigin } from './utils/appUrl.js'
+import { signFileLinksForSignedIn } from './utils/fileLinks.js'
 import { bumpTopics, changeSnapshot, trackChanges } from './utils/changeFeed.js'
 import { corsPolicy, errorHandler, hideServerErrors, noStoreForAuthenticated, rateLimit, securityHeaders } from './middleware/security.js'
 
@@ -66,6 +67,8 @@ if (!configuredAppUrl()) {
   console.warn('PUBLIC_APP_URL is not set: email links use the address of the site calling the API, or http://localhost:5173 until one does. Set it to the website address (for example https://your-site.vercel.app).')
 }
 app.use(express.json({ limit: '10mb' }))
+// Links to private uploads (ID photos) are signed and expire; see utils/fileLinks.js.
+app.use(signFileLinksForSignedIn)
 // Open pages poll this to refresh themselves when data changes (see utils/changeFeed.js).
 app.use(trackChanges)
 app.get('/api/changes', (_req, res) => {
@@ -74,22 +77,6 @@ app.get('/api/changes', (_req, res) => {
 })
 
 const PORT = Number(process.env.PORT) || 3001
-
-app.get('/api/public/metrics', async (_req, res) => {
-  try {
-    const db = await getDb()
-    const [reservations, pendingReservations, pendingPayments, pendingWaivers, activeGames] = await Promise.all([
-      db.collection('reservations').countDocuments({}),
-      db.collection('reservations').countDocuments({ reservationStatus: { $in: ['pending', 'needs review', 'review'] } }),
-      db.collection('payments').countDocuments({ paymentStatus: { $in: ['pending', 'submitted', 'review'] } }),
-      db.collection('waivers').countDocuments({ status: { $in: ['pending', 'review', 'submitted'] } }),
-      db.collection('gameplay').countDocuments({ Status: { $in: ['Scheduled', 'Ongoing', 'Completed'] } }),
-    ])
-    return res.json({ ok: true, data: { reservations, pendingReservations, pendingPayments, pendingWaivers, activeGames } })
-  } catch (err) {
-    return res.status(500).json({ ok: false, error: String(err) })
-  }
-})
 
 getDb()
   .then(async (db) => {
@@ -393,17 +380,74 @@ app.use('/api', weatherRouter)
 app.use('/api', childrenRouter)
 app.use('/api', causeDaysRouter)
 app.use('/api/auth', authRouter)
-app.use('/api', crudRouter)
-
-app.delete('/api/notifications', requireAuth, requireRole('admin'), async (req, res) => {
+// Admin notification log: notifications are archived, never cleared. Archiving only takes them off
+// the admin's Sent notifications list (they stay on record and can be restored); the players and
+// staff who received them keep theirs.
+// POST /api/notifications/archive { ids?: string[] } — no ids archives every notification.
+app.post('/api/notifications/archive', requireAuth, requireRole('admin'), async (req, res) => {
   try {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(String).filter(Boolean).slice(0, 1000) : null
+    if (ids && ids.length === 0) return res.status(400).json({ ok: false, error: 'Choose notifications to archive.' })
     const db = await getDb()
-    const result = await db.collection('notifications').deleteMany({})
-    return res.json({ ok: true, deletedCount: result.deletedCount || 0 })
+    const result = await db.collection('notifications').updateMany(
+      { ...(ids ? { id: { $in: ids } } : {}), archivedAtISO: { $exists: false } },
+      { $set: { archivedAtISO: new Date().toISOString(), archivedBy: String(req.user.id) } },
+    )
+    return res.json({ ok: true, archived: result.modifiedCount || 0 })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
   }
 })
+
+// GET /api/notifications/sent?archived=1 — every notification the system has sent, to anyone
+// (newest 1000), for the admin's Sent notifications log. Personal ones carry the recipient's name.
+// Separate from GET /api/notifications, which returns only the admin's own (their bell).
+app.get('/api/notifications/sent', requireAuth, requireRole('admin'), async (req, res) => {
+  try {
+    const db = await getDb()
+    const archived = req.query.archived === '1'
+    const data = await db.collection('notifications')
+      .find({ archivedAtISO: { $exists: archived } }, { projection: { _id: 0 } })
+      .sort({ createdAtISO: -1 })
+      .limit(1000)
+      .toArray()
+    const personIds = [...new Set(data.map((n) => String(n.userId || '')).filter((id) => id && id !== 'broadcast'))]
+    const accounts = personIds.length
+      ? await db.collection('user_accounts').find({ id: { $in: personIds } }, { projection: { _id: 0, id: 1, name: 1, role: 1 } }).toArray()
+      : []
+    const byId = new Map(accounts.map((a) => [String(a.id), a]))
+    const [activeCount, archivedCount] = await Promise.all([
+      db.collection('notifications').countDocuments({ archivedAtISO: { $exists: false } }),
+      db.collection('notifications').countDocuments({ archivedAtISO: { $exists: true } }),
+    ])
+    return res.json({
+      ok: true,
+      data: data.map((n) => {
+        const person = byId.get(String(n.userId))
+        return person ? { ...n, recipientName: person.name || '', recipientRole: person.role || 'user' } : n
+      }),
+      activeCount,
+      archivedCount,
+    })
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: String(err) })
+  }
+})
+
+// POST /api/notifications/unarchive { ids: string[] } — puts archived notifications back on the list.
+app.post('/api/notifications/unarchive', requireAuth, requireRole('admin'), async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(String).filter(Boolean).slice(0, 1000) : []
+    if (ids.length === 0) return res.status(400).json({ ok: false, error: 'Choose notifications to restore.' })
+    const db = await getDb()
+    const result = await db.collection('notifications').updateMany({ id: { $in: ids } }, { $unset: { archivedAtISO: '', archivedBy: '' } })
+    return res.json({ ok: true, restored: result.modifiedCount || 0 })
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: String(err) })
+  }
+})
+
+app.use('/api', crudRouter)
 
 // Unknown API paths and anything thrown past a route.
 app.use('/api', (_req, res) => res.status(404).json({ ok: false, error: 'Not found' }))

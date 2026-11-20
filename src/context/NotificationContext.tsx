@@ -43,6 +43,8 @@ export type NotificationItem = {
   linkedResourceId?: string
   read: boolean
   createdAtISO: string
+  // Set when an admin archives it: off the admin's lists, still on record (and still with the recipients).
+  archivedAtISO?: string
 }
 
 export const STAFF_NOTIFICATION_ROLES: NotificationTargetRole[] = ['admin', 'registrar', 'marshal']
@@ -84,7 +86,9 @@ type NotificationContextValue = {
   addNotification: (item: Omit<NotificationItem, 'id' | 'read' | 'createdAtISO'>) => void
   markAsRead: (id: string) => void
   markAllAsRead: (userId: string, role?: string) => void
-  clearAllNotifications: () => Promise<void>
+  // Admins archive notifications instead of deleting them. No ids = every notification.
+  archiveNotifications: (ids?: string[]) => Promise<number>
+  restoreNotifications: (ids: string[]) => Promise<number>
   clearNotificationsByIds: (ids: string[]) => Promise<void>
   unreadCount: (userId: string) => number
   getNotificationsForUser: (userId: string) => NotificationItem[]
@@ -211,9 +215,19 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     [],
   )
 
-  const clearAllNotifications = useCallback(async () => {
-    setNotifications([])
-    await apiDelete('/api/notifications')
+  const archiveNotifications = useCallback(async (ids?: string[]) => {
+    const nowISO = new Date().toISOString()
+    const only = ids ? new Set(ids.map(String)) : null
+    setNotifications((prev) => prev.map((n) => (!n.archivedAtISO && (!only || only.has(n.id)) ? { ...n, archivedAtISO: nowISO } : n)))
+    const res = await apiPost<{ ok: boolean; archived: number }>('/api/notifications/archive', ids ? { ids } : {})
+    return Number(res?.archived || 0)
+  }, [])
+
+  const restoreNotifications = useCallback(async (ids: string[]) => {
+    const only = new Set(ids.map(String))
+    setNotifications((prev) => prev.map((n) => (only.has(n.id) ? { ...n, archivedAtISO: undefined } : n)))
+    const res = await apiPost<{ ok: boolean; restored: number }>('/api/notifications/unarchive', { ids })
+    return Number(res?.restored || 0)
   }, [])
 
   const clearNotificationsByIds = useCallback(async (ids: string[]) => {
@@ -243,9 +257,10 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
 
   const getNotificationsForRole = useCallback(
     (role: string, userId?: string) => {
-      // Admins only need notifications targeted to admins or broadcast items.
+      // Admins only need notifications targeted to admins or broadcast items, minus the ones they archived.
       if (role === 'admin') {
         return notifications.filter((n) => {
+          if (n.archivedAtISO) return false
           if (n.targetRole === 'all') return true
           if (n.targetRole === 'admin') return true
           if (userId && n.userId === userId) return true
@@ -284,7 +299,8 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       addNotification,
       markAsRead,
       markAllAsRead,
-      clearAllNotifications,
+      archiveNotifications,
+      restoreNotifications,
       clearNotificationsByIds,
       unreadCount,
       getNotificationsForUser,
@@ -292,7 +308,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       deleteNotification,
       getAllNotifications,
     }),
-    [notifications, loading, addNotification, markAsRead, markAllAsRead, clearAllNotifications, clearNotificationsByIds, unreadCount, getNotificationsForUser, getNotificationsForRole, deleteNotification, getAllNotifications],
+    [notifications, loading, addNotification, markAsRead, markAllAsRead, archiveNotifications, restoreNotifications, clearNotificationsByIds, unreadCount, getNotificationsForUser, getNotificationsForRole, deleteNotification, getAllNotifications],
   )
 
   return <NotificationContext.Provider value={value}>{children}</NotificationContext.Provider>

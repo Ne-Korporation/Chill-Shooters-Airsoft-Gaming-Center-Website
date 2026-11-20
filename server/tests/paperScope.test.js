@@ -107,3 +107,12 @@ test('billing summary lists every price line, the total, the online payment and 
   assert.match(html, /To pay online now.*PHP 675/)
   assert.match(html, /Balance at the field.*PHP 675/)
 })
+
+test('players get one reschedule; staff moves and sent-back new dates do not count', async () => {
+  const { playerRescheduleCount } = await import('../routes/crud.js')
+  assert.equal(playerRescheduleCount({}), 0)
+  assert.equal(playerRescheduleCount({ rescheduleHistory: [{ actorRole: 'admin' }, { actorRole: 'registrar' }] }), 0)
+  assert.equal(playerRescheduleCount({ rescheduleHistory: [{ actorRole: 'user', sentBack: true }] }), 0)
+  assert.equal(playerRescheduleCount({ rescheduleHistory: [{ actorRole: 'user', reason: 'New date chosen after staff sent it back: fields closed' }] }), 0)
+  assert.equal(playerRescheduleCount({ rescheduleHistory: [{ actorRole: 'user', reason: '' }] }), 1)
+})

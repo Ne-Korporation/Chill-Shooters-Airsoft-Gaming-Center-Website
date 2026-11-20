@@ -575,6 +575,7 @@ router.post('/slot-holds', requireAuth, requireRole('user'), async (req, res) =>
 
   if (!LOCATION_FIELD_DEFS[locationId]) return res.status(400).json({ ok: false, error: 'locationId is not supported' })
   if (!/^\d{4}-\d{2}-\d{2}$/.test(reservationDate)) return res.status(400).json({ ok: false, error: 'reservationDate must be YYYY-MM-DD' })
+  if (daysBetweenISO(manilaDateISO(), reservationDate) > BOOKING_WINDOW_DAYS) return res.status(400).json({ ok: false, error: 'Bookings open up to 1 year ahead. Pick an earlier date.' })
   if (!SLOT_NAMES.includes(reservationTime)) return res.status(400).json({ ok: false, error: 'reservationTime must be morning, afternoon, or evening' })
   if (!['public', 'private'].includes(sessionType)) return res.status(400).json({ ok: false, error: 'sessionType must be public or private' })
   if (!Number.isInteger(playersCount) || playersCount <= 0 || playersCount > 600) {
@@ -855,6 +856,20 @@ const GAME_MODES = [
 ]
 
 const RESCHEDULE_CUTOFF_DAYS = 3
+// Players book up to a year ahead. They can reschedule a booking once, to a date up to 60 days
+// after its original date. Same limits as src/utils/bookingWindow.ts.
+const BOOKING_WINDOW_DAYS = 365
+const RESCHEDULE_WINDOW_DAYS = 60
+const PLAYER_RESCHEDULES_ALLOWED = 1
+
+// Reschedules the player chose themselves. Moves made by staff, and the new date a player picks
+// after staff sent the booking back, don't count against the one allowed.
+export function playerRescheduleCount(reservation) {
+  return (reservation?.rescheduleHistory || []).filter((event) =>
+    event?.actorRole === 'user'
+    && !event.sentBack
+    && !String(event.reason || '').startsWith('New date chosen after staff sent it back')).length
+}
 const RESCHEDULABLE_STATUSES = ['pending', 'needs review', 'confirmed']
 
 // Calendar date in the field's timezone, so the cutoff doesn't shift at UTC midnight.
@@ -908,6 +923,17 @@ router.post('/reservations/:id/reschedule', requireAuth, requireRole('user', 'ad
 
     const originalDate = String(reservation.reservationDate || reservation.dateISO || '')
     const originalTime = String(reservation.reservationTime || reservation.slot || '').toLowerCase()
+    if (req.user.role === 'user' && !sentBack) {
+      if (playerRescheduleCount(reservation) >= PLAYER_RESCHEDULES_ALLOWED) {
+        return res.status(409).json({ ok: false, error: 'This booking was already rescheduled once and can\'t be moved again.' })
+      }
+      if (daysBetweenISO(originalDate, newDate) > RESCHEDULE_WINDOW_DAYS) {
+        return res.status(400).json({ ok: false, error: `A booking can be moved to a date up to ${RESCHEDULE_WINDOW_DAYS} days after its original date.` })
+      }
+    }
+    if (req.user.role === 'user' && daysBetweenISO(todayISO, newDate) > BOOKING_WINDOW_DAYS) {
+      return res.status(400).json({ ok: false, error: 'Bookings open up to 1 year ahead. Pick an earlier date.' })
+    }
     if (req.user.role === 'user' && !sentBack && daysBetweenISO(todayISO, originalDate) < RESCHEDULE_CUTOFF_DAYS) {
       return res.status(409).json({
         ok: false,
@@ -947,6 +973,8 @@ router.post('/reservations/:id/reschedule', requireAuth, requireRole('user', 'ad
       toTime: newTime,
       fieldIds,
       reason,
+      // A new date picked after staff sent the booking back isn't the player's one reschedule.
+      ...(sentBack ? { sentBack: true } : {}),
       actorId: String(req.user.id || ''),
       actorRole: req.user.role,
       atISO: nowISO,
@@ -1104,6 +1132,16 @@ const READ_ROLES = {
 }
 
 const USER_OWNED_COLLECTIONS = new Set(['feedback', 'gameplay', 'payments', 'reservations', 'user_accounts', 'waivers'])
+// Weapons and gear: center rental pieces are visible to all; personal gear (source 'player') only to its owner.
+const PLAYER_GEAR_COLLECTIONS = new Set(['weapons', 'equipments'])
+
+// A player and the child profiles on their account: a parent manages their children's gear.
+async function gearOwnerIds(db, userId) {
+  const children = await db.collection('user_accounts')
+    .find({ isChildProfile: true, guardianId: String(userId), removedByGuardianAtISO: { $exists: false } }, { projection: { id: 1 } })
+    .toArray()
+  return [String(userId), ...children.map((child) => String(child.id || child._id))]
+}
 
 function canReadCollection(role, collection) {
   return READ_ROLES[collection]?.includes(role) ?? false
@@ -1378,7 +1416,15 @@ router.get('/:collection', requireAuth, async (req, res) => {
     }
 
     if (playerUser && USER_OWNED_COLLECTIONS.has(collection)) {
-      filter = mergeFilters(filter, playerOwnershipFilter(req.user.id))
+      // Players also see bookings a captain added them to (read-only: changes stay with the captain).
+      filter = mergeFilters(filter, collection === 'reservations'
+        ? { $or: [playerOwnershipFilter(req.user.id), { 'teamMembers.id': String(req.user.id) }] }
+        : playerOwnershipFilter(req.user.id))
+    }
+    // Players see the center's rental gear and their own personal gear, not other players'.
+    if (playerUser && PLAYER_GEAR_COLLECTIONS.has(collection)) {
+      const owners = await gearOwnerIds(db, req.user.id)
+      filter = mergeFilters(filter, { $or: [{ source: { $ne: 'player' } }, ...owners.map(playerOwnershipFilter)] })
     }
     if (playerUser && collection === 'notifications') {
       filter = mergeFilters(filter, {
@@ -1448,8 +1494,13 @@ router.get('/:collection/:id', requireAuth, async (req, res) => {
       return res.status(404).json({ ok: false, error: 'not found' })
     }
     // An account is owned by its own id (checked above), not by a userId/playerId field.
-    if (req.user.role === 'user' && collection !== 'user_accounts' && USER_OWNED_COLLECTIONS.has(collection) && !isOwnedByUser(doc, req.user.id)) {
+    const isTeammate = collection === 'reservations' && (doc.teamMembers || []).some((member) => String(member?.id) === String(req.user.id))
+    if (req.user.role === 'user' && collection !== 'user_accounts' && USER_OWNED_COLLECTIONS.has(collection) && !isOwnedByUser(doc, req.user.id) && !isTeammate) {
       return res.status(404).json({ ok: false, error: 'not found' })
+    }
+    if (req.user.role === 'user' && PLAYER_GEAR_COLLECTIONS.has(collection) && doc.source === 'player') {
+      const owners = await gearOwnerIds(db, req.user.id)
+      if (!owners.some((ownerId) => isOwnedByUser(doc, ownerId))) return res.status(404).json({ ok: false, error: 'not found' })
     }
     if (collection === 'notifications') {
       if (!canAccessNotification(doc, req.user)) return res.status(404).json({ ok: false, error: 'not found' })
@@ -1925,6 +1976,9 @@ router.post('/:collection', requireAuth, async (req, res) => {
       // Manila dates: today is bookable, but only for slots that haven't started yet.
       if (reservationDate < manilaDateISO()) {
         return res.status(400).json({ ok: false, error: 'Reservation date cannot be in the past' })
+      }
+      if (daysBetweenISO(manilaDateISO(), reservationDate) > BOOKING_WINDOW_DAYS) {
+        return res.status(400).json({ ok: false, error: 'Bookings open up to 1 year ahead. Pick an earlier date.' })
       }
       const closedDay = await findClosedDay(db, reservationDate)
       if (closedDay) return res.status(409).json({ ok: false, error: closedDayError(closedDay) })

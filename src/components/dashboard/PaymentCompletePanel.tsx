@@ -102,7 +102,7 @@ export function PaymentCompletePanel({ hideWhenEmpty = false }: { hideWhenEmpty?
                   </div>
                   <div className="mt-0.5 text-xs text-muted">
                     {isPrivateSession(reservation.sessionType) ? 'Captain' : 'Booked by'} {reservation.captainName} ·{reservation.numberOfPlayers} players · {reservation.packageName} ·{' '}
-                    {reservation.paymentMode === 'split' ? 'Split payment' : 'Single payer'} · {formatPHP(reservation.depositAmount)} paid of {formatPHP(reservation.totalAmount)}
+                    {reservation.paymentMode === 'split' ? 'Split payment' : 'The captain paid'} · {formatPHP(reservation.depositAmount)} paid of {formatPHP(reservation.totalAmount)}
                   </div>
                 </div>
                 <Button variant="primary" size="sm" disabled={approvingId === reservation.id} onClick={() => approve(reservation.id)}>

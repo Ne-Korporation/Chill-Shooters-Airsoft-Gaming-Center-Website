@@ -2,7 +2,7 @@ import { CapacityCalendar } from '../booking/CapacityCalendar'
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import type { IconType } from 'react-icons'
-import { GiAk47 } from 'react-icons/gi'
+import { GiAk47, GiKevlarVest } from 'react-icons/gi'
 import { useAuth } from '../../context/AuthContext'
 import { useLastBookedLocation } from '../../hooks/useLastBookedLocation'
 import { apiGet } from '../../utils/apiClient'
@@ -35,6 +35,11 @@ import {
   FiCheckCircle,
   FiBell,
   FiInbox,
+  FiMessageCircle,
+  FiBookOpen,
+  FiFlag,
+  FiUserCheck,
+  FiFolder,
 } from 'react-icons/fi'
 
 type Role = 'user' | 'admin' | 'marshal' | 'registrar'
@@ -101,31 +106,42 @@ const marshalItems: Item[] = [
   { label: 'Gear', to: '/app/admin/equipment', icon: FiTool },
 ]
 
-// Grouped by the job the admin is doing, in the order a game day runs: check what needs
-// attention, handle bookings, run the field, keep inventory, look after people, keep records.
+// Grouped by the job the admin is doing, in the order a game day runs: messages to answer,
+// bookings and their payments, running the field, the equipment, the people, then the records.
 const adminItems: Item[] = [
   { section: 'Overview', label: 'Dashboard', to: '/app/admin', icon: FiGrid },
-  { section: 'Overview', label: 'Announcements', to: '/app/admin/announcements', icon: FiVolume2 },
-  { section: 'Overview', label: 'Notifications', to: '/app/notifications', icon: FiBell },
-  // Messages from players.
-  { section: 'Overview', label: 'Inbox', to: '/app/admin/inbox', icon: FiInbox },
+  // Messages from players, system notifications, and announcements sent to everyone.
+  { section: 'Messages', label: 'Inbox', to: '/app/admin/inbox', icon: FiInbox },
+  { section: 'Messages', label: 'Notifications', to: '/app/notifications', icon: FiBell },
+  { section: 'Messages', label: 'Announcements', to: '/app/admin/announcements', icon: FiVolume2 },
   // Games and archived games are tabs of one Reservations page.
-  { section: 'Bookings', label: 'Reservations', to: '/app/admin/reservations', icon: FiCalendar },
-  { section: 'Bookings', label: 'Payments', to: '/app/admin/payments', icon: FiCreditCard },
-  { section: 'Game day', label: 'Games', to: '/app/counter', icon: FiZap },
-  { section: 'Game day', label: 'Walk-ins', to: '/app/walk-ins', icon: FiUserPlus },
-  { section: 'Inventory', label: 'Weapons', to: '/app/admin/weapons', icon: GiAk47 },
-  { section: 'Inventory', label: 'Gear', to: '/app/admin/equipment', icon: FiTool },
-  { section: 'Inventory', label: 'Rental packages', to: '/app/admin/rental-packages', icon: FiPackage },
-  // Waivers are mostly approved automatically from the verified profile ID, so they sit with the records kept here.
-  { section: 'Inventory', label: 'Waivers', to: '/app/admin/waivers', icon: FiShield },
-  { section: 'People', label: 'Players & staff', to: '/app/admin/player-management', icon: FiUsers },
-  { section: 'People', label: 'Partnerships', to: '/app/admin/partnerships', icon: FiBriefcase },
-  { section: 'People', label: 'Player feedback', to: '/app/admin/feedback', icon: FiMessageSquare },
-  { section: 'Records', label: 'Reports', to: '/app/admin/reports', icon: FiBarChart2 },
-  { section: 'Records', label: 'REACH fund', to: '/app/admin/reach-fund', icon: FiHeart },
-  { section: 'Records', label: 'Audit logs', to: '/app/admin/audit-logs', icon: FiFileText },
+  { section: 'Bookings & Payments', label: 'Reservations', to: '/app/admin/reservations', icon: FiCalendar },
+  { section: 'Bookings & Payments', label: 'Payments', to: '/app/admin/payments', icon: FiCreditCard },
+  { section: 'Game Day', label: 'Games', to: '/app/counter', icon: FiZap },
+  { section: 'Game Day', label: 'Walk-ins', to: '/app/walk-ins', icon: FiUserPlus },
+  { section: 'Equipment', label: 'Weapons', to: '/app/admin/weapons', icon: GiAk47 },
+  { section: 'Equipment', label: 'Gear', to: '/app/admin/equipment', icon: FiTool },
+  { section: 'Equipment', label: 'Rental packages', to: '/app/admin/rental-packages', icon: FiPackage },
+  // Waivers belong to the players who sign them.
+  { section: 'Players & Partners', label: 'Players & staff', to: '/app/admin/player-management', icon: FiUsers },
+  { section: 'Players & Partners', label: 'Waivers', to: '/app/admin/waivers', icon: FiShield },
+  { section: 'Players & Partners', label: 'Player feedback', to: '/app/admin/feedback', icon: FiMessageSquare },
+  { section: 'Players & Partners', label: 'Partnerships', to: '/app/admin/partnerships', icon: FiBriefcase },
+  { section: 'Reports & Records', label: 'Reports', to: '/app/admin/reports', icon: FiBarChart2 },
+  { section: 'Reports & Records', label: 'REACH fund', to: '/app/admin/reach-fund', icon: FiHeart },
+  { section: 'Reports & Records', label: 'Audit logs', to: '/app/admin/audit-logs', icon: FiFileText },
 ]
+
+// An icon beside each admin group's name, so the groups are easy to scan. Each differs from the
+// icons of the items inside it.
+const SECTION_ICONS: Record<string, IconType> = {
+  Messages: FiMessageCircle,
+  'Bookings & Payments': FiBookOpen,
+  'Game Day': FiFlag,
+  Equipment: GiKevlarVest,
+  'Players & Partners': FiUserCheck,
+  'Reports & Records': FiFolder,
+}
 
 // In the order a registrar's day runs: check bookings and what players submitted (payments, then
 // waivers), then game day at the counter (walk-ins, the games running now), then the full list
@@ -321,6 +337,9 @@ export function AppSidebar({
           }
           const holdsCurrentPage = sectionItems.some((item) => item.to === pathname)
           const open = holdsCurrentPage || openGroups.includes(section)
+          const SectionIcon = SECTION_ICONS[section]
+          // A closed group still shows its items' unread counts (e.g. new Inbox messages).
+          const sectionBadge = sectionItems.reduce((sum, item) => sum + (item.badge || 0), 0)
           return (
             <div key={section} className="pt-1">
               <button
@@ -329,8 +348,16 @@ export function AppSidebar({
                 aria-expanded={open}
                 className={`hover-row flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left text-sm lg:py-2 ${holdsCurrentPage ? 'font-medium text-text' : 'text-muted hover:text-text'}`}
               >
-                <span>{section}</span>
-                <FiChevronDown className={`h-4 w-4 transition ${open ? 'rotate-180' : ''}`} />
+                <span className="flex items-center gap-3">
+                  {SectionIcon ? <SectionIcon className="h-4 w-4 shrink-0" /> : null}
+                  {section}
+                </span>
+                <span className="flex items-center gap-2">
+                  {!open && sectionBadge > 0 ? (
+                    <span className="rounded-full bg-danger px-1.5 py-0.5 text-[10px] font-bold leading-none text-white">{sectionBadge}</span>
+                  ) : null}
+                  <FiChevronDown className={`h-4 w-4 transition ${open ? 'rotate-180' : ''}`} />
+                </span>
               </button>
               {open ? (
                 <div className="mt-0.5 space-y-0.5">
