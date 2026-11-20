@@ -98,7 +98,7 @@ test('unavailable, already-reserved, or too few pieces are rejected', async () =
       findDocumentById,
       listPieces,
     }),
-    /Vest has only 4 piece/,
+    /Not enough Vest free/,
   )
 })
 

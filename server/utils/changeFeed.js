@@ -31,7 +31,8 @@ const PATH_TOPICS = [
   [/^\/(waivers|waiver|guardian-approvals|guardian-confirmations|children)/, ['waivers', 'accounts']],
   [/^\/notifications/, ['notifications']],
   [/^\/(user_accounts|auth\/admin|players|upload-image|scan-id)/, ['accounts']],
-  [/^\/(weapons|equipments|equipment|rentals|repairs|damage-reports|fps|inventory)/, ['gear', 'games']],
+  // /inventory-check only reads stock, so it changes nothing.
+  [/^\/(weapons|equipments|equipment|my-gear|rentals|repairs|damage-reports|fps|inventory(?!-check))/, ['gear', 'games']],
   [/^\/(gameplay|games|check-in|teams|field)/, ['games', 'reservations']],
   [/^\/(packages|dashboard_posts|feedback|partnerships|reach|announcements)/, ['content']],
   // Messages from players and the admin Inbox.

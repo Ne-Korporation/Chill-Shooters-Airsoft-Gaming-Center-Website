@@ -6,7 +6,7 @@ import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { ItemCombobox } from '../../components/ui/ItemCombobox'
-import { apiGet, apiPost, apiPut } from '../../utils/apiClient'
+import { apiGet, apiPost, apiPut, apiGetAll } from '../../utils/apiClient'
 import { formatDateTime, formatPHP, manilaTodayISO, toInventoryOptions, type InventoryOption } from './shared'
 
 type Repair = {
@@ -166,7 +166,7 @@ export function RepairsPage({ embedded = false }: { embedded?: boolean } = {}) {
 
   useEffect(() => {
     void load()
-    Promise.all([apiGet<{ data: any[] }>('/api/weapons?limit=200'), apiGet<{ data: any[] }>('/api/equipments?limit=200')])
+    Promise.all([apiGetAll<any>('weapons').then((data) => ({ ok: true, data })), apiGetAll<any>('equipments').then((data) => ({ ok: true, data }))])
       .then(([w, e]) => setInventory([...toInventoryOptions(w.data || [], 'weapons'), ...toInventoryOptions(e.data || [], 'equipments')]))
       .catch(() => null)
   }, [load])

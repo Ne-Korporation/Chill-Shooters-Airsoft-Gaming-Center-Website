@@ -5,7 +5,7 @@ import toast from 'react-hot-toast'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
-import { apiBase, apiGet, apiPost, apiPut, getApiAuthHeaders } from '../../utils/apiClient'
+import { apiBase, apiGet, apiPost, apiPut, getApiAuthHeaders, apiGetAll } from '../../utils/apiClient'
 import { PlayerStatsCard } from '../../components/players/PlayerStatsCard'
 import { PartnershipDiscountCard } from './PartnershipDiscountCard'
 import { useAuth } from '../../context/AuthContext'
@@ -195,7 +195,7 @@ export function PlayerProfilePage() {
     ;(async () => {
       setEquipmentLoading(true)
       try {
-        const res = await apiGet<{ ok: boolean; data: EquipmentItem[] }>('/api/equipments?limit=200')
+        const res = await apiGetAll<any>('equipments').then((data) => ({ ok: true, data }))
         if (!alive) return
         setEquipmentList(Array.isArray(res?.data) ? res.data : [])
       } catch {
@@ -1038,6 +1038,8 @@ export function PlayerProfilePage() {
         <Card className="p-4 text-sm text-danger">{error}</Card>
       ) : null}
 
+      {/* The profile is drawn once it has loaded, so it never flashes empty values first. */}
+      {loading ? null : (
       <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
         <Card className="p-4">
           <div className="flex items-center gap-4">
@@ -1161,6 +1163,7 @@ export function PlayerProfilePage() {
           />
         ) : null}
       </div>
+      )}
     </div>
   )
 }

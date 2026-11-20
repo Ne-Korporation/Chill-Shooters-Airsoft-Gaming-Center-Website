@@ -2,14 +2,14 @@ import express from 'express'
 import { ObjectId } from 'mongodb'
 import { randomUUID } from 'crypto'
 import { getDb, startDbSession, toObjectId } from '../db/mongo.js'
-import { forgetAccount, requireAuth, requireRole, revokeSessionsFields } from '../middleware/auth.js'
+import { forgetAccount, requireAuth, requireRole, revokeSessionsFields, verifyAuthToken } from '../middleware/auth.js'
 import { blockedWriteFields, checkQueryFilter, dropIdFields, safeSort, secretAccountProjection, stripAccountSecrets } from '../utils/querySafety.js'
 import { ALLOWED_COLLECTIONS } from './collections.js'
 import { ACCEPTED_ID_TYPES } from '../utils/idTypes.js'
 import { getActorName } from '../utils/actors.js'
 import { NICKNAME_MAX, cleanMiddleInitial, cleanNamePart, composeFullName } from '../utils/names.js'
 import { calculateBookingPrice, getAmmoReloadPrice, normalizeExtraAmmoReloads } from '../utils/bookingPricing.js'
-import { getBookingInventoryRequirements, getHeldQuantities, holdBookingInventory, pieceAtBranch, stockQuantity } from '../utils/inventoryHolds.js'
+import { assignCustomPieces, getBookingInventoryRequirements, getHeldQuantities, holdBookingInventory, pieceAtBranch, stockQuantity } from '../utils/inventoryHolds.js'
 import { canonicalEmail, normalizeEmail, sameEmailFilter } from '../utils/emails.js'
 import { submitGcashPayment } from '../utils/gcashPayments.js'
 import { newReservationId, nextShortId } from '../utils/shortIds.js'
@@ -123,6 +123,39 @@ const LOCATION_NAMES = {
   binan: 'BBC Airsoft Binan Laguna',
 }
 
+// Staff (admin, registrar, marshal) signed in on this request: they see real head counts.
+function requestIsStaff(req) {
+  const header = String(req.headers.authorization || '')
+  const payload = header.startsWith('Bearer ') ? verifyAuthToken(header.slice(7).trim()) : null
+  return ['admin', 'registrar', 'marshal'].includes(String(payload?.role || ''))
+}
+
+// Players and visitors only learn whether each slot is available or full, never how many are
+// booked: a full slot reads as booked to capacity, any other as empty, and private days only say
+// whether a group has booked. Day and location totals are rebuilt from the masked slots.
+function maskCapacityDays(days) {
+  return days.map((day) => {
+    const locations = (day.locations || []).map((location) => {
+      const slots = (location.slots || []).map((slot) => {
+        const full = Number(slot.remaining) <= 0 && Number(slot.capacity) > 0
+        return { ...slot, booked: full ? slot.capacity : 0, remaining: full ? 0 : slot.capacity, groups: slot.groups ? 1 : 0 }
+      })
+      return {
+        ...location,
+        slots,
+        booked: slots.reduce((sum, slot) => sum + slot.booked, 0),
+        groups: slots.some((slot) => slot.groups) ? 1 : 0,
+      }
+    })
+    return {
+      ...day,
+      locations,
+      booked: locations.reduce((sum, location) => sum + location.booked, 0),
+      groups: locations.some((location) => location.groups) ? 1 : 0,
+    }
+  })
+}
+
 // Player counts per location and slot for the given public-game dates (no player details).
 async function capacityForDates(db, dates, todayISO) {
   const [reservations, holds] = await Promise.all([
@@ -164,7 +197,8 @@ router.get('/public/capacity-calendar', async (req, res) => {
       listActiveCauseDays(db, { from: dates[0], to: dates[dates.length - 1] }),
       listClosedDays(db, { from: dates[0], to: dates[dates.length - 1] }),
     ])
-    const data = days.map((day) => ({ ...day, kind: weekends.has(day.dateISO) ? 'public' : 'private' }))
+    const shown = requestIsStaff(req) ? days : maskCapacityDays(days)
+    const data = shown.map((day) => ({ ...day, kind: weekends.has(day.dateISO) ? 'public' : 'private' }))
     return res.json({ ok: true, todayISO, month, data, causeDays, closedDays })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
@@ -173,7 +207,7 @@ router.get('/public/capacity-calendar', async (req, res) => {
 
 // Public: how full this week's weekend games are (weekends are public games), for the landing
 // page and the player dashboard. Only player counts per location and slot are sent.
-router.get('/public/weekend-capacity', async (_req, res) => {
+router.get('/public/weekend-capacity', async (req, res) => {
   try {
     const db = await getDb()
     const todayISO = manilaDateISO()
@@ -183,7 +217,7 @@ router.get('/public/weekend-capacity', async (_req, res) => {
       listActiveCauseDays(db, { from: dates[0], to: dates[dates.length - 1] }),
       listClosedDays(db, { from: dates[0], to: dates[dates.length - 1] }),
     ])
-    return res.json({ ok: true, todayISO, data: days, causeDays, closedDays })
+    return res.json({ ok: true, todayISO, data: requestIsStaff(req) ? days : maskCapacityDays(days), causeDays, closedDays })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
   }
@@ -388,7 +422,46 @@ router.get('/team-directory/lookup', requireAuth, requireRole('user'), async (re
 // GET /api/inventory-availability?date=YYYY-MM-DD&slot=morning&location=salawag
 // Rental stock left for one date/slot after existing booking holds. With a location, pieces kept
 // at another branch count as unavailable (each branch rents only its own stock).
-router.get('/inventory-availability', requireAuth, async (req, res) => {
+// POST /api/inventory-check { reservationDate, reservationTime, locationId, players, selectionMode,
+// selectedPackageId?, customWeaponIds?, customEquipmentIds?, verifiedOwnWeaponCount? }
+// Whether the gear for this booking is free for the slot: { enough, message, shortModels }.
+// Players get only yes / no (and which models are short), never stock or booked counts.
+router.post('/inventory-check', requireAuth, async (req, res) => {
+  const body = req.body || {}
+  const reservationDate = String(body.reservationDate || '').trim()
+  const reservationTime = String(body.reservationTime || '').trim().toLowerCase()
+  const players = Math.max(1, Math.min(600, Math.round(Number(body.players) || 1)))
+  const mode = String(body.selectionMode || '').toLowerCase()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(reservationDate) || !SLOT_NAMES.includes(reservationTime)) {
+    return res.status(400).json({ ok: false, error: 'date (YYYY-MM-DD) and slot are required' })
+  }
+  if (!['package', 'custom'].includes(mode)) return res.json({ ok: true, enough: true })
+  try {
+    const db = await getDb()
+    const heldQuantities = await getHeldQuantities(db, { reservationDate, reservationTime })
+    const payload = {
+      locationId: normalizeLocationId(body.locationId),
+      selectionMode: mode,
+      selectedPackageId: String(body.selectedPackageId || ''),
+      customWeaponIds: Array.isArray(body.customWeaponIds) ? body.customWeaponIds.map(String) : [],
+      customEquipmentIds: Array.isArray(body.customEquipmentIds) ? body.customEquipmentIds.map(String) : [],
+      verifiedOwnWeaponCount: Math.max(0, Math.round(Number(body.verifiedOwnWeaponCount) || 0)),
+    }
+    try {
+      if (mode === 'custom') Object.assign(payload, await assignCustomPieces({ db, payload, findDocumentById, heldQuantities }))
+      await getBookingInventoryRequirements({ db, payload, players, findDocumentById, heldQuantities })
+      return res.json({ ok: true, enough: true })
+    } catch (err) {
+      return res.json({ ok: true, enough: false, message: err?.message || 'Not enough gear free for this slot.', shortModels: err?.shortModels || [] })
+    }
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: String(err) })
+  }
+})
+
+// Per-piece stock for one slot. Staff only: it shows which pieces are taken, which would let
+// players work out how many others booked. Players use POST /inventory-check instead.
+router.get('/inventory-availability', requireAuth, requireRole('admin', 'registrar', 'marshal'), async (req, res) => {
   const reservationDate = String(req.query.date || '').trim()
   const reservationTime = String(req.query.slot || '').trim().toLowerCase()
   const branch = normalizeLocationId(req.query.location)
@@ -461,9 +534,31 @@ router.get('/reservation-availability', requireAuth, requireRole('user'), async 
       userId: { $ne: String(req.user.id) },
     }).toArray()
 
+    // Players never get head counts: only which slots are full ("location|date|slot"). Whether a
+    // larger group fits is checked when they hold the slot or book it.
+    const capacities = getLocationCapacities()
+    const used = new Map()
+    const keyOf = (locationId, dateISO, slot) => `${locationId}|${dateISO}|${String(slot || '').toLowerCase()}`
+    for (const r of reservations) {
+      const key = keyOf(normalizeLocationId(r.locationId || r.location || r.locationName), r.reservationDate || r.dateISO, r.reservationTime || r.slot)
+      used.set(key, (used.get(key) || 0) + Number(r.numberOfPlayers || r.players || 0))
+    }
+    for (const hold of holds) {
+      const key = keyOf(normalizeLocationId(hold.locationId), hold.reservationDate, hold.reservationTime)
+      used.set(key, (used.get(key) || 0) + Number(hold.players || 0))
+    }
+    const fullSlots = [...used.entries()]
+      .filter(([key, count]) => {
+        const [locationId, , slot] = key.split('|')
+        const cap = capacities[locationId]?.[slot]
+        return cap && count >= cap
+      })
+      .map(([key]) => key)
+
     return res.json({
       ok: true,
-      capacities: getLocationCapacities(),
+      capacities,
+      fullSlots,
       ammoReloadPrice: getAmmoReloadPrice(),
       data: [
         ...reservations.map((reservation) => ({
@@ -471,7 +566,6 @@ router.get('/reservation-availability', requireAuth, requireRole('user'), async 
           fieldIds: extractReservationFieldIds(reservation),
           slot: reservation.reservationTime || reservation.slot || 'morning',
           sessionType: reservation.sessionType || 'public',
-          players: Number(reservation.numberOfPlayers || reservation.players || 0),
           reservationStatus: reservation.reservationStatus,
           locationId: normalizeLocationId(reservation.locationId || reservation.location || reservation.locationName),
         })),
@@ -480,7 +574,6 @@ router.get('/reservation-availability', requireAuth, requireRole('user'), async 
           fieldIds: hold.fieldIds || [],
           slot: hold.reservationTime,
           sessionType: hold.sessionType,
-          players: Number(hold.players || 0),
           reservationStatus: 'held',
           locationId: hold.locationId,
         })),
@@ -547,7 +640,8 @@ async function assertSlotAvailable({ db, session, locationId, reservationDate, r
   const capacity = getLocationCapacities()[locationId][reservationTime]
   const usedPlayers = getSlotPlayerCount(blockingReservations) + holds.reduce((sum, hold) => sum + Number(hold.players || 0), 0)
   if (usedPlayers + playersCount > capacity) {
-    const full = new Error(`This slot has only ${Math.max(0, capacity - usedPlayers)} places remaining.`)
+    // No numbers: players only learn whether their group fits, never how many are booked.
+    const full = new Error(`There isn't room for ${playersCount} more player${playersCount === 1 ? '' : 's'} in this slot. Try fewer players or another slot.`)
     full.statusCode = 409
     throw full
   }
@@ -1018,7 +1112,7 @@ router.post('/reservations/:id/reschedule', requireAuth, requireRole('user', 'ad
         const capacity = getLocationCapacities()[locationId][newTime]
         const usedPlayers = getSlotPlayerCount(blocking)
         if (usedPlayers + playersCount > capacity) {
-          const full = new Error(`The new slot has only ${Math.max(0, capacity - usedPlayers)} places remaining.`)
+          const full = new Error("The new slot doesn't have room for your group. Pick another date or slot.")
           full.statusCode = 409
           throw full
         }
@@ -1132,6 +1226,26 @@ const READ_ROLES = {
 }
 
 const USER_OWNED_COLLECTIONS = new Set(['feedback', 'gameplay', 'payments', 'reservations', 'user_accounts', 'waivers'])
+// Ids (public id and database id) of the bookings a captain added this player to.
+async function teammateReservationIds(db, userId) {
+  const bookings = await db.collection('reservations').find({ 'teamMembers.id': String(userId) }, { projection: { id: 1 } }).toArray()
+  return bookings.flatMap((booking) => [booking.id, String(booking._id)].filter(Boolean))
+}
+
+// Bookings made before the captain's name was stored on them get it from the account, so
+// "Paid by" and "booked by" can name the captain. Walk-ins use the name taken at the counter.
+async function fillBookerNames(db, reservations) {
+  const missing = reservations.filter((r) => r && !r.bookerName && !r.walkIn && r.userId)
+  if (missing.length === 0) return
+  const ids = [...new Set(missing.map((r) => String(r.userId)))]
+  const accounts = await db.collection('user_accounts').find({ id: { $in: ids } }, { projection: { id: 1, name: 1 } }).toArray()
+  const nameById = new Map(accounts.map((a) => [String(a.id), String(a.name || '').trim()]))
+  for (const r of missing) {
+    const name = nameById.get(String(r.userId))
+    if (name) r.bookerName = name
+  }
+}
+
 // Weapons and gear: center rental pieces are visible to all; personal gear (source 'player') only to its owner.
 const PLAYER_GEAR_COLLECTIONS = new Set(['weapons', 'equipments'])
 
@@ -1416,10 +1530,13 @@ router.get('/:collection', requireAuth, async (req, res) => {
     }
 
     if (playerUser && USER_OWNED_COLLECTIONS.has(collection)) {
-      // Players also see bookings a captain added them to (read-only: changes stay with the captain).
+      // Players also see bookings a captain added them to (read-only: changes stay with the captain),
+      // and the games of those bookings (so they can rate them in Game Evaluation).
       filter = mergeFilters(filter, collection === 'reservations'
         ? { $or: [playerOwnershipFilter(req.user.id), { 'teamMembers.id': String(req.user.id) }] }
-        : playerOwnershipFilter(req.user.id))
+        : collection === 'gameplay'
+          ? { $or: [playerOwnershipFilter(req.user.id), { reservationId: { $in: await teammateReservationIds(db, req.user.id) } }] }
+          : playerOwnershipFilter(req.user.id))
     }
     // Players see the center's rental gear and their own personal gear, not other players'.
     if (playerUser && PLAYER_GEAR_COLLECTIONS.has(collection)) {
@@ -1469,6 +1586,7 @@ router.get('/:collection', requireAuth, async (req, res) => {
     if (collection === 'notifications') {
       return res.json({ ok: true, data: docs.map((doc) => personalizeNotification(doc, req.user)), total })
     }
+    if (collection === 'reservations') await fillBookerNames(db, docs)
     return res.json({ ok: true, data: docs, total })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
@@ -1517,6 +1635,7 @@ router.get('/:collection/:id', requireAuth, async (req, res) => {
         delete doc.email
       }
     }
+    if (collection === 'reservations') await fillBookerNames(db, [doc])
     return res.json({ ok: true, data: doc })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
@@ -1580,8 +1699,14 @@ async function resolveTeamAndOwnWeapons(db, doc, { requireFullTeam = false } = {
   }
 
   const memberIds = new Set([captainId, ...teamMembers.map((member) => member.id)])
-  // Bringing your own weapon is part of a custom selection only: a package always rents its weapons.
-  const allowsOwnWeapons = String(doc.selectionMode || '').toLowerCase() !== 'package'
+  // Players with an approved weapon can bring it with a custom selection, or with a package: they
+  // get the package without its weapon (no rental charge for it). A package with a fixed group
+  // price (settledAmount) can't be split, so own weapons don't apply to it.
+  let allowsOwnWeapons = true
+  if (String(doc.selectionMode || '').toLowerCase() === 'package') {
+    const pkg = doc.selectedPackageId ? await findDocumentById(db, 'packages', String(doc.selectedPackageId)) : null
+    allowsOwnWeapons = Boolean(pkg) && !(Number(pkg.settledAmount) > 0) && Array.isArray(pkg.weaponIds) && pkg.weaponIds.length > 0
+  }
   const bringerIds = allowsOwnWeapons ? Array.from(new Set(
     (Array.isArray(doc.ownWeaponBringerIds) ? doc.ownWeaponBringerIds : []).map(String).filter((id) => memberIds.has(id)),
   )) : []
@@ -1938,7 +2063,9 @@ router.post('/:collection', requireAuth, async (req, res) => {
       if (!gameplayId) return res.status(400).json({ ok: false, error: 'gameplayId is required.' })
       if (req.user.role === 'user') {
         const gameplay = await findDocumentById(db, 'gameplay', gameplayId)
-        if (!gameplay || !isOwnedByUser(gameplay, req.user.id)) {
+        // The captain and every teammate on the booking can rate the game (once each).
+        const onTeam = gameplay && (await teammateReservationIds(db, req.user.id)).includes(String(gameplay.reservationId || ''))
+        if (!gameplay || (!isOwnedByUser(gameplay, req.user.id) && !onTeam)) {
           return res.status(404).json({ ok: false, error: 'Completed gameplay not found.' })
         }
         if (!['completed', 'archived'].includes(String(gameplay.Status || gameplay.status || '').toLowerCase())) {
@@ -2101,6 +2228,20 @@ router.post('/:collection', requireAuth, async (req, res) => {
       if (causeDay) doc.causeDay = { title: causeDay.title, donationPercent: causeDay.donationPercent }
       // 30 minutes when the captain pays alone, 24 hours when the team splits the payment.
       doc.paymentDueAtISO = new Date(Date.now() + paymentWindowMsFor(doc)).toISOString()
+      // Custom rentals: the server picks the actual free pieces of each model for this slot and
+      // branch (the page only says which models and how many).
+      if (String(doc.selectionMode || '').toLowerCase() === 'custom') {
+        try {
+          Object.assign(doc, await assignCustomPieces({
+            db,
+            payload: doc,
+            findDocumentById,
+            heldQuantities: await getHeldQuantities(db, { reservationDate: doc.reservationDate, reservationTime: doc.reservationTime }),
+          }))
+        } catch (err) {
+          return res.status(err?.statusCode || 409).json({ ok: false, error: err.message || 'That gear is not available for this slot.' })
+        }
+      }
       try {
         Object.assign(doc, await calculateBookingPrice({
           db,
@@ -2695,8 +2836,13 @@ router.delete('/:collection/:id', requireAuth, async (req, res) => {
     if (collection === 'notifications' && !canAccessNotification(existing, req.user)) {
       return res.status(404).json({ ok: false, error: 'not found' })
     }
-    if (collection === 'notifications' && isSharedNotification(existing, req.user)) {
-      await db.collection(collection).updateOne({ _id: existing._id }, { $addToSet: { dismissedBy: String(req.user.id) } })
+    // Removing a notification only hides it for the person removing it. The record stays, so there's
+    // always proof it was sent (payment deadlines, released bookings, reminders); admins archive instead.
+    if (collection === 'notifications') {
+      await db.collection(collection).updateOne(
+        { _id: existing._id },
+        { $addToSet: { dismissedBy: String(req.user.id) }, ...(isSharedNotification(existing, req.user) ? {} : { $set: { dismissedAtISO: new Date().toISOString() } }) },
+      )
       return res.json({ ok: true })
     }
     if (deleteRole !== 'admin' && collection !== 'notifications') {

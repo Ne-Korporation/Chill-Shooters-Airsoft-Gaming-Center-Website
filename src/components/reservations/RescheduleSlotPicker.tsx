@@ -68,6 +68,8 @@ export function RescheduleSlotPicker({
 }) {
   const [bookings, setBookings] = useState<Booking[]>([])
   const [capacities, setCapacities] = useState<Capacities>({})
+  // Slots the server reports full ("location|date|slot"); players never get head counts.
+  const [fullSlots, setFullSlots] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(true)
   const [month, setMonth] = useState(() => (date || addDaysISO(todayISO, 1)).slice(0, 7))
   const closedDays = useClosedDays(`${month}-01`, `${month}-31`)
@@ -77,11 +79,12 @@ export function RescheduleSlotPicker({
   useEffect(() => {
     let alive = true
     setLoading(true)
-    apiGet<{ ok: boolean; data: Booking[]; capacities?: Capacities }>('/api/reservation-availability')
+    apiGet<{ ok: boolean; data: Booking[]; capacities?: Capacities; fullSlots?: string[] }>('/api/reservation-availability')
       .then((res) => {
         if (!alive) return
         setBookings(Array.isArray(res?.data) ? res.data : [])
         setCapacities(res?.capacities || {})
+        setFullSlots(new Set(Array.isArray(res?.fullSlots) ? res.fullSlots : []))
       })
       .catch(() => {
         if (alive) setBookings([])
@@ -98,12 +101,11 @@ export function RescheduleSlotPicker({
     const isOriginal = dateISO === target.originalDate && slotName === target.originalSlot
     const same = bookings.filter((booking) =>
       booking.dateISO === dateISO && String(booking.slot).toLowerCase() === slotName && normalizeLocation(booking.locationId || '') === locationId)
-    // The player's own booking is still counted in its current slot; leave it out of that one.
-    const used = same.reduce((sum, booking) => sum + Number(booking.players || 0), 0) - (isOriginal ? target.players : 0)
-    const capacity = Number(capacities[locationId]?.[slotName] ?? 0)
-    const remaining = capacity ? Math.max(0, capacity - used) : Number.POSITIVE_INFINITY
+    // Only "full" or not: whether the whole group fits is checked by the server on Confirm.
+    const full = fullSlots.has(`${locationId}|${dateISO}|${slotName}`)
+    const remaining = full ? 0 : Number.POSITIVE_INFINITY
     if (isOriginal) return { available: false, remaining, reason: 'Current slot' }
-    if (remaining < target.players) return { available: false, remaining, reason: remaining === 0 ? 'Full' : `Only ${remaining} places left` }
+    if (full) return { available: false, remaining, reason: 'Full' }
     if (target.sessionType === 'private') {
       const taken = new Set(same.filter((booking) => booking.sessionType === 'private').flatMap((booking) => booking.fieldIds || []))
       if (target.fieldIds.some((fieldId) => taken.has(fieldId))) return { available: false, remaining, reason: 'Your field is booked' }
@@ -217,7 +219,7 @@ export function RescheduleSlotPicker({
                   <span className="ml-2 text-xs text-muted">{formatSlotRange(slotHours, name)}</span>
                 </span>
                 <span className={['text-xs font-semibold', state.available ? 'text-success' : 'text-muted'].join(' ')}>
-                  {loading ? 'Checking…' : state.available ? (Number.isFinite(state.remaining) ? `${state.remaining} places left` : 'Open') : state.reason}
+                  {loading ? 'Checking…' : state.available ? 'Available' : state.reason}
                 </span>
               </button>
             )

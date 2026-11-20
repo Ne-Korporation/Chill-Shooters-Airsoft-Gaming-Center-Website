@@ -33,6 +33,7 @@ const { default: recommendationsRouter } = await import('./routes/recommendation
 const { default: weatherRouter } = await import('./routes/weather.js')
 const { default: childrenRouter } = await import('./routes/children.js')
 const { default: causeDaysRouter } = await import('./routes/causeDays.js')
+const { default: myGearRouter } = await import('./routes/myGear.js')
 const { expireOverdueReservations, notifyRole, sendSplitPaymentWarnings } = await import('./utils/paymentProgress.js')
 const { expireOldIdentities } = await import('./utils/identityValidity.js')
 const { sendDueReminders } = await import('./utils/reminders.js')
@@ -379,6 +380,7 @@ app.use('/api', recommendationsRouter)
 app.use('/api', weatherRouter)
 app.use('/api', childrenRouter)
 app.use('/api', causeDaysRouter)
+app.use('/api', myGearRouter)
 app.use('/api/auth', authRouter)
 // Admin notification log: notifications are archived, never cleared. Archiving only takes them off
 // the admin's Sent notifications list (they stay on record and can be restored); the players and

@@ -28,7 +28,7 @@ import {
   FiHeart,
 } from 'react-icons/fi'
 
-import { apiBase, apiDelete, apiGet, apiPost, getApiAuthHeaders } from '../../utils/apiClient'
+import { apiBase, apiDelete, apiGet, apiPost, getApiAuthHeaders, apiGetAll } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
 import { LANDING_PREFILL_KEY, type LandingReservationPrefill } from '../auth/LandingPage'
 import { Card } from '../../components/ui/Card'
@@ -225,7 +225,7 @@ function getFieldById(fieldId: string): Field | undefined {
 const locationOptions: { id: LocationOption; name: string; detail: string; capacity: string }[] = [
   { id: 'salawag', name: 'Chill Shooters (Salawag)', detail: 'Approximately 2 hectares.', capacity: 'Up to 400 players per slot' },
   { id: 'langkaan', name: 'Chill Shooters (Langkaan)', detail: 'Approximately 2 hectares.', capacity: 'Up to 400 players per slot' },
-  { id: 'binan', name: 'BBC Airsoft Binan Laguna', detail: 'Approximately 4 hectares.', capacity: 'Up to 200 players per slot' },
+  { id: 'binan', name: 'BBC Airsoft Binan Laguna', detail: 'Approximately 1 hectare.', capacity: 'Up to 200 players per slot' },
 ]
 
 const slotLabels: Record<TimeSlot, string> = {
@@ -383,6 +383,8 @@ export function ReservationCalendarPage() {
   const [reservations, setReservations] = useState<ReservationRecord[]>([])
   const [loadingReservations, setLoadingReservations] = useState(true)
   const [serverCapacities, setServerCapacities] = useState<SlotCapacities | null>(null)
+  // Slots that are full, as "location|date|slot". Players only learn full / not full, never counts.
+  const [fullSlotKeys, setFullSlotKeys] = useState<Set<string>>(new Set())
   const [loadingWaiverEligibility, setLoadingWaiverEligibility] = useState(true)
   // Teammates are found one at a time by email rather than from a list of every player.
   const [selectedTeammates, setSelectedTeammates] = useState<TeamMember[]>(() => draftState.selectedTeammates ?? [])
@@ -529,10 +531,11 @@ export function ReservationCalendarPage() {
     let cancelled = false
     try {
       if (!silent) setLoadingReservations(true)
-      const res = await apiGet<{ ok: boolean; data: any[]; capacities?: SlotCapacities; ammoReloadPrice?: number }>('/api/reservation-availability')
+      const res = await apiGet<{ ok: boolean; data: any[]; capacities?: SlotCapacities; fullSlots?: string[]; ammoReloadPrice?: number }>('/api/reservation-availability')
       if (cancelled) return
 
       if (res.capacities) setServerCapacities(res.capacities)
+      setFullSlotKeys(new Set(Array.isArray(res.fullSlots) ? res.fullSlots : []))
       if (typeof res.ammoReloadPrice === 'number' && res.ammoReloadPrice >= 0) setAmmoReloadPrice(res.ammoReloadPrice)
       const data = Array.isArray(res?.data) ? res.data : []
       // Include PENDING, CONFIRMED, and APPROVED reservations
@@ -833,8 +836,8 @@ export function ReservationCalendarPage() {
       try {
         const [pkgRes, wepRes, eqRes] = await Promise.all([
           apiGet<{ ok: boolean; data: any[] }>('/api/packages?limit=200'),
-          apiGet<{ ok: boolean; data: any[] }>('/api/weapons?limit=200'),
-          apiGet<{ ok: boolean; data: any[] }>('/api/equipments?limit=200'),
+          apiGetAll<any>('weapons').then((data) => ({ ok: true, data })),
+          apiGetAll<any>('equipments').then((data) => ({ ok: true, data })),
         ])
 
         if (cancelled) return
@@ -909,17 +912,17 @@ export function ReservationCalendarPage() {
     ;(async () => {
       try {
         const [wepRes, eqRes] = await Promise.all([
-          apiGet<{ ok: boolean; data: any[] }>('/api/weapons?limit=200'),
-          apiGet<{ ok: boolean; data: any[] }>('/api/equipments?limit=200'),
+          apiGetAll<any>('weapons').then((data) => ({ ok: true, data })),
+          apiGetAll<any>('equipments').then((data) => ({ ok: true, data })),
         ])
         if (cancelled) return
         const wepDocs = Array.isArray(wepRes?.data) ? wepRes.data : []
         const eqDocs = Array.isArray(eqRes?.data) ? eqRes.data : []
         const approvedWeapons = wepDocs.filter(
-          (d: any) => String(d.submittedBy) === String(user.id) && d.approvalStatus !== 'rejected'
+          (d: any) => String(d.submittedBy) === String(user.id) && d.approvalStatus !== 'rejected' && String(d.status || 'available') !== 'damaged'
         )
         const approvedEquipment = eqDocs.filter(
-          (d: any) => String(d.submittedBy) === String(user.id) && d.approvalStatus !== 'rejected'
+          (d: any) => String(d.submittedBy) === String(user.id) && d.approvalStatus !== 'rejected' && String(d.status || 'available') !== 'damaged'
         )
         setPlayerApprovedWeapons(approvedWeapons)
         setPlayerApprovedEquipment(approvedEquipment)
@@ -931,8 +934,11 @@ export function ReservationCalendarPage() {
   }, [user?.id])
 
   // Only players with an approved weapon on file count; the rest are charged a rental weapon.
-  // Bringing your own weapon belongs to a custom selection: a package always rents its weapons.
-  const ownWeaponsAllowed = selectionMode === 'custom'
+  // Own weapons work with a custom selection, and with a package that rents weapons: that player
+  // gets the package without its weapon. A fixed group price (settled amount) can't be split.
+  const pickedPackage = packages.find((p) => p.id === selectedPackageId)
+  const packageAllowsOwnWeapons = Boolean(pickedPackage) && !(Number(pickedPackage?.settledAmount) > 0) && (pickedPackage?.weaponIds.length || 0) > 0
+  const ownWeaponsAllowed = selectionMode === 'custom' || (selectionMode === 'package' && packageAllowsOwnWeapons)
   const captainBringsOwnWeapon = ownWeaponsAllowed && selectedOwnWeaponIds.length > 0
   const verifiedTeammateBringers = useMemo(
     () => selectedTeammates.filter((member) => teammateOwnWeaponIds.includes(member.id) && member.hasApprovedWeapon),
@@ -949,27 +955,48 @@ export function ReservationCalendarPage() {
     setOwnWeaponTarget(markedOwnWeaponCount)
   }, [markedOwnWeaponCount])
 
-  // Rental stock left for the chosen date/slot, so players see shortages here
-  // instead of hitting them when the reservation is submitted at payment.
-  const [slotStock, setSlotStock] = useState<SlotStock | null>(null)
+  // Whether the gear for this booking is free for the slot, so players see a shortage here
+  // instead of at payment. The server answers only yes / no (and which models are short): players
+  // never see stock or how many others booked, and the server picks the exact pieces at booking.
+  const [stockCheck, setStockCheck] = useState<{ enough: boolean; message: string; shortModels: string[] } | null>(null)
   const [loadingSlotStock, setLoadingSlotStock] = useState(false)
   useEffect(() => {
-    if (!dateISO || !slot) return
+    if (!dateISO || !slot || !['package', 'custom'].includes(selectionMode)) {
+      setStockCheck(null)
+      return
+    }
     let cancelled = false
-    setLoadingSlotStock(true)
-    apiGet<{ ok: boolean; data: SlotStock }>(`/api/inventory-availability?date=${encodeURIComponent(dateISO)}&slot=${encodeURIComponent(slot)}&location=${encodeURIComponent(selectedLocation)}`)
-      .then((res) => { if (!cancelled) setSlotStock(res?.data ?? null) })
-      .catch(() => { if (!cancelled) setSlotStock(null) })
-      .finally(() => { if (!cancelled) setLoadingSlotStock(false) })
-    return () => { cancelled = true }
-  }, [dateISO, slot, step, selectedLocation])
+    const timer = window.setTimeout(() => {
+      setLoadingSlotStock(true)
+      apiPost<{ ok: boolean; enough: boolean; message?: string; shortModels?: string[] }>('/api/inventory-check', {
+        reservationDate: dateISO,
+        reservationTime: slot,
+        locationId: selectedLocation,
+        players,
+        selectionMode,
+        selectedPackageId,
+        customWeaponIds,
+        customEquipmentIds,
+        verifiedOwnWeaponCount,
+      })
+        .then((res) => { if (!cancelled) setStockCheck({ enough: res.enough !== false, message: res.message || '', shortModels: res.shortModels || [] }) })
+        .catch(() => { if (!cancelled) setStockCheck(null) })
+        .finally(() => { if (!cancelled) setLoadingSlotStock(false) })
+    }, 400)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [dateISO, slot, step, selectedLocation, players, selectionMode, selectedPackageId, customWeaponIds, customEquipmentIds, verifiedOwnWeaponCount])
+  const stockShort = Boolean(stockCheck && !stockCheck.enough)
+  // A model is flagged short when the server named it (or named nothing in particular).
+  const modelShort = useCallback((model: string) => Boolean(stockCheck && !stockCheck.enough
+    && (stockCheck.shortModels.length === 0 || stockCheck.shortModels.includes(model) || stockCheck.message.includes(model))), [stockCheck])
 
   // A piece is free when it's in service and not reserved by another booking for this slot.
-  const pieceFree = useCallback((collection: 'weapons' | 'equipments', piece: { id: string; status: string }) => {
-    if (String(piece.status || 'available') !== 'available') return false
-    const entry = slotStock?.[collection]?.[piece.id]
-    return entry ? entry.available > 0 : true
-  }, [slotStock])
+  const pieceFree = useCallback((_collection: 'weapons' | 'equipments', piece: { id: string; status: string }) => (
+    String(piece.status || 'available') === 'available'
+  ), [])
 
   // Packages name models through one piece id each, which may sit at any branch: look models up
   // in every rental piece. Free stock then comes from this branch's pieces only.
@@ -1008,11 +1035,8 @@ export function ReservationCalendarPage() {
     const models = modelsOfIds(allRentalWeapons, pkg.weaponIds)
     const needs = models.map((_, index) => Math.max(0, players - (index === 0 ? Math.min(verifiedOwnWeaponCount, players) : 0)))
     const needed = needs.reduce((sum, n) => sum + n, 0)
-    if (!slotStock) return { needed, available: null as number | null, ok: true }
-    const free = models.map((model) => freeOfModel(weaponGroups, model))
-    const available = free.reduce((sum, n, index) => sum + Math.min(n, needs[index]), 0)
-    return { needed, available, ok: free.every((n, index) => n >= needs[index]) }
-  }, [modelsOfIds, allRentalWeapons, players, verifiedOwnWeaponCount, slotStock, freeOfModel, weaponGroups])
+    return { needed }
+  }, [modelsOfIds, allRentalWeapons, players, verifiedOwnWeaponCount])
 
   // Only packages that fit the headcount can be picked (a group package fits exactly its size).
   const cheapestPackage = useMemo(() => {
@@ -1213,14 +1237,8 @@ export function ReservationCalendarPage() {
   // Check if a specific slot can't take a booking (taken, or fully booked for ALL fields at this location)
   const isSlotFullyBooked = (slotToCheck: TimeSlot): boolean => {
     if (getSlotBlockReason(slotToCheck)) return true
-    // Any day: the slot is full once its player capacity is used up.
-    const cap = serverCapacities?.[selectedLocation]?.[slotToCheck] ?? capacityFor(selectedLocation, slotToCheck)
-    const used = reservations
-      .filter((r) => r.dateISO === dateISO &&
-                     r.slot === slotToCheck &&
-                     r.locationId === selectedLocation)
-      .reduce((sum, r) => sum + r.players, 0)
-    return used >= cap
+    // Any day: the slot is full once the server reports its player capacity used up.
+    return fullSlotKeys.has(`${selectedLocation}|${dateISO}|${slotToCheck}`)
   }
 
   // Get available fields for a specific slot at this location
@@ -1232,40 +1250,15 @@ export function ReservationCalendarPage() {
     return fields
   }
 
-  // Used players from reservations. Capacity is per location and slot (all fields),
-  // matching the server's check, so the counter never shows room the server will refuse.
-  // For a full day, the slot with the fewest spots left decides how many players can book.
-  const capacitySlot = useMemo<TimeSlot>(() => {
-    if (!fullDay) return slot
-    const left = (s: TimeSlot) => (serverCapacities?.[selectedLocation]?.[s] ?? capacityFor(selectedLocation, s))
-      - reservations.filter((r) => r.dateISO === dateISO && r.slot === s && r.locationId === selectedLocation).reduce((sum, r) => sum + r.players, 0)
-    return [...timeSlots].sort((a, b) => left(a) - left(b))[0]
-  }, [fullDay, slot, serverCapacities, selectedLocation, reservations, dateISO])
-
-  const usedPlayers = useMemo(() => {
-    return reservations
-      .filter((r) => r.dateISO === dateISO &&
-                     r.slot === capacitySlot &&
-                     r.locationId === selectedLocation)
-      .reduce((sum, r) => sum + r.players, 0)
-  }, [dateISO, capacitySlot, reservations, selectedLocation])
-
+  // The most players one slot takes (public information). Whether this group fits is checked by
+  // the server when the slot is held; players only ever see "full" or "available".
   const maxCapacity = useMemo(() => {
-    return serverCapacities?.[selectedLocation]?.[capacitySlot] ?? capacityFor(selectedLocation, capacitySlot)
-  }, [selectedLocation, serverCapacities, capacitySlot])
-
-  const remainingSlots = maxCapacity - usedPlayers
-  // Public games: grounds open as the whole slot fills (same rule the server applies).
-  const publicGroundCount = fieldCountForPlayers(usedPlayers + players)
+    return serverCapacities?.[selectedLocation]?.[slot] ?? capacityFor(selectedLocation, slot)
+  }, [selectedLocation, serverCapacities, slot])
+  const pickedSlotFull = bookedSlots.some((s) => isSlotFullyBooked(s))
   const hasRequiredSlotSelection = isWd ? slotTouched : selectedSlots.length > 0
   const pickedSlotStarted = bookedSlots.some((s) => slotHasStarted(slotHours, s, dateISO))
-  const canProceed = hasRequiredSlotSelection && !pickedSlotStarted && remainingSlots >= players && meetsFieldRequirements
-
-  const slotOverview = useMemo(() => {
-    const cap = maxCapacity
-    const pct = cap > 0 ? Math.round((usedPlayers / cap) * 100) : 0
-    return { cap, pct: clamp(pct, 0, 100) }
-  }, [maxCapacity, usedPlayers])
+  const canProceed = hasRequiredSlotSelection && !pickedSlotStarted && !pickedSlotFull && meetsFieldRequirements
 
   const packageWeapons = useMemo(() => {
     if (!selectedPackage) return []
@@ -1331,22 +1324,10 @@ export function ReservationCalendarPage() {
     return Math.max(1, ...ids.map((id) => packageEquipmentQty(selectedPackage, id)))
   }, [selectedPackage, allRentalEquipment])
 
-  // Package shortages for the selected date/slot. Custom picks are individual free pieces.
-  const equipmentStockCheck = useMemo(() => {
-    if (selectionMode !== 'package' || !selectedPackage || !slotStock) return []
-    const checks = packageEquipmentModels.map((model) => {
-      const available = freeOfModel(equipmentGroups, model)
-      const required = players * equipmentPerPlayer(model)
-      return { name: model, available, required, ok: available >= required }
-    })
-    if (packageWeaponModels.length > 0) {
-      const weaponStock = packageWeaponStock(selectedPackage)
-      if (weaponStock.available !== null) {
-        checks.push({ name: 'Rental weapons', available: weaponStock.available, required: weaponStock.needed, ok: weaponStock.ok })
-      }
-    }
-    return checks
-  }, [selectionMode, selectedPackage, slotStock, packageEquipmentModels, packageWeaponModels, freeOfModel, equipmentGroups, players, packageWeaponStock, equipmentPerPlayer])
+  // Shortage for the selected date/slot, as the server reported it (package or custom gear).
+  const equipmentStockCheck = useMemo(() => (
+    stockShort ? [{ name: stockCheck?.shortModels.join(' and ') || 'Rental gear', message: stockCheck?.message || 'Not enough gear free for this slot.', ok: false }] : []
+  ), [stockShort, stockCheck])
 
   const hasInsufficientEquipmentStock = equipmentStockCheck.some((item) => !item.ok)
 
@@ -1759,10 +1740,8 @@ export function ReservationCalendarPage() {
       }
     }
 
-    const currentRemaining = maxCapacity - usedPlayers
-
-    if (players > currentRemaining) {
-      setConfirmError(`Only ${currentRemaining} slots remaining. Please reduce players.`)
+    if (pickedSlotFull) {
+      setConfirmError('This slot is full. Please pick another time or date.')
       return
     }
 
@@ -2294,10 +2273,11 @@ export function ReservationCalendarPage() {
                   <FiCheck className="h-3 w-3" />
                 </span>
                 <div className="min-w-0 flex-1">
-                  <div className="text-sm font-bold">{FIELD_CHOICES[publicGroundCount - 1].label}</div>
-                  <div className="mt-1 text-xs text-muted">{availableFields.slice(0, publicGroundCount).map((f) => f.name).join(' · ')}</div>
+                  <div className="text-sm font-bold">Assigned automatically</div>
+                  <div className="mt-1 text-xs text-muted">{availableFields.map((f) => f.name).join(' · ')}</div>
+                  {/* No player counts here: players only see availability, never how many are booked. */}
                   <div className="mt-1 text-xs text-muted">
-                    Assigned automatically from everyone booked in this slot ({usedPlayers + players} players with your group): Upper Ground below {FIELD_COUNT_MINIMUMS[2]} players, Upper + Lower Ground from {FIELD_COUNT_MINIMUMS[2]}, all 3 fields from {FIELD_COUNT_MINIMUMS[3]}. The marshals place players on arrival.
+                    Assigned automatically. More grounds open as more players book this slot. The marshals place players on arrival.
                   </div>
                 </div>
               </div>
@@ -2500,32 +2480,9 @@ export function ReservationCalendarPage() {
 
                   <div className="mt-3 rounded-2xl border border-white/10 bg-black/20 p-4">
                     <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <div className="text-xs text-muted">Capacity</div>
-                        <div className="mt-1 text-sm font-bold">{slotOverview.cap} max</div>
-                      </div>
-                      <div className="text-right">
-                        <div className="text-xs text-muted">Used</div>
-                        <div className="mt-1 text-sm font-bold">{usedPlayers} ops</div>
-                      </div>
-                    </div>
-
-                    <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/5">
-                      <motion.div
-                        className="h-full bg-[linear-gradient(90deg,rgba(197,163,90,0.9),rgba(85,107,47,0.8))]"
-                        initial={{ width: 0 }}
-                        animate={{ width: `${slotOverview.pct}%` }}
-                        transition={{ duration: 0.6, ease: 'easeOut' }}
-                      />
-                    </div>
-
-                    <div className="mt-3 flex items-center justify-between">
-                      <div className="text-xs text-muted">Remaining</div>
-                      <div className={[
-                        'text-xs font-bold rounded-xl px-3 py-1',
-                        remainingSlots <= 0 ? 'bg-danger/15 text-danger' : remainingSlots < 6 ? 'bg-accent/15 text-gold' : 'bg-success/15 text-success',
-                      ].join(' ')}>
-                        {remainingSlots <= 0 ? 'FULL' : `${remainingSlots} slots left`}
+                      <div className="text-xs text-muted">This slot</div>
+                      <div className={`rounded-xl px-3 py-1 text-xs font-bold ${pickedSlotFull ? 'bg-danger/15 text-danger' : 'bg-success/15 text-success'}`}>
+                        {pickedSlotFull ? 'FULL' : 'AVAILABLE'}
                       </div>
                     </div>
 
@@ -2537,7 +2494,9 @@ export function ReservationCalendarPage() {
                           <div className="mt-1 text-xs text-muted">
                             {!meetsFieldRequirements
                               ? `Need ${minPlayersForFields} players for selected fields.`
-                              : 'Cannot proceed.'
+                              : pickedSlotFull
+                                ? 'This slot is full. Pick another time or date.'
+                                : 'Cannot proceed.'
                             }
                           </div>
                         </div>
@@ -2797,47 +2756,58 @@ export function ReservationCalendarPage() {
             {noPackages ? null : (
             <Card className="p-4 md:p-6">
               <div className="flex items-center gap-2 text-sm font-bold">
-                <FiSliders /> <span>Selection Mode</span>
+                <FiSliders /> <span>How do you want to rent?</span>
               </div>
-              <p className="mt-1 text-xs text-muted">Choose a pre-set package or pick individual items.</p>
+              <p className="mt-1 text-xs text-muted">Pick one. Bringing your own weapon works with either.</p>
 
-              <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                <button
-                  type="button"
-                  onClick={() => setSelectionMode('package')}
-                  className={[
-                    'rounded-2xl border p-4 text-left transition',
-                    selectionMode === 'package'
-                      ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25'
-                      : 'border-white/10 bg-white/5 hover:bg-white/8',
-                  ].join(' ')}
-                >
-                  <div className="flex items-center gap-2">
-                    <FiPackage className="text-gold" />
-                    <div className="text-sm font-bold">Select Package</div>
-                  </div>
-                  <div className="mt-1 text-xs text-muted">Choose a curated rental package with discount.</div>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSelectionMode('custom')
-                    setSelectedPackageId('')
-                  }}
-                  className={[
-                    'rounded-2xl border p-4 text-left transition',
-                    selectionMode === 'custom'
-                      ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25'
-                      : 'border-white/10 bg-white/5 hover:bg-white/8',
-                  ].join(' ')}
-                >
-                  <div className="flex items-center gap-2">
-                    <FiTool className="text-gold" />
-                    <div className="text-sm font-bold">Custom Selection</div>
-                  </div>
-                  <div className="mt-1 text-xs text-muted">Pick individual weapons/equipment + bring your own.</div>
-                </button>
+              {/* Two choices, one at a time: a radio-style card for each. */}
+              <div className="mt-4 grid gap-3 sm:grid-cols-2" role="radiogroup" aria-label="How do you want to rent?">
+                {([
+                  {
+                    mode: 'package' as const,
+                    icon: <FiPackage className="text-gold" />,
+                    title: 'Rental package',
+                    tag: 'Best value',
+                    lines: ['A ready set for each player: weapon, vest, mask and BBs.', 'Cheaper than renting each item.'],
+                  },
+                  {
+                    mode: 'custom' as const,
+                    icon: <FiTool className="text-gold" />,
+                    title: 'Pick items yourself',
+                    tag: '',
+                    lines: ['Choose exactly which weapons and gear to rent, and how many.', 'Good if some players bring their own vest or mask.'],
+                  },
+                ]).map((option) => {
+                  const active = selectionMode === option.mode
+                  return (
+                    <button
+                      key={option.mode}
+                      type="button"
+                      role="radio"
+                      aria-checked={active}
+                      onClick={() => {
+                        setSelectionMode(option.mode)
+                        if (option.mode === 'custom') setSelectedPackageId('')
+                      }}
+                      className={[
+                        'flex items-start gap-3 rounded-2xl border p-4 text-left transition',
+                        active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
+                      ].join(' ')}
+                    >
+                      <span aria-hidden className={`mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full border-2 ${active ? 'border-accent bg-accent text-white' : 'border-[rgba(var(--text),0.3)]'}`}>
+                        {active ? <FiCheck className="h-3 w-3" /> : null}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="flex flex-wrap items-center gap-2">
+                          {option.icon}
+                          <span className="text-sm font-bold">{option.title}</span>
+                          {option.tag ? <span className="rounded-full bg-success/15 px-2 py-0.5 text-[10px] font-semibold text-success">{option.tag}</span> : null}
+                        </span>
+                        {option.lines.map((line) => <span key={line} className="mt-1 block text-xs text-muted">{line}</span>)}
+                      </span>
+                    </button>
+                  )
+                })}
               </div>
             </Card>
             )}
@@ -2908,7 +2878,6 @@ export function ReservationCalendarPage() {
                           >
                             {(() => {
                               const discount = resolvePackageDiscountConfig(pkg)
-                              const stock = pkg.weaponIds.length > 0 ? packageWeaponStock(pkg) : null
                               const includes = [
                                 ...modelsOfIds(allRentalWeapons, pkg.weaponIds),
                                 ...modelsOfIds(allRentalEquipment.filter((item) => !isAmmo(item)), pkg.equipmentIds),
@@ -2977,8 +2946,8 @@ export function ReservationCalendarPage() {
                                   {players < pkg.minPlayers ? (
                                     <div className="mt-3 text-xs text-warning">Needs at least {pkg.minPlayers} players</div>
                                   ) : null}
-                                  {stock && stock.available !== null && !stock.ok ? (
-                                    <div className="mt-3 text-xs text-danger">Not enough weapons free this slot ({stock.available} of {stock.needed})</div>
+                                  {active && stockShort ? (
+                                    <div className="mt-3 text-xs text-danger">Not enough gear free this slot for your group.</div>
                                   ) : null}
                                 </>
                               )
@@ -3002,13 +2971,12 @@ export function ReservationCalendarPage() {
 
                     <div className="mt-4 grid gap-2 sm:grid-cols-2">
                         {packageWeaponGroups.length > 0 && packageWeaponsNeeded > 0 && (() => {
-                          const free = packageWeaponGroups.reduce((sum, group) => sum + group.pieces.filter((piece) => piece.free).length, 0)
-                          const short = slotStock ? free < packageWeaponsNeeded : false
+                          const short = packageWeaponGroups.some((group) => modelShort(group.model))
                           return (
                             <div className={['flex items-center justify-between gap-3 rounded-2xl border p-3', short ? 'border-danger/30 bg-danger/10' : 'border-white/10 bg-white/5'].join(' ')}>
                               <div className="min-w-0">
                                 <div className="truncate text-sm font-bold">{packageWeaponGroups.map((group) => group.model).join(' / ')}</div>
-                                <div className="text-xs text-muted">Weapon · {short ? <span className="text-danger">only {free} free</span> : 'auto-assigned'}</div>
+                                <div className="text-xs text-muted">Weapon · {short ? <span className="text-danger">not enough free</span> : 'auto-assigned'}</div>
                               </div>
                               <div className="shrink-0 rounded-xl bg-black/30 px-2.5 py-1 text-xs font-bold">× {packageWeaponsNeeded}</div>
                             </div>
@@ -3016,13 +2984,12 @@ export function ReservationCalendarPage() {
                         })()}
                         {packageEquipmentGroups.map((group) => {
                           const needed = players * equipmentPerPlayer(group.model)
-                          const free = group.pieces.filter((piece) => piece.free).length
-                          const short = slotStock ? free < needed : false
+                          const short = modelShort(group.model)
                           return (
                             <div key={group.model} className={['flex items-center justify-between gap-3 rounded-2xl border p-3', short ? 'border-danger/30 bg-danger/10' : 'border-white/10 bg-white/5'].join(' ')}>
                               <div className="min-w-0">
                                 <div className="truncate text-sm font-bold">{group.model}</div>
-                                <div className="text-xs text-muted">{equipmentPerPlayer(group.model)} per player · {short ? <span className="text-danger">only {free} free</span> : 'auto-assigned'}</div>
+                                <div className="text-xs text-muted">{equipmentPerPlayer(group.model)} per player · {short ? <span className="text-danger">not enough free</span> : 'auto-assigned'}</div>
                               </div>
                               <div className="shrink-0 rounded-xl bg-black/30 px-2.5 py-1 text-xs font-bold">× {needed}</div>
                             </div>
@@ -3047,6 +3014,7 @@ export function ReservationCalendarPage() {
                     groups={weaponGroups}
                     selected={customWeaponIds}
                     onChange={setCustomWeaponIds}
+                    shortModels={stockShort ? stockCheck?.shortModels : []}
                     emptyText="No rental weapons in inventory."
                   />
                 </Card>
@@ -3060,6 +3028,7 @@ export function ReservationCalendarPage() {
                     groups={gearGroups}
                     selected={customEquipmentIds}
                     onChange={setCustomEquipmentIds}
+                    shortModels={stockShort ? stockCheck?.shortModels : []}
                     emptyText="No rental gear in inventory."
                   />
                 </Card>
@@ -3091,13 +3060,24 @@ export function ReservationCalendarPage() {
               ) : null}
             </Card>
 
-            {/* Bring Your Own: part of a custom selection only (packages always rent their weapons) */}
-            {selectionMode === 'custom' && (
+            {/* A fixed group price can't drop a weapon, so own weapons don't apply to that package. */}
+            {selectionMode === 'package' && pickedPackage && !packageAllowsOwnWeapons && pickedPackage.weaponIds.length > 0 ? (
+              <Card className="p-4 text-xs text-muted md:p-6">
+                <span className="font-semibold text-text">Bringing your own weapon?</span> This package has a fixed group price, so it can't leave a weapon out. Use Custom Selection to rent only what you need.
+              </Card>
+            ) : null}
+
+            {/* Bring Your Own: with a custom selection, or with a package (that player skips its weapon). */}
+            {ownWeaponsAllowed && (
             <Card className="p-4 md:p-6">
               <div className="flex items-center gap-2 text-sm font-bold">
                 <FiTool /> <span>Bring Your Own (Free)</span>
               </div>
-              <p className="mt-1 text-xs text-muted">Bringing your own weapon? Mark it here and rent fewer weapons above. Only weapons added to a player's profile count.</p>
+              <p className="mt-1 text-xs text-muted">
+                {selectionMode === 'package'
+                  ? 'Anyone bringing their own weapon gets the package without its weapon, so it isn\'t charged. Only weapons added to a player\'s profile count.'
+                  : 'Bringing your own weapon? Mark it here and rent fewer weapons above. Only weapons added to a player\'s profile count.'}
+              </p>
 
 
               {playerApprovedWeapons.length === 0 && playerApprovedEquipment.length === 0 ? (
@@ -3153,7 +3133,7 @@ export function ReservationCalendarPage() {
                     </div>
                   )}
 
-                  {playerApprovedEquipment.length > 0 && (
+                  {selectionMode === 'custom' && playerApprovedEquipment.length > 0 && (
                     <div>
                       <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted mb-2">
                         Approved Equipment ({playerApprovedEquipment.length})
@@ -3256,7 +3236,7 @@ export function ReservationCalendarPage() {
                     <div className="text-sm font-bold text-danger">Not enough rental stock for this slot</div>
                     <div className="mt-2 space-y-1 text-xs text-muted">
                       {equipmentStockCheck.filter((item) => !item.ok).map((item) => (
-                        <div key={item.name}>• {item.name}: only {item.available} free, needs {item.required} for this group.</div>
+                        <div key={item.name}>• {item.message}</div>
                       ))}
                     </div>
                     <div className="mt-2 text-xs text-muted">Reduce players, pick another package or slot, or bring your own gear.</div>
@@ -3309,7 +3289,7 @@ export function ReservationCalendarPage() {
 
               {hasInsufficientEquipmentStock ? (() => {
                 const shortage = equipmentStockCheck.find((item) => !item.ok)
-                return <InlineError className="mt-4" message={`${shortage?.name || 'Gear'}: needs ${shortage?.required ?? players}, only ${shortage?.available ?? 0} free this slot. Pick other gear or another slot.`} />
+                return <InlineError className="mt-4" message={shortage?.message || 'Not enough gear free for this slot. Pick other gear or another slot.'} />
               })() : null}
               <div className="mt-4 flex flex-col gap-2 sm:flex-row">
                 <Button variant="ghost" onClick={() => setStep(soloBooking ? 1 : 2)}>Back</Button>

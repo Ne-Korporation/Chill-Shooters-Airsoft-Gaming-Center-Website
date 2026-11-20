@@ -1239,6 +1239,10 @@ export function WaiverPage({
         </div>
       ) : null}
 
+      {/* Until the check for an existing waiver finishes, show that instead of a blank form. */}
+      {checkingSubmission && !child ? (
+        <Card className="p-6 text-sm text-muted">Checking your waiver…</Card>
+      ) : (
       <fieldset
         disabled={waiverLocked || (!child && !submitted && !identityLoaded)}
         aria-disabled={waiverLocked}
@@ -1638,6 +1642,7 @@ export function WaiverPage({
       </div>
 
       </fieldset>
+      )}
       </>
       )}
 

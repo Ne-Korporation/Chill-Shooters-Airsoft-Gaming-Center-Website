@@ -78,7 +78,7 @@ test('package bookings only take pieces from the booking branch', async () => {
     getBookingInventoryRequirements({
       db: {}, payload: { selectionMode: 'package', selectedPackageId: 'pkg', locationId: 'binan' }, players: 2, findDocumentById, listPieces,
     }),
-    /not enough Rifle stock/,
+    /Not enough Rifle free/,
   )
 })
 
@@ -115,4 +115,21 @@ test('players get one reschedule; staff moves and sent-back new dates do not cou
   assert.equal(playerRescheduleCount({ rescheduleHistory: [{ actorRole: 'user', sentBack: true }] }), 0)
   assert.equal(playerRescheduleCount({ rescheduleHistory: [{ actorRole: 'user', reason: 'New date chosen after staff sent it back: fields closed' }] }), 0)
   assert.equal(playerRescheduleCount({ rescheduleHistory: [{ actorRole: 'user', reason: '' }] }), 1)
+})
+
+test('custom rentals: the server picks free pieces of each model at the branch', async () => {
+  const { assignCustomPieces } = await import('../utils/inventoryHolds.js')
+  // The page asked for 2 rifles (sample ids); RF-1 is at Langkaan, so Salawag gets RF-2 and the unassigned RF-3.
+  const picked = await assignCustomPieces({
+    db: {}, payload: { locationId: 'salawag', customWeaponIds: ['RF-1', 'RF-2'] }, findDocumentById, listPieces,
+  })
+  assert.deepEqual(picked.customWeaponIds, ['RF-2', 'RF-3'])
+  // RF-3 already taken for the slot: only one rifle is free there, so it's short, without saying how many.
+  await assert.rejects(
+    assignCustomPieces({
+      db: {}, payload: { locationId: 'salawag', customWeaponIds: ['RF-1', 'RF-2'] }, findDocumentById, listPieces,
+      heldQuantities: new Map([['weapons:RF-3', 1]]),
+    }),
+    (err) => /Not enough Rifle free/.test(err.message) && !/\d/.test(err.message) && err.shortModels.includes('Rifle'),
+  )
 })

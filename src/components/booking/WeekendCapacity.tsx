@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { FiHeart, FiUsers } from 'react-icons/fi'
-import { getApiBase } from '../../utils/apiClient'
+import { getApiAuthHeaders, getApiBase } from '../../utils/apiClient'
 import { formatSlotRange, useSlotHours } from '../../utils/slotHours'
 import { causeDayMessage, type CauseDay } from '../../utils/causeDays'
 import { useAuth } from '../../context/AuthContext'
@@ -31,7 +31,7 @@ function useWeekendCapacity() {
   const [state, setState] = useState<{ loading: boolean; days: WeekendDay[]; causeDays: CauseDay[]; failed: boolean }>({ loading: true, days: [], causeDays: [], failed: false })
   useEffect(() => {
     let alive = true
-    const load = () => fetch(`${getApiBase()}/api/public/weekend-capacity`)
+    const load = () => fetch(`${getApiBase()}/api/public/weekend-capacity`, { headers: getApiAuthHeaders() })
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error('failed'))))
       .then((body) => { if (alive) setState({ loading: false, days: Array.isArray(body?.data) ? body.data : [], causeDays: Array.isArray(body?.causeDays) ? body.causeDays : [], failed: false }) })
       .catch(() => { if (alive) setState((current) => ({ ...current, loading: false, failed: current.days.length === 0 })) })

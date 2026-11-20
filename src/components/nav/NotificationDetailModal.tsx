@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Modal } from '../ui/Modal'
 import { Button } from '../ui/Button'
+import { FiTrash2 } from 'react-icons/fi'
 import type { NotificationItem } from '../../context/NotificationContext'
 import { apiGet } from '../../utils/apiClient'
 import { kindOf } from '../../utils/notificationDisplay'
@@ -37,11 +38,14 @@ export function NotificationDetailModal({
   role,
   userId,
   onClose,
+  onRemove,
 }: {
   notification: NotificationItem
   role?: string
   userId: string
   onClose: () => void
+  // Shown as a Remove button when given (the Notifications page); the bell leaves it out.
+  onRemove?: () => void
 }) {
   const navigate = useNavigate()
   const slotHours = useSlotHours()
@@ -82,6 +86,7 @@ export function NotificationDetailModal({
       onClose={onClose}
       footer={
         <>
+          {onRemove ? <Button variant="danger-soft" onClick={onRemove} className="mr-auto"><FiTrash2 /> Remove</Button> : null}
           <Button variant="ghost" onClick={onClose}>Close</Button>
           {destination ? (
             <Button

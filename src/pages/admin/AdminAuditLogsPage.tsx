@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { Card } from '../../components/ui/Card'
 import { FilterTabs, titleCaseLabel } from '../../components/ui/FilterTabs'
 import { Paged } from '../../components/ui/Pagination'
-import { apiGet } from '../../utils/apiClient'
+import { apiGet, apiGetAll } from '../../utils/apiClient'
 import { equipmentAlerts } from '../../utils/inventoryModels'
 
 type AuditAction = 'RESERVATION' | 'PLAYER' | 'EQUIPMENT' | 'WEAPON' | 'PAYMENT' | 'NOTIFICATION'
@@ -101,7 +101,7 @@ export function AdminAuditLogsPage() {
         const [reservationsRes, paymentsRes, equipmentRes, usersRes] = await Promise.all([
           apiGet<{ ok: boolean; data: ReservationDoc[] }>('/api/reservations?limit=200'),
           apiGet<{ ok: boolean; data: PaymentDoc[] }>('/api/payments?limit=200'),
-          apiGet<{ ok: boolean; data: EquipmentDoc[] }>('/api/equipments?limit=200'),
+          apiGetAll<any>('equipments').then((data) => ({ ok: true, data })),
           apiGet<{ ok: boolean; data: UserDoc[] }>('/api/user_accounts?limit=200'),
         ])
 
