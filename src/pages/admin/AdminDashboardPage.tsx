@@ -6,7 +6,7 @@ import { CapacityCalendar } from '../../components/booking/CapacityCalendar'
 import { useAuth } from '../../context/AuthContext'
 import { PaymentCompletePanel } from '../../components/dashboard/PaymentCompletePanel'
 import { ActionRow, ActivityList, DashboardHeader, Panel, StatTile, type ActivityTone } from '../../components/dashboard/DashboardParts'
-import { apiGet } from '../../utils/apiClient'
+import { apiGet, apiGetAll } from '../../utils/apiClient'
 import { useAutoRefresh } from '../../hooks/useAutoRefresh'
 import { equipmentAlerts } from '../../utils/inventoryModels'
 import { WeatherAdvisoryWidget } from '../../components/dashboard/WeatherAdvisoryWidget'
@@ -82,7 +82,7 @@ export function AdminDashboardPage() {
           apiGet<{ ok: boolean; data: any[] }>('/api/reservations?limit=200'),
           apiGet<{ ok: boolean; data: any[] }>('/api/payments?limit=200'),
           apiGet<{ ok: boolean; data: any[] }>('/api/user_accounts?limit=500'),
-          apiGet<{ ok: boolean; data: any[] }>('/api/equipments?limit=200'),
+          apiGetAll<any>('equipments').then((data) => ({ ok: true, data })),
           apiGet<{ ok: boolean; data: any[] }>('/api/waivers?limit=200').catch(() => ({ ok: false, data: [] as any[] })),
         ])
         const waiversToReview = (Array.isArray(waiversRes?.data) ? waiversRes.data : []).filter((waiver) =>

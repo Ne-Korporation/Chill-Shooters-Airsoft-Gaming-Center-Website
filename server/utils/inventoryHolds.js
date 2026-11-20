@@ -141,7 +141,7 @@ export async function getBookingInventoryRequirements({
       if (grams <= 0) continue
       const inStock = Math.max(0, Number(item.stockGrams) || 0)
       if (!isUsable(item) || inStock < grams) {
-        throw new Error(`Not enough BBs: ${item.name || 'Ammo'} has ${inStock.toLocaleString()} g left, but this booking needs ${grams.toLocaleString()} g.`)
+        throw new Error('Not enough BBs in stock for this booking. Choose fewer players or another package.')
       }
       requirements.push({ itemId: String(item.id || item._id), collection: 'equipments', kind: 'ammo_grams', grams, quantity: 0, capacity: 0, name: item.name || 'Ammo' })
       continue
@@ -155,7 +155,8 @@ export async function getBookingInventoryRequirements({
     const needed = players * perPlayer
     const free = await freePiecesOf('equipments', model)
     if (free.length < needed) {
-      throw new Error(`${model} has only ${free.length} piece(s) free for this slot, but ${players} players need ${perPlayer} each.`)
+      // No counts in the message: players only learn that there isn't enough, never how much is booked.
+      throw new Error(`Not enough ${model} free for this slot for ${players} player${players === 1 ? '' : 's'}. Reduce the number of players or choose another package or slot.`)
     }
     for (const piece of free.slice(0, needed)) {
       taken.add(String(piece.id))
@@ -170,7 +171,7 @@ export async function getBookingInventoryRequirements({
     const needed = Math.max(0, players - (index === 0 ? Math.min(ownWeaponCount, players) : 0))
     const free = await freePiecesOf('weapons', model)
     if (free.length < needed) {
-      throw new Error(`There is not enough ${model} stock for this booking: it needs ${needed} but only ${free.length} are free for this slot. Reduce the number of players or choose another package or slot.`)
+      throw new Error(`Not enough ${model} free for this slot for ${players} player${players === 1 ? '' : 's'}. Reduce the number of players or choose another package or slot.`)
     }
     for (const piece of free.slice(0, needed)) {
       taken.add(String(piece.id))
@@ -179,6 +180,49 @@ export async function getBookingInventoryRequirements({
   }
 
   return requirements
+}
+
+// Custom selections: players say how many of each model they want (the page sends sample piece
+// ids only to name the models and counts). The server picks the actual free pieces at the
+// booking's branch for the slot, so players never need to know which pieces are taken.
+// Returns { customWeaponIds, customEquipmentIds }, or throws naming the models that are short.
+export async function assignCustomPieces({
+  db,
+  payload,
+  findDocumentById,
+  heldQuantities = new Map(),
+  listPieces = listModelPieces,
+}) {
+  const branch = normalizeLocationId(payload.locationId || payload.location || payload.locationName)
+  const freeUnits = (item, collection) =>
+    Math.max(0, stockQuantity(item, collection) - Number(heldQuantities.get(holdKey(collection, String(item.id || item._id))) || 0))
+  const result = {}
+  const short = []
+  for (const [collection, field] of [['weapons', 'customWeaponIds'], ['equipments', 'customEquipmentIds']]) {
+    // How many of each model was asked for (ammo isn't a piece; it's sold as reloads).
+    const wanted = new Map()
+    for (const id of [...new Set((Array.isArray(payload[field]) ? payload[field] : []).map(String))]) {
+      const item = await findDocumentById(db, collection, id)
+      if (!item || !isRentalPiece(item) || isAmmo(item)) continue
+      const model = modelOf(item)
+      wanted.set(model, (wanted.get(model) || 0) + 1)
+    }
+    const ids = []
+    for (const [model, count] of wanted) {
+      const free = (await listPieces(db, collection, model))
+        .filter((piece) => isUsable(piece) && pieceAtBranch(piece, branch) && freeUnits(piece, collection) > 0)
+      if (free.length < count) short.push(model)
+      ids.push(...free.slice(0, count).map((piece) => String(piece.id)))
+    }
+    result[field] = ids
+  }
+  if (short.length) {
+    const error = new Error(`Not enough ${short.join(' and ')} free for this slot. Choose fewer, other gear, or another slot.`)
+    error.statusCode = 409
+    error.shortModels = short
+    throw error
+  }
+  return result
 }
 
 export async function holdBookingInventory({ db, session, reservationId, requirements, reservationDate, reservationTime }) {

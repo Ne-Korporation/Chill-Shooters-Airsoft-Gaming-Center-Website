@@ -3,7 +3,7 @@ import toast from 'react-hot-toast'
 import { FiPaperclip, FiPlus, FiTrash2 } from 'react-icons/fi'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
-import { apiBase, apiGet, apiPost, apiPut, getApiAuthHeaders } from '../../utils/apiClient'
+import { apiBase, apiGet, apiPost, apiPut, getApiAuthHeaders, apiGetAll } from '../../utils/apiClient'
 
 type LoanDocument = { label: string; url: string }
 
@@ -112,8 +112,8 @@ export function PartnerLoansCard({ partners }: { partners: Array<{ id: string; n
   useEffect(() => {
     void load()
     Promise.all([
-      apiGet<{ ok: boolean; data: any[] }>('/api/weapons?limit=500'),
-      apiGet<{ ok: boolean; data: any[] }>('/api/equipments?limit=500'),
+      apiGetAll<any>('weapons').then((data) => ({ ok: true, data })),
+      apiGetAll<any>('equipments').then((data) => ({ ok: true, data })),
     ]).then(([weapons, equipment]) => {
       const toOptions = (docs: any[], collection: string) => docs
         .filter((doc) => doc.source !== 'player')

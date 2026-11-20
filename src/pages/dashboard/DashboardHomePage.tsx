@@ -124,11 +124,13 @@ export function DashboardHomePage() {
           return Number.isNaN(timestamp) ? 0 : timestamp
         }
 
+        // The player's own bookings, plus bookings a captain added them to as a teammate.
         const myReservations = reservations.filter((reservation) =>
           matchesUserRecord(reservation?.userId, user.id)
           || matchesUserRecord(reservation?.playerId, user.id)
           || matchesUserRecord(reservation?.accountId, user.id)
-          || matchesUserRecord(reservation?.submittedBy, user.id),
+          || matchesUserRecord(reservation?.submittedBy, user.id)
+          || (Array.isArray(reservation?.teamMembers) && reservation.teamMembers.some((member: any) => matchesUserRecord(member?.id, user.id))),
         )
 
         const myPayments = payments.filter((payment) =>

@@ -260,13 +260,14 @@ export function AppSidebar({
 
   const playerItems: Item[] = [
     { label: 'Dashboard', to: '/app', icon: FiGrid },
+    // Checked often, so it sits right under the Dashboard.
+    notificationsItem,
     { label: 'Book a game', to: '/app/reservations', icon: FiPlusCircle },
     { label: 'My Reservations', to: '/app/my-reservations', icon: FiList },
     { label: 'My Weapons & Gear', to: `/app/players/${encodeURIComponent(user?.id || '1')}/weapons-and-equipment`, icon: FiTarget },
     { label: 'Online Waiver', to: '/app/waiver', icon: FiShield },
     { label: 'Game Evaluation', to: '/app/feedback', icon: FiMessageSquare },
     ...(hasOpenSplitPayment ? [{ label: 'Split Payment', to: '/app/split-payments', icon: FiDollarSign }] : []),
-    notificationsItem,
   ]
 
   // Marshals see what needs them on the Weapons and Gear items themselves.
@@ -279,8 +280,8 @@ export function AppSidebar({
   // Every menu ends with the profile, at the bottom of the sidebar.
   const items = (
     role === 'admin' ? adminItems
-    : role === 'marshal' ? [...marshalMenu, notificationsItem]
-    : role === 'registrar' ? [...registrarItems, notificationsItem]
+    : role === 'marshal' ? [marshalMenu[0], notificationsItem, ...marshalMenu.slice(1)]
+    : role === 'registrar' ? [registrarItems[0], notificationsItem, ...registrarItems.slice(1)]
     : playerItems
   ).map(withBadges)
 

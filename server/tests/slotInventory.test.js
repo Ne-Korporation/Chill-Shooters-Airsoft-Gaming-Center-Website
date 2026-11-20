@@ -43,7 +43,7 @@ test('every player gets one of each package weapon model, skipping pieces alread
       listPieces,
       heldQuantities: held,
     }),
-    /not enough Rifle A stock for this booking: it needs 5 but only 4 are free/,
+    /Not enough Rifle A free/,
   )
 })
 

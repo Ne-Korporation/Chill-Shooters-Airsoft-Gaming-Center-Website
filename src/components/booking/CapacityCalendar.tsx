@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useLiveRefresh } from '../../utils/liveUpdates'
 import toast from 'react-hot-toast'
 import { FiCalendar, FiChevronLeft, FiChevronRight, FiHeart, FiSlash, FiTrash2 } from 'react-icons/fi'
-import { apiPost, apiPut, getApiBase } from '../../utils/apiClient'
+import { apiPost, apiPut, getApiAuthHeaders, getApiBase } from '../../utils/apiClient'
 import { causeDayMessage, type CauseDay } from '../../utils/causeDays'
 import { closedDayMessage, type ClosedDay } from '../../utils/closedDays'
 import { addDaysISO, BOOKING_WINDOW_DAYS } from '../../utils/bookingWindow'
@@ -82,7 +82,8 @@ function monthGrid(month: string) {
 function useCapacityMonth(month: string) {
   const [state, setState] = useState<{ loading: boolean; days: WeekendDay[]; causeDays: CauseDay[]; closedDays: ClosedDay[]; todayISO: string }>({ loading: true, days: [], causeDays: [], closedDays: [], todayISO: manilaToday() })
   const load = useCallback(() => {
-    return fetch(`${getApiBase()}/api/public/capacity-calendar?month=${encodeURIComponent(month)}`)
+    // Signed-in staff get real head counts; players and visitors only see available / full.
+    return fetch(`${getApiBase()}/api/public/capacity-calendar?month=${encodeURIComponent(month)}`, { headers: getApiAuthHeaders() })
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error('failed'))))
       .then((body) => setState({
         loading: false,

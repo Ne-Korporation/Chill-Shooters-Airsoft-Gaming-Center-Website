@@ -33,18 +33,29 @@ export type ReservationDetails = {
   depositAmount?: number
   balanceAmount?: number
   paymentMode?: string
+  // The captain's name, kept on the booking when it's made.
+  bookerName?: string
   paymentState?: string
   pricingBreakdown?: Array<{ label?: string; amount?: number }>
   teamMembers?: Array<{ id?: string; name?: string }>
   ownWeapons?: string
   ownEquipment?: string
   createdAtISO?: string
-  rescheduleHistory?: Array<{ fromDate?: string; fromTime?: string; toDate?: string; toTime?: string; reason?: string; atISO?: string }>
+  rescheduleHistory?: Array<{ fromDate?: string; fromTime?: string; toDate?: string; toTime?: string; reason?: string; atISO?: string; actorRole?: string }>
 }
 
 export type Payment = { amount?: number; paymentMethod?: string; paymentStatus?: string; createdAtISO?: string; transactionReference?: string }
 
 const peso = (value?: number) => `₱${Number(value || 0).toLocaleString('en-PH', { maximumFractionDigits: 2 })}`
+
+// "2026-11-15", "morning" → "Sun, Nov 15 (morning)".
+function gameSlotLabel(dateISO?: string, slot?: string) {
+  const date = dateISO ? new Date(`${dateISO}T12:00:00`) : null
+  const day = date && !Number.isNaN(date.getTime())
+    ? date.toLocaleDateString('en-PH', { weekday: 'short', month: 'short', day: 'numeric' })
+    : dateISO || '—'
+  return slot ? `${day} (${slot})` : day
+}
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -185,7 +196,12 @@ export function ReservationChargesSections({ reservation, payments }: { reservat
           <Row label={fullOnline ? 'Online payment (full amount)' : 'Down payment (online)'}>{peso(reservation.depositAmount)}</Row>
           <Row label="Paid so far">{peso(paid)}</Row>
           <Row label="Balance due on game day">{peso(Math.max(0, total - Math.max(paid, 0)))}</Row>
-          <Row label="Who pays">{reservation.paymentMode === 'split' ? 'Split: each player pays their share' : 'The captain paid'}</Row>
+          {/* The captain pays for everyone unless the team split it; "To be paid by" until it's in. */}
+          {reservation.paymentMode === 'split' ? (
+            <Row label="Paid by">Each player pays their share</Row>
+          ) : (
+            <Row label={paid > 0 ? 'Paid by' : 'To be paid by'}>{reservation.bookerName ? `${reservation.bookerName} (captain)` : 'The captain'}</Row>
+          )}
         </div>
         {payments.length ? (
           <ul className="mt-2 space-y-1 text-xs text-muted">
@@ -202,11 +218,20 @@ export function ReservationChargesSections({ reservation, payments }: { reservat
 
       {reservation.rescheduleHistory?.length ? (
         <section className="mt-4">
-          <div className="text-xs uppercase tracking-widest text-muted">Reschedules</div>
-          <ul className="mt-2 space-y-1 text-xs text-muted">
+          <div className="text-xs uppercase tracking-widest text-muted">Date changes</div>
+          <ul className="mt-2 space-y-2">
             {reservation.rescheduleHistory.map((event, index) => (
-              <li key={index}>
-                {event.fromDate} {event.fromTime} → {event.toDate} {event.toTime}{event.reason ? ` — ${event.reason}` : ''}
+              <li key={index} className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm">
+                <div>
+                  Moved from <span className="font-semibold">{gameSlotLabel(event.fromDate, event.fromTime)}</span>
+                  {' '}to <span className="font-semibold">{gameSlotLabel(event.toDate, event.toTime)}</span>
+                </div>
+                {event.reason ? <div className="mt-0.5 text-xs text-muted">Reason: {event.reason}</div> : null}
+                {event.atISO ? (
+                  <div className="mt-0.5 text-xs text-muted">
+                    Changed {event.actorRole && event.actorRole !== 'user' ? 'by staff ' : ''}on {new Date(event.atISO).toLocaleDateString('en-PH', { timeZone: 'Asia/Manila', month: 'short', day: 'numeric', year: 'numeric' })}
+                  </div>
+                ) : null}
               </li>
             ))}
           </ul>

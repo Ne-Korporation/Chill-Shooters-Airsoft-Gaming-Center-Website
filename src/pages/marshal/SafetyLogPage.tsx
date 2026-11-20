@@ -5,7 +5,7 @@ import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { ItemCombobox, type ComboItem } from '../../components/ui/ItemCombobox'
-import { apiGet, apiPost, apiPut } from '../../utils/apiClient'
+import { apiGet, apiPost, apiPut, apiGetAll } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
 import { Paged } from '../../components/ui/Pagination'
 
@@ -128,8 +128,8 @@ export function SafetyLogPage({ embedded = false, tab: tabFromPage, onRepairOpen
       const [fpsRes, damageRes, weaponRes, equipmentRes] = await Promise.all([
         apiGet<{ ok: boolean; data: FpsLog[]; limits: { aeg: number; sniper: number } }>('/api/fps-logs'),
         apiGet<{ ok: boolean; data: DamageReport[] }>('/api/damage-reports'),
-        apiGet<{ ok: boolean; data: any[] }>('/api/weapons?limit=200'),
-        apiGet<{ ok: boolean; data: any[] }>('/api/equipments?limit=200'),
+        apiGetAll<any>('weapons').then((data) => ({ ok: true, data })),
+        apiGetAll<any>('equipments').then((data) => ({ ok: true, data })),
       ])
       setFpsLogs(fpsRes.data || [])
       if (fpsRes.limits) setLimits(fpsRes.limits)

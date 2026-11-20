@@ -7,7 +7,7 @@ import { confirmDialog } from '../../components/ui/ConfirmDialog'
 import { FilterTabs, titleCaseLabel } from '../../components/ui/FilterTabs'
 import { Card } from '../../components/ui/Card'
 import { Modal } from '../../components/ui/Modal'
-import { apiGet, apiPost, apiPut, apiDelete } from '../../utils/apiClient'
+import { apiGet, apiPost, apiPut, apiDelete, apiGetAll } from '../../utils/apiClient'
 import { calculatePackagePricing, formatDiscountTargetLabel, MAX_EQUIPMENT_PER_PLAYER, PACKAGE_ENTRANCE_FEE_PER_PLAYER, packageRegularTotal, type PackageLike, packageEquipmentQty, resolvePackageDiscountConfig, type PackageDiscountMode, type PackageDiscountTarget } from '../../utils/packagePricing'
 import { isAmmo, modelOf, summarizeModels } from '../../utils/inventoryModels'
 
@@ -222,8 +222,8 @@ export function AdminRentalPackagesPage() {
     try {
       const [pkgRes, wepRes, eqRes, countsRes] = await Promise.all([
         apiGet<{ ok: boolean; data: any[] }>('/api/packages?limit=200'),
-        apiGet<{ ok: boolean; data: any[] }>('/api/weapons?limit=200'),
-        apiGet<{ ok: boolean; data: any[] }>('/api/equipments?limit=200'),
+        apiGetAll<any>('weapons').then((data) => ({ ok: true, data })),
+        apiGetAll<any>('equipments').then((data) => ({ ok: true, data })),
         // Without the counts, Delete stays hidden (Archive still works).
         apiGet<{ ok: boolean; data: Record<string, number> }>('/api/packages/booking-counts').catch(() => null),
       ])

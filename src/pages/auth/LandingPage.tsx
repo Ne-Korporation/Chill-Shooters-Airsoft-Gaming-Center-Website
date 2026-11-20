@@ -58,7 +58,7 @@ export type LandingReservationPrefill = {
 const bookingLocations: { id: LocationOption; name: string; detail: string; maxPlayers: number }[] = [
   { id: 'salawag', name: 'Chill Shooters (Salawag)', detail: 'About 2 hectares · up to 400 players per slot', maxPlayers: 400 },
   { id: 'langkaan', name: 'Chill Shooters (Langkaan)', detail: 'About 2 hectares · up to 400 players per slot', maxPlayers: 400 },
-  { id: 'binan', name: 'BBC Airsoft Binan Laguna', detail: 'About 4 hectares · up to 200 players per slot', maxPlayers: 200 },
+  { id: 'binan', name: 'BBC Airsoft Binan Laguna', detail: 'About 1 hectare · up to 200 players per slot', maxPlayers: 200 },
 ]
 
 // Fields are assigned from the group size, same as the booking page: 10-19 players get Upper Ground,
@@ -128,7 +128,7 @@ const fieldLocations = [
   {
     name: 'BBC Airsoft Binan Laguna',
     img: '/loma.png',
-    size: '~4 hectares',
+    size: '~1 hectare',
     capacity: 'Up to 200 players per slot',
     desc: 'Ideal for large groups and tournaments.',
     mapQuery: 'BBC Airsoft, Biñan, Laguna',

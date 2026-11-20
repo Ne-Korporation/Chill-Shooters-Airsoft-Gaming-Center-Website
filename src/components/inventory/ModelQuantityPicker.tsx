@@ -15,18 +15,21 @@ export function assignPieces(groups: PickerGroup[], selected: string[], model: s
   return [...others, ...[...kept, ...extra].slice(0, target)]
 }
 
-// One row per model ("M4 Rifle · ₱500 each · 12 free") with a − / + counter. The exact pieces are
-// assigned automatically from what's free for the slot.
+// One row per model ("M4 Rifle · ₱500 each") with a − / + counter. The server picks the exact
+// pieces at booking from what's free for the slot; players never see stock or booked counts, only
+// "not enough free" on a model the server reported short (shortModels).
 export function ModelQuantityPicker({
   groups,
   selected,
   onChange,
   emptyText = 'Nothing in inventory.',
+  shortModels = [],
 }: {
   groups: PickerGroup[]
   selected: string[]
   onChange: (ids: string[]) => void
   emptyText?: string
+  shortModels?: string[]
 }) {
   if (groups.length === 0) return <div className="mt-4 text-sm text-muted">{emptyText}</div>
 
@@ -48,7 +51,7 @@ export function ModelQuantityPicker({
             <div className="min-w-0">
               <div className="truncate text-sm font-bold">{group.model}</div>
               <div className="text-xs text-muted">
-                ₱{group.price} each · {free === 0 ? <span className="text-danger">none free this slot</span> : `${free} free`}
+                ₱{group.price} each{free === 0 ? <span className="text-danger"> · not available</span> : shortModels.includes(group.model) && count > 0 ? <span className="text-danger"> · not enough free this slot</span> : null}
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
