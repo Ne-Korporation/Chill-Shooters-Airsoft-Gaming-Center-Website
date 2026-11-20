@@ -2,8 +2,9 @@ import React, { useState } from 'react'
 import { FiCheck, FiCheckSquare, FiEdit3, FiPlus, FiTrash2, FiX } from 'react-icons/fi'
 import { Button } from '../ui/Button'
 import { Modal } from '../ui/Modal'
+import { BRANCHES } from '../../utils/branches'
 
-export type BulkChange = { status?: string; price?: number; category?: string }
+export type BulkChange = { status?: string; price?: number; category?: string; locationId?: string }
 
 const fieldClass = 'h-10 w-full rounded-xl border border-white/10 bg-background px-3 text-sm text-text [&>option]:bg-background'
 
@@ -78,7 +79,7 @@ export function InventoryToolbar({
   )
 }
 
-// Pop-up for the ticked rows: set one status, price, or category on all of them, or remove them.
+// Pop-up for the ticked rows: set one status, price, category or branch on all of them, or remove them.
 export function BulkUpdateModal({
   count,
   noun,
@@ -101,6 +102,7 @@ export function BulkUpdateModal({
   const [status, setStatus] = useState('')
   const [price, setPrice] = useState('')
   const [category, setCategory] = useState('')
+  const [branch, setBranch] = useState('')
 
   return (
     <Modal eyebrow={`${count} ${noun} selected`} title="Update selected" onClose={onClose} size="md">
@@ -131,6 +133,17 @@ export function BulkUpdateModal({
             </select>
           </label>
           <Button disabled={busy || !category} onClick={() => onApply({ category })}>Apply</Button>
+        </div>
+        <div className="flex items-end gap-2">
+          <label className="flex-1 text-sm font-semibold">
+            Branch
+            <select value={branch} onChange={(e) => setBranch(e.target.value)} className={`${fieldClass} mt-1`}>
+              <option value="">Choose a branch…</option>
+              {BRANCHES.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+              <option value="none">Unassigned (any branch)</option>
+            </select>
+          </label>
+          <Button disabled={busy || !branch} onClick={() => onApply({ locationId: branch === 'none' ? '' : branch })}>Apply</Button>
         </div>
         <div className="border-t border-white/10 pt-4">
           <Button variant="danger-soft" className="w-full" disabled={busy} onClick={onRemove}>

@@ -9,7 +9,7 @@ import { ACCEPTED_ID_TYPES } from '../utils/idTypes.js'
 import { getActorName } from '../utils/actors.js'
 import { NICKNAME_MAX, cleanMiddleInitial, cleanNamePart, composeFullName } from '../utils/names.js'
 import { calculateBookingPrice, getAmmoReloadPrice, normalizeExtraAmmoReloads } from '../utils/bookingPricing.js'
-import { getBookingInventoryRequirements, getHeldQuantities, holdBookingInventory, stockQuantity } from '../utils/inventoryHolds.js'
+import { getBookingInventoryRequirements, getHeldQuantities, holdBookingInventory, pieceAtBranch, stockQuantity } from '../utils/inventoryHolds.js'
 import { canonicalEmail, normalizeEmail, sameEmailFilter } from '../utils/emails.js'
 import { submitGcashPayment } from '../utils/gcashPayments.js'
 import { newReservationId, nextShortId } from '../utils/shortIds.js'
@@ -45,8 +45,10 @@ import {
   BLOCKING_RESERVATION_STATUSES,
   getBlockingSlotReservations,
   getSlotPlayerCount,
+  groundIdsForPlayers,
   normalizeLocationId,
   slotConflict,
+  syncPublicGrounds,
 } from '../utils/bookingSlots.js'
 
 const router = express.Router()
@@ -56,7 +58,7 @@ const SLOT_NAMES = ['morning', 'afternoon', 'evening']
 const DEFAULT_LOCATION_CAPACITIES = {
   salawag: { morning: 400, afternoon: 400, evening: 400 },
   langkaan: { morning: 400, afternoon: 400, evening: 400 },
-  binan: { morning: 600, afternoon: 600, evening: 600 },
+  binan: { morning: 200, afternoon: 200, evening: 200 },
 }
 
 function getLocationCapacities() {
@@ -383,11 +385,13 @@ router.get('/team-directory/lookup', requireAuth, requireRole('user'), async (re
   }
 })
 
-// GET /api/inventory-availability?date=YYYY-MM-DD&slot=morning
-// Rental stock left for one date/slot after existing booking holds.
+// GET /api/inventory-availability?date=YYYY-MM-DD&slot=morning&location=salawag
+// Rental stock left for one date/slot after existing booking holds. With a location, pieces kept
+// at another branch count as unavailable (each branch rents only its own stock).
 router.get('/inventory-availability', requireAuth, async (req, res) => {
   const reservationDate = String(req.query.date || '').trim()
   const reservationTime = String(req.query.slot || '').trim().toLowerCase()
+  const branch = normalizeLocationId(req.query.location)
   if (!/^\d{4}-\d{2}-\d{2}$/.test(reservationDate) || !SLOT_NAMES.includes(reservationTime)) {
     return res.status(400).json({ ok: false, error: 'date (YYYY-MM-DD) and slot are required' })
   }
@@ -397,14 +401,14 @@ router.get('/inventory-availability', requireAuth, async (req, res) => {
     const held = await getHeldQuantities(db, { reservationDate, reservationTime })
     const summarize = async (collection) => {
       const items = await db.collection(collection)
-        .find({}, { projection: { id: 1, qty: 1, quantity: 1, stock: 1, status: 1 } })
+        .find({}, { projection: { id: 1, qty: 1, quantity: 1, stock: 1, status: 1, locationId: 1 } })
         .toArray()
       return Object.fromEntries(items.map((item) => {
         const id = String(item.id || item._id)
         const stock = stockQuantity(item, collection)
         const heldUnits = Number(held.get(`${collection}:${id}`) || 0)
-        const usable = String(item.status || 'available').toLowerCase() === 'available'
-        return [id, { stock, held: heldUnits, available: usable ? Math.max(0, stock - heldUnits) : 0 }]
+        const usable = String(item.status || 'available').toLowerCase() === 'available' && pieceAtBranch(item, branch)
+        return [id, { stock, held: heldUnits, available: usable ? Math.max(0, stock - heldUnits) : 0, locationId: item.locationId || '' }]
       }))
     }
     const [weapons, equipments] = await Promise.all([summarize('weapons'), summarize('equipments')])
@@ -683,16 +687,16 @@ const WALK_IN_LOCATION_NAMES = {
 }
 const ONSITE_PAYMENT_METHODS = { cash: 'Cash', gcash: 'GCash', bank_transfer: 'Bank transfer' }
 
-// POST /api/walk-ins — the counter registers a walk-in group for today's public game: own-gear
-// players pay the entrance fee; rental walk-ins only get gear that is still free. Uses the same
-// capacity, inventory, and pricing checks as online bookings, and records the onsite payment.
+// POST /api/walk-ins — the counter registers a walk-in group for today's public game. Walk-ins are
+// only for players who bring their own complete gear (they pay the entrance fee); anyone who needs
+// rental gear must reserve online. Uses the same capacity and pricing checks as online bookings,
+// and records the onsite payment.
 router.post('/walk-ins', requireAuth, requireRole('admin', 'registrar'), async (req, res) => {
   const body = req.body || {}
   const walkInName = String(body.name || '').trim().slice(0, 120)
   const locationId = normalizeLocationId(body.locationId)
   const reservationTime = String(body.reservationTime || '').trim().toLowerCase()
   const playersCount = Number(body.players)
-  const mode = String(body.mode || 'own_gear')
   const paymentMethod = String(body.paymentMethod || '').toLowerCase()
   const reference = String(body.reference || '').trim().slice(0, 120)
   const reservationDate = manilaTodayISO()
@@ -712,7 +716,9 @@ router.post('/walk-ins', requireAuth, requireRole('admin', 'registrar'), async (
   if (!Number.isInteger(playersCount) || playersCount < 1 || playersCount > 100) {
     return res.status(400).json({ ok: false, error: 'Players must be a whole number from 1 to 100.' })
   }
-  if (!['own_gear', 'package', 'custom'].includes(mode)) return res.status(400).json({ ok: false, error: 'Choose own gear, a package, or custom rentals.' })
+  if (String(body.mode || 'own_gear') !== 'own_gear') {
+    return res.status(400).json({ ok: false, error: 'Walk-ins must bring their own complete gear. Players who need rental gear must reserve online.' })
+  }
   if (isWeekdayDateISO(reservationDate)) {
     return res.status(400).json({ ok: false, error: 'Walk-ins are only accepted for public games on weekends.' })
   }
@@ -735,13 +741,13 @@ router.post('/walk-ins', requireAuth, requireRole('admin', 'registrar'), async (
     reservationTime,
     sessionType: 'public',
     numberOfPlayers: playersCount,
-    fieldIds: [LOCATION_FIELD_DEFS[locationId][0].id],
-    fieldId: LOCATION_FIELD_DEFS[locationId][0].id,
-    selectionMode: mode === 'package' ? 'package' : 'custom',
-    selectedPackageId: mode === 'package' ? String(body.selectedPackageId || '') : undefined,
-    customWeaponIds: mode === 'custom' && Array.isArray(body.customWeaponIds) ? body.customWeaponIds.map(String) : [],
-    customEquipmentIds: mode === 'custom' && Array.isArray(body.customEquipmentIds) ? body.customEquipmentIds.map(String) : [],
-    packageName: mode === 'own_gear' ? 'Walk-in (own gear)' : undefined,
+    // Re-assigned from the slot's whole public headcount once saved (syncPublicGrounds).
+    fieldIds: groundIdsForPlayers(locationId, playersCount),
+    fieldId: groundIdsForPlayers(locationId, playersCount)[0],
+    selectionMode: 'custom',
+    customWeaponIds: [],
+    customEquipmentIds: [],
+    packageName: 'Walk-in (own gear)',
     paymentMode: 'self',
     teamSize: 1,
     teamMembers: [],
@@ -756,24 +762,10 @@ router.post('/walk-ins', requireAuth, requireRole('admin', 'registrar'), async (
   let session
   try {
     const db = await getDb()
-    if (mode === 'package') {
-      const pkg = await findDocumentById(db, 'packages', doc.selectedPackageId)
-      doc.packageName = pkg?.name || 'Rental package'
-      doc.selectedGameplayName = doc.packageName
-    } else if (mode === 'custom') {
-      doc.packageName = 'Walk-in (custom rentals)'
-    }
     try {
       Object.assign(doc, await calculateBookingPrice({ db, payload: doc, players: playersCount, findDocumentById, userId: null }))
-      doc.inventoryRequirements = await getBookingInventoryRequirements({
-        db,
-        payload: doc,
-        players: playersCount,
-        findDocumentById,
-        heldQuantities: await getHeldQuantities(db, { reservationDate, reservationTime }),
-      })
     } catch (err) {
-      return res.status(409).json({ ok: false, error: err.message || 'That gear is not available for this group.' })
+      return res.status(409).json({ ok: false, error: err.message || 'Unable to price this walk-in.' })
     }
 
     session = startDbSession()
@@ -786,11 +778,9 @@ router.post('/walk-ins', requireAuth, requireRole('admin', 'registrar'), async (
       await assertSlotAvailable({
         db, session, locationId, reservationDate, reservationTime, sessionType: 'public', fieldIds: doc.fieldIds, playersCount,
       })
-      await holdBookingInventory({ db, session, reservationId: doc.id, requirements: doc.inventoryRequirements || [] })
       await db.collection('reservations').insertOne(doc, { session })
+      await syncPublicGrounds(db, { locationId, reservationDate, reservationTime }, session)
     })
-
-    if ((doc.inventoryRequirements || []).some((r) => r.kind === 'ammo_grams')) void checkAmmoStock(db).catch(() => null)
 
     // Marshals see walk-ins on the games board like any confirmed booking.
     await db.collection('gameplay').insertOne({
@@ -876,8 +866,9 @@ function daysBetweenISO(fromISO, toISO) {
   return Math.round((Date.parse(`${toISO}T00:00:00Z`) - Date.parse(`${fromISO}T00:00:00Z`)) / 86400000)
 }
 
-// POST /api/reservations/:id/reschedule { reservationDate, reservationTime, fieldIds?, reason }
-// Moves a booking to a new date/slot at least three days before the original date.
+// POST /api/reservations/:id/reschedule { reservationDate, reservationTime, reason? }
+// One-click reschedule: the player only picks the new date and slot (no reason needed) at least
+// three days before the original date. Grounds are re-assigned from the headcount.
 // Payments stay linked to the same reservation id, so the deposit carries over.
 router.post('/reservations/:id/reschedule', requireAuth, requireRole('user', 'admin', 'registrar'), async (req, res) => {
   const body = req.body || {}
@@ -914,7 +905,6 @@ router.post('/reservations/:id/reschedule', requireAuth, requireRole('user', 'ad
     // A booking staff sent back can be moved any time, and goes back to pending for staff to re-check.
     const sentBack = Boolean(reservation.sentBack) && status === 'needs review'
     if (!reason && sentBack) reason = `New date chosen after staff sent it back: ${reservation.sentBack.note}`.slice(0, 500)
-    if (!reason) return res.status(400).json({ ok: false, error: 'Please give a reason for rescheduling.' })
 
     const originalDate = String(reservation.reservationDate || reservation.dateISO || '')
     const originalTime = String(reservation.reservationTime || reservation.slot || '').toLowerCase()
@@ -924,7 +914,7 @@ router.post('/reservations/:id/reschedule', requireAuth, requireRole('user', 'ad
         error: `Reservations can only be rescheduled at least ${RESCHEDULE_CUTOFF_DAYS} days before the original date.`,
       })
     }
-    if (newDate === originalDate && newTime === originalTime && !Array.isArray(body.fieldIds)) {
+    if (newDate === originalDate && newTime === originalTime) {
       return res.status(400).json({ ok: false, error: 'Choose a different date or time slot.' })
     }
 
@@ -944,13 +934,9 @@ router.post('/reservations/:id/reschedule', requireAuth, requireRole('user', 'ad
       })
     }
 
-    const knownFieldIds = new Set((LOCATION_FIELD_DEFS[locationId] || []).map((field) => field.id))
-    const fieldIds = Array.isArray(body.fieldIds)
-      ? Array.from(new Set(body.fieldIds.map(String).filter(Boolean)))
-      : extractReservationFieldIds(reservation)
-    if (fieldIds.length === 0 || fieldIds.some((id) => !knownFieldIds.has(id))) {
-      return res.status(400).json({ ok: false, error: 'One or more selected fields are invalid for this location.' })
-    }
+    if (!LOCATION_FIELD_DEFS[locationId]) return res.status(400).json({ ok: false, error: 'This reservation has an unknown location.' })
+    // Re-synced from the new slot's public headcount below for public games.
+    const fieldIds = groundIdsForPlayers(locationId, playersCount)
 
     const reservationId = String(reservation.id || reservation._id)
     const nowISO = new Date().toISOString()
@@ -1053,6 +1039,14 @@ router.post('/reservations/:id/reschedule', requireAuth, requireRole('user', 'ad
           { $set: { reservationDate: newDate, reservationTime: newTime } },
           { session },
         )
+
+        // Public grounds follow each slot's headcount: the old slot may need fewer, the new one more.
+        if (sessionType !== 'private') {
+          await syncPublicGrounds(db, { locationId, reservationDate: originalDate, reservationTime: originalTime }, session)
+          await syncPublicGrounds(db, { locationId, reservationDate: newDate, reservationTime: newTime }, session)
+          const synced = await db.collection('reservations').findOne({ _id: reservation._id }, { session, projection: { fieldIds: 1, fieldId: 1 } })
+          if (synced) Object.assign(updated, { fieldIds: synced.fieldIds, fieldId: synced.fieldId })
+        }
       })
 
       // A confirmed booking already has a gameplay entry; keep its schedule in step.
@@ -1918,11 +1912,11 @@ router.post('/:collection', requireAuth, async (req, res) => {
       const reservationTime = String(payload.reservationTime || payload.slot || '').trim().toLowerCase()
       const sessionType = String(payload.sessionType || '').trim().toLowerCase()
       const playersCount = Number(payload.numberOfPlayers ?? payload.players ?? 0)
-      const fieldIds = Array.from(new Set(
-        (Array.isArray(payload.fieldIds) ? payload.fieldIds : (payload.fieldId ? [payload.fieldId] : []))
-          .map((id) => String(id))
-          .filter(Boolean),
-      ))
+      // Grounds are assigned by the server from the headcount; whatever the browser sent is ignored.
+      // Public games are re-assigned from the whole slot's headcount once the booking is saved.
+      const fieldIds = groundIdsForPlayers(locationId, playersCount)
+      payload.fieldIds = fieldIds
+      payload.fieldId = fieldIds[0]
 
       if (!locationId) return res.status(400).json({ ok: false, error: 'locationId is required' })
       if (!/^\d{4}-\d{2}-\d{2}$/.test(reservationDate) || Number.isNaN(new Date(`${reservationDate}T12:00:00`).getTime())) {
@@ -2124,6 +2118,9 @@ router.post('/:collection', requireAuth, async (req, res) => {
           })
           const insert = await db.collection(collection).insertOne(doc, { session })
           insertedId = insert.insertedId
+          if (doc.sessionType === 'public') {
+            await syncPublicGrounds(db, { locationId: doc.locationId, reservationDate: doc.reservationDate, reservationTime: doc.reservationTime }, session)
+          }
           // The booking now holds the slot itself.
           await db.collection('slot_holds').deleteOne({ _id: `user:${doc.userId}` }, { session })
         })

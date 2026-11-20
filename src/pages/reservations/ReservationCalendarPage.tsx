@@ -46,6 +46,7 @@ import { DEFAULT_SLOT_HOURS, formatSlotRange, manilaTodayISO, slotHasStarted, us
 import { causeDayMessage, useCauseDays } from '../../utils/causeDays'
 import { closedDayMessage, useClosedDays } from '../../utils/closedDays'
 import { bookingRoles } from '../../utils/bookingRoles'
+import { pieceAtBranch } from '../../utils/branches'
 
 // Slot holds last 15 minutes on the server; refresh well before that while the player is booking.
 const SLOT_HOLD_REFRESH_MS = 4 * 60 * 1000
@@ -100,6 +101,8 @@ type WeaponItem = {
   category: string
   status: string
   price: number
+  // Branch that rents out this piece; blank = not assigned yet (any branch).
+  locationId?: string
 }
 
 type EquipmentItemDetails = {
@@ -112,6 +115,7 @@ type EquipmentItemDetails = {
   category: string
   status: string
   price: number
+  locationId?: string
 }
 
 type ReservationRecord = {
@@ -195,7 +199,7 @@ const locationFields: Record<LocationOption, Field[]> = {
 const locationMaxPlayers: Record<LocationOption, number> = {
   salawag: 400,
   langkaan: 400,
-  binan: 600,
+  binan: 200,
 }
 
 function capacityFor(location: LocationOption, _slot: TimeSlot) {
@@ -219,7 +223,7 @@ function getFieldById(fieldId: string): Field | undefined {
 const locationOptions: { id: LocationOption; name: string; detail: string; capacity: string }[] = [
   { id: 'salawag', name: 'Chill Shooters (Salawag)', detail: 'Approximately 2 hectares.', capacity: 'Up to 400 players per slot' },
   { id: 'langkaan', name: 'Chill Shooters (Langkaan)', detail: 'Approximately 2 hectares.', capacity: 'Up to 400 players per slot' },
-  { id: 'binan', name: 'BBC Airsoft Binan Laguna', detail: 'Approximately 4 hectares.', capacity: 'Up to 600 players per slot' },
+  { id: 'binan', name: 'BBC Airsoft Binan Laguna', detail: 'Approximately 4 hectares.', capacity: 'Up to 200 players per slot' },
 ]
 
 const slotLabels: Record<TimeSlot, string> = {
@@ -854,6 +858,7 @@ export function ReservationCalendarPage() {
           category: d.category || 'rifles',
           status: d.status || 'available',
           price: typeof d.price === 'number' ? d.price : 0,
+          locationId: d.locationId || '',
         })))
 
         const eqDocs = Array.isArray(eqRes?.data) ? eqRes.data : []
@@ -867,6 +872,7 @@ export function ReservationCalendarPage() {
           category: d.category || 'gear',
           status: d.status || 'available',
           price: typeof d.price === 'number' ? d.price : 0,
+          locationId: d.locationId || '',
         })))
       } catch (e: any) {
         if (!cancelled) setLoadError(`Couldn't load packages and gear: ${String(e?.message || e)}`)
@@ -933,12 +939,12 @@ export function ReservationCalendarPage() {
     if (!dateISO || !slot) return
     let cancelled = false
     setLoadingSlotStock(true)
-    apiGet<{ ok: boolean; data: SlotStock }>(`/api/inventory-availability?date=${encodeURIComponent(dateISO)}&slot=${encodeURIComponent(slot)}`)
+    apiGet<{ ok: boolean; data: SlotStock }>(`/api/inventory-availability?date=${encodeURIComponent(dateISO)}&slot=${encodeURIComponent(slot)}&location=${encodeURIComponent(selectedLocation)}`)
       .then((res) => { if (!cancelled) setSlotStock(res?.data ?? null) })
       .catch(() => { if (!cancelled) setSlotStock(null) })
       .finally(() => { if (!cancelled) setLoadingSlotStock(false) })
     return () => { cancelled = true }
-  }, [dateISO, slot, step])
+  }, [dateISO, slot, step, selectedLocation])
 
   // A piece is free when it's in service and not reserved by another booking for this slot.
   const pieceFree = useCallback((collection: 'weapons' | 'equipments', piece: { id: string; status: string }) => {
@@ -947,8 +953,13 @@ export function ReservationCalendarPage() {
     return entry ? entry.available > 0 : true
   }, [slotStock])
 
-  const rentalWeapons = useMemo(() => weapons.filter((w) => w.source !== 'player'), [weapons])
-  const rentalEquipment = useMemo(() => equipment.filter((e) => e.source !== 'player'), [equipment])
+  // Packages name models through one piece id each, which may sit at any branch: look models up
+  // in every rental piece. Free stock then comes from this branch's pieces only.
+  const allRentalWeapons = useMemo(() => weapons.filter((w) => w.source !== 'player'), [weapons])
+  const allRentalEquipment = useMemo(() => equipment.filter((e) => e.source !== 'player'), [equipment])
+  // Each branch rents out only its own stock (plus pieces not assigned to a branch yet).
+  const rentalWeapons = useMemo(() => weapons.filter((w) => w.source !== 'player' && pieceAtBranch(w, selectedLocation)), [weapons, selectedLocation])
+  const rentalEquipment = useMemo(() => equipment.filter((e) => e.source !== 'player' && (isAmmo(e) || pieceAtBranch(e, selectedLocation))), [equipment, selectedLocation])
 
   const groupPieces = useCallback((collection: 'weapons' | 'equipments', items: Array<WeaponItem | EquipmentItemDetails>): PickerGroup[] => {
     const groups = new Map<string, PickerGroup>()
@@ -976,14 +987,14 @@ export function ReservationCalendarPage() {
   // Mirrors the server: each player gets one of every weapon model in the package (an approved
   // own gun replaces the first, main one), from the free pieces of each model.
   const packageWeaponStock = useCallback((pkg: RentalPackage) => {
-    const models = modelsOfIds(rentalWeapons, pkg.weaponIds)
+    const models = modelsOfIds(allRentalWeapons, pkg.weaponIds)
     const needs = models.map((_, index) => Math.max(0, players - (index === 0 ? Math.min(verifiedOwnWeaponCount, players) : 0)))
     const needed = needs.reduce((sum, n) => sum + n, 0)
     if (!slotStock) return { needed, available: null as number | null, ok: true }
     const free = models.map((model) => freeOfModel(weaponGroups, model))
     const available = free.reduce((sum, n, index) => sum + Math.min(n, needs[index]), 0)
     return { needed, available, ok: free.every((n, index) => n >= needs[index]) }
-  }, [modelsOfIds, rentalWeapons, players, verifiedOwnWeaponCount, slotStock, freeOfModel, weaponGroups])
+  }, [modelsOfIds, allRentalWeapons, players, verifiedOwnWeaponCount, slotStock, freeOfModel, weaponGroups])
 
   // Only packages that fit the headcount can be picked (a group package fits exactly its size).
   const cheapestPackage = useMemo(() => {
@@ -1226,6 +1237,8 @@ export function ReservationCalendarPage() {
   }, [selectedLocation, serverCapacities, capacitySlot])
 
   const remainingSlots = maxCapacity - usedPlayers
+  // Public games: grounds open as the whole slot fills (same rule the server applies).
+  const publicGroundCount = fieldCountForPlayers(usedPlayers + players)
   const hasRequiredSlotSelection = isWd ? slotTouched : selectedSlots.length > 0
   const pickedSlotStarted = bookedSlots.some((s) => slotHasStarted(slotHours, s, dateISO))
   const canProceed = hasRequiredSlotSelection && !pickedSlotStarted && remainingSlots >= players && meetsFieldRequirements
@@ -1256,9 +1269,9 @@ export function ReservationCalendarPage() {
     return weaponPrices + equipmentPrices
   }, [packageWeapons, packageEquipment])
 
-  const packageWeaponModels = useMemo(() => (selectedPackage ? modelsOfIds(rentalWeapons, selectedPackage.weaponIds) : []), [selectedPackage, modelsOfIds, rentalWeapons])
+  const packageWeaponModels = useMemo(() => (selectedPackage ? modelsOfIds(allRentalWeapons, selectedPackage.weaponIds) : []), [selectedPackage, modelsOfIds, allRentalWeapons])
   // Ammo is given per refill (in grams), not reserved as pieces, so it has no picker or stock check.
-  const packageEquipmentModels = useMemo(() => (selectedPackage ? modelsOfIds(rentalEquipment.filter((item) => !isAmmo(item)), selectedPackage.equipmentIds) : []), [selectedPackage, modelsOfIds, rentalEquipment])
+  const packageEquipmentModels = useMemo(() => (selectedPackage ? modelsOfIds(allRentalEquipment.filter((item) => !isAmmo(item)), selectedPackage.equipmentIds) : []), [selectedPackage, modelsOfIds, allRentalEquipment])
   const packageWeaponGroups = useMemo(() => weaponGroups.filter((group) => packageWeaponModels.includes(group.model)), [weaponGroups, packageWeaponModels])
   const packageEquipmentGroups = useMemo(() => equipmentGroups.filter((group) => packageEquipmentModels.includes(group.model)), [equipmentGroups, packageEquipmentModels])
 
@@ -1271,6 +1284,20 @@ export function ReservationCalendarPage() {
 
   const packageWeaponsNeeded = selectedPackage ? packageWeaponStock(selectedPackage).needed : 0
 
+  // Picked pieces from another branch can't be rented here: drop them when the location changes.
+  useEffect(() => {
+    if (weapons.length === 0 && equipment.length === 0) return
+    const keep = (items: Array<{ id: string; locationId?: string }>) => (ids: string[]) => {
+      const next = ids.filter((id) => {
+        const item = items.find((piece) => piece.id === id)
+        return !item || pieceAtBranch(item, selectedLocation)
+      })
+      return next.length === ids.length ? ids : next
+    }
+    setCustomWeaponIds(keep(weapons))
+    setCustomEquipmentIds(keep(equipment))
+  }, [selectedLocation, weapons, equipment])
+
   const customSelectedWeapons = useMemo(() => {
     return weapons.filter((w) => customWeaponIds.includes(w.id))
   }, [weapons, customWeaponIds])
@@ -1282,9 +1309,9 @@ export function ReservationCalendarPage() {
   // Pieces of an equipment model each player gets in the selected package (set by the admin).
   const equipmentPerPlayer = useCallback((model: string) => {
     if (!selectedPackage) return 1
-    const ids = selectedPackage.equipmentIds.filter((id) => rentalEquipment.find((item) => item.id === id)?.model === model)
+    const ids = selectedPackage.equipmentIds.filter((id) => allRentalEquipment.find((item) => item.id === id)?.model === model)
     return Math.max(1, ...ids.map((id) => packageEquipmentQty(selectedPackage, id)))
-  }, [selectedPackage, rentalEquipment])
+  }, [selectedPackage, allRentalEquipment])
 
   // Package shortages for the selected date/slot. Custom picks are individual free pieces.
   const equipmentStockCheck = useMemo(() => {
@@ -2212,7 +2239,7 @@ export function ReservationCalendarPage() {
               </div>
             </Card>
 
-            {/* Public games are an open roster on every field: the marshals place players, so there is no field to pick. */}
+            {/* Public games share the slot: the server opens grounds from the slot's total headcount, so there is no field to pick. */}
             {publicGame && (
             <Card className="p-4 md:p-6">
               <div className="flex items-center gap-2 text-sm font-bold">
@@ -2223,9 +2250,11 @@ export function ReservationCalendarPage() {
                   <FiCheck className="h-3 w-3" />
                 </span>
                 <div className="min-w-0 flex-1">
-                  <div className="text-sm font-bold">All 3 fields</div>
-                  <div className="mt-1 text-xs text-muted">{availableFields.map((f) => f.name).join(' · ')}</div>
-                  <div className="mt-1 text-xs text-muted">Public games use every field. The marshals place players on arrival.</div>
+                  <div className="text-sm font-bold">{FIELD_CHOICES[publicGroundCount - 1].label}</div>
+                  <div className="mt-1 text-xs text-muted">{availableFields.slice(0, publicGroundCount).map((f) => f.name).join(' · ')}</div>
+                  <div className="mt-1 text-xs text-muted">
+                    Assigned automatically from everyone booked in this slot ({usedPlayers + players} players with your group): Upper Ground below {FIELD_COUNT_MINIMUMS[2]} players, Upper + Lower Ground from {FIELD_COUNT_MINIMUMS[2]}, all 3 fields from {FIELD_COUNT_MINIMUMS[3]}. The marshals place players on arrival.
+                  </div>
                 </div>
               </div>
             </Card>
@@ -2837,8 +2866,8 @@ export function ReservationCalendarPage() {
                               const discount = resolvePackageDiscountConfig(pkg)
                               const stock = pkg.weaponIds.length > 0 ? packageWeaponStock(pkg) : null
                               const includes = [
-                                ...modelsOfIds(rentalWeapons, pkg.weaponIds),
-                                ...modelsOfIds(rentalEquipment.filter((item) => !isAmmo(item)), pkg.equipmentIds),
+                                ...modelsOfIds(allRentalWeapons, pkg.weaponIds),
+                                ...modelsOfIds(allRentalEquipment.filter((item) => !isAmmo(item)), pkg.equipmentIds),
                                 `${INCLUDED_RELOADS_PER_PLAYER} BB reloads`,
                                 `Entrance fee (${formatCurrency(ENTRANCE_FEE_PER_PLAYER)})`,
                               ]

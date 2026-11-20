@@ -4,6 +4,7 @@ import { FiCheck, FiEdit2, FiPlus, FiTrash2, FiX } from 'react-icons/fi'
 import toast from 'react-hot-toast'
 import { ActionGroup, Button } from '../../components/ui/Button'
 import { FilterTabs } from '../../components/ui/FilterTabs'
+import { BRANCHES, branchLabel } from '../../utils/branches'
 import { Card } from '../../components/ui/Card'
 import { Input } from '../../components/ui/Input'
 import { Modal } from '../../components/ui/Modal'
@@ -21,6 +22,8 @@ type EquipmentStatus = 'available' | 'rented' | 'maintenance'
 
 type InventoryItem = {
   partnerId?: string
+  // The branch that keeps and rents out this piece; blank = not assigned yet.
+  locationId?: string
   id: string
   _id?: any
   name: string
@@ -67,11 +70,12 @@ const StatusBadge = ({ status }: { status: EquipmentStatus }) => {
 // Ammo is one record per BB type, stocked in grams and priced per refill.
 const AMMO_PRICE_PER_REFILL = '50'
 
-const emptyForm = () => ({ name: '', description: '', pieces: '1', grams: '', lowGrams: '', applyToModel: true, price: '0', replacementValue: '', status: 'available' as EquipmentStatus, category: 'masks' as EquipmentCategory, partnerId: '' })
+const emptyForm = () => ({ name: '', description: '', pieces: '1', grams: '', lowGrams: '', applyToModel: true, price: '0', replacementValue: '', status: 'available' as EquipmentStatus, category: 'masks' as EquipmentCategory, partnerId: '', locationId: '' })
 
 export function AdminEquipmentPage() {
   const [activeCategory, setActiveCategory] = React.useState<EquipmentCategory | 'all'>('all')
   const [status, setStatus] = React.useState<EquipmentStatus | 'all'>('all')
+  const [branchFilter, setBranchFilter] = React.useState<string>('all')
   const [inventory, setInventory] = React.useState<InventoryItem[]>([])
   const [loading, setLoading] = React.useState(true)
   const [saving, setSaving] = React.useState(false)
@@ -108,6 +112,7 @@ export function AdminEquipmentPage() {
         approvalStatus: (d.approvalStatus || (d.source === 'player' || d.submittedBy ? 'pending' : 'approved')) as 'pending' | 'approved' | 'rejected',
         rejectionReason: d.rejectionReason || '',
         partnerId: d.partnerId || '',
+        locationId: d.locationId || '',
       }))
 
       setInventory(equipmentItems)
@@ -131,10 +136,11 @@ export function AdminEquipmentPage() {
       const matchesCategory = activeCategory === 'all' ? true : item.category === activeCategory
       const matchesStatus = status === 'all' ? true : item.status === status
       const matchesSource = item.source === sourceFilter
+      const matchesBranch = branchFilter === 'all' || item.source === 'player' || (item.locationId || 'none') === branchFilter
       const matchesSearch = !term || [item.id, item.name, item.model, item.description].some((value) => String(value || '').toLowerCase().includes(term))
-      return matchesCategory && matchesStatus && matchesSource && matchesSearch
+      return matchesCategory && matchesStatus && matchesSource && matchesBranch && matchesSearch
     })
-  }, [inventory, activeCategory, status, sourceFilter, search])
+  }, [inventory, activeCategory, status, sourceFilter, branchFilter, search])
   const { page, setPage, pageCount, pageItems, total } = usePagination(filtered, undefined, `${activeCategory}|${status}|${sourceFilter}|${search}`)
 
   const rentalPieces = inventory.filter((item) => item.source !== 'player')
@@ -179,6 +185,7 @@ export function AdminEquipmentPage() {
         description: form.description.trim(),
         note: form.description.trim() || 'Newly entered from admin inventory.',
         partnerId: form.partnerId,
+        ...(ammo ? {} : { locationId: form.locationId }),
       })
       const ids = res.data.map((piece) => piece.id)
       toast.success(ammo ? `Added ${ids[0]} (${Math.round(grams).toLocaleString()} g)` : count === 1 ? `Added ${ids[0]}` : `Added ${count} pieces (${ids[0]} – ${ids[ids.length - 1]})`)
@@ -207,6 +214,7 @@ export function AdminEquipmentPage() {
       status: item.status,
       category: item.category,
       partnerId: item.partnerId || '',
+      locationId: item.locationId || '',
     })
   }
 
@@ -346,6 +354,8 @@ export function AdminEquipmentPage() {
       // Status and notes belong to this one piece.
       await apiPut<any>(`/api/equipments/${encodeURIComponent(selectedItemId)}`, {
         status: form.status,
+        // The branch belongs to this one piece (BB ammo stock is shared by all branches).
+        ...(ammo ? {} : { locationId: form.locationId }),
         description: form.description.trim(),
         note: form.description.trim() || 'Updated from admin inventory.',
         ...(ammo ? { stockGrams: Math.round(grams), lowStockGrams: Math.max(0, Math.round(Number(form.lowGrams) || 0)) } : {}),
@@ -499,6 +509,21 @@ export function AdminEquipmentPage() {
                 <option value="maintenance">Maintenance</option>
               </select>
             </div>
+
+            {sourceFilter === 'business' ? (
+            <div>
+              <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-muted">Branch</div>
+              <select
+                value={branchFilter}
+                onChange={(event) => setBranchFilter(event.target.value)}
+                className="w-full sm:w-auto sm:min-w-[170px] rounded-full border border-white/10 bg-background px-3 py-2 text-sm text-text outline-none"
+              >
+                <option value="all">All branches</option>
+                {BRANCHES.map((branch) => <option key={branch.id} value={branch.id}>{branch.label}</option>)}
+                <option value="none">Unassigned</option>
+              </select>
+            </div>
+            ) : null}
           </div>
         </div>
 
@@ -580,6 +605,10 @@ export function AdminEquipmentPage() {
                       {item.source === 'player' ? (
                         <span className="rounded-full border border-accent/20 bg-accent/10 px-2 py-1 text-[10px] uppercase tracking-[0.15em] text-accent">
                           Player owned
+                        </span>
+                      ) : item.category !== 'ammo' ? (
+                        <span className={`rounded-full border px-2 py-1 text-[10px] uppercase tracking-[0.15em] ${item.locationId ? 'border-white/10 bg-white/5 text-muted' : 'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400'}`}>
+                          {branchLabel(item.locationId)}
                         </span>
                       ) : null}
                       {item.source === 'player' && item.approvalStatus === 'pending' ? (
@@ -766,6 +795,20 @@ export function AdminEquipmentPage() {
                 </select>
               </div>
             </div>
+            {form.category !== 'ammo' ? (
+            <label className="mt-3 block">
+              <div className="block text-sm font-semibold text-text">Branch</div>
+              <select
+                value={form.locationId}
+                onChange={(event) => setForm((prev) => ({ ...prev, locationId: event.target.value }))}
+                className="mt-2 w-full rounded-xl border border-white/10 glass px-4 py-3 text-sm text-text"
+              >
+                <option value="">Unassigned (any branch can rent it)</option>
+                {BRANCHES.map((branch) => <option key={branch.id} value={branch.id}>{branch.label}</option>)}
+              </select>
+              <div className="mt-1 text-xs text-muted">Each branch rents out only its own pieces.{selectedItemId ? ' Applies to this piece only.' : ''}</div>
+            </label>
+            ) : null}
             {partners.length > 0 ? (
             <label className="mt-3 block">
               <div className="block text-sm font-semibold text-text">Owned by partner</div>

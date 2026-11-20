@@ -135,7 +135,7 @@ export function buildPrompt(context, { focus = '' } = {}) {
     [`bookingsLast${context.lookbackDays}Days`]: context.bookings,
   }
   return [
-    'You help the admin of an airsoft gaming center in the Philippines design rental packages.',
+    'You help the admin of an airsoft game center in the Philippines design rental packages.',
     'Suggest new packages that are likely to sell, based only on the inventory and booking facts below.',
     'Rules:',
     '- Use only weapon and gear model names exactly as listed. Prefer models with pieces available.',

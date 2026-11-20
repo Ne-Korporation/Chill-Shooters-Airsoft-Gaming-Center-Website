@@ -1,4 +1,5 @@
 import { isRentalPiece, modelFilter, modelOf } from './inventoryPieces.js'
+import { normalizeLocationId } from './bookingSlots.js'
 import { packageEquipmentQty } from './packageQuantities.js'
 
 export function stockQuantity(item, collection) {
@@ -43,6 +44,13 @@ function isUsable(item) {
   return Boolean(item) && String(item.status || 'available').toLowerCase() === 'available'
 }
 
+// Each branch rents out only its own pieces (`locationId` on the piece). A piece with no branch
+// yet can go to any branch; it still can't be double-booked, because holds are per piece and slot.
+export function pieceAtBranch(item, locationId) {
+  const branch = normalizeLocationId(item?.locationId)
+  return !branch || !locationId || branch === normalizeLocationId(locationId)
+}
+
 // Every rental piece of a model, in unit order. Injected in tests.
 async function listModelPieces(db, collection, model) {
   return db.collection(collection).find(modelFilter(model)).sort({ unitNumber: 1, id: 1 }).toArray()
@@ -61,6 +69,7 @@ export async function getBookingInventoryRequirements({
   listPieces = listModelPieces,
 }) {
   const mode = String(payload.selectionMode || '').toLowerCase()
+  const branch = normalizeLocationId(payload.locationId || payload.location || payload.locationName)
   const ownWeaponCount = Math.max(0, Math.round(Number(payload.verifiedOwnWeaponCount) || 0))
   const freeUnits = (item, collection) =>
     Math.max(0, stockQuantity(item, collection) - Number(heldQuantities.get(holdKey(collection, String(item.id || item._id))) || 0))
@@ -84,6 +93,9 @@ export async function getBookingInventoryRequirements({
           throw new Error(`${item?.name || 'One of the selected items'} is unavailable.`)
         }
         if (isAmmo(item)) continue
+        if (!pieceAtBranch(item, branch)) {
+          throw new Error(`${item.name || id} belongs to another branch. Choose a piece from this location.`)
+        }
         if (freeUnits(item, collection) < 1) {
           throw new Error(`${item.name || id} is already reserved for this slot. Choose another piece.`)
         }
@@ -103,7 +115,7 @@ export async function getBookingInventoryRequirements({
   // Free pieces of a model, the player's own picks first.
   const freePiecesOf = async (collection, model) => {
     const pieces = (await listPieces(db, collection, model))
-      .filter((piece) => isUsable(piece) && freeUnits(piece, collection) > 0 && !taken.has(String(piece.id)))
+      .filter((piece) => isUsable(piece) && pieceAtBranch(piece, branch) && freeUnits(piece, collection) > 0 && !taken.has(String(piece.id)))
     return [...pieces.filter((p) => preferred.has(String(p.id))), ...pieces.filter((p) => !preferred.has(String(p.id)))]
   }
   const modelsOf = async (collection, ids) => {

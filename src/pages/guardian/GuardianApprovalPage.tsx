@@ -87,7 +87,7 @@ export function GuardianApprovalPage() {
     <div className="min-h-screen bg-background px-4 py-10">
       <div className="mx-auto max-w-2xl space-y-4">
         <div>
-          <div className="flex items-center gap-2 text-sm font-medium text-accent"><FiShield /> Chill Shooters Airsoft Gaming Center</div>
+          <div className="flex items-center gap-2 text-sm font-medium text-accent"><FiShield /> Chill Shooters Airsoft Game Center</div>
           <h1 className="mt-2 text-3xl font-bold">Guardian approval</h1>
           <p className="mt-1 text-sm text-muted">Players under 18 need a parent or guardian to approve every booking.</p>
         </div>

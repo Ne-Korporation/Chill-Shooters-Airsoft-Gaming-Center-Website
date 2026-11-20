@@ -1,353 +1,270 @@
 import React, { useMemo, useState } from 'react'
 import { confirmDialog } from '../../components/ui/ConfirmDialog'
-import { FiTrash2 } from 'react-icons/fi'
+import { FiCheck, FiSend, FiTrash2, FiUser, FiUsers } from 'react-icons/fi'
 import { useNavigate } from 'react-router-dom'
 import { Button } from '../../components/ui/Button'
+import { Card } from '../../components/ui/Card'
 import { FilterTabs } from '../../components/ui/FilterTabs'
 import { useAuth } from '../../context/AuthContext'
-import { useNotifications } from '../../context/NotificationContext'
+import { useNotifications, type NotificationItem } from '../../context/NotificationContext'
 import { resolveNotificationRoute } from '../../utils/notificationRoutes'
+import { kindOf, timeLabel } from '../../utils/notificationDisplay'
 import toast from 'react-hot-toast'
 import { Paged } from '../../components/ui/Pagination'
 
-type NotifChannel = 'system' | 'email'
+type Role = 'user' | 'registrar' | 'marshal' | 'admin'
+type FeedFilter = 'all' | Role
 
-type Audience = 'all' | 'users' | 'admins' | 'registrars' | 'marshals'
+// Who a notification goes to, in the order they're picked.
+const ROLES: Array<{ value: Role; label: string }> = [
+  { value: 'user', label: 'Players' },
+  { value: 'registrar', label: 'Registrars' },
+  { value: 'marshal', label: 'Marshals' },
+  { value: 'admin', label: 'Admins' },
+]
+const ROLE_LABEL: Record<string, string> = { user: 'Players', registrar: 'Registrars', marshal: 'Marshals', admin: 'Admins', all: 'Everyone' }
 
+const fieldClass = 'w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-text placeholder:text-muted'
+
+function recipientsOf(item: NotificationItem) {
+  if (item.userId !== 'broadcast') return 'One person'
+  return ROLE_LABEL[String(item.targetRole || 'all')] || 'Everyone'
+}
+
+// Admin notifications: send an announcement on the left, review everything sent on the right.
+// Announcements appear in each recipient's notifications (the bell and this page).
 export function AdminNotificationsPage() {
   const { user } = useAuth()
   const navigate = useNavigate()
-  const isAdmin = user?.role === 'admin'
-  const { addNotification, deleteNotification, getNotificationsForRole, getAllNotifications, markAsRead, markAllAsRead, clearAllNotifications, clearNotificationsByIds } = useNotifications()
-  const [channel, setChannel] = useState<NotifChannel>('system')
-  const [title, setTitle] = useState('Weekend package reminder')
-  const [body, setBody] = useState('Please confirm the gear checklist for the Saturday booking before 5:00 PM.')
+  const { addNotification, deleteNotification, getAllNotifications, markAsRead, clearAllNotifications } = useNotifications()
+
+  const [sendTo, setSendTo] = useState<'everyone' | 'roles' | 'person'>('roles')
+  const [roles, setRoles] = useState<Role[]>(['user'])
   const [targetUserId, setTargetUserId] = useState('')
-  const [sendMode, setSendMode] = useState<'audience' | 'user'>('audience')
-  const [feedAudience, setFeedAudience] = useState<Audience>('all')
-  const [selectedAudiences, setSelectedAudiences] = useState<Audience[]>(['users'])
+  const [title, setTitle] = useState('')
+  const [body, setBody] = useState('')
+  const [feedFilter, setFeedFilter] = useState<FeedFilter>('all')
+  const now = new Date()
 
-  const currentRole = user?.role || 'user'
-  const roleNotifications = useMemo(() => {
-    return [...getNotificationsForRole(currentRole, user?.id)].sort(
-      (a, b) => new Date(b.createdAtISO).getTime() - new Date(a.createdAtISO).getTime(),
-    )
-  }, [currentRole, getNotificationsForRole, user?.id])
+  const allSent = useMemo(
+    () => [...getAllNotifications()].sort((a, b) => new Date(b.createdAtISO).getTime() - new Date(a.createdAtISO).getTime()),
+    [getAllNotifications],
+  )
+  const countFor = (filter: FeedFilter) =>
+    filter === 'all' ? allSent.length
+    : allSent.filter((item) => (filter === 'user' ? item.targetRole === 'user' || (!item.targetRole && item.userId !== 'broadcast') : item.targetRole === filter)).length
+  const visible = useMemo(() => {
+    if (feedFilter === 'all') return allSent
+    if (feedFilter === 'user') return allSent.filter((item) => item.targetRole === 'user' || (!item.targetRole && item.userId !== 'broadcast'))
+    return allSent.filter((item) => item.targetRole === feedFilter)
+  }, [allSent, feedFilter])
+  const unread = allSent.filter((item) => !item.read).length
 
-  const allSentNotifications = useMemo(() => {
-    return [...getAllNotifications()].sort((a, b) => new Date(b.createdAtISO).getTime() - new Date(a.createdAtISO).getTime())
-  }, [getAllNotifications])
+  const toggleRole = (role: Role) =>
+    setRoles((current) => (current.includes(role) ? current.filter((item) => item !== role) : [...current, role]))
 
-  const visibleNotifications = useMemo(() => {
-    if (!isAdmin) return roleNotifications
-    if (feedAudience === 'all') return allSentNotifications
-    return allSentNotifications.filter((item) => {
-      if (feedAudience === 'users') return item.targetRole === 'user' || (!item.targetRole && item.userId !== 'broadcast')
-      if (feedAudience === 'admins') return item.targetRole === 'admin'
-      if (feedAudience === 'registrars') return item.targetRole === 'registrar'
-      if (feedAudience === 'marshals') return item.targetRole === 'marshal'
-      return true
-    })
-  }, [allSentNotifications, feedAudience, isAdmin, roleNotifications])
+  const canSend = Boolean(title.trim() && body.trim()) && (
+    sendTo === 'everyone' || (sendTo === 'roles' && roles.length > 0) || (sendTo === 'person' && targetUserId.trim())
+  )
 
-  const toggleAudience = (audience: Audience) => {
-    setSelectedAudiences((prev) => {
-      if (audience === 'all') return ['all']
-      const next = prev.filter((item) => item !== 'all')
-      return next.includes(audience) ? next.filter((item) => item !== audience) : [...next, audience]
-    })
-  }
-
-  const handleSendToUser = () => {
-    if (!targetUserId.trim()) {
-      toast.error('Please enter a target user ID.')
-      return
+  const handleSend = () => {
+    if (!canSend) return
+    const base = { type: 'announcement' as const, title: title.trim(), message: body.trim(), linkedResourceId: undefined }
+    if (sendTo === 'person') {
+      addNotification({ ...base, userId: targetUserId.trim() })
+      toast.success('Notification sent.')
+    } else {
+      const targets: Array<Role | 'all'> = sendTo === 'everyone' ? ['all'] : roles
+      targets.forEach((role) => addNotification({ ...base, userId: 'broadcast', targetRole: role }))
+      toast.success(`Notification sent to ${targets.map((role) => ROLE_LABEL[role]).join(', ')}.`)
     }
-    addNotification({
-      userId: targetUserId.trim(),
-      type: 'announcement',
-      title: title.trim() || 'Admin notification',
-      message: body.trim() || 'No message.',
-      linkedResourceId: undefined,
-    })
-    toast.success(`Notification sent to user ${targetUserId.trim()}`)
+    setTitle('')
+    setBody('')
     setTargetUserId('')
   }
 
-  const handleSend = () => {
-    if (sendMode === 'user') {
-      handleSendToUser()
-      return
-    }
-    handleBroadcast()
-  }
-
-  const handleBroadcast = () => {
-    const audienceToTargetRole: Record<Audience, 'user' | 'registrar' | 'marshal' | 'admin' | 'all'> = {
-      all: 'all',
-      users: 'user',
-      admins: 'admin',
-      registrars: 'registrar',
-      marshals: 'marshal',
-    }
-    const targets: Audience[] = selectedAudiences.length > 0 ? selectedAudiences : ['users']
-    targets.forEach((audience) => {
-      addNotification({
-        userId: 'broadcast',
-        targetRole: audienceToTargetRole[audience as Audience] || 'all',
-        type: 'announcement',
-        title: title.trim() || 'Broadcast notification',
-        message: body.trim() || 'No message.',
-        linkedResourceId: undefined,
-      })
-    })
-    toast.success(`Broadcast notification sent to ${targets.map((item) => item.toUpperCase()).join(', ')}.`)
-  }
-
-  const handleDeleteNotification = async (id: string) => {
-    if (!(await confirmDialog({ title: 'Delete this notification?', confirmLabel: 'Delete', danger: true }))) return
+  const handleDelete = async (id: string) => {
+    if (!(await confirmDialog({ title: 'Delete this notification?', message: 'It is removed for everyone who received it.', confirmLabel: 'Delete', danger: true }))) return
     deleteNotification(id)
     toast.success('Notification deleted.')
   }
 
-  const handleNotificationClick = (item: ReturnType<typeof getAllNotifications>[number]) => {
-    const destination = resolveNotificationRoute(item, user?.role, user?.id)
-    markAsRead(item.id)
-    if (destination) {
-      navigate(destination)
-      return
+  const handleClearAll = async () => {
+    if (!(await confirmDialog({ title: 'Clear every notification?', message: 'Every account loses all of its notifications. This cannot be undone.', confirmLabel: 'Clear all', danger: true }))) return
+    try {
+      await clearAllNotifications()
+      toast.success('All notifications cleared.')
+    } catch (error: any) {
+      toast.error(error?.message || 'Unable to clear notifications')
     }
-    toast.error('No destination is assigned to this notification yet.')
   }
+
+  const openNotification = (item: NotificationItem) => {
+    markAsRead(item.id)
+    const destination = resolveNotificationRoute(item, user?.role, user?.id)
+    if (destination) navigate(destination)
+  }
+
+  const modeButton = (value: typeof sendTo, label: string, Icon: typeof FiUsers) => (
+    <button
+      type="button"
+      onClick={() => setSendTo(value)}
+      aria-pressed={sendTo === value}
+      className={['flex flex-1 items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold transition', sendTo === value ? 'bg-accent/15 text-accent' : 'text-muted hover:text-text'].join(' ')}
+    >
+      <Icon className="h-4 w-4" /> {label}
+    </button>
+  )
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold sm:text-3xl">Notifications</h1>
-          <p className="mt-1 text-sm text-muted">View your notifications and manage delivery only if you are an admin.</p>
+          <h1 className="text-3xl font-bold">Notifications</h1>
+          <p className="mt-1 text-sm text-muted">Send announcements to players and staff, and review every notification the system has sent.</p>
         </div>
-
-        <div className="flex flex-wrap items-center gap-2 sm:self-end">
-          {!isAdmin ? (
-            <>
-              <Button size="sm" variant="ghost" onClick={() => user?.id ? markAllAsRead(user.id, user.role) : null}>Mark all as read</Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="danger-soft"
-                onClick={async () => {
-                  if (!(await confirmDialog({ title: 'Clear all notifications visible to you?', message: 'This cannot be undone.', confirmLabel: 'Clear all', danger: true }))) return
-
-                  try {
-                    await clearNotificationsByIds(roleNotifications.map((notification) => notification.id))
-                    toast.success('Your notifications were cleared.')
-                  } catch (error: any) {
-                    toast.error(error?.message || 'Unable to clear your notifications')
-                  }
-                }}
-              >
-                Clear all
-              </Button>
-            </>
-          ) : null}
-
-          {isAdmin ? (
-            <div className="flex flex-wrap items-center gap-3">
-              <FilterTabs
-                ariaLabel="Filter sent notifications by audience"
-                value={feedAudience}
-                onChange={setFeedAudience}
-                options={(['all', 'users', 'admins', 'registrars', 'marshals'] as Audience[]).map((item) => ({
-                  value: item,
-                  label: item.charAt(0).toUpperCase() + item.slice(1),
-                }))}
-              />
-              <Button
-                type="button"
-                size="sm"
-                variant="danger-soft"
-                onClick={async () => {
-                  if (await confirmDialog({ title: 'Clear all notifications from the database?', message: 'Every account loses them. This cannot be undone.', confirmLabel: 'Clear database', danger: true })) {
-                    try {
-                      await clearAllNotifications()
-                      toast.success('All notifications cleared.')
-                    } catch (error: any) {
-                      toast.error(error?.message || 'Unable to clear notifications')
-                    }
-                  }
-                }}
-              >
-                Clear all
-              </Button>
-            </div>
-          ) : null}
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" variant="danger-soft" disabled={allSent.length === 0} onClick={handleClearAll}>
+            <FiTrash2 /> Clear all
+          </Button>
         </div>
       </div>
 
-      <div className="rounded-3xl border border-white/5 bg-white/5 p-2 sm:p-4">
-        <div className={isAdmin ? 'grid gap-4 lg:grid-cols-[1.15fr_0.85fr]' : 'grid gap-4'}>
-          {isAdmin ? (
-            <div className="rounded-2xl border border-white/5 bg-background/70 p-3 sm:p-4">
-              <div className="text-xs uppercase tracking-widest text-muted">Compose notification</div>
-              <div className="mt-2 text-sm text-muted">Use this panel to prepare operating alerts for staff or players.</div>
+      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+        {/* Compose */}
+        <Card className="p-4 md:p-5 lg:sticky lg:top-4">
+          <h2 className="text-lg font-bold">Send a notification</h2>
+          <p className="mt-1 text-xs text-muted">Shows up in the recipients' notifications in the app.</p>
 
-              <div className="mt-4 space-y-4">
-                <div className="rounded-xl border border-white/5 bg-white/5 p-3">
-                  <div className="text-xs text-muted">Audience</div>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSendMode('audience')
-                        setTargetUserId('')
-                      }}
-                      className={['rounded-full border px-4 py-1.5 text-sm font-semibold transition', sendMode === 'audience' ? 'border-accent/40 bg-accent/15 text-accent' : 'surface text-muted hover:text-text'].join(' ')}
-                    >
-                      Select audience
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setSendMode('user')}
-                      className={['rounded-full border px-4 py-1.5 text-sm font-semibold transition', sendMode === 'user' ? 'border-accent/40 bg-accent/15 text-accent' : 'surface text-muted hover:text-text'].join(' ')}
-                    >
-                      Send to a user
-                    </button>
-                  </div>
-
-                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                    {(['users', 'marshals', 'registrars', 'admins', 'all'] as Audience[]).map((item) => (
-                      <label key={item} className={['flex items-center gap-2 rounded-xl border px-3 py-2 text-sm text-text', sendMode === 'user' ? 'border-white/5 bg-white/5 opacity-50' : 'border-white/10 bg-white/5'].join(' ')}>
-                        <input
-                          type="checkbox"
-                          checked={selectedAudiences.includes(item)}
-                          disabled={sendMode === 'user'}
-                          onChange={() => toggleAudience(item)}
-                          className="h-4 w-4 accent-[var(--color-accent)]"
-                        />
-                        <span>{item === 'all' ? 'All' : item.slice(0, 1).toUpperCase() + item.slice(1)}</span>
-                      </label>
-                    ))}
-                  </div>
-
-                  {sendMode === 'user' ? (
-                    <div className="mt-3">
-                      <div className="text-xs text-muted">Send to specific user</div>
-                      <input
-                        value={targetUserId}
-                        onChange={(e) => setTargetUserId(e.target.value)}
-                        className="mt-2 w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-text placeholder:text-muted"
-                        placeholder="Enter user ID"
-                      />
-                    </div>
-                  ) : null}
-                </div>
-
-                <div>
-                  <div className="text-xs text-muted">Delivery channel</div>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {(['system', 'email'] as const).map((item) => (
-                      <button
-                        key={item}
-                        type="button"
-                        onClick={() => setChannel(item)}
-                        className={['rounded-full border px-4 py-1.5 text-sm font-semibold transition', channel === item ? 'border-accent/40 bg-accent/15 text-accent' : 'surface text-muted hover:text-text'].join(' ')}
-                      >
-                        {item === 'email' ? 'Email' : 'In-app'}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <label className="block">
-                  <div className="mb-2 text-sm font-semibold text-text">Title</div>
-                  <input
-                    value={title}
-                    onChange={(event) => setTitle(event.target.value)}
-                    className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-text placeholder:text-muted"
-                    placeholder="Brief notification title"
-                  />
-                </label>
-
-                <label className="block">
-                  <div className="mb-2 text-sm font-semibold text-text">Message body</div>
-                  <textarea
-                    value={body}
-                    onChange={(event) => setBody(event.target.value)}
-                    rows={4}
-                    className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-text placeholder:text-muted"
-                    placeholder="Describe the update or instruction"
-                  />
-                </label>
-
-                <Button onClick={handleSend} variant="ghost" className="w-full">
-                  Send notification
-                </Button>
+          <div className="mt-4 space-y-4">
+            <div>
+              <div className="mb-2 text-sm font-semibold">Send to</div>
+              <div className="flex gap-1 rounded-xl border border-white/10 bg-white/5 p-1">
+                {modeButton('roles', 'Groups', FiUsers)}
+                {modeButton('everyone', 'Everyone', FiSend)}
+                {modeButton('person', 'One person', FiUser)}
               </div>
+
+              {sendTo === 'roles' ? (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {ROLES.map((role) => {
+                    const on = roles.includes(role.value)
+                    return (
+                      <button
+                        key={role.value}
+                        type="button"
+                        aria-pressed={on}
+                        onClick={() => toggleRole(role.value)}
+                        className={['inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm font-semibold transition', on ? 'border-accent/40 bg-accent/15 text-accent' : 'surface text-muted hover:text-text'].join(' ')}
+                      >
+                        {on ? <FiCheck className="h-3.5 w-3.5" /> : null} {role.label}
+                      </button>
+                    )
+                  })}
+                </div>
+              ) : null}
+              {sendTo === 'everyone' ? (
+                <p className="mt-3 text-xs text-muted">Every player, registrar, marshal and admin gets it.</p>
+              ) : null}
+              {sendTo === 'person' ? (
+                <div className="mt-3">
+                  <input value={targetUserId} onChange={(e) => setTargetUserId(e.target.value)} className={fieldClass} placeholder="Account ID" />
+                  <p className="mt-1 text-xs text-muted">The account ID shown on Players &amp; staff.</p>
+                </div>
+              ) : null}
             </div>
-          ) : null}
 
-          <div className="rounded-2xl border border-white/5 bg-background/70 p-3 sm:p-4">
-            <div className="text-xs uppercase tracking-widest text-muted">Delivery feed</div>
-            <div className="mt-2 text-sm text-muted">{isAdmin ? 'Filter by account type to review sent notifications.' : 'Your notifications from the system.'}</div>
+            <label className="block">
+              <div className="mb-2 text-sm font-semibold">Title</div>
+              <input value={title} onChange={(e) => setTitle(e.target.value.slice(0, 120))} className={fieldClass} placeholder="e.g. Weekend package reminder" />
+            </label>
 
-            <div className="mt-4 space-y-2">
-              <Paged items={visibleNotifications}>{(pageItems) => pageItems.map((draft) => (
+            <label className="block">
+              <div className="mb-2 text-sm font-semibold">Message</div>
+              <textarea
+                value={body}
+                onChange={(e) => setBody(e.target.value.slice(0, 1000))}
+                rows={4}
+                className={fieldClass}
+                placeholder="e.g. Please confirm the gear checklist for the Saturday booking before 5:00 PM."
+              />
+            </label>
+
+            <Button onClick={handleSend} disabled={!canSend} className="w-full">
+              <FiSend /> Send notification
+            </Button>
+          </div>
+        </Card>
+
+        {/* Sent notifications */}
+        <Card className="p-4 md:p-5">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h2 className="text-lg font-bold">Sent notifications</h2>
+            <span className="text-xs text-muted">{unread > 0 ? `${unread} unread · ` : ''}{allSent.length} total</span>
+          </div>
+          <FilterTabs
+            className="mt-3"
+            size="sm"
+            ariaLabel="Filter sent notifications by recipient"
+            value={feedFilter}
+            onChange={setFeedFilter}
+            options={([{ value: 'all', label: 'All' }, ...ROLES] as Array<{ value: FeedFilter; label: string }>).map((option) => ({
+              ...option,
+              count: countFor(option.value),
+            }))}
+          />
+
+          <div className="mt-3 divide-y divide-white/5">
+            <Paged items={visible}>{(pageItems) => pageItems.map((item) => {
+              const kind = kindOf(item)
+              const Icon = kind.icon
+              return (
                 <div
-                  key={draft.id}
+                  key={item.id}
                   role="button"
                   tabIndex={0}
-                  onClick={() => handleNotificationClick(draft)}
+                  onClick={() => openNotification(item)}
                   onKeyDown={(event) => {
                     if (event.key === 'Enter' || event.key === ' ') {
                       event.preventDefault()
-                      handleNotificationClick(draft)
+                      openNotification(item)
                     }
                   }}
-                  className="cursor-pointer rounded-xl border border-white/5 bg-white/5/60 px-3 py-2 transition hover:bg-white/10"
+                  className="group flex cursor-pointer gap-3 rounded-xl px-2 py-3 transition hover:bg-white/5"
                 >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-semibold">{draft.title}</div>
-                      <div className="mt-1 text-xs text-muted">
-                        {draft.type.toUpperCase()} • {draft.targetRole?.toUpperCase() || 'DIRECT'}
+                  <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-full bg-white/5 text-muted">
+                    <Icon className="h-4 w-4" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className={`min-w-0 text-sm ${item.read ? 'font-semibold' : 'font-bold'}`}>
+                        {!item.read ? <span aria-label="Unread" className="mr-1.5 inline-block h-2 w-2 rounded-full bg-accent align-middle" /> : null}
+                        {item.title}
                       </div>
+                      <span className="shrink-0 text-xs text-muted">{timeLabel(item.createdAtISO, now)}</span>
                     </div>
-                    <span
-                      className={[
-                        'inline-flex shrink-0 items-center rounded-full border px-3 py-1 text-[11px] font-semibold',
-                        draft.read ? 'bg-white/5 text-muted border-white/10' : 'bg-success/15 text-success border-success/30',
-                      ].join(' ')}
-                    >
-                      {draft.read ? 'READ' : 'NEW'}
-                    </span>
+                    <div className="mt-0.5 text-xs text-muted">{kind.label} · To {recipientsOf(item)}</div>
+                    <p className="mt-1 line-clamp-2 break-words text-sm text-muted">{item.message}</p>
                   </div>
-                  <div className="mt-2 whitespace-pre-wrap break-words text-sm text-muted">{draft.message}</div>
-                  <div className="mt-2 flex justify-end">
-                    {isAdmin ? (
-                      <Button
-                        size="xs"
-                        variant="danger-soft"
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          handleDeleteNotification(draft.id)
-                        }}
-                      >
-                        <FiTrash2 /> Delete
-                      </Button>
-                    ) : null}
-                  </div>
+                  <button
+                    type="button"
+                    aria-label={`Delete ${item.title}`}
+                    title="Delete"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      void handleDelete(item.id)
+                    }}
+                    className="grid h-8 w-8 shrink-0 place-items-center self-center rounded-lg text-muted transition hover:bg-danger/10 hover:text-danger sm:opacity-0 sm:focus:opacity-100 sm:group-hover:opacity-100"
+                  >
+                    <FiTrash2 className="h-4 w-4" />
+                  </button>
                 </div>
-              ))}</Paged>
-              {visibleNotifications.length === 0 && (
-                <div className="p-6 text-sm text-muted">No notifications found.</div>
-              )}
-            </div>
+              )
+            })}</Paged>
+            {visible.length === 0 ? <div className="py-8 text-center text-sm text-muted">No notifications here.</div> : null}
           </div>
-        </div>
+        </Card>
       </div>
-
     </div>
   )
 }
-

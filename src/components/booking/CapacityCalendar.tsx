@@ -226,11 +226,13 @@ export function CapacityCalendar({
               // Weekdays are private days, even when the server sent no data for them.
               const weekday = new Date(`${dateISO}T12:00:00Z`).getUTCDay() % 6 !== 0
               const privateDay = weekday && !capacity
-              const privateGroups = privateDay ? day?.groups || 0 : 0
-              const privateFull = Boolean(privateDay && day && day.capacity > 0 && day.booked >= day.capacity)
+              const past = dateISO < todayISO
+              // Finished private days don't advertise bookings; they just read "Done".
+              const privateDone = past && privateDay
+              const privateGroups = privateDay && !past ? day?.groups || 0 : 0
+              const privateFull = Boolean(!past && privateDay && day && day.capacity > 0 && day.booked >= day.capacity)
               const cause = causeByDate[dateISO]
               const closed = closedByDate[dateISO]
-              const past = dateISO < todayISO
               // "All locations" colours a public day by its least-full location: open while any has room.
               const best = capacity && location === ALL ? leastFull(capacity) : undefined
               const shown = best || capacity
@@ -246,6 +248,7 @@ export function CapacityCalendar({
                   ? location === ALL
                     ? `Public game · ${capacity.locations.map((entry) => `${locationLabel(entry)} ${Math.max(0, entry.capacity - entry.booked)} left`).join(', ')}`
                     : `Public game · ${capacity.booked} of ${capacity.capacity} spots booked`
+                  : privateDone ? 'Private games · done'
                   : privateFull ? 'Private games · fully booked'
                   : privateGroups ? `Private games · ${privateGroups} booked` : 'Private games · open to book',
               ].filter(Boolean).join(' · ')
@@ -297,6 +300,8 @@ export function CapacityCalendar({
                     </span>
                   ) : cause ? (
                     <span className="mt-auto truncate text-[10px] font-semibold text-rose-500">Cause</span>
+                  ) : privateDone ? (
+                    <span className="mt-auto truncate text-[10px] font-semibold text-muted">Done</span>
                   ) : privateFull ? (
                     <span className="mt-auto truncate text-[10px] font-semibold text-danger">Full</span>
                   ) : privateGroups ? (

@@ -8,6 +8,7 @@ import { getReservationPayments, syncReservationPaymentState } from '../utils/pa
 import { emailDamageCharge } from '../services/notificationEmails.js'
 import { getExperienceLevel, getAgeGroup, suggestBalancedTeams } from '../utils/teamBalancing.js'
 import { createPieces, modelFilter } from '../utils/inventoryPieces.js'
+import { pieceAtBranch } from '../utils/inventoryHolds.js'
 import { computePenalty, getPenaltyRules, resolvePenaltyCharge } from '../utils/penaltyRules.js'
 import { fpsBlockReason, gameFpsStatus } from '../utils/fpsChecks.js'
 
@@ -170,6 +171,17 @@ router.get('/players/:id/stats', requireAuth, async (req, res) => {
     const today = new Date().toISOString().slice(0, 10)
     const status = (r) => String(r.reservationStatus || '').toLowerCase()
 
+    // Which of the listed reservations had their game completed at the field (shown as "Played").
+    const recent = reservations.slice(0, 5)
+    const recentIds = recent.map((r) => String(r.id || r._id || '')).filter(Boolean)
+    const playedGames = recentIds.length
+      ? await db.collection('gameplay').find(
+        { reservationId: { $in: recentIds }, $or: [{ Status: { $in: ['Completed', 'Archived'] } }, { status: { $in: ['completed', 'archived'] } }] },
+        { projection: { reservationId: 1 } },
+      ).toArray()
+      : []
+    const played = new Set(playedGames.map((game) => String(game.reservationId)))
+
     const [weapons, equipment] = await Promise.all([
       db.collection('weapons').find({ submittedBy: id, approvalStatus: { $ne: 'rejected' } }, { projection: { id: 1, name: 1, category: 1 } }).toArray(),
       db.collection('equipments').find({ submittedBy: id, approvalStatus: { $ne: 'rejected' } }, { projection: { id: 1, name: 1, category: 1 } }).toArray(),
@@ -183,8 +195,9 @@ router.get('/players/:id/stats', requireAuth, async (req, res) => {
           total: reservations.length,
           upcoming: reservations.filter((r) => r.reservationDate >= today && status(r) !== 'cancelled').length,
           cancelled: reservations.filter((r) => status(r) === 'cancelled').length,
-          recent: reservations.slice(0, 5).map((r) => ({
+          recent: recent.map((r) => ({
             id: r.id,
+            played: played.has(String(r.id || r._id || '')),
             reservationDate: r.reservationDate,
             reservationTime: r.reservationTime,
             reservationStatus: r.reservationStatus,
@@ -1039,6 +1052,10 @@ router.post('/rentals/issue', requireAuth, requireRole(...GEAR), async (req, res
     if (!reservation) return res.status(404).json({ ok: false, error: 'Reservation not found' })
     const item = await findById(db, itemCollection, body.itemId)
     if (!item) return res.status(404).json({ ok: false, error: 'Item not found' })
+    // Each branch hands out only its own pieces (or ones not assigned to a branch yet).
+    if (!pieceAtBranch(item, reservation.locationId || reservation.location || reservation.locationName)) {
+      return res.status(409).json({ ok: false, error: `${item.name || 'This item'} belongs to another branch.` })
+    }
     const unitLabel = String(body.unitLabel || '').trim().slice(0, 40)
     // Each piece is its own record, so a piece that is out can't be handed to a second player.
     const alreadyOut = await db.collection('rentals').findOne({ itemId: keyOf(item), status: 'out' })
@@ -1101,13 +1118,21 @@ router.put('/rentals/:id/return', requireAuth, requireRole(...GEAR), async (req,
 // replacementValue is what a lost piece costs to replace; it is the loss penalty.
 // stockGrams is the BB stock of an ammo record (ammo is tracked in grams, not pieces), and
 // lowStockGrams the level below which staff are told to restock (utils/ammoStock.js).
-const PIECE_FIELDS = ['category', 'price', 'replacementValue', 'description', 'note', 'status', 'partnerId', 'fpsClass', 'fpsLimit', 'stockGrams', 'lowStockGrams']
+// locationId is the branch that keeps the piece (salawag, langkaan, binan); blank = not assigned yet.
+const PIECE_FIELDS = ['category', 'price', 'replacementValue', 'description', 'note', 'status', 'partnerId', 'fpsClass', 'fpsLimit', 'stockGrams', 'lowStockGrams', 'locationId']
 const NUMERIC_PIECE_FIELDS = ['price', 'replacementValue', 'fpsLimit', 'stockGrams', 'lowStockGrams']
+const BRANCH_IDS = ['salawag', 'langkaan', 'binan']
 
 function readPieceFields(body) {
   const fields = {}
   for (const key of PIECE_FIELDS) {
     if (body[key] === undefined) continue
+    if (key === 'locationId') {
+      const branch = String(body.locationId || '').trim().toLowerCase()
+      if (branch && !BRANCH_IDS.includes(branch)) throw Object.assign(new Error('Choose Salawag, Langkaan or Biñan as the branch.'), { statusCode: 400 })
+      fields.locationId = branch
+      continue
+    }
     fields[key] = NUMERIC_PIECE_FIELDS.includes(key) ? Math.max(0, Number(body[key]) || 0) : String(body[key] ?? '').trim().slice(0, 500)
   }
   return fields
@@ -1142,7 +1167,13 @@ router.put('/inventory/:collection/models', requireAuth, requireRole('admin', 'm
   if (!RENTAL_COLLECTIONS.includes(collection)) return res.status(400).json({ ok: false, error: 'collection must be weapons or equipments' })
   const model = String(req.body?.model || '').trim()
   if (!model) return res.status(400).json({ ok: false, error: 'model is required' })
-  const { status, ...fields } = readPieceFields(req.body || {})
+  let fields
+  try {
+    fields = readPieceFields(req.body || {})
+    delete fields.status
+  } catch (err) {
+    return sendError(res, err)
+  }
   if (!Object.keys(fields).length) return res.status(400).json({ ok: false, error: 'Nothing to update.' })
   try {
     const db = await getDb()

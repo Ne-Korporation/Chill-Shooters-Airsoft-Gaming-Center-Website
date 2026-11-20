@@ -34,7 +34,7 @@ function layout(title, name, lines) {
       <h2 style="margin-bottom: 8px;">${escapeHtml(title)}</h2>
       <p>Hello ${escapeHtml(name || 'there')},</p>
       ${lines.map((line) => `<p>${line}</p>`).join('')}
-      <p style="color: #6b7280; font-size: 12px;">Chill Shooters Airsoft Gaming Center</p>
+      <p style="color: #6b7280; font-size: 12px;">Chill Shooters Airsoft Game Center</p>
     </div>
   `
 }
@@ -146,7 +146,7 @@ export async function emailReservationEvent(db, reservation, event, keySuffix = 
       return [message.line(reservation)]
     })
     : event === 'received'
-      ? [message.line(reservation), button(`${appUrl()}/app/my-reservations?view=${encodeURIComponent(id)}`, 'Pay now')]
+      ? [message.line(reservation), billingSummaryHtml(reservation), button(`${appUrl()}/app/my-reservations?view=${encodeURIComponent(id)}`, 'Pay now')]
       : [message.line(reservation)]
   return sendLogged(db, {
     key,
@@ -163,9 +163,12 @@ function fullDayReservation(group) {
   const sorted = [...group].sort((a, b) => order.indexOf(a.reservationTime) - order.indexOf(b.reservationTime))
   const sum = (field) => sorted.reduce((total, item) => total + Number(item[field] || 0), 0)
   const dueTimes = sorted.map((item) => item.paymentDueAtISO).filter(Boolean).sort()
+  const slotName = (item) => String(item.reservationTime || '').replace(/^./, (c) => c.toUpperCase())
   return {
     ...sorted[0],
     reservationTime: 'full day (morning, afternoon & evening)',
+    // Each slot's own bill lines, labelled with the slot.
+    pricingBreakdown: sorted.flatMap((item) => (item.pricingBreakdown || []).map((line) => ({ ...line, label: `${slotName(item)}: ${line.label}` }))),
     totalAmount: sum('totalAmount'),
     depositAmount: sum('depositAmount'),
     paymentDueAtISO: dueTimes[0] || sorted[0].paymentDueAtISO,
@@ -228,6 +231,24 @@ function detailRow(label, value) {
   return `<tr><td style="padding:4px 12px 4px 0;color:#6b7280;vertical-align:top;">${escapeHtml(label)}</td><td style="padding:4px 0;font-weight:bold;">${value}</td></tr>`
 }
 
+// Itemized billing summary: every line of the server's price breakdown (entrance fees, package or
+// rentals, reloads, discounts), then the total, the online payment and what is left for the field.
+export function billingSummaryHtml(reservation, { paid = null } = {}) {
+  const lines = Array.isArray(reservation.pricingBreakdown) ? reservation.pricingBreakdown : []
+  const total = Number(reservation.totalAmount || 0)
+  const online = paid === null ? Number(reservation.depositAmount || 0) : Number(paid || 0)
+  const balance = Math.max(0, total - online)
+  const cell = 'padding:4px 12px 4px 0;'
+  const amount = (value) => (Number(value) < 0 ? `- ${formatPHP(Math.abs(Number(value)))}` : formatPHP(value))
+  const rows = [
+    ...lines.map((line) => `<tr><td style="${cell}">${escapeHtml(line.label)}</td><td style="padding:4px 0;text-align:right;">${amount(line.amount)}</td></tr>`),
+    `<tr><td style="${cell}border-top:1px solid #e5e7eb;font-weight:bold;">Total</td><td style="padding:4px 0;border-top:1px solid #e5e7eb;text-align:right;font-weight:bold;">${formatPHP(total)}</td></tr>`,
+    `<tr><td style="${cell}color:#6b7280;">${paid === null ? 'To pay online now' : 'Paid online'}</td><td style="padding:4px 0;text-align:right;">${formatPHP(online)}</td></tr>`,
+    `<tr><td style="${cell}color:#6b7280;">Balance at the field</td><td style="padding:4px 0;text-align:right;">${formatPHP(balance)}</td></tr>`,
+  ]
+  return `<div style="font-weight:bold;margin-bottom:4px;">Billing summary</div><table style="border-collapse:collapse;font-size:14px;min-width:280px;">${rows.join('')}</table>`
+}
+
 // The confirmation email, laid out like the guardian email: a short note, the booking details,
 // and a button that opens the reservation in My Reservations.
 async function confirmedReservationLines(db, reservation) {
@@ -268,6 +289,7 @@ async function confirmedReservationLines(db, reservation) {
   return [
     RESERVATION_MESSAGES.confirmed.line(reservation),
     `<table style="border-collapse:collapse;font-size:14px;">${details.join('')}</table>`,
+    billingSummaryHtml(reservation, { paid: Math.max(0, total - balance) }),
     button(link, 'Review my reservation'),
     `If the button doesn't work, open this link: ${escapeHtml(link)}`,
   ]
@@ -561,7 +583,7 @@ export async function emailWelcome(db, { account, req, setPasswordUrl = '', send
   const button = (href, label) =>
     `<a href="${escapeHtml(href)}" style="display:inline-block;padding:10px 18px;border-radius:10px;background:#c5a35a;color:#111827;font-weight:700;text-decoration:none;">${escapeHtml(label)}</a>`
   const lines = [
-    'Welcome to Chill Shooters Airsoft Gaming Center! Your player account is ready.',
+    'Welcome to Chill Shooters Airsoft Game Center! Your player account is ready.',
     ...(setPasswordUrl
       ? [
         'Our counter staff made this account for you when you played as a walk-in. Set a password to sign in:',

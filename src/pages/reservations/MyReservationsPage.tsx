@@ -215,15 +215,29 @@ export function MyReservationsPage() {
   const [draft, setDraft] = useState<BookingDraft | null>(null)
   const [draftSecondsLeft, setDraftSecondsLeft] = useState(0)
   useEffect(() => {
-    // Read after the booking page's "left" mark lands (it fires 300 ms after leaving). Being on
-    // this page means the player isn't booking, so a draft still marked active is marked left now.
-    const timer = window.setTimeout(() => {
+    // Read after the booking page's "left" mark lands (it fires 300 ms after leaving).
+    let cancelled = false
+    const timer = window.setTimeout(async () => {
+      if (!readBookingDraft(user?.id)) return
+      // The server's hold is what keeps the slot. A draft left behind in this browser (e.g. the
+      // player logged out or closed the tab long ago) must not restart the countdown once the
+      // hold is gone.
+      const hold = await apiGet<{ ok: boolean; data: unknown }>('/api/slot-holds/mine').then((res) => res?.data || null).catch(() => null)
+      if (cancelled) return
+      if (!hold) {
+        clearBookingDraft(user?.id)
+        return
+      }
+      // Being on this page means the player isn't booking, so a draft still marked active is marked left now.
       markBookingDraftLeft(user?.id)
       const found = readBookingDraft(user?.id)
       setDraft(found)
       setDraftSecondsLeft(found ? Math.ceil(draftTimeLeft(found) / 1000) : 0)
     }, 400)
-    return () => window.clearTimeout(timer)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
   }, [user?.id])
   // The server's view: a slot still held for this player (booking started on another device, or
   // the draft here was already cleared). Shown so it can be cancelled without waiting.
@@ -242,7 +256,13 @@ export function MyReservationsPage() {
   // payment step is listed below with its own Cancel button.
   const [cancellingDraft, setCancellingDraft] = useState(false)
   const cancelUnfinishedBooking = async () => {
-    if (!window.confirm('Cancel this unfinished booking? The slot will be opened for other players.')) return
+    if (!(await confirmDialog({
+      title: 'Cancel this unfinished booking?',
+      message: 'The slot will be opened for other players.',
+      confirmLabel: 'Cancel booking',
+      cancelLabel: 'Keep it',
+      danger: true,
+    }))) return
     setCancellingDraft(true)
     try {
       await apiDelete('/api/slot-holds/mine')
@@ -314,10 +334,6 @@ export function MyReservationsPage() {
       return
     }
     const sentBack = Boolean(reservation.sentBack) && statusOf(reservation) === 'needs review'
-    if (!reason.trim() && !sentBack) {
-      toast.error('Please give a reason for rescheduling.')
-      return
-    }
 
     setSaving(true)
     try {
@@ -531,16 +547,19 @@ export function MyReservationsPage() {
                     }}
                   />
                 </div>
-                <label className="block text-xs font-semibold text-muted md:col-span-3">
-                  {sentBack ? 'Note for staff (optional)' : 'Reason'}
-                  <textarea
-                    value={reason}
-                    onChange={(event) => setReason(event.target.value.slice(0, 500))}
-                    rows={2}
-                    placeholder="e.g. Weather, team availability"
-                    className="mt-1 w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-text"
-                  />
-                </label>
+                {/* One-click reschedule: just pick the new date and slot. A booking staff sent back
+                    can carry an optional note for them. */}
+                {sentBack ? (
+                  <label className="block text-xs font-semibold text-muted md:col-span-3">
+                    Note for staff (optional)
+                    <textarea
+                      value={reason}
+                      onChange={(event) => setReason(event.target.value.slice(0, 500))}
+                      rows={2}
+                      className="mt-1 w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-text"
+                    />
+                  </label>
+                ) : null}
                 <div className="flex gap-2 md:col-span-3">
                   <Button variant="ghost" onClick={() => setEditingId(null)} disabled={saving}>Cancel</Button>
                   <Button variant="primary" onClick={() => submitReschedule(reservation)} disabled={saving || !newDate}>

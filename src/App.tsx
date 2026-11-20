@@ -35,6 +35,7 @@ import { MyNotificationsPage } from './pages/dashboard/MyNotificationsPage'
 import { AdminAuditLogsPage } from './pages/admin/AdminAuditLogsPage'
 import { AdminPartnershipsPage } from './pages/admin/AdminPartnershipsPage'
 import { AdminFeedbackPage } from './pages/admin/AdminFeedbackPage'
+import { AdminInboxPage } from './pages/admin/AdminInboxPage'
 import { AdminReachFundPage } from './pages/admin/AdminReachFundPage'
 import { AdminAnnouncementsPage } from './pages/admin/AdminAnnouncementsPage'
 import { GuardianApprovalPage } from './pages/guardian/GuardianApprovalPage'
@@ -221,6 +222,7 @@ export default function App() {
         <Route path="admin/payments" element={<AdminPageWrapper><AdminPaymentsPage /></AdminPageWrapper>} />
         <Route path="admin/partnerships" element={<AdminPageWrapper><AdminPartnershipsPage /></AdminPageWrapper>} />
         <Route path="admin/feedback" element={<AdminPageWrapper><AdminFeedbackPage /></AdminPageWrapper>} />
+        <Route path="admin/inbox" element={<AdminPageWrapper><AdminInboxPage /></AdminPageWrapper>} />
         <Route path="admin/reach-fund" element={<AdminPageWrapper><AdminReachFundPage /></AdminPageWrapper>} />
         <Route path="admin/announcements" element={<AdminPageWrapper><AdminAnnouncementsPage /></AdminPageWrapper>} />
         {/* Safety logs now live on the Weapons page (FPS safety log and Damage reports tabs). */}

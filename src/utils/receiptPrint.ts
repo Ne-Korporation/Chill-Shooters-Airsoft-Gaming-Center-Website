@@ -81,7 +81,7 @@ export function buildReceiptHtml(
   .stamp { border: 2px solid #b45309; color: #b45309; padding: 6px 8px; margin-bottom: 10px; font-weight: bold; }
 </style></head><body>
   <div class="head">
-    <div><h1>Chill Shooters</h1><div class="muted">Airsoft Gaming Center · ${record ? 'Payment record' : 'Official payment receipt'}</div></div>
+    <div><h1>Chill Shooters</h1><div class="muted">Airsoft Game Center · ${record ? 'Payment record' : 'Official payment receipt'}</div></div>
     <div class="r"><b>${esc(receiptNo)}</b><div class="muted">Printed ${esc(new Date().toLocaleString())}</div></div>
   </div>
   ${record ? '<div class="stamp">Not an official receipt: this payment has not been verified yet.</div>' : ''}

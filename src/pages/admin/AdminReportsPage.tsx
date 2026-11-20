@@ -445,7 +445,7 @@ export function AdminReportsPage() {
 
   const exportCsv = () => {
     const lines: string[] = []
-    lines.push(['Chill Shooters Airsoft Gaming Center', reportTitle].map(csvCell).join(','))
+    lines.push(['Chill Shooters Airsoft Game Center', reportTitle].map(csvCell).join(','))
     lines.push(['Period', rangeLabel].map(csvCell).join(','))
     lines.push(['Transactions', transactionLabel].map(csvCell).join(','))
     lines.push(['Prepared by', preparedBy].map(csvCell).join(','))
@@ -557,7 +557,7 @@ export function AdminReportsPage() {
 
       <div className="print-area space-y-4">
         <Card className="p-5">
-          <div className="text-xs uppercase tracking-widest text-muted">Chill Shooters Airsoft Gaming Center</div>
+          <div className="text-xs uppercase tracking-widest text-muted">Chill Shooters Airsoft Game Center</div>
           <h2 className="mt-1 text-2xl font-bold">{reportTitle}</h2>
           <div className="mt-1 text-sm text-muted">{rangeLabel} · {transactionLabel}{loading ? ' · Loading…' : ''}</div>
           <div className="mt-3 grid gap-1 text-sm sm:grid-cols-2">

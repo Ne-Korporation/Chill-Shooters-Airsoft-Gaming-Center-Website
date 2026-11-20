@@ -21,7 +21,7 @@ services:
       - key: EMAIL_FROM
         sync: false
       - key: TO_EMAIL
-        value: support@chillshooters.com
+        value: chillshooters.agc@gmail.com
       # Vercel site URL, used in emailed links such as guardian approvals.
       - key: PUBLIC_APP_URL
         sync: false

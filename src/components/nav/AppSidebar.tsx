@@ -1,11 +1,13 @@
 import { CapacityCalendar } from '../booking/CapacityCalendar'
-import React, { useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import type { IconType } from 'react-icons'
 import { GiAk47 } from 'react-icons/gi'
 import { useAuth } from '../../context/AuthContext'
 import { useLastBookedLocation } from '../../hooks/useLastBookedLocation'
 import { apiGet } from '../../utils/apiClient'
+import { useNotifications } from '../../context/NotificationContext'
+import { useLiveRefresh } from '../../utils/liveUpdates'
 import { isLowOnAmmo } from '../../utils/inventoryModels'
 import { SPLIT_PAYMENTS_CHANGED_EVENT } from '../../pages/payments/SplitPaymentPage'
 import {
@@ -31,6 +33,8 @@ import {
   FiUserPlus,
   FiVolume2,
   FiCheckCircle,
+  FiBell,
+  FiInbox,
 } from 'react-icons/fi'
 
 type Role = 'user' | 'admin' | 'marshal' | 'registrar'
@@ -102,6 +106,9 @@ const marshalItems: Item[] = [
 const adminItems: Item[] = [
   { section: 'Overview', label: 'Dashboard', to: '/app/admin', icon: FiGrid },
   { section: 'Overview', label: 'Announcements', to: '/app/admin/announcements', icon: FiVolume2 },
+  { section: 'Overview', label: 'Notifications', to: '/app/notifications', icon: FiBell },
+  // Messages from players.
+  { section: 'Overview', label: 'Inbox', to: '/app/admin/inbox', icon: FiInbox },
   // Games and archived games are tabs of one Reservations page.
   { section: 'Bookings', label: 'Reservations', to: '/app/admin/reservations', icon: FiCalendar },
   { section: 'Bookings', label: 'Payments', to: '/app/admin/payments', icon: FiCreditCard },
@@ -132,6 +139,20 @@ const registrarItems: Item[] = [
   { label: 'Games', to: '/app/counter', icon: FiZap },
   { label: 'Game queue', to: '/app/registrar/games', icon: FiList },
 ]
+
+// Unread player messages, for the Inbox badge (admins only).
+function useInboxUnread(enabled: boolean) {
+  const [unread, setUnread] = useState(0)
+  const check = useCallback(() => {
+    if (!enabled) return
+    apiGet<{ unread?: number }>('/api/admin/inbox?status=new')
+      .then((res) => setUnread(Number(res?.unread) || 0))
+      .catch(() => setUnread(0))
+  }, [enabled])
+  useEffect(() => { check() }, [check])
+  useLiveRefresh(['inbox'], check, enabled)
+  return enabled ? unread : 0
+}
 
 // Players see the Split Payment module only while they owe a share or, as captain, are waiting on the team.
 function useHasOpenSplitPayment(enabled: boolean) {
@@ -190,7 +211,7 @@ function SidebarLink({ item, onNavigate, nested = false }: { item: Item; onNavig
   )
 }
 
-// Notifications are reached from the bell in the top bar, not from this menu.
+// Every role has Notifications in the menu (as well as the bell in the top bar).
 export function AppSidebar({
   role,
   onNavigate,
@@ -208,6 +229,19 @@ export function AppSidebar({
   const lastLocation = useLastBookedLocation(role === 'user' ? user?.id : null)
   const profile: Item = { label: 'Profile', to: profilePath, icon: FiUser }
 
+  // Unread counts beside Notifications (every role) and Inbox (admins).
+  const { getNotificationsForRole } = useNotifications()
+  const unreadNotifications = useMemo(
+    () => (user?.id ? getNotificationsForRole(role, user.id).filter((n) => !n.read).length : 0),
+    [getNotificationsForRole, role, user?.id],
+  )
+  const inboxUnread = useInboxUnread(role === 'admin')
+  const notificationsItem: Item = { label: 'Notifications', to: '/app/notifications', icon: FiBell }
+  const withBadges = (item: Item): Item =>
+    item.to === '/app/notifications' ? { ...item, badge: unreadNotifications, badgeTitle: `${unreadNotifications} unread notification${unreadNotifications === 1 ? '' : 's'}` }
+    : item.to === '/app/admin/inbox' ? { ...item, badge: inboxUnread, badgeTitle: `${inboxUnread} unread message${inboxUnread === 1 ? '' : 's'}` }
+    : item
+
   const playerItems: Item[] = [
     { label: 'Dashboard', to: '/app', icon: FiGrid },
     { label: 'Book a game', to: '/app/reservations', icon: FiPlusCircle },
@@ -216,6 +250,7 @@ export function AppSidebar({
     { label: 'Online Waiver', to: '/app/waiver', icon: FiShield },
     { label: 'Game Evaluation', to: '/app/feedback', icon: FiMessageSquare },
     ...(hasOpenSplitPayment ? [{ label: 'Split Payment', to: '/app/split-payments', icon: FiDollarSign }] : []),
+    notificationsItem,
   ]
 
   // Marshals see what needs them on the Weapons and Gear items themselves.
@@ -226,11 +261,12 @@ export function AppSidebar({
     : item)
 
   // Every menu ends with the profile, at the bottom of the sidebar.
-  const items =
+  const items = (
     role === 'admin' ? adminItems
-    : role === 'marshal' ? marshalMenu
-    : role === 'registrar' ? registrarItems
+    : role === 'marshal' ? [...marshalMenu, notificationsItem]
+    : role === 'registrar' ? [...registrarItems, notificationsItem]
     : playerItems
+  ).map(withBadges)
 
   // Admin groups: the one holding the current page is open. Others can be opened to look around,
   // and close again as soon as the admin moves to another page.

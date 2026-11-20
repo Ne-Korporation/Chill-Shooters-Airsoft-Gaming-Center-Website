@@ -6,6 +6,7 @@ import { useAuth } from '../../context/AuthContext'
 import toast from 'react-hot-toast'
 import { ActionGroup, Button } from '../../components/ui/Button'
 import { FilterTabs } from '../../components/ui/FilterTabs'
+import { BRANCHES, branchLabel } from '../../utils/branches'
 import { Card } from '../../components/ui/Card'
 import { Modal } from '../../components/ui/Modal'
 import { apiGet, apiGetAll, apiPost, apiPut, apiDelete } from '../../utils/apiClient'
@@ -32,6 +33,8 @@ type WeaponStatus = 'available' | 'rented' | 'needs-check'
 
 type WeaponItem = {
   partnerId?: string
+  // The branch that keeps and rents out this piece; blank = not assigned yet.
+  locationId?: string
   fpsClass?: string
   fpsLimit?: number
   id: string
@@ -89,7 +92,7 @@ const StatusBadge = ({ status }: { status: WeaponStatus }) => {
 // category fills in the price; the admin can still change it.
 const DEFAULT_CATEGORY_PRICES: Partial<Record<WeaponCategory, number>> = { rifles: 500 }
 
-const emptyForm = () => ({ name: '', description: '', category: 'rifles' as WeaponCategory, status: 'available' as WeaponStatus, price: String(DEFAULT_CATEGORY_PRICES.rifles), replacementValue: '', pieces: '1', applyToModel: true, partnerId: '', fpsClass: '', fpsLimit: '' })
+const emptyForm = () => ({ name: '', description: '', category: 'rifles' as WeaponCategory, status: 'available' as WeaponStatus, price: String(DEFAULT_CATEGORY_PRICES.rifles), replacementValue: '', pieces: '1', applyToModel: true, partnerId: '', locationId: '', fpsClass: '', fpsLimit: '' })
 
 // Blank class follows the category (snipers are sniper class); blank limit uses the class default.
 function fpsFields(form: { fpsClass: string; fpsLimit: string }) {
@@ -99,6 +102,7 @@ function fpsFields(form: { fpsClass: string; fpsLimit: string }) {
 function WeaponInventory() {
   const [category, setCategory] = React.useState<WeaponCategory | 'all'>('all')
   const [status, setStatus] = React.useState<WeaponStatus | 'all'>('all')
+  const [branchFilter, setBranchFilter] = React.useState<string>('all')
   const [sourceFilter, setSourceFilter] = React.useState<'business' | 'player'>('business')
   const [ownerNames, setOwnerNames] = React.useState<Record<string, string>>({})
   const [weapons, setWeapons] = React.useState<WeaponItem[]>([])
@@ -148,6 +152,7 @@ function WeaponInventory() {
         approvalStatus: (d.approvalStatus === 'rejected' ? 'rejected' : 'approved') as 'pending' | 'approved' | 'rejected',
         rejectionReason: d.rejectionReason || '',
         partnerId: d.partnerId || '',
+        locationId: d.locationId || '',
         fpsClass: d.fpsClass || '',
         fpsLimit: Number(d.fpsLimit) || 0,
       }))
@@ -214,9 +219,10 @@ function WeaponInventory() {
       const matchCategory = category === 'all' ? true : weapon.category === category
       const matchStatus = status === 'all' ? true : weapon.status === status
       const matchSource = weapon.source === sourceFilter
+      const matchBranch = branchFilter === 'all' || weapon.source === 'player' || (weapon.locationId || 'none') === branchFilter
       const matchSearch = !term || [weapon.id, weapon.name, weapon.model, weapon.description, ownerNames[String(weapon.submittedBy)]]
         .some((value) => String(value || '').toLowerCase().includes(term))
-      return matchCategory && matchStatus && matchSource && matchSearch
+      return matchCategory && matchStatus && matchSource && matchBranch && matchSearch
     })
       // Ascending by ID; numbers inside IDs compare by value (W-2 before W-10).
       .sort((a, b) => String(a.id || '').localeCompare(String(b.id || ''), undefined, { numeric: true, sensitivity: 'base' }))
@@ -253,6 +259,7 @@ function WeaponInventory() {
         description: form.description.trim(),
         note: form.description.trim() || 'Added through the admin inventory review.',
         partnerId: form.partnerId,
+        locationId: form.locationId,
         ...fpsFields(form),
       })
       const ids = res.data.map((piece) => piece.id)
@@ -280,6 +287,7 @@ function WeaponInventory() {
       pieces: '1',
       applyToModel: true,
       partnerId: weapon.partnerId || '',
+      locationId: weapon.locationId || '',
       fpsClass: weapon.fpsClass || '',
       fpsLimit: weapon.fpsLimit ? String(weapon.fpsLimit) : '',
     })
@@ -301,6 +309,8 @@ function WeaponInventory() {
       // Status and notes belong to this one piece.
       await apiPut<any>(`/api/weapons/${encodeURIComponent(selectedWeaponId)}`, {
         status: form.status,
+        // The branch belongs to this one piece.
+        locationId: form.locationId,
         description: form.description.trim(),
         note: form.description.trim() || 'Updated from admin inventory.',
         ...(form.applyToModel ? {} : { price: Number(form.price) || 0, replacementValue: Number(form.replacementValue) || 0, category: form.category, partnerId: form.partnerId, ...fpsFields(form) }),
@@ -553,6 +563,21 @@ function WeaponInventory() {
                 <option value="needs-check">Needs check</option>
               </select>
             </div>
+
+            {sourceFilter === 'business' ? (
+            <div>
+              <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-muted">Branch</div>
+              <select
+                value={branchFilter}
+                onChange={(event) => setBranchFilter(event.target.value)}
+                className="w-full sm:w-auto sm:min-w-[170px] rounded-full border border-white/10 bg-background px-3 py-2 text-sm text-text outline-none"
+              >
+                <option value="all">All branches</option>
+                {BRANCHES.map((branch) => <option key={branch.id} value={branch.id}>{branch.label}</option>)}
+                <option value="none">Unassigned</option>
+              </select>
+            </div>
+            ) : null}
           </div>
           <InventoryToolbar
             selecting={selecting}
@@ -608,7 +633,11 @@ function WeaponInventory() {
                         <span className="rounded-full border border-accent/20 bg-accent/10 px-2 py-1 text-[10px] uppercase tracking-[0.15em] text-accent">
                           Player owned
                         </span>
-                      ) : null}
+                      ) : (
+                        <span className={`rounded-full border px-2 py-1 text-[10px] uppercase tracking-[0.15em] ${weapon.locationId ? 'border-white/10 bg-white/5 text-muted' : 'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400'}`}>
+                          {branchLabel(weapon.locationId)}
+                        </span>
+                      )}
                     </div>
                     <div className="mt-1 text-xs text-muted">{weapon.description || weapon.note}</div>
                     {weapon.source === 'player' ? (
@@ -786,6 +815,19 @@ function WeaponInventory() {
                 </select>
               </label>
             </div>
+
+            <label className="block">
+              <div className="mb-2 text-sm font-semibold text-text">Branch</div>
+              <select
+                value={form.locationId}
+                onChange={(event) => setForm((prev) => ({ ...prev, locationId: event.target.value }))}
+                className="w-full rounded-xl border border-white/10 glass px-4 py-3 text-sm text-text"
+              >
+                <option value="">Unassigned (any branch can rent it)</option>
+                {BRANCHES.map((branch) => <option key={branch.id} value={branch.id}>{branch.label}</option>)}
+              </select>
+              <div className="mt-1 text-xs text-muted">Each branch rents out only its own pieces.{selectedWeaponId ? ' Applies to this piece only.' : ''}</div>
+            </label>
 
             <div className="grid gap-3 md:grid-cols-2">
               <label className="block">

@@ -16,6 +16,7 @@ import {
   FiMenu,
   FiMinus,
   FiPlus,
+  FiDisc,
   FiShield,
   FiTarget,
   FiUsers,
@@ -56,7 +57,7 @@ export type LandingReservationPrefill = {
 const bookingLocations: { id: LocationOption; name: string; detail: string; maxPlayers: number }[] = [
   { id: 'salawag', name: 'Chill Shooters (Salawag)', detail: 'About 2 hectares · up to 400 players per slot', maxPlayers: 400 },
   { id: 'langkaan', name: 'Chill Shooters (Langkaan)', detail: 'About 2 hectares · up to 400 players per slot', maxPlayers: 400 },
-  { id: 'binan', name: 'BBC Airsoft Binan Laguna', detail: 'About 4 hectares · up to 600 players per slot', maxPlayers: 600 },
+  { id: 'binan', name: 'BBC Airsoft Binan Laguna', detail: 'About 4 hectares · up to 200 players per slot', maxPlayers: 200 },
 ]
 
 // Fields are assigned from the group size, same as the booking page: 10-19 players get Upper Ground,
@@ -109,10 +110,10 @@ const navLinks = [
 const fieldLocations = [
   {
     name: 'Chill Shooters (Salawag)',
-    img: '/delta.png',
+    img: '/salawag.png',
     size: '~2 hectares',
     capacity: 'Up to 400 players per slot',
-    desc: 'Home of Chill Shooters Airsoft Game Center and Delta Stronghold Airsoft Field, at Toledo Compound, Salawag. Enter through the Grey Gate, the farthest gate at the corner of the compound.',
+    desc: 'Home of Chill Shooters Airsoft Game Center, at Toledo Compound, Salawag. Enter through the Grey Gate, the farthest gate at the corner of the compound.',
     mapQuery: 'Chill Shooters Airsoft Game Center, Toledo Compound, Salawag, Dasmariñas, Cavite',
   },
   {
@@ -121,13 +122,13 @@ const fieldLocations = [
     size: '~2 hectares',
     capacity: 'Up to 400 players per slot',
     desc: 'Ideal for small to medium groups and tournaments.',
-    mapQuery: 'Chill Shooters Airsoft, Langkaan, Dasmariñas, Cavite',
+    mapQuery: 'Barangay Langkaan II, City of Dasmariñas, Cavite',
   },
   {
     name: 'BBC Airsoft Binan Laguna',
     img: '/loma.png',
     size: '~4 hectares',
-    capacity: 'Up to 600 players per slot',
+    capacity: 'Up to 200 players per slot',
     desc: 'Ideal for large groups and tournaments.',
     mapQuery: 'BBC Airsoft, Biñan, Laguna',
   },
@@ -275,12 +276,15 @@ function PackagesSection({ onBook }: { onBook: () => void }) {
                     <span>{weaponNames.join(' + ')}</span>
                   </li>
                 ) : null}
-                {gear.map((row) => (
+                {gear.map((row) => {
+                  const GearIcon = /ammo|\bbbs?\b/i.test(row.name) ? FiDisc : FiShield
+                  return (
                   <li key={row.name} className="flex items-start gap-2">
-                    <FiShield className="mt-0.5 h-4 w-4 shrink-0 text-accent" />
+                    <GearIcon className="mt-0.5 h-4 w-4 shrink-0 text-accent" />
                     <span>{row.qty > 1 ? `${row.qty} × ` : ''}{row.name}</span>
                   </li>
-                ))}
+                  )
+                })}
                 {Number(pkg.bbReloadGrams) > 0 ? (
                   <li className="flex items-start gap-2">
                     <FiCheck className="mt-0.5 h-4 w-4 shrink-0 text-accent" />
@@ -831,7 +835,7 @@ export function LandingPage() {
       },
       {
         q: 'How do I get to the Salawag field?',
-        a: 'Chill Shooters Airsoft Game Center and Delta Stronghold Airsoft Field are at Toledo Compound, Salawag, Dasmariñas City, Cavite. Enter through the Grey Gate, the farthest gate at the corner of the compound. On Google Maps, search for "Chill Shooters Airsoft Game Center" or "Delta Stronghold Airsoft Field".',
+        a: 'Chill Shooters Airsoft Game Center is at Toledo Compound, Salawag, Dasmariñas City, Cavite. Enter through the Grey Gate, the farthest gate at the corner of the compound. On Google Maps, search for "Chill Shooters Airsoft Game Center".',
       },
     ],
     [],
@@ -1238,8 +1242,8 @@ export function LandingPage() {
                 className="surface w-full resize-y rounded-xl px-4 py-3 text-sm text-text placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-[rgba(197,163,90,0.4)]"
               />
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <a href="mailto:support@chillshooters.com" className="inline-flex items-center gap-2 text-sm text-muted hover:text-text">
-                  <FiMail /> support@chillshooters.com
+                <a href="mailto:chillshooters.agc@gmail.com" className="inline-flex items-center gap-2 text-sm text-muted hover:text-text">
+                  <FiMail /> chillshooters.agc@gmail.com
                 </a>
                 <Button type="submit" variant="primary" size="sm" disabled={contactSending}>
                   {contactSending ? 'Sending…' : 'Send message'}

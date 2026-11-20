@@ -1,14 +1,14 @@
-# Chill Shooters Airsoft Gaming Center
+# Chill Shooters Airsoft Game Center
 
 **Aim. Book. Play.**
 
-A web-based reservation and operations management system designed for airsoft gaming centers.
+A web-based reservation and operations management system designed for airsoft game centers.
 
 ---
 
 # About the System
 
-Chill Shooters Airsoft Gaming Center streamlines the entire player journey—from booking a reservation to managing game-day operations.
+Chill Shooters Airsoft Game Center streamlines the entire player journey—from booking a reservation to managing game-day operations.
 
 The system allows players to reserve game schedules, select packages, submit digital waivers, upload payment proofs, and track their reservations online. Staff members can efficiently manage reservations, payments, inventory, and game sessions through dedicated dashboards.
 
@@ -291,6 +291,6 @@ an Express API on Render:
 
 ---
 
-**Chill Shooters Airsoft Gaming Center**
+**Chill Shooters Airsoft Game Center**
 
 *Aim. Book. Play.*

@@ -1,5 +1,5 @@
 import type { IconType } from 'react-icons'
-import { FiBell, FiCalendar, FiCloudRain, FiCreditCard, FiFlag, FiShield, FiTarget, FiVolume2 } from 'react-icons/fi'
+import { FiBell, FiCalendar, FiCloudRain, FiCreditCard, FiFlag, FiInbox, FiShield, FiTarget, FiVolume2 } from 'react-icons/fi'
 import type { NotificationItem } from '../context/NotificationContext'
 
 // Shared by the notification bell and the notifications page so both read the same way.
@@ -14,6 +14,7 @@ export function kindOf(item: NotificationItem): { icon: IconType; label: string 
   if (type.startsWith('weapon_') || type.startsWith('equipment_')) return { icon: FiTarget, label: 'Weapons & gear' }
   if (type.startsWith('weather_')) return { icon: FiCloudRain, label: 'Weather' }
   if (type.startsWith('gameplay_')) return { icon: FiFlag, label: 'Game' }
+  if (type === 'contact_message') return { icon: FiInbox, label: 'Message' }
   return { icon: FiBell, label: 'Update' }
 }
 

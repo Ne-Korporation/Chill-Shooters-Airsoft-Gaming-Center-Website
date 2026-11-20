@@ -195,7 +195,7 @@ export function TopNav({
             />
             <div className="hidden leading-tight sm:block">
               <div className="text-sm font-bold">Chill Shooters</div>
-              <div className="text-[11px] text-muted">Airsoft Gaming Center</div>
+              <div className="text-[11px] text-muted">Airsoft Game Center</div>
             </div>
           </Link>
         </div>

@@ -5,7 +5,7 @@ import { apiBase } from './apiClient'
 // bumps it whenever that kind of data changes. One poller per tab watches it; when a topic moves,
 // every page that showed that topic reloads its data in place (forms keep what was typed).
 
-export type LiveTopic = 'reservations' | 'slots' | 'payments' | 'waivers' | 'notifications' | 'accounts' | 'gear' | 'games' | 'content'
+export type LiveTopic = 'reservations' | 'slots' | 'payments' | 'waivers' | 'notifications' | 'accounts' | 'gear' | 'games' | 'content' | 'inbox'
 
 type Snapshot = { bootId: string; versions: Record<string, number> }
 
