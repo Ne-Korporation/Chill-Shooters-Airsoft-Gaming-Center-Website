@@ -29,6 +29,52 @@ export function getSlotPlayerCount(reservations) {
   )
 }
 
+// Grounds are never picked by the player: they are assigned from the number of players, in this
+// order (Upper Ground is the main field). Management rule: fewer than 20 players get Upper Ground,
+// 20-49 get Upper + Lower Ground, 50 or more get all three. A private game counts its own group;
+// public games share the slot, so their grounds follow the slot's total public headcount.
+export const GROUND_OPENS_AT = [0, 20, 50]
+
+export function groundCountForPlayers(players) {
+  const count = Math.max(0, Number(players) || 0)
+  return GROUND_OPENS_AT.filter((threshold) => count >= threshold).length || 1
+}
+
+// Field ids are `<location>-field-1` (Upper), `-2` (Lower) and `-3` (Forest).
+export function groundIdsForPlayers(locationId, players) {
+  return Array.from({ length: groundCountForPlayers(players) }, (_, index) => `${locationId}-field-${index + 1}`)
+}
+
+// Re-assigns the grounds of every public booking in one slot from the slot's total public
+// headcount. Called whenever a public booking joins, leaves or moves.
+export async function syncPublicGrounds(db, { locationId, reservationDate, reservationTime }, session) {
+  if (!locationId || !reservationDate || !reservationTime) return
+  const options = session ? { session } : {}
+  const sameSlot = await db.collection('reservations').find(
+    {
+      $and: [
+        { $or: [{ reservationDate }, { dateISO: reservationDate }] },
+        { $or: [{ reservationTime }, { slot: reservationTime }] },
+      ],
+    },
+    options,
+  ).toArray()
+  const publicGames = getBlockingSlotReservations({ reservations: sameSlot, locationId, normalizeLocationId })
+    .filter((reservation) => !isPrivate(reservation))
+  if (publicGames.length === 0) return
+  const fieldIds = groundIdsForPlayers(locationId, getSlotPlayerCount(publicGames))
+  const stale = publicGames.filter((reservation) => {
+    const current = Array.isArray(reservation.fieldIds) ? reservation.fieldIds.map(String) : []
+    return current.length !== fieldIds.length || current.some((id, index) => id !== fieldIds[index])
+  })
+  if (stale.length === 0) return
+  await db.collection('reservations').updateMany(
+    { _id: { $in: stale.map((reservation) => reservation._id) } },
+    { $set: { fieldIds, fieldId: fieldIds[0] } },
+    options,
+  )
+}
+
 const isPrivate = (item) => String(item?.sessionType || '').toLowerCase() === 'private'
 
 // Why a new booking can't take this slot, or null. `reservations` are the slot's blocking

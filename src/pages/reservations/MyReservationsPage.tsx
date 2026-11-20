@@ -19,6 +19,7 @@ import { ReservationIdTag } from '../../components/reservations/ReservationIdTag
 import { ReservationDetailsDialog, type ReservationDetails } from '../../components/reservations/ReservationDetailsDialog'
 import { Pagination, usePagination } from '../../components/ui/Pagination'
 import { FilterTabs } from '../../components/ui/FilterTabs'
+import { PLAYER_RESCHEDULES_ALLOWED, playerRescheduleCount, RESCHEDULE_WINDOW_DAYS } from '../../utils/bookingWindow'
 
 type RescheduleEvent = {
   fromDate?: string
@@ -27,11 +28,15 @@ type RescheduleEvent = {
   toTime?: string
   reason?: string
   atISO?: string
+  actorRole?: string
+  sentBack?: boolean
 }
 
 type ReservationDoc = ReservationDetails & {
   // The captain who booked it.
   userId?: string
+  // Kept on the booking so teammates can see who booked it.
+  bookerName?: string
   id?: string
   _id?: string
   reservationDate?: string
@@ -215,15 +220,29 @@ export function MyReservationsPage() {
   const [draft, setDraft] = useState<BookingDraft | null>(null)
   const [draftSecondsLeft, setDraftSecondsLeft] = useState(0)
   useEffect(() => {
-    // Read after the booking page's "left" mark lands (it fires 300 ms after leaving). Being on
-    // this page means the player isn't booking, so a draft still marked active is marked left now.
-    const timer = window.setTimeout(() => {
+    // Read after the booking page's "left" mark lands (it fires 300 ms after leaving).
+    let cancelled = false
+    const timer = window.setTimeout(async () => {
+      if (!readBookingDraft(user?.id)) return
+      // The server's hold is what keeps the slot. A draft left behind in this browser (e.g. the
+      // player logged out or closed the tab long ago) must not restart the countdown once the
+      // hold is gone.
+      const hold = await apiGet<{ ok: boolean; data: unknown }>('/api/slot-holds/mine').then((res) => res?.data || null).catch(() => null)
+      if (cancelled) return
+      if (!hold) {
+        clearBookingDraft(user?.id)
+        return
+      }
+      // Being on this page means the player isn't booking, so a draft still marked active is marked left now.
       markBookingDraftLeft(user?.id)
       const found = readBookingDraft(user?.id)
       setDraft(found)
       setDraftSecondsLeft(found ? Math.ceil(draftTimeLeft(found) / 1000) : 0)
     }, 400)
-    return () => window.clearTimeout(timer)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
   }, [user?.id])
   // The server's view: a slot still held for this player (booking started on another device, or
   // the draft here was already cleared). Shown so it can be cancelled without waiting.
@@ -242,7 +261,13 @@ export function MyReservationsPage() {
   // payment step is listed below with its own Cancel button.
   const [cancellingDraft, setCancellingDraft] = useState(false)
   const cancelUnfinishedBooking = async () => {
-    if (!window.confirm('Cancel this unfinished booking? The slot will be opened for other players.')) return
+    if (!(await confirmDialog({
+      title: 'Cancel this unfinished booking?',
+      message: 'The slot will be opened for other players.',
+      confirmLabel: 'Cancel booking',
+      cancelLabel: 'Keep it',
+      danger: true,
+    }))) return
     setCancellingDraft(true)
     try {
       await apiDelete('/api/slot-holds/mine')
@@ -314,10 +339,6 @@ export function MyReservationsPage() {
       return
     }
     const sentBack = Boolean(reservation.sentBack) && statusOf(reservation) === 'needs review'
-    if (!reason.trim() && !sentBack) {
-      toast.error('Please give a reason for rescheduling.')
-      return
-    }
 
     setSaving(true)
     try {
@@ -347,7 +368,7 @@ export function MyReservationsPage() {
           <ul className="mt-3 flex flex-wrap gap-2 text-xs">
             <li className="inline-flex items-center gap-1.5 rounded-full bg-[rgba(var(--text),0.06)] px-3 py-1.5">
               <FiRefreshCw className="shrink-0 text-accent" />
-              <span><span className="font-semibold">Reschedule</span> up to {RESCHEDULE_CUTOFF_DAYS} days before. Your deposit carries over.</span>
+              <span><span className="font-semibold">Reschedule once</span>, up to {RESCHEDULE_CUTOFF_DAYS} days before, to a date within {RESCHEDULE_WINDOW_DAYS} days of the original. Your deposit carries over.</span>
             </li>
             <li className="inline-flex items-center gap-1.5 rounded-full bg-[rgba(var(--text),0.06)] px-3 py-1.5">
               <FiXCircle className="shrink-0 text-accent" />
@@ -422,8 +443,12 @@ export function MyReservationsPage() {
         const daysLeft = date ? daysBetweenISO(today, date) : -1
         const statusAllows = RESCHEDULABLE_STATUSES.includes(status)
         // Staff sent it back: the player can always pick a new date, whatever the cutoff.
-        const sentBack = Boolean(reservation.sentBack) && status === 'needs review'
-        const canReschedule = statusAllows && (sentBack || daysLeft >= RESCHEDULE_CUTOFF_DAYS)
+        // Bookings a captain added this player to show here too, read-only: only the captain changes them.
+        const isCaptain = String(reservation.userId || '') === String(user?.id || '')
+        const sentBack = isCaptain && Boolean(reservation.sentBack) && status === 'needs review'
+        // Players reschedule a booking once (a new date after staff sent it back doesn't count).
+        const alreadyRescheduled = playerRescheduleCount(reservation.rescheduleHistory) >= PLAYER_RESCHEDULES_ALLOWED
+        const canReschedule = isCaptain && statusAllows && (sentBack || (daysLeft >= RESCHEDULE_CUTOFF_DAYS && !alreadyRescheduled))
         const cutoffDate = date ? addDaysISO(date, -RESCHEDULE_CUTOFF_DAYS) : ''
         const editing = editingId === id
         const reservationPayments = payments.filter((payment) => [reservation.id, reservation._id].map(String).includes(String(payment.reservationId)))
@@ -433,7 +458,7 @@ export function MyReservationsPage() {
           && String(reservation.userId || '') === String(user?.id || '')
           && !reservationPayments.some((payment: any) => !['failed', 'rejected'].includes(String(payment.paymentStatus || payment.status || '').toLowerCase()))
         // Still owes this player's payment and can pay it online now.
-        const payable = canPayOnline && status === 'pending' && reservation.paymentState !== 'finalized'
+        const payable = isCaptain && canPayOnline && status === 'pending' && reservation.paymentState !== 'finalized'
           && !reservationPayments.some((payment: any) => String(payment.userId) === String(user?.id) && !['failed', 'rejected'].includes(String(payment.paymentStatus || '').toLowerCase()))
         const needsAction = sentBack || payable
 
@@ -444,6 +469,11 @@ export function MyReservationsPage() {
                 <div className="text-lg font-semibold">
                   {date ? formatCardDate(date) : 'No date'} · <span className="capitalize">{slotOf(reservation) || '-'}</span>
                 </div>
+                {!isCaptain ? (
+                  <div className="mt-1 inline-flex items-center gap-1.5 rounded-full bg-accent/10 px-2.5 py-0.5 text-xs font-semibold text-accent">
+                    Teammate · booked by {reservation.bookerName || 'your captain'}
+                  </div>
+                ) : null}
                 <div className="mt-0.5 text-sm text-muted">
                   {reservation.locationName || reservation.locationId || 'Location'} · {reservation.numberOfPlayers || 0} player{Number(reservation.numberOfPlayers) === 1 ? '' : 's'} · {reservation.packageName || 'Custom selection'} · {formatPHP(reservation.totalAmount)}
                 </div>
@@ -504,7 +534,9 @@ export function MyReservationsPage() {
               ) : null}
               <ReservationIdTag id={id} className="ml-auto text-[11px] text-muted" />
             </div>
-            {tab === 'upcoming' && statusAllows && !sentBack && daysLeft >= 0 && daysLeft < RESCHEDULE_CUTOFF_DAYS ? (
+            {tab === 'upcoming' && statusAllows && !sentBack && alreadyRescheduled && daysLeft >= 0 ? (
+              <div className="mt-2 text-xs text-muted">This booking was already rescheduled once, so it can't be moved again.</div>
+            ) : tab === 'upcoming' && statusAllows && !sentBack && daysLeft >= 0 && daysLeft < RESCHEDULE_CUTOFF_DAYS ? (
               <div className="mt-2 text-xs text-muted">Rescheduling closed on {formatShortDate(cutoffDate)} ({RESCHEDULE_CUTOFF_DAYS} days before the game).</div>
             ) : null}
 
@@ -531,16 +563,19 @@ export function MyReservationsPage() {
                     }}
                   />
                 </div>
-                <label className="block text-xs font-semibold text-muted md:col-span-3">
-                  {sentBack ? 'Note for staff (optional)' : 'Reason'}
-                  <textarea
-                    value={reason}
-                    onChange={(event) => setReason(event.target.value.slice(0, 500))}
-                    rows={2}
-                    placeholder="e.g. Weather, team availability"
-                    className="mt-1 w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-text"
-                  />
-                </label>
+                {/* One-click reschedule: just pick the new date and slot. A booking staff sent back
+                    can carry an optional note for them. */}
+                {sentBack ? (
+                  <label className="block text-xs font-semibold text-muted md:col-span-3">
+                    Note for staff (optional)
+                    <textarea
+                      value={reason}
+                      onChange={(event) => setReason(event.target.value.slice(0, 500))}
+                      rows={2}
+                      className="mt-1 w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-text"
+                    />
+                  </label>
+                ) : null}
                 <div className="flex gap-2 md:col-span-3">
                   <Button variant="ghost" onClick={() => setEditingId(null)} disabled={saving}>Cancel</Button>
                   <Button variant="primary" onClick={() => submitReschedule(reservation)} disabled={saving || !newDate}>

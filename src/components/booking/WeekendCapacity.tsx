@@ -3,6 +3,22 @@ import { FiHeart, FiUsers } from 'react-icons/fi'
 import { getApiBase } from '../../utils/apiClient'
 import { formatSlotRange, useSlotHours } from '../../utils/slotHours'
 import { causeDayMessage, type CauseDay } from '../../utils/causeDays'
+import { useAuth } from '../../context/AuthContext'
+
+// Staff (admin, registrar, marshal) see how many spots are left; players and visitors only see
+// whether a slot is available or full.
+export function useShowsSpotCounts() {
+  const { user } = useAuth()
+  return ['admin', 'registrar', 'marshal'].includes(String(user?.role || ''))
+}
+
+// "Available" or "Full", for players and visitors.
+export function availabilityLabel(booked: number, capacity: number) {
+  return capacity > 0 && booked >= capacity ? 'Full' : 'Available'
+}
+export function availabilityText(booked: number, capacity: number) {
+  return capacity > 0 && booked >= capacity ? 'text-danger' : 'text-success'
+}
 
 export type SlotCapacity = { slot: string; capacity: number; booked: number; remaining: number; groups?: number }
 export type LocationCapacity = { id: string; name: string; capacity: number; booked: number; groups?: number; slots: SlotCapacity[] }
@@ -57,7 +73,7 @@ function formatDay(dateISO: string) {
 
 export function WeekendCapacity({
   title = 'This weekend',
-  subtitle = 'Spots left in the public games. Anyone can join.',
+  subtitle = 'Spots available in the public games. Anyone can join.',
   compact = false,
   action,
 }: {
@@ -69,6 +85,7 @@ export function WeekendCapacity({
 }) {
   const { loading, days, causeDays, failed } = useWeekendCapacity()
   const causeByDate = Object.fromEntries(causeDays.map((cause) => [cause.dateISO, cause]))
+  const showCounts = useShowsSpotCounts()
 
   if (failed) return null
 
@@ -100,7 +117,9 @@ export function WeekendCapacity({
                     <span className="text-sm font-bold">{label.weekday}</span>
                     <span className="ml-2 text-xs text-muted">{label.date}</span>
                   </div>
-                  <span className={`text-xs font-semibold ${day.past ? 'text-muted' : tone.text}`}>{day.past ? 'Done' : tone.label}</span>
+                  <span className={`text-xs font-semibold ${day.past ? 'text-muted' : showCounts ? tone.text : availabilityText(day.booked, day.capacity)}`}>
+                    {day.past ? 'Done' : showCounts ? tone.label : availabilityLabel(day.booked, day.capacity)}
+                  </span>
                 </div>
                 {causeByDate[day.dateISO] ? (
                   <div className="mt-1.5 flex items-start gap-1.5 rounded-lg bg-rose-500/10 px-2 py-1 text-[11px] font-semibold text-rose-600 dark:text-rose-400" title={causeDayMessage(causeByDate[day.dateISO])}>
@@ -116,7 +135,7 @@ export function WeekendCapacity({
           })}
         </div>
       )}
-      {!loading ? <div className="mt-2 text-[11px] text-muted">Numbers are spots left. Anyone can join a public game.</div> : null}
+      {!loading ? <div className="mt-2 text-[11px] text-muted">{showCounts ? 'Numbers are spots available. ' : ''}Anyone can join a public game.</div> : null}
     </div>
   )
 }
@@ -129,7 +148,7 @@ export function isPublicDay(day: WeekendDay) {
 const SLOT_NAMES: Record<string, string> = { morning: 'Morning', afternoon: 'Afternoon', evening: 'Evening' }
 export const SHORT_LOCATION: Record<string, string> ={ salawag: 'Salawag', langkaan: 'Langkaan', binan: 'Biñan' }
 
-// One day at a glance: a row per location, a column per time slot. Public days show spots left;
+// One day at a glance: a row per location, a column per time slot. Public days show spots available;
 // private days show how many groups have booked each slot.
 export function DaySlotsTable({ day, past, note = true }: { day: WeekendDay; past: boolean; note?: boolean }) {
   const slotHours = useSlotHours()
@@ -137,13 +156,18 @@ export function DaySlotsTable({ day, past, note = true }: { day: WeekendDay; pas
   const slots = day.locations[0]?.slots.map((slot) => slot.slot) || []
   const groups = day.groups || 0
   const left = Math.max(0, day.capacity - day.booked)
+  const showCounts = useShowsSpotCounts()
 
   return (
     <div>
       <div className="text-sm">
-        {isPublic ? (
+        {!showCounts ? (
+          isPublic
+            ? past ? 'This game day is done.' : left > 0 ? 'Spots are available.' : 'This day is fully booked.'
+            : groups ? 'Some slots are already booked for private games.' : 'No private games booked yet. Every slot is open.'
+        ) : isPublic ? (
           past ? <><span className="font-semibold">{day.booked.toLocaleString()}</span> players played</>
-            : <><span className="font-semibold">{left.toLocaleString()}</span> spots left · {day.booked.toLocaleString()} booked</>
+            : <><span className="font-semibold">{left.toLocaleString()}</span> spots available</>
         ) : groups ? (
           <><span className="font-semibold">{groups}</span> private game{groups === 1 ? '' : 's'} booked</>
         ) : 'No private games booked yet. Every slot is open.'}
@@ -178,14 +202,21 @@ export function DaySlotsTable({ day, past, note = true }: { day: WeekendDay; pas
                     const full = slot.remaining === 0
                     return (
                       <td key={slot.slot} className={`whitespace-nowrap px-1.5 py-2 text-center align-middle tabular-nums ${full ? 'font-semibold text-danger' : booked ? 'font-semibold text-accent' : 'text-muted'}`}>
-                        {full ? 'Full' : booked ? `${booked} booked` : 'Free'}
+                        {full ? 'Full' : booked ? (showCounts ? `${booked} booked` : 'Booked') : 'Free'}
+                      </td>
+                    )
+                  }
+                  if (!showCounts) {
+                    return (
+                      <td key={slot.slot} className={`whitespace-nowrap px-1.5 py-2 text-center align-middle font-semibold ${past ? 'text-muted' : slot.remaining === 0 ? 'text-danger' : 'text-success'}`}>
+                        {past ? 'Done' : slot.remaining === 0 ? 'Full' : 'Available'}
                       </td>
                     )
                   }
                   const tone = fillTone(slot.booked, slot.capacity)
                   return (
-                    <td key={slot.slot} className={`whitespace-nowrap px-1.5 py-2 text-center align-middle font-semibold tabular-nums ${past ? 'text-muted' : tone.text}`} title={`${slot.booked} of ${slot.capacity} booked`}>
-                      {past ? `${slot.booked} played` : slot.remaining === 0 ? 'Full' : `${slot.remaining.toLocaleString()} left`}
+                    <td key={slot.slot} className={`whitespace-nowrap px-1.5 py-2 text-center align-middle font-semibold tabular-nums ${past ? 'text-muted' : tone.text}`} title={past ? `${slot.booked} played` : `${slot.remaining.toLocaleString()} of ${slot.capacity.toLocaleString()} spots available`}>
+                      {past ? `${slot.booked} played` : slot.remaining === 0 ? 'Full' : `${slot.remaining.toLocaleString()} available`}
                     </td>
                   )
                 })}
@@ -197,7 +228,7 @@ export function DaySlotsTable({ day, past, note = true }: { day: WeekendDay; pas
 
       {note ? <div className="mt-2 text-[11px] text-muted">
         {isPublic
-          ? past ? 'Numbers are players who booked.' : 'Numbers are spots left. Anyone can join a public game.'
+          ? !showCounts ? 'Anyone can join a public game.' : past ? 'Numbers are players who booked.' : 'Numbers are spots available. Anyone can join a public game.'
           : 'Private games are for your own group of 10 or more.'}
       </div> : null}
     </div>

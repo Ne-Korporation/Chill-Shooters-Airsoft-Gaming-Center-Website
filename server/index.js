@@ -8,6 +8,7 @@ import { getDb, startDbSession } from './db/mongo.js'
 import { ensureDatabaseSetup } from './db/setup.js'
 import { requireAuth, requireRole } from './middleware/auth.js'
 import { configuredAppUrl, rememberAppOrigin } from './utils/appUrl.js'
+import { signFileLinksForSignedIn } from './utils/fileLinks.js'
 import { bumpTopics, changeSnapshot, trackChanges } from './utils/changeFeed.js'
 import { corsPolicy, errorHandler, hideServerErrors, noStoreForAuthenticated, rateLimit, securityHeaders } from './middleware/security.js'
 
@@ -32,7 +33,7 @@ const { default: recommendationsRouter } = await import('./routes/recommendation
 const { default: weatherRouter } = await import('./routes/weather.js')
 const { default: childrenRouter } = await import('./routes/children.js')
 const { default: causeDaysRouter } = await import('./routes/causeDays.js')
-const { expireOverdueReservations, sendSplitPaymentWarnings } = await import('./utils/paymentProgress.js')
+const { expireOverdueReservations, notifyRole, sendSplitPaymentWarnings } = await import('./utils/paymentProgress.js')
 const { expireOldIdentities } = await import('./utils/identityValidity.js')
 const { sendDueReminders } = await import('./utils/reminders.js')
 const { checkAmmoStock } = await import('./utils/ammoStock.js')
@@ -66,6 +67,8 @@ if (!configuredAppUrl()) {
   console.warn('PUBLIC_APP_URL is not set: email links use the address of the site calling the API, or http://localhost:5173 until one does. Set it to the website address (for example https://your-site.vercel.app).')
 }
 app.use(express.json({ limit: '10mb' }))
+// Links to private uploads (ID photos) are signed and expire; see utils/fileLinks.js.
+app.use(signFileLinksForSignedIn)
 // Open pages poll this to refresh themselves when data changes (see utils/changeFeed.js).
 app.use(trackChanges)
 app.get('/api/changes', (_req, res) => {
@@ -74,22 +77,6 @@ app.get('/api/changes', (_req, res) => {
 })
 
 const PORT = Number(process.env.PORT) || 3001
-
-app.get('/api/public/metrics', async (_req, res) => {
-  try {
-    const db = await getDb()
-    const [reservations, pendingReservations, pendingPayments, pendingWaivers, activeGames] = await Promise.all([
-      db.collection('reservations').countDocuments({}),
-      db.collection('reservations').countDocuments({ reservationStatus: { $in: ['pending', 'needs review', 'review'] } }),
-      db.collection('payments').countDocuments({ paymentStatus: { $in: ['pending', 'submitted', 'review'] } }),
-      db.collection('waivers').countDocuments({ status: { $in: ['pending', 'review', 'submitted'] } }),
-      db.collection('gameplay').countDocuments({ Status: { $in: ['Scheduled', 'Ongoing', 'Completed'] } }),
-    ])
-    return res.json({ ok: true, data: { reservations, pendingReservations, pendingPayments, pendingWaivers, activeGames } })
-  } catch (err) {
-    return res.status(500).json({ ok: false, error: String(err) })
-  }
-})
 
 getDb()
   .then(async (db) => {
@@ -189,7 +176,7 @@ if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
 }
 
 // Public: must be registered before the /api routers, which require auth.
-const CONTACT_TO = process.env.TO_EMAIL || 'support@chillshooters.com'
+const CONTACT_TO = process.env.TO_EMAIL || 'chillshooters.agc@gmail.com'
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 // Render's free tier blocks outbound SMTP, so prefer Brevo's HTTPS API when
@@ -243,12 +230,138 @@ app.post('/api/contact', async (req, res) => {
   if (!EMAIL_PATTERN.test(email)) return res.status(400).json({ ok: false, error: 'Please enter a valid email address.' })
   if (!message) return res.status(400).json({ ok: false, error: 'Please write a message.' })
 
+  // Every message is saved to the admin Inbox first, then emailed to the official address. A
+  // failed email doesn't lose the message: it stays in the Inbox, marked as not emailed.
+  let db
+  let saved
+  try {
+    db = await getDb()
+    saved = {
+      id: `MSG-${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
+      name,
+      email,
+      message,
+      status: 'new',
+      emailStatus: 'sending',
+      createdAtISO: new Date().toISOString(),
+    }
+    await db.collection('contact_messages').insertOne(saved)
+  } catch (err) {
+    console.error('contact message save error', err)
+  }
+
+  let emailed = false
   try {
     await sendContactEmail({ name, email, message })
-    return res.json({ ok: true })
+    emailed = true
   } catch (err) {
     console.error('contact email error', err)
-    return res.status(502).json({ ok: false, error: 'Could not send your message right now.' })
+  }
+  if (saved) {
+    await db.collection('contact_messages').updateOne({ id: saved.id }, { $set: { emailStatus: emailed ? 'sent' : 'failed' } }).catch(() => null)
+    await notifyRole(db, {
+      role: 'admin',
+      type: 'contact_message',
+      title: `New message from ${name}`,
+      message: `${name} (${email}): ${message.slice(0, 140)}${message.length > 140 ? '…' : ''}`,
+      linkedResourceId: saved.id,
+    })
+  }
+  if (!saved && !emailed) return res.status(502).json({ ok: false, error: 'Could not send your message right now.' })
+  return res.json({ ok: true })
+})
+
+// Admin Inbox: messages players send from the website's message form.
+const INBOX_STATUSES = ['new', 'read', 'replied', 'archived']
+
+app.get('/api/admin/inbox', requireAuth, requireRole('admin'), async (req, res) => {
+  try {
+    const db = await getDb()
+    const status = String(req.query.status || '')
+    const filter = INBOX_STATUSES.includes(status) ? { status } : { status: { $ne: 'archived' } }
+    const [data, unread] = await Promise.all([
+      db.collection('contact_messages').find(filter, { projection: { _id: 0 } }).sort({ createdAtISO: -1 }).limit(500).toArray(),
+      db.collection('contact_messages').countDocuments({ status: 'new' }),
+    ])
+    return res.json({ ok: true, data, unread })
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: String(err) })
+  }
+})
+
+app.put('/api/admin/inbox/:id', requireAuth, requireRole('admin'), async (req, res) => {
+  const status = String(req.body?.status || '')
+  if (!INBOX_STATUSES.includes(status)) return res.status(400).json({ ok: false, error: 'Choose new, read, replied or archived.' })
+  try {
+    const db = await getDb()
+    const nowISO = new Date().toISOString()
+    const result = await db.collection('contact_messages').findOneAndUpdate(
+      { id: String(req.params.id) },
+      { $set: { status, updatedAtISO: nowISO, updatedBy: { id: String(req.user.id), role: req.user.role } } },
+      { returnDocument: 'after', projection: { _id: 0 } },
+    )
+    if (!result) return res.status(404).json({ ok: false, error: 'Message not found' })
+    return res.json({ ok: true, data: result })
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: String(err) })
+  }
+})
+
+// POST /api/admin/inbox/:id/reply { body } — the server emails the reply, so it always goes out
+// from the center's sender (never an admin's personal account). The player's answer goes to the
+// official address (reply-to), which also gets a hidden copy of every reply.
+app.post('/api/admin/inbox/:id/reply', requireAuth, requireRole('admin'), async (req, res) => {
+  const body = String(req.body?.body || '').replace(/\r\n/g, '\n').trim().slice(0, 5000)
+  if (!body) return res.status(400).json({ ok: false, error: 'Write your reply.' })
+  try {
+    const db = await getDb()
+    const original = await db.collection('contact_messages').findOne({ id: String(req.params.id) })
+    if (!original) return res.status(404).json({ ok: false, error: 'Message not found' })
+
+    const escape = (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]))
+    const paragraphs = (text) => escape(text).split(/\n{2,}/).map((part) => `<p>${part.replace(/\n/g, '<br>')}</p>`).join('')
+    const sentOn = new Date(original.createdAtISO).toLocaleString('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short' })
+    // Reads as a message from the center: a branded header and intro, the reply, then the sign-off.
+    const center = 'Chill Shooters Airsoft Game Center'
+    const html = `
+      <div style="font-family: Arial, sans-serif; line-height: 1.5; color: #111827;">
+        <div style="font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:#6b7280;">Message from ${center}</div>
+        <p>Hi ${escape(original.name || 'there')}, this is ${center} replying to your message.</p>
+        ${paragraphs(body)}
+        <p>Thank you,<br><strong>${center}</strong></p>
+        <div style="margin-top:16px;padding-left:12px;border-left:3px solid #e5e7eb;color:#6b7280;font-size:13px;">
+          <p style="margin:0 0 4px;">On ${escape(sentOn)}, you wrote:</p>
+          ${paragraphs(original.message)}
+        </div>
+      </div>`
+    const text = `Message from ${center}\n\nHi ${original.name || 'there'}, this is ${center} replying to your message.\n\n${body}\n\nThank you,\n${center}\n\n---\nOn ${sentOn}, you wrote:\n${original.message}`
+
+    const { default: mailer } = await import('./services/mailService.js')
+    try {
+      await mailer.sendMail({
+        from: `Chill Shooters <${process.env.EMAIL_USER || CONTACT_TO}>`,
+        to: original.email,
+        replyTo: `Chill Shooters <${CONTACT_TO}>`,
+        bcc: CONTACT_TO,
+        subject: `${center} replied to your message`,
+        html,
+        text,
+      })
+    } catch (err) {
+      console.error('inbox reply email error', err)
+      return res.status(502).json({ ok: false, error: 'The reply could not be sent. Please try again.' })
+    }
+
+    const nowISO = new Date().toISOString()
+    const reply = { body, byId: String(req.user.id), byEmail: req.user.email || '', atISO: nowISO }
+    const updated = await db.collection('contact_messages').findOneAndUpdate(
+      { id: original.id },
+      { $push: { replies: reply }, $set: { status: 'replied', updatedAtISO: nowISO, updatedBy: { id: String(req.user.id), role: req.user.role } } },
+      { returnDocument: 'after', projection: { _id: 0 } },
+    )
+    return res.json({ ok: true, data: updated })
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: String(err) })
   }
 })
 
@@ -267,17 +380,74 @@ app.use('/api', weatherRouter)
 app.use('/api', childrenRouter)
 app.use('/api', causeDaysRouter)
 app.use('/api/auth', authRouter)
-app.use('/api', crudRouter)
-
-app.delete('/api/notifications', requireAuth, requireRole('admin'), async (req, res) => {
+// Admin notification log: notifications are archived, never cleared. Archiving only takes them off
+// the admin's Sent notifications list (they stay on record and can be restored); the players and
+// staff who received them keep theirs.
+// POST /api/notifications/archive { ids?: string[] } — no ids archives every notification.
+app.post('/api/notifications/archive', requireAuth, requireRole('admin'), async (req, res) => {
   try {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(String).filter(Boolean).slice(0, 1000) : null
+    if (ids && ids.length === 0) return res.status(400).json({ ok: false, error: 'Choose notifications to archive.' })
     const db = await getDb()
-    const result = await db.collection('notifications').deleteMany({})
-    return res.json({ ok: true, deletedCount: result.deletedCount || 0 })
+    const result = await db.collection('notifications').updateMany(
+      { ...(ids ? { id: { $in: ids } } : {}), archivedAtISO: { $exists: false } },
+      { $set: { archivedAtISO: new Date().toISOString(), archivedBy: String(req.user.id) } },
+    )
+    return res.json({ ok: true, archived: result.modifiedCount || 0 })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
   }
 })
+
+// GET /api/notifications/sent?archived=1 — every notification the system has sent, to anyone
+// (newest 1000), for the admin's Sent notifications log. Personal ones carry the recipient's name.
+// Separate from GET /api/notifications, which returns only the admin's own (their bell).
+app.get('/api/notifications/sent', requireAuth, requireRole('admin'), async (req, res) => {
+  try {
+    const db = await getDb()
+    const archived = req.query.archived === '1'
+    const data = await db.collection('notifications')
+      .find({ archivedAtISO: { $exists: archived } }, { projection: { _id: 0 } })
+      .sort({ createdAtISO: -1 })
+      .limit(1000)
+      .toArray()
+    const personIds = [...new Set(data.map((n) => String(n.userId || '')).filter((id) => id && id !== 'broadcast'))]
+    const accounts = personIds.length
+      ? await db.collection('user_accounts').find({ id: { $in: personIds } }, { projection: { _id: 0, id: 1, name: 1, role: 1 } }).toArray()
+      : []
+    const byId = new Map(accounts.map((a) => [String(a.id), a]))
+    const [activeCount, archivedCount] = await Promise.all([
+      db.collection('notifications').countDocuments({ archivedAtISO: { $exists: false } }),
+      db.collection('notifications').countDocuments({ archivedAtISO: { $exists: true } }),
+    ])
+    return res.json({
+      ok: true,
+      data: data.map((n) => {
+        const person = byId.get(String(n.userId))
+        return person ? { ...n, recipientName: person.name || '', recipientRole: person.role || 'user' } : n
+      }),
+      activeCount,
+      archivedCount,
+    })
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: String(err) })
+  }
+})
+
+// POST /api/notifications/unarchive { ids: string[] } — puts archived notifications back on the list.
+app.post('/api/notifications/unarchive', requireAuth, requireRole('admin'), async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(String).filter(Boolean).slice(0, 1000) : []
+    if (ids.length === 0) return res.status(400).json({ ok: false, error: 'Choose notifications to restore.' })
+    const db = await getDb()
+    const result = await db.collection('notifications').updateMany({ id: { $in: ids } }, { $unset: { archivedAtISO: '', archivedBy: '' } })
+    return res.json({ ok: true, restored: result.modifiedCount || 0 })
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: String(err) })
+  }
+})
+
+app.use('/api', crudRouter)
 
 // Unknown API paths and anything thrown past a route.
 app.use('/api', (_req, res) => res.status(404).json({ ok: false, error: 'Not found' }))

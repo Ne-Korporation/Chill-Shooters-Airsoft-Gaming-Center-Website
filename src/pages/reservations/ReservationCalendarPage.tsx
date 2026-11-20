@@ -8,6 +8,7 @@ import {
   FiCalendar,
   FiAlertCircle,
   FiCheck,
+  FiChevronLeft,
   FiChevronRight,
   FiClock,
   FiCrosshair,
@@ -46,6 +47,8 @@ import { DEFAULT_SLOT_HOURS, formatSlotRange, manilaTodayISO, slotHasStarted, us
 import { causeDayMessage, useCauseDays } from '../../utils/causeDays'
 import { closedDayMessage, useClosedDays } from '../../utils/closedDays'
 import { bookingRoles } from '../../utils/bookingRoles'
+import { addDaysISO, BOOKING_WINDOW_DAYS, monthsBetween } from '../../utils/bookingWindow'
+import { pieceAtBranch } from '../../utils/branches'
 
 // Slot holds last 15 minutes on the server; refresh well before that while the player is booking.
 const SLOT_HOLD_REFRESH_MS = 4 * 60 * 1000
@@ -100,6 +103,8 @@ type WeaponItem = {
   category: string
   status: string
   price: number
+  // Branch that rents out this piece; blank = not assigned yet (any branch).
+  locationId?: string
 }
 
 type EquipmentItemDetails = {
@@ -112,6 +117,7 @@ type EquipmentItemDetails = {
   category: string
   status: string
   price: number
+  locationId?: string
 }
 
 type ReservationRecord = {
@@ -195,7 +201,7 @@ const locationFields: Record<LocationOption, Field[]> = {
 const locationMaxPlayers: Record<LocationOption, number> = {
   salawag: 400,
   langkaan: 400,
-  binan: 600,
+  binan: 200,
 }
 
 function capacityFor(location: LocationOption, _slot: TimeSlot) {
@@ -219,7 +225,7 @@ function getFieldById(fieldId: string): Field | undefined {
 const locationOptions: { id: LocationOption; name: string; detail: string; capacity: string }[] = [
   { id: 'salawag', name: 'Chill Shooters (Salawag)', detail: 'Approximately 2 hectares.', capacity: 'Up to 400 players per slot' },
   { id: 'langkaan', name: 'Chill Shooters (Langkaan)', detail: 'Approximately 2 hectares.', capacity: 'Up to 400 players per slot' },
-  { id: 'binan', name: 'BBC Airsoft Binan Laguna', detail: 'Approximately 4 hectares.', capacity: 'Up to 600 players per slot' },
+  { id: 'binan', name: 'BBC Airsoft Binan Laguna', detail: 'Approximately 4 hectares.', capacity: 'Up to 200 players per slot' },
 ]
 
 const slotLabels: Record<TimeSlot, string> = {
@@ -410,10 +416,16 @@ export function ReservationCalendarPage() {
   // Status of the logged-in user's own waiver: none = never submitted
   const [currentWaiverStatus, setCurrentWaiverStatus] = useState<'none' | 'pending' | 'approved' | 'denied'>('none')
 
+  // Players can book up to a year ahead. The calendar shows two months at a time; the arrows page
+  // through from this month to the month of the last bookable date.
+  const lastBookableISO = addDaysISO(manilaTodayISO(), BOOKING_WINDOW_DAYS)
+  const maxMonthOffset = Math.max(0, monthsBetween(manilaTodayISO(), lastBookableISO) - 1)
+  const [monthOffset, setMonthOffset] = useState(0)
+
   const monthCalendars = useMemo(() => {
     const monthStarts = [
-      new Date(today.getFullYear(), today.getMonth(), 1),
-      new Date(today.getFullYear(), today.getMonth() + 1, 1),
+      new Date(today.getFullYear(), today.getMonth() + monthOffset, 1),
+      new Date(today.getFullYear(), today.getMonth() + monthOffset + 1, 1),
     ]
 
     return monthStarts.map((start) => {
@@ -440,7 +452,7 @@ export function ReservationCalendarPage() {
         weeks,
       }
     })
-  }, [today])
+  }, [today, monthOffset])
   // Games for a cause in the months shown: marked on the date and explained on hover.
   const causeDays = useCauseDays(
     monthCalendars[0] ? `${monthCalendars[0].key}-01` : '',
@@ -475,7 +487,17 @@ export function ReservationCalendarPage() {
   // ISO dates compare correctly as strings; ignore a prefilled date that has already passed.
   const startDateISO =
     landingPrefill?.dateISO && landingPrefill.dateISO >= initialDateISO ? landingPrefill.dateISO : initialDateISO
-  const [dateISO, setDateISO] = useState<string>(() => (draftState.dateISO >= initialDateISO ? draftState.dateISO : startDateISO))
+  const [dateISO, setDateISO] = useState<string>(() => {
+    const wanted = draftState.dateISO >= initialDateISO ? draftState.dateISO : startDateISO
+    return wanted > lastBookableISO ? initialDateISO : wanted
+  })
+  // Open the calendar on the months holding the picked date (e.g. a saved draft months ahead).
+  useEffect(() => {
+    const offset = monthsBetween(todayDateISO, dateISO)
+    setMonthOffset((current) => (offset < current || offset > current + 1 ? Math.min(Math.max(0, offset), maxMonthOffset) : current))
+    // Only when the date changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dateISO])
   const [slot, setSlot] = useState<TimeSlot>(() => draftState.slot ?? landingPrefill?.slot ?? 'morning')
   // One slot per booking. Drafts saved before this could hold several; keep the one being booked.
   const [selectedSlots, setSelectedSlots] = useState<TimeSlot[]>(() => {
@@ -854,6 +876,7 @@ export function ReservationCalendarPage() {
           category: d.category || 'rifles',
           status: d.status || 'available',
           price: typeof d.price === 'number' ? d.price : 0,
+          locationId: d.locationId || '',
         })))
 
         const eqDocs = Array.isArray(eqRes?.data) ? eqRes.data : []
@@ -867,6 +890,7 @@ export function ReservationCalendarPage() {
           category: d.category || 'gear',
           status: d.status || 'available',
           price: typeof d.price === 'number' ? d.price : 0,
+          locationId: d.locationId || '',
         })))
       } catch (e: any) {
         if (!cancelled) setLoadError(`Couldn't load packages and gear: ${String(e?.message || e)}`)
@@ -933,12 +957,12 @@ export function ReservationCalendarPage() {
     if (!dateISO || !slot) return
     let cancelled = false
     setLoadingSlotStock(true)
-    apiGet<{ ok: boolean; data: SlotStock }>(`/api/inventory-availability?date=${encodeURIComponent(dateISO)}&slot=${encodeURIComponent(slot)}`)
+    apiGet<{ ok: boolean; data: SlotStock }>(`/api/inventory-availability?date=${encodeURIComponent(dateISO)}&slot=${encodeURIComponent(slot)}&location=${encodeURIComponent(selectedLocation)}`)
       .then((res) => { if (!cancelled) setSlotStock(res?.data ?? null) })
       .catch(() => { if (!cancelled) setSlotStock(null) })
       .finally(() => { if (!cancelled) setLoadingSlotStock(false) })
     return () => { cancelled = true }
-  }, [dateISO, slot, step])
+  }, [dateISO, slot, step, selectedLocation])
 
   // A piece is free when it's in service and not reserved by another booking for this slot.
   const pieceFree = useCallback((collection: 'weapons' | 'equipments', piece: { id: string; status: string }) => {
@@ -947,8 +971,13 @@ export function ReservationCalendarPage() {
     return entry ? entry.available > 0 : true
   }, [slotStock])
 
-  const rentalWeapons = useMemo(() => weapons.filter((w) => w.source !== 'player'), [weapons])
-  const rentalEquipment = useMemo(() => equipment.filter((e) => e.source !== 'player'), [equipment])
+  // Packages name models through one piece id each, which may sit at any branch: look models up
+  // in every rental piece. Free stock then comes from this branch's pieces only.
+  const allRentalWeapons = useMemo(() => weapons.filter((w) => w.source !== 'player'), [weapons])
+  const allRentalEquipment = useMemo(() => equipment.filter((e) => e.source !== 'player'), [equipment])
+  // Each branch rents out only its own stock (plus pieces not assigned to a branch yet).
+  const rentalWeapons = useMemo(() => weapons.filter((w) => w.source !== 'player' && pieceAtBranch(w, selectedLocation)), [weapons, selectedLocation])
+  const rentalEquipment = useMemo(() => equipment.filter((e) => e.source !== 'player' && (isAmmo(e) || pieceAtBranch(e, selectedLocation))), [equipment, selectedLocation])
 
   const groupPieces = useCallback((collection: 'weapons' | 'equipments', items: Array<WeaponItem | EquipmentItemDetails>): PickerGroup[] => {
     const groups = new Map<string, PickerGroup>()
@@ -976,14 +1005,14 @@ export function ReservationCalendarPage() {
   // Mirrors the server: each player gets one of every weapon model in the package (an approved
   // own gun replaces the first, main one), from the free pieces of each model.
   const packageWeaponStock = useCallback((pkg: RentalPackage) => {
-    const models = modelsOfIds(rentalWeapons, pkg.weaponIds)
+    const models = modelsOfIds(allRentalWeapons, pkg.weaponIds)
     const needs = models.map((_, index) => Math.max(0, players - (index === 0 ? Math.min(verifiedOwnWeaponCount, players) : 0)))
     const needed = needs.reduce((sum, n) => sum + n, 0)
     if (!slotStock) return { needed, available: null as number | null, ok: true }
     const free = models.map((model) => freeOfModel(weaponGroups, model))
     const available = free.reduce((sum, n, index) => sum + Math.min(n, needs[index]), 0)
     return { needed, available, ok: free.every((n, index) => n >= needs[index]) }
-  }, [modelsOfIds, rentalWeapons, players, verifiedOwnWeaponCount, slotStock, freeOfModel, weaponGroups])
+  }, [modelsOfIds, allRentalWeapons, players, verifiedOwnWeaponCount, slotStock, freeOfModel, weaponGroups])
 
   // Only packages that fit the headcount can be picked (a group package fits exactly its size).
   const cheapestPackage = useMemo(() => {
@@ -1226,6 +1255,8 @@ export function ReservationCalendarPage() {
   }, [selectedLocation, serverCapacities, capacitySlot])
 
   const remainingSlots = maxCapacity - usedPlayers
+  // Public games: grounds open as the whole slot fills (same rule the server applies).
+  const publicGroundCount = fieldCountForPlayers(usedPlayers + players)
   const hasRequiredSlotSelection = isWd ? slotTouched : selectedSlots.length > 0
   const pickedSlotStarted = bookedSlots.some((s) => slotHasStarted(slotHours, s, dateISO))
   const canProceed = hasRequiredSlotSelection && !pickedSlotStarted && remainingSlots >= players && meetsFieldRequirements
@@ -1256,9 +1287,9 @@ export function ReservationCalendarPage() {
     return weaponPrices + equipmentPrices
   }, [packageWeapons, packageEquipment])
 
-  const packageWeaponModels = useMemo(() => (selectedPackage ? modelsOfIds(rentalWeapons, selectedPackage.weaponIds) : []), [selectedPackage, modelsOfIds, rentalWeapons])
+  const packageWeaponModels = useMemo(() => (selectedPackage ? modelsOfIds(allRentalWeapons, selectedPackage.weaponIds) : []), [selectedPackage, modelsOfIds, allRentalWeapons])
   // Ammo is given per refill (in grams), not reserved as pieces, so it has no picker or stock check.
-  const packageEquipmentModels = useMemo(() => (selectedPackage ? modelsOfIds(rentalEquipment.filter((item) => !isAmmo(item)), selectedPackage.equipmentIds) : []), [selectedPackage, modelsOfIds, rentalEquipment])
+  const packageEquipmentModels = useMemo(() => (selectedPackage ? modelsOfIds(allRentalEquipment.filter((item) => !isAmmo(item)), selectedPackage.equipmentIds) : []), [selectedPackage, modelsOfIds, allRentalEquipment])
   const packageWeaponGroups = useMemo(() => weaponGroups.filter((group) => packageWeaponModels.includes(group.model)), [weaponGroups, packageWeaponModels])
   const packageEquipmentGroups = useMemo(() => equipmentGroups.filter((group) => packageEquipmentModels.includes(group.model)), [equipmentGroups, packageEquipmentModels])
 
@@ -1271,6 +1302,20 @@ export function ReservationCalendarPage() {
 
   const packageWeaponsNeeded = selectedPackage ? packageWeaponStock(selectedPackage).needed : 0
 
+  // Picked pieces from another branch can't be rented here: drop them when the location changes.
+  useEffect(() => {
+    if (weapons.length === 0 && equipment.length === 0) return
+    const keep = (items: Array<{ id: string; locationId?: string }>) => (ids: string[]) => {
+      const next = ids.filter((id) => {
+        const item = items.find((piece) => piece.id === id)
+        return !item || pieceAtBranch(item, selectedLocation)
+      })
+      return next.length === ids.length ? ids : next
+    }
+    setCustomWeaponIds(keep(weapons))
+    setCustomEquipmentIds(keep(equipment))
+  }, [selectedLocation, weapons, equipment])
+
   const customSelectedWeapons = useMemo(() => {
     return weapons.filter((w) => customWeaponIds.includes(w.id))
   }, [weapons, customWeaponIds])
@@ -1282,9 +1327,9 @@ export function ReservationCalendarPage() {
   // Pieces of an equipment model each player gets in the selected package (set by the admin).
   const equipmentPerPlayer = useCallback((model: string) => {
     if (!selectedPackage) return 1
-    const ids = selectedPackage.equipmentIds.filter((id) => rentalEquipment.find((item) => item.id === id)?.model === model)
+    const ids = selectedPackage.equipmentIds.filter((id) => allRentalEquipment.find((item) => item.id === id)?.model === model)
     return Math.max(1, ...ids.map((id) => packageEquipmentQty(selectedPackage, id)))
-  }, [selectedPackage, rentalEquipment])
+  }, [selectedPackage, allRentalEquipment])
 
   // Package shortages for the selected date/slot. Custom picks are individual free pieces.
   const equipmentStockCheck = useMemo(() => {
@@ -1961,7 +2006,31 @@ export function ReservationCalendarPage() {
 
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
                 <div>
-                  <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Date</div>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Date</div>
+                    {/* Two months at a time, up to a year ahead. */}
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        aria-label="Earlier months"
+                        disabled={monthOffset === 0}
+                        onClick={() => setMonthOffset((o) => Math.max(0, o - 1))}
+                        className="grid h-7 w-7 place-items-center rounded-lg border border-white/10 text-muted transition hover:text-text disabled:opacity-30"
+                      >
+                        <FiChevronLeft className="h-4 w-4" />
+                      </button>
+                      <button
+                        type="button"
+                        aria-label="Later months"
+                        disabled={monthOffset >= maxMonthOffset}
+                        onClick={() => setMonthOffset((o) => Math.min(maxMonthOffset, o + 1))}
+                        className="grid h-7 w-7 place-items-center rounded-lg border border-white/10 text-muted transition hover:text-text disabled:opacity-30"
+                      >
+                        <FiChevronRight className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="mt-1 text-[11px] text-muted">Book up to 1 year ahead (until {new Date(`${lastBookableISO}T12:00:00`).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' })}).</div>
                   <div className="mt-2 space-y-4 max-h-96 overflow-y-auto pr-1">
                     {monthCalendars.map((month) => (
                       <div key={month.key} className="rounded-2xl border border-white/10 bg-black/20 p-3">
@@ -1986,7 +2055,9 @@ export function ReservationCalendarPage() {
                                 const isWd = isWeekday(iso)
                                 const closedDay = closedDays[iso]
                                 const cause = closedDay ? undefined : causeDays[iso]
-                                const unavailable = isPastOrToday || Boolean(closedDay)
+                                // Beyond the one-year booking window.
+                                const tooFar = iso > lastBookableISO
+                                const unavailable = isPastOrToday || tooFar || Boolean(closedDay)
 
                                 return (
                                   <button
@@ -2212,7 +2283,7 @@ export function ReservationCalendarPage() {
               </div>
             </Card>
 
-            {/* Public games are an open roster on every field: the marshals place players, so there is no field to pick. */}
+            {/* Public games share the slot: the server opens grounds from the slot's total headcount, so there is no field to pick. */}
             {publicGame && (
             <Card className="p-4 md:p-6">
               <div className="flex items-center gap-2 text-sm font-bold">
@@ -2223,9 +2294,11 @@ export function ReservationCalendarPage() {
                   <FiCheck className="h-3 w-3" />
                 </span>
                 <div className="min-w-0 flex-1">
-                  <div className="text-sm font-bold">All 3 fields</div>
-                  <div className="mt-1 text-xs text-muted">{availableFields.map((f) => f.name).join(' · ')}</div>
-                  <div className="mt-1 text-xs text-muted">Public games use every field. The marshals place players on arrival.</div>
+                  <div className="text-sm font-bold">{FIELD_CHOICES[publicGroundCount - 1].label}</div>
+                  <div className="mt-1 text-xs text-muted">{availableFields.slice(0, publicGroundCount).map((f) => f.name).join(' · ')}</div>
+                  <div className="mt-1 text-xs text-muted">
+                    Assigned automatically from everyone booked in this slot ({usedPlayers + players} players with your group): Upper Ground below {FIELD_COUNT_MINIMUMS[2]} players, Upper + Lower Ground from {FIELD_COUNT_MINIMUMS[2]}, all 3 fields from {FIELD_COUNT_MINIMUMS[3]}. The marshals place players on arrival.
+                  </div>
                 </div>
               </div>
             </Card>
@@ -2837,8 +2910,8 @@ export function ReservationCalendarPage() {
                               const discount = resolvePackageDiscountConfig(pkg)
                               const stock = pkg.weaponIds.length > 0 ? packageWeaponStock(pkg) : null
                               const includes = [
-                                ...modelsOfIds(rentalWeapons, pkg.weaponIds),
-                                ...modelsOfIds(rentalEquipment.filter((item) => !isAmmo(item)), pkg.equipmentIds),
+                                ...modelsOfIds(allRentalWeapons, pkg.weaponIds),
+                                ...modelsOfIds(allRentalEquipment.filter((item) => !isAmmo(item)), pkg.equipmentIds),
                                 `${INCLUDED_RELOADS_PER_PLAYER} BB reloads`,
                                 `Entrance fee (${formatCurrency(ENTRANCE_FEE_PER_PLAYER)})`,
                               ]

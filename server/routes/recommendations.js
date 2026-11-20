@@ -57,7 +57,7 @@ export function packageGroupFit(pkg, { players, ownWeapons, weaponsWanted }) {
 }
 
 // POST /api/package-recommendations
-// { budget, players, sessionType: 'public'|'private', ownWeapons, weaponsWanted, date?, slot? }
+// { budget, players, sessionType: 'public'|'private', ownWeapons, weaponsWanted, date?, slot?, locationId? }
 router.post('/package-recommendations', requireAuth, async (req, res) => {
   const body = req.body || {}
   const budget = Number(body.budget)
@@ -94,6 +94,8 @@ router.post('/package-recommendations', requireAuth, async (req, res) => {
         selectedPackageId: packageId,
         sessionType,
         verifiedOwnWeaponCount: ownWeapons,
+        // Only that branch's rental stock counts when a location is given.
+        locationId: String(body.locationId || ''),
       }
 
       let pricing = null

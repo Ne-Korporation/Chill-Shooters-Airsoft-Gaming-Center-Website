@@ -39,7 +39,8 @@ export function PartnershipDiscountCard({ institution, status, reviewReason, onS
     try {
       const formData = new FormData()
       formData.append('file', file, file.name)
-      const uploadRes = await fetch(`${apiBase}/api/upload-image`, { method: 'POST', headers: getApiAuthHeaders(), body: formData })
+      // The proof is a personal document (e.g. a school ID), so it is stored as a private file.
+      const uploadRes = await fetch(`${apiBase}/api/upload-image?private=1`, { method: 'POST', headers: getApiAuthHeaders(), body: formData })
       const uploadJson = await uploadRes.json().catch(() => null)
       if (!uploadRes.ok || !uploadJson?.url) throw new Error(uploadJson?.error || 'Upload failed')
 

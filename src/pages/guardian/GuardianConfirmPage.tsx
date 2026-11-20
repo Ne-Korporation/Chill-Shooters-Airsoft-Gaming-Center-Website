@@ -39,7 +39,7 @@ export function GuardianConfirmPage() {
     <div className="min-h-screen bg-background px-4 py-10">
       <div className="mx-auto max-w-xl space-y-4">
         <div>
-          <div className="flex items-center gap-2 text-sm font-medium text-accent"><FiShield /> Chill Shooters Airsoft Gaming Center</div>
+          <div className="flex items-center gap-2 text-sm font-medium text-accent"><FiShield /> Chill Shooters Airsoft Game Center</div>
           <h1 className="mt-2 text-3xl font-bold">Confirm you are the guardian</h1>
         </div>
 

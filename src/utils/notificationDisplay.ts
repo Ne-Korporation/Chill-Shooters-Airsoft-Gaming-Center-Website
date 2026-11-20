@@ -1,5 +1,5 @@
 import type { IconType } from 'react-icons'
-import { FiBell, FiCalendar, FiCloudRain, FiCreditCard, FiFlag, FiShield, FiTarget, FiVolume2 } from 'react-icons/fi'
+import { FiBell, FiCalendar, FiCloudRain, FiCreditCard, FiFlag, FiInbox, FiShield, FiTarget, FiVolume2 } from 'react-icons/fi'
 import type { NotificationItem } from '../context/NotificationContext'
 
 // Shared by the notification bell and the notifications page so both read the same way.
@@ -7,13 +7,18 @@ import type { NotificationItem } from '../context/NotificationContext'
 // What a notification is about, from its type: an icon and a short label.
 export function kindOf(item: NotificationItem): { icon: IconType; label: string } {
   const type = String(item.type || '').toLowerCase()
-  if (type === 'announcement' || item.userId === 'broadcast') return { icon: FiVolume2, label: 'Announcement' }
+  // The server only ever broadcasts announcements to players / everyone (older ones were saved with
+  // another type). Broadcasts to staff roles are system notices, labelled by their type below.
+  if (type === 'announcement' || (item.userId === 'broadcast' && ['user', 'all'].includes(String(item.targetRole || 'all')))) {
+    return { icon: FiVolume2, label: 'Announcement' }
+  }
   if (type.startsWith('split_payment_') || type.startsWith('payment_') || type === 'reservation_payment_finalized') return { icon: FiCreditCard, label: 'Payment' }
   if (type.startsWith('reservation_')) return { icon: FiCalendar, label: 'Booking' }
   if (type.startsWith('waiver_')) return { icon: FiShield, label: 'Waiver' }
   if (type.startsWith('weapon_') || type.startsWith('equipment_')) return { icon: FiTarget, label: 'Weapons & gear' }
   if (type.startsWith('weather_')) return { icon: FiCloudRain, label: 'Weather' }
   if (type.startsWith('gameplay_')) return { icon: FiFlag, label: 'Game' }
+  if (type === 'contact_message') return { icon: FiInbox, label: 'Message' }
   return { icon: FiBell, label: 'Update' }
 }
 

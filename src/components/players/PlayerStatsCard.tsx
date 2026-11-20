@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
-import { FiAward } from 'react-icons/fi'
+import { FiAward, FiClock } from 'react-icons/fi'
 
 import { Button } from '../ui/Button'
 import { apiGet, apiPut } from '../../utils/apiClient'
@@ -17,7 +17,7 @@ type PlayerStats = {
     total: number
     upcoming: number
     cancelled: number
-    recent: Array<{ id: string; reservationDate: string; reservationTime: string; reservationStatus: string; locationName?: string; asCaptain: boolean; sessionType?: string }>
+    recent: Array<{ id: string; reservationDate: string; reservationTime: string; reservationStatus: string; locationName?: string; asCaptain: boolean; sessionType?: string; played?: boolean }>
   }
   ownedGear: Array<{ id: string; name: string; kind: 'weapon' | 'equipment'; category?: string }>
 }
@@ -71,6 +71,25 @@ export function ExperienceProgress({ gamesPlayed }: { gamesPlayed: number }) {
   )
 }
 
+type HistoryItem = PlayerStats['reservations']['recent'][number]
+
+// "2026-11-21" → "Sat, Nov 21, 2026"
+function formatHistoryDate(dateISO: string) {
+  const date = new Date(`${dateISO}T12:00:00Z`)
+  if (Number.isNaN(date.getTime())) return dateISO
+  return date.toLocaleDateString('en-PH', { timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+// What happened to a reservation, in the player's words.
+function historyOutcome(r: HistoryItem) {
+  const status = String(r.reservationStatus || '').toLowerCase()
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' })
+  if (status === 'cancelled') return { label: 'Cancelled', className: 'bg-white/10 text-muted' }
+  if (r.played) return { label: 'Played', className: 'bg-success/15 text-success' }
+  if (r.reservationDate >= today) return { label: 'Upcoming', className: 'bg-accent/15 text-accent' }
+  return { label: 'Not played', className: 'bg-warning/15 text-warning' }
+}
+
 // Experience (total games played: games at the field plus games from before the system), age group,
 // reservation history, and approved gear for one player. Admins can correct the total here.
 export function PlayerStatsCard({ playerId, canAdjust = false }: { playerId: string; canAdjust?: boolean }) {
@@ -109,9 +128,10 @@ export function PlayerStatsCard({ playerId, canAdjust = false }: { playerId: str
   if (!stats) return null
 
   return (
+    <div className="space-y-4">
     <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-      <div className="flex items-center gap-2 text-xs uppercase tracking-widest text-muted"><FiAward /> Experience & history</div>
-      <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="flex items-center gap-2 text-xs uppercase tracking-widest text-muted"><FiAward /> Experience</div>
+      <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
         <div>
           <div className="text-xs text-muted">Level</div>
           <div className="text-sm font-bold">{stats.experienceLevel}</div>
@@ -124,24 +144,9 @@ export function PlayerStatsCard({ playerId, canAdjust = false }: { playerId: str
           <div className="text-xs text-muted">Age group</div>
           <div className="text-sm font-bold">{stats.age ? `${stats.ageGroup} (${stats.age})` : stats.ageGroup}</div>
         </div>
-        <div>
-          <div className="text-xs text-muted">Reservations</div>
-          <div className="text-sm font-bold">{stats.reservations.total} <span className="text-xs font-normal text-muted">({stats.reservations.upcoming} upcoming)</span></div>
-        </div>
       </div>
 
       <ExperienceProgress gamesPlayed={stats.gamesPlayed} />
-
-      {stats.reservations.recent.length > 0 ? (
-        <ul className="mt-3 space-y-1 text-xs text-muted">
-          {stats.reservations.recent.map((r) => (
-            <li key={r.id}>
-              {r.reservationDate} · <span className="capitalize">{r.reservationTime}</span> · {r.locationName || ''} · <span className="capitalize">{r.reservationStatus}</span>
-              {' · '}{(r.asCaptain ? bookingRoles(r.sessionType).booker : bookingRoles(r.sessionType).member).toLowerCase()}
-            </li>
-          ))}
-        </ul>
-      ) : null}
 
       <div className="mt-3 text-xs text-muted">
         Registered gear: {stats.ownedGear.length ? stats.ownedGear.map((g) => g.name).join(', ') : 'none added yet'}
@@ -177,6 +182,41 @@ export function PlayerStatsCard({ playerId, canAdjust = false }: { playerId: str
           The player's total games, which replaces the number shown above. {stats.gamesAtField} of them were completed at the field and can't be removed; games played from now on are added automatically. Beginner 0–10, Intermediate 11–25, Experienced 26+.
         </div>
       ) : null}
+    </div>
+
+    <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <div className="flex items-center gap-2 text-xs uppercase tracking-widest text-muted"><FiClock /> History</div>
+        <div className="text-xs text-muted">
+          <span className="font-bold text-text">{stats.reservations.total}</span> reservation{stats.reservations.total === 1 ? '' : 's'} · {stats.reservations.upcoming} upcoming
+        </div>
+      </div>
+      {stats.reservations.recent.length > 0 ? (
+        <>
+          <div className="mt-3 text-[11px] text-muted">Your last {stats.reservations.recent.length} reservations</div>
+          <ul className="mt-1 divide-y divide-white/5">
+            {stats.reservations.recent.map((r) => {
+              const outcome = historyOutcome(r)
+              return (
+                <li key={r.id} className="flex items-center justify-between gap-3 py-2">
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold">
+                      {formatHistoryDate(r.reservationDate)} · <span className="capitalize">{r.reservationTime}</span>
+                    </div>
+                    <div className="truncate text-xs text-muted">
+                      {r.locationName || 'Field'} · {r.asCaptain ? 'You booked' : `Joined as ${bookingRoles(r.sessionType).member.toLowerCase()}`}
+                    </div>
+                  </div>
+                  <span className={`shrink-0 rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${outcome.className}`}>{outcome.label}</span>
+                </li>
+              )
+            })}
+          </ul>
+        </>
+      ) : (
+        <div className="mt-3 text-xs text-muted">No reservations yet.</div>
+      )}
+    </div>
     </div>
   )
 }

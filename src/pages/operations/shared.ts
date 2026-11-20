@@ -36,6 +36,8 @@ export type InventoryOption = {
   model: string
   unitNumber: number
   status: string
+  // Branch that keeps the piece; blank = not assigned yet.
+  locationId: string
 }
 
 export function toInventoryOptions(docs: any[], collection: 'weapons' | 'equipments'): InventoryOption[] {
@@ -50,6 +52,7 @@ export function toInventoryOptions(docs: any[], collection: 'weapons' | 'equipme
       model: modelOf(doc),
       unitNumber: Number(doc.unitNumber) || 0,
       status: String(doc.status || 'available').toLowerCase(),
+      locationId: String(doc.locationId || ''),
     }))
     .filter((item) => item.id)
 }

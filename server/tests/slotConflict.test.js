@@ -31,7 +31,10 @@ test('change requests map to the topics open pages listen for', () => {
   assert.ok(topicsForPath('/api/reservations/R1/cancel').includes('slots'))
   assert.ok(topicsForPath('/api/demo-pay/abc/pay').includes('payments'))
   assert.ok(topicsForPath('/api/waivers/W1').includes('waivers'))
-  assert.deepEqual(topicsForPath('/api/contact'), [])
+  // A message from a player lands in the admin Inbox.
+  assert.deepEqual(topicsForPath('/api/contact'), ['inbox'])
+  assert.deepEqual(topicsForPath('/api/admin/inbox/MSG-1'), ['inbox'])
+  assert.deepEqual(topicsForPath('/api/auth/login'), [])
 })
 
 test('bumping a topic moves only that version', () => {

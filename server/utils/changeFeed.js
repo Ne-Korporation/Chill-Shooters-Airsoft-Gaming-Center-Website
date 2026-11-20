@@ -7,7 +7,7 @@
 // Versions live in memory. bootId changes on every server start, so a restart makes every page
 // refresh once, which is the safe choice (anything may have changed while it was down).
 
-export const TOPICS = ['reservations', 'slots', 'payments', 'waivers', 'notifications', 'accounts', 'gear', 'games', 'content']
+export const TOPICS = ['reservations', 'slots', 'payments', 'waivers', 'notifications', 'accounts', 'gear', 'games', 'content', 'inbox']
 
 const bootId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 const versions = Object.fromEntries(TOPICS.map((topic) => [topic, 0]))
@@ -34,6 +34,8 @@ const PATH_TOPICS = [
   [/^\/(weapons|equipments|equipment|rentals|repairs|damage-reports|fps|inventory)/, ['gear', 'games']],
   [/^\/(gameplay|games|check-in|teams|field)/, ['games', 'reservations']],
   [/^\/(packages|dashboard_posts|feedback|partnerships|reach|announcements)/, ['content']],
+  // Messages from players and the admin Inbox.
+  [/^\/(contact|admin\/inbox)/, ['inbox']],
 ]
 
 export function topicsForPath(path) {

@@ -11,6 +11,7 @@ import { Paged } from '../../components/ui/Pagination'
 import { ItemCombobox, type ComboItem } from '../../components/ui/ItemCombobox'
 import { categoryLabel, formatDateTime, selectClass, toInventoryOptions, type InventoryOption } from './shared'
 import { useAuth } from '../../context/AuthContext'
+import { pieceAtBranch } from '../../utils/branches'
 
 // Guns and gear are the marshals' job: they hand them out and check them in. Everyone else
 // (registrars) sees who has what, read-only.
@@ -157,6 +158,8 @@ export function RentalsPanel({ reservationId, active = true, finished = false }:
   const readOnly = !useCanHandleGear()
   const [members, setMembers] = useState<TeamMember[]>([])
   const [inventory, setInventory] = useState<InventoryOption[]>([])
+  // The booking's branch: only that branch's pieces (or unassigned ones) can be handed out.
+  const [branch, setBranch] = useState('')
   const [rentals, setRentals] = useState<Rental[] | null>(null)
   const [reservedGuns, setReservedGuns] = useState<BookingWeapon[]>([])
   const [ownGunIds, setOwnGunIds] = useState<Set<string>>(new Set())
@@ -194,7 +197,7 @@ export function RentalsPanel({ reservationId, active = true, finished = false }:
   const loadReservation = useCallback(async () => {
     try {
       const [ledger, list, weapons, own] = await Promise.all([
-        apiGet<{ data: { reservation: { walkIn: boolean; walkInName: string; userId?: string; captainName?: string; teamMembers: TeamMember[]; ownWeaponBringerIds?: string[] } } }>(`/api/reservations/${encodeURIComponent(reservationId)}/ledger`),
+        apiGet<{ data: { reservation: { walkIn: boolean; walkInName: string; userId?: string; captainName?: string; teamMembers: TeamMember[]; ownWeaponBringerIds?: string[]; locationId?: string } } }>(`/api/reservations/${encodeURIComponent(reservationId)}/ledger`),
         apiGet<{ data: Rental[] }>(`/api/rentals?reservationId=${encodeURIComponent(reservationId)}`),
         apiGet<{ data: BookingWeapon[] }>(`/api/reservations/${encodeURIComponent(reservationId)}/weapons`).catch(() => ({ data: [] as BookingWeapon[] })),
         apiGet<{ data: OwnItem[] }>(`/api/reservations/${encodeURIComponent(reservationId)}/own-gear`).catch(() => ({ data: [] as OwnItem[] })),
@@ -203,6 +206,7 @@ export function RentalsPanel({ reservationId, active = true, finished = false }:
       // Rental guns the booking reserved that haven't been handed to anyone yet.
       setReservedGuns(weapons.data.filter((w) => w.source === 'rental' && !w.rentedTo))
       const r = ledger.data.reservation
+      setBranch(String(r.locationId || ''))
       setOwnGunIds(new Set((r.ownWeaponBringerIds || []).map(String)))
       setMembers(r.walkIn
         ? [{ id: '', name: r.walkInName }]
@@ -225,7 +229,7 @@ export function RentalsPanel({ reservationId, active = true, finished = false }:
 
   // Pieces already handed out (from the rental records), so they can't be issued twice.
   const outByItemId = useMemo(() => new Map(outstanding.map((rental: any) => [String(rental.itemId || ''), rental])), [outstanding])
-  const pieceFree = (item: InventoryOption) => item.status === 'available' && !outByItemId.has(item.id)
+  const pieceFree = (item: InventoryOption) => item.status === 'available' && !outByItemId.has(item.id) && pieceAtBranch(item, branch)
 
   // The three things a player is handed: a gun, a vest and a mask. Each slot lists only the free
   // pieces of its kind, lowest unit number first ("Vest #4 · Vests · EQ-V-004").
@@ -241,9 +245,9 @@ export function RentalsPanel({ reservationId, active = true, finished = false }:
       vest: free.filter((i) => i.collection === 'equipments' && i.category.includes('vest')).map(toCombo),
       mask: free.filter((i) => i.collection === 'equipments' && i.category.includes('mask')).map(toCombo),
     }
-    // pieceFree only depends on outByItemId
+    // pieceFree only depends on outByItemId and branch
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [inventory, outByItemId])
+  }, [inventory, outByItemId, branch])
 
   // Hands the player every filled slot (gun, vest, mask) in one go.
   const issue = async (event: React.FormEvent) => {
@@ -316,9 +320,9 @@ export function RentalsPanel({ reservationId, active = true, finished = false }:
     () => inventory
       .filter((item) => item.collection === 'weapons' && !NOT_GUNS.includes(item.category) && pieceFree(item))
       .sort((a, b) => Number(reservedIds.has(b.id)) - Number(reservedIds.has(a.id)) || a.name.localeCompare(b.name) || a.unitNumber - b.unitNumber),
-    // pieceFree only depends on outByItemId
+    // pieceFree only depends on outByItemId and branch
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [inventory, outByItemId, reservedIds],
+    [inventory, outByItemId, reservedIds, branch],
   )
   const gunKey = (item: InventoryOption) => `${item.collection}:${item.id}`
   const gunLabel = (item: InventoryOption) => `${item.name}${item.unitNumber && !item.name.includes('#') ? ` #${item.unitNumber}` : ''}`

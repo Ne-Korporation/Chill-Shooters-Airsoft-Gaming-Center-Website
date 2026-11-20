@@ -25,11 +25,14 @@ export function parseAddress(value) {
 // so callers don't care which transport is active.
 function createBrevoTransport(apiKey) {
   return {
-    async sendMail({ from, to, subject, html, text }) {
+    async sendMail({ from, to, subject, html, text, replyTo, bcc }) {
       const sender = parseAddress(process.env.EMAIL_FROM || from)
-      const recipients = (Array.isArray(to) ? to : String(to).split(','))
+      const list = (value) => (Array.isArray(value) ? value : String(value || '').split(','))
         .map(parseAddress)
         .filter((r) => r.email)
+      const recipients = list(to)
+      const hidden = list(bcc)
+      const replyAddress = replyTo ? parseAddress(replyTo) : null
 
       const response = await fetch('https://api.brevo.com/v3/smtp/email', {
         method: 'POST',
@@ -41,6 +44,8 @@ function createBrevoTransport(apiKey) {
         body: JSON.stringify({
           sender,
           to: recipients,
+          ...(hidden.length ? { bcc: hidden } : {}),
+          ...(replyAddress?.email ? { replyTo: replyAddress } : {}),
           subject,
           ...(html ? { htmlContent: html } : {}),
           ...(text ? { textContent: text } : {}),

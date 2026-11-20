@@ -16,6 +16,9 @@ export function resolveNotificationRoute(notification: NotificationItem, role?: 
 
   if (notificationType.startsWith('split_payment_')) return '/app/split-payments'
 
+  // A message from a player opens the admin Inbox.
+  if (notificationType === 'contact_message') return currentRole === 'admin' ? '/app/admin/inbox' : null
+
   if (notificationType === 'weather_advisory') return '/app'
 
   if (notificationType === 'reservation_payment_finalized') {

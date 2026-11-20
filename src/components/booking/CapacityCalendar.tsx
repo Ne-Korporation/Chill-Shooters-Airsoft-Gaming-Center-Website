@@ -5,10 +5,11 @@ import { FiCalendar, FiChevronLeft, FiChevronRight, FiHeart, FiSlash, FiTrash2 }
 import { apiPost, apiPut, getApiBase } from '../../utils/apiClient'
 import { causeDayMessage, type CauseDay } from '../../utils/causeDays'
 import { closedDayMessage, type ClosedDay } from '../../utils/closedDays'
+import { addDaysISO, BOOKING_WINDOW_DAYS } from '../../utils/bookingWindow'
 import { Modal } from '../ui/Modal'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
-import { Bar, DaySlotsTable, fillTone, isPublicDay, SHORT_LOCATION, type LocationCapacity, type WeekendDay } from './WeekendCapacity'
+import { availabilityLabel, availabilityText, Bar, DaySlotsTable, fillTone, isPublicDay, SHORT_LOCATION, useShowsSpotCounts, type LocationCapacity, type WeekendDay } from './WeekendCapacity'
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
@@ -141,9 +142,15 @@ export function CapacityCalendar({
     [days, location],
   )
   const causeByDate = useMemo(() => Object.fromEntries(causeDays.map((cause) => [cause.dateISO, cause])), [causeDays])
+  // Staff see spot counts; players and visitors only see Available / Full.
+  const showCounts = useShowsSpotCounts()
   const closedByDate = useMemo(() => Object.fromEntries(closedDays.map((day) => [day.dateISO, day])), [closedDays])
   const weeks = useMemo(() => monthGrid(month), [month])
   const currentMonth = todayISO.slice(0, 7)
+  // Same window as booking: the calendar runs from this month to the month one year from today.
+  // Days past the last bookable date in that month show as not open yet.
+  const lastOpenISO = todayISO ? addDaysISO(todayISO, BOOKING_WINDOW_DAYS) : ''
+  const lastMonth = lastOpenISO.slice(0, 7)
 
   return (
     <div className={compact || mini ? '' : 'surface rounded-2xl p-5 md:p-6'}>
@@ -196,7 +203,7 @@ export function CapacityCalendar({
       ) : null}
 
       <div className={`${mini ? 'mt-2' : 'mt-4'} flex items-center justify-between gap-2 rounded-xl bg-[rgba(var(--text),0.04)] p-1`}>
-        <Button size="sm" variant="ghost" aria-label="Previous month" disabled={month <= currentMonth} onClick={() => setMonth((m) => shiftMonth(m, -1))}>
+        <Button size="sm" variant="ghost" aria-label="Previous month" disabled={!showCounts && month <= currentMonth} onClick={() => setMonth((m) => shiftMonth(m, -1))}>
           <FiChevronLeft /> <span className={mini ? 'hidden' : 'hidden sm:inline'}>{monthLabel(shiftMonth(month, -1)).split(' ')[0]}</span>
         </Button>
         <div className="flex flex-col items-center">
@@ -207,7 +214,7 @@ export function CapacityCalendar({
             </button>
           ) : null}
         </div>
-        <Button size="sm" variant="ghost" aria-label="Next month" onClick={() => setMonth((m) => shiftMonth(m, 1))}>
+        <Button size="sm" variant="ghost" aria-label="Next month" disabled={Boolean(lastMonth) && month >= lastMonth} onClick={() => setMonth((m) => shiftMonth(m, 1))}>
           <span className={mini ? 'hidden' : 'hidden sm:inline'}>{monthLabel(shiftMonth(month, 1)).split(' ')[0]}</span> <FiChevronRight />
         </Button>
       </div>
@@ -222,32 +229,39 @@ export function CapacityCalendar({
               const cellHeight = mini ? 'h-7' : compact ? 'h-14' : 'h-16'
               if (!dateISO) return <div key={`blank-${dayIndex}`} className={cellHeight} />
               const day = capacityByDate[dateISO]
-              const capacity = day && isPublicDay(day) ? day : undefined
+              // Past the one-year booking window: shown, but not open for booking yet.
+              const notOpenYet = Boolean(lastOpenISO) && dateISO > lastOpenISO
+              const capacity = !notOpenYet && day && isPublicDay(day) ? day : undefined
               // Weekdays are private days, even when the server sent no data for them.
               const weekday = new Date(`${dateISO}T12:00:00Z`).getUTCDay() % 6 !== 0
-              const privateDay = weekday && !capacity
-              const privateGroups = privateDay ? day?.groups || 0 : 0
-              const privateFull = Boolean(privateDay && day && day.capacity > 0 && day.booked >= day.capacity)
+              const privateDay = weekday && !capacity && !notOpenYet
+              const past = dateISO < todayISO
+              // Finished private days don't advertise bookings; they just read "Done".
+              const privateDone = past && privateDay
+              const privateGroups = privateDay && !past ? day?.groups || 0 : 0
+              const privateFull = Boolean(!past && privateDay && day && day.capacity > 0 && day.booked >= day.capacity)
               const cause = causeByDate[dateISO]
               const closed = closedByDate[dateISO]
-              const past = dateISO < todayISO
               // "All locations" colours a public day by its least-full location: open while any has room.
               const best = capacity && location === ALL ? leastFull(capacity) : undefined
               const shown = best || capacity
               const tone = shown && !closed ? fillTone(shown.booked, shown.capacity) : null
-              // Past days never open. Private days open for info unless fully booked.
-              const clickable = !past && Boolean(
+              // Past days open only for staff, to look back (read-only). Private days open for info unless fully booked.
+              const clickable = (!past || showCounts) && !notOpenYet && Boolean(
                 capacity || cause || closed || editable
                 || (privateDay && !privateFull),
               )
-              const hint = closed ? closedDayMessage(closed) : [
+              const hint = notOpenYet ? 'Not open for booking yet (bookings open 1 year ahead)' : closed ? closedDayMessage(closed) : [
                 cause ? causeDayMessage(cause) : '',
                 capacity
-                  ? location === ALL
-                    ? `Public game · ${capacity.locations.map((entry) => `${locationLabel(entry)} ${Math.max(0, entry.capacity - entry.booked)} left`).join(', ')}`
+                  ? !showCounts
+                    ? `Public game · ${capacity.locations.some((entry) => entry.booked < entry.capacity) ? 'spots available' : 'fully booked'}`
+                    : location === ALL
+                    ? `Public game · ${capacity.locations.map((entry) => `${locationLabel(entry)} ${Math.max(0, entry.capacity - entry.booked)} available`).join(', ')}`
                     : `Public game · ${capacity.booked} of ${capacity.capacity} spots booked`
+                  : privateDone ? 'Private games · done'
                   : privateFull ? 'Private games · fully booked'
-                  : privateGroups ? `Private games · ${privateGroups} booked` : 'Private games · open to book',
+                  : privateGroups ? (showCounts ? `Private games · ${privateGroups} booked` : 'Private games · some slots booked') : 'Private games · open to book',
               ].filter(Boolean).join(' · ')
               return (
                 <button
@@ -267,7 +281,7 @@ export function CapacityCalendar({
                       : privateGroups ? 'border-accent/30 bg-accent/10'
                       : 'border-[rgba(var(--text),0.06)] text-muted',
                     dateISO === todayISO ? 'ring-2 ring-accent/60' : '',
-                    past ? 'opacity-50' : '',
+                    past || notOpenYet ? 'opacity-50' : '',
                     clickable ? 'cursor-pointer hover:border-accent/50' : 'cursor-default',
                   ].join(' ')}
                 >
@@ -276,7 +290,9 @@ export function CapacityCalendar({
                       <span className="font-bold leading-none">{Number(dateISO.slice(8))}</span>
                       {(() => {
                         if (closed && !past) return <FiSlash className="mt-0.5 h-2.5 w-2.5 text-muted" aria-label="No games" />
-                        const dot = past ? '' : cause ? 'bg-rose-500' : capacity ? tone?.bar : privateFull ? 'bg-danger' : privateGroups ? 'bg-accent' : ''
+                        // Players: green while spots are available, red when full (no "filling up" levels).
+                        const publicDot = showCounts ? tone?.bar : shown && shown.booked >= shown.capacity ? 'bg-danger' : 'bg-success'
+                        const dot = past ? '' : cause ? 'bg-rose-500' : capacity ? publicDot : privateFull ? 'bg-danger' : privateGroups ? 'bg-accent' : ''
                         return dot ? <span className={`mt-1 h-1.5 w-1.5 rounded-full ${dot}`} /> : null
                       })()}
                     </>
@@ -286,22 +302,30 @@ export function CapacityCalendar({
                     {closed ? <FiSlash className="h-3 w-3 text-muted" aria-label="No games" />
                       : cause ? <FiHeart className="h-3 w-3 text-rose-500" aria-label="Game for a cause" /> : null}
                   </span>
-                  {closed ? (
+                  {notOpenYet ? (
+                    <span className="mt-auto truncate text-[10px] font-semibold text-muted">Not open</span>
+                  ) : closed ? (
                     <span className="mt-auto truncate text-[10px] font-semibold text-muted">No game</span>
                   ) : capacity ? (
                     <span className="mt-auto">
-                      <span className={`block truncate text-[10px] font-semibold ${past ? 'text-muted' : tone?.text}`}>
-                        {past ? 'Done' : best ? tone?.label : `${Math.max(0, capacity.capacity - capacity.booked)} left`}
+                      {/* Players and visitors see only Available / Full; staff see the numbers and fill bar. */}
+                      <span className={`block truncate text-[10px] font-semibold ${past ? 'text-muted' : showCounts ? tone?.text : availabilityText(shown?.booked || 0, shown?.capacity || 0)}`}>
+                        {/* The mini (sidebar) calendar's cells are too narrow for the word: the number alone. */}
+                        {past ? 'Done'
+                          : !showCounts ? availabilityLabel(shown?.booked || 0, shown?.capacity || 0)
+                          : best ? tone?.label : `${Math.max(0, capacity.capacity - capacity.booked).toLocaleString()}${mini ? '' : ' available'}`}
                       </span>
-                      {shown ? <Bar booked={shown.booked} capacity={shown.capacity} className="mt-0.5 h-1" /> : null}
+                      {shown && showCounts ? <Bar booked={shown.booked} capacity={shown.capacity} className="mt-0.5 h-1" /> : null}
                     </span>
                   ) : cause ? (
                     <span className="mt-auto truncate text-[10px] font-semibold text-rose-500">Cause</span>
+                  ) : privateDone ? (
+                    <span className="mt-auto truncate text-[10px] font-semibold text-muted">Done</span>
                   ) : privateFull ? (
                     <span className="mt-auto truncate text-[10px] font-semibold text-danger">Full</span>
                   ) : privateGroups ? (
                     <span className="mt-auto truncate text-[10px] font-semibold text-accent">
-                      {privateGroups} private
+                      {showCounts ? `${privateGroups} private` : 'Booked'}
                     </span>
                   ) : null}
                   </>}
@@ -313,8 +337,8 @@ export function CapacityCalendar({
       </div>
       {mini ? (
         <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[10px] text-muted">
-          <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-success" /> Open</span>
-          <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-amber-500" /> Filling</span>
+          <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-success" /> {showCounts ? 'Open' : 'Available'}</span>
+          {showCounts ? <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-amber-500" /> Filling</span> : null}
           <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-danger" /> Full</span>
           <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-accent" /> Private</span>
           <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-rose-500" /> Cause</span>
@@ -322,8 +346,8 @@ export function CapacityCalendar({
         </div>
       ) : (
       <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted">
-        <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-success" /> Open</span>
-        <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-amber-500" /> Filling up</span>
+        <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-success" /> {showCounts ? 'Open' : 'Available'}</span>
+        {showCounts ? <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-amber-500" /> Filling up</span> : null}
         <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-danger" /> Full</span>
         <span className="flex items-center gap-1"><FiHeart className="text-rose-500" /> For a cause</span>
         <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-accent" /> Private game booked</span>
@@ -369,22 +393,40 @@ function DayDialog({ dateISO, todayISO, capacity, cause, closed, editable, onClo
   })
   const [closeReason, setCloseReason] = useState(closed?.reason || '')
   const [saving, setSaving] = useState(false)
-  const [confirmRemove, setConfirmRemove] = useState(false)
-  const [confirmClose, setConfirmClose] = useState(false)
   // Bookings already on this day; closing it doesn't cancel them.
   const publicDay = Boolean(capacity && isPublicDay(capacity))
   const bookedPlayers = publicDay ? capacity?.booked || 0 : 0
   const privateGroups = !publicDay ? capacity?.groups || 0 : 0
 
-  const closeDay = async () => {
+  // Admins pick what kind of day this is; only that choice's fields show.
+  type DayMode = 'regular' | 'cause' | 'closed'
+  const currentMode: DayMode = closed ? 'closed' : cause ? 'cause' : 'regular'
+  const [mode, setMode] = useState<DayMode>(currentMode)
+  const [confirming, setConfirming] = useState(false)
+  useEffect(() => setConfirming(false), [mode])
+
+  // Moves the day to the chosen kind. A cause day and a no-game day exclude each other, so the
+  // old one is undone first.
+  const apply = async () => {
     setSaving(true)
     try {
-      const res = await apiPut<{ ok: boolean; activeBookings?: number }>(`/api/closed-days/${dateISO}`, { reason: closeReason })
-      const active = Number(res?.activeBookings || 0)
-      if (closed) toast.success('Reason updated')
-      else if (active > 0) {
-        toast(`No games on this day. ${active} existing booking${active === 1 ? ' is' : 's are'} still on it: reschedule or cancel ${active === 1 ? 'it' : 'them'} in Reservations.`, { icon: '⚠️', duration: 8000 })
-      } else toast.success('Marked as no game')
+      if (mode === 'closed') {
+        if (cause) await apiPost(`/api/cause-days/${dateISO}/remove`, {})
+        const res = await apiPut<{ ok: boolean; activeBookings?: number }>(`/api/closed-days/${dateISO}`, { reason: closeReason })
+        const active = Number(res?.activeBookings || 0)
+        if (closed) toast.success('Reason updated')
+        else if (active > 0) {
+          toast(`No games on this day. ${active} existing booking${active === 1 ? ' is' : 's are'} still on it: reschedule or cancel ${active === 1 ? 'it' : 'them'} in Reservations.`, { icon: '⚠️', duration: 8000 })
+        } else toast.success('Marked as no game')
+      } else if (mode === 'cause') {
+        if (closed) await apiPost(`/api/closed-days/${dateISO}/remove`, {})
+        await apiPut(`/api/cause-days/${dateISO}`, { ...form, donationPercent: Number(form.donationPercent) })
+        toast.success(cause ? 'Game for a cause updated' : 'Day marked as a game for a cause')
+      } else {
+        if (closed) await apiPost(`/api/closed-days/${dateISO}/remove`, {})
+        if (cause) await apiPost(`/api/cause-days/${dateISO}/remove`, {})
+        toast.success(closed ? 'Games are back on for this day' : 'Back to a regular game day')
+      }
       onChanged()
       onClose()
     } catch (e: any) {
@@ -393,45 +435,30 @@ function DayDialog({ dateISO, todayISO, capacity, cause, closed, editable, onClo
     }
   }
 
-  const reopenDay = async () => {
-    setSaving(true)
-    try {
-      await apiPost(`/api/closed-days/${dateISO}/remove`, {})
-      toast.success('Games are back on for this day')
-      onChanged()
-      onClose()
-    } catch (e: any) {
-      toast.error(e?.message || 'Could not reopen it')
-      setSaving(false)
-    }
-  }
+  // What the action button says and whether it needs a second click to confirm.
+  const action = mode === 'closed'
+    ? closed
+      ? { label: 'Save reason', icon: <FiSlash />, variant: 'primary' as const, confirm: false, disabled: closeReason.trim() === (closed.reason || '') }
+      : { label: 'Mark as no game', icon: <FiSlash />, variant: 'danger' as const, confirm: true, disabled: false }
+    : mode === 'cause'
+      ? { label: cause ? 'Save changes' : 'Make it a game for a cause', icon: <FiHeart />, variant: 'primary' as const, confirm: false, disabled: !form.title.trim() }
+      : closed
+        ? { label: 'Reopen for games', icon: <FiCalendar />, variant: 'primary' as const, confirm: false, disabled: false }
+        : cause
+          ? { label: 'Remove game for a cause', icon: <FiTrash2 />, variant: 'danger' as const, confirm: true, disabled: false }
+          : null
+  const hasBookings = bookedPlayers > 0 || privateGroups > 0
 
-  const save = async () => {
-    setSaving(true)
-    try {
-      await apiPut(`/api/cause-days/${dateISO}`, { ...form, donationPercent: Number(form.donationPercent) })
-      toast.success(cause ? 'Game for a cause updated' : 'Day marked as a game for a cause')
-      onChanged()
-      onClose()
-    } catch (e: any) {
-      toast.error(e?.message || 'Could not save')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const remove = async () => {
-    setSaving(true)
-    try {
-      await apiPost(`/api/cause-days/${dateISO}/remove`, {})
-      toast.success('Back to a regular game day')
-      onChanged()
-      onClose()
-    } catch (e: any) {
-      toast.error(e?.message || 'Could not remove it')
-      setSaving(false)
-    }
-  }
+  const modeButton = (value: DayMode, label: string, icon: React.ReactNode) => (
+    <button
+      type="button"
+      aria-pressed={mode === value}
+      onClick={() => setMode(value)}
+      className={['flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-sm font-semibold transition', mode === value ? 'bg-accent/15 text-accent' : 'text-muted hover:text-text'].join(' ')}
+    >
+      {icon} {label}
+    </button>
+  )
 
   return (
     <Modal
@@ -439,68 +466,35 @@ function DayDialog({ dateISO, todayISO, capacity, cause, closed, editable, onClo
       eyebrow={closed ? 'No game' : cause ? 'Game for a cause' : publicDay ? 'Public game day' : 'Private game day'}
       size="md"
       onClose={saving ? () => {} : onClose}
-      footer={canEdit && !closed ? (
+      footer={canEdit ? (
         <>
-          <Button variant="ghost" disabled={saving} onClick={onClose}>Close</Button>
-          <Button variant="primary" disabled={saving || !form.title.trim()} onClick={save}>
-            <FiHeart /> {saving ? 'Saving…' : cause ? 'Save changes' : 'Make it a game for a cause'}
-          </Button>
+          <Button variant="ghost" disabled={saving} onClick={confirming ? () => setConfirming(false) : onClose}>{confirming ? 'Cancel' : 'Close'}</Button>
+          {action ? (
+            <Button
+              variant={action.variant}
+              disabled={saving || action.disabled}
+              onClick={action.confirm && !confirming ? () => setConfirming(true) : apply}
+            >
+              {action.icon} {saving ? 'Saving…' : confirming ? `Yes, ${action.label.charAt(0).toLowerCase()}${action.label.slice(1)}` : action.label}
+            </Button>
+          ) : null}
         </>
       ) : undefined}
     >
-      <div className="space-y-4">
-        {closed && !canEdit ? (
+      <div className="space-y-5">
+        {/* What's booked on this day comes first. */}
+        {capacity ? <DaySlotsTable day={capacity} past={past} /> : (
+          <div className="text-xs text-muted">Weekdays are private games for your own group.</div>
+        )}
+
+        {!canEdit && closed ? (
           <div className="rounded-2xl border border-dashed border-[rgba(var(--text),0.2)] bg-[rgba(var(--text),0.04)] p-4 text-sm">
             <div className="flex items-center gap-2 font-bold"><FiSlash /> No games this day</div>
             {closed.reason ? <p className="mt-1 text-sm text-muted">{closed.reason}</p> : null}
           </div>
         ) : null}
 
-        {canEdit ? (
-          <div className="space-y-3 rounded-2xl border border-dashed border-[rgba(var(--text),0.2)] bg-[rgba(var(--text),0.03)] p-4">
-            <div className="flex items-center gap-2 text-sm font-bold"><FiSlash /> No game on this day</div>
-            {cause && !closed ? (
-              <p className="text-xs text-muted">This day is a game for a cause. Remove the cause below first to mark it as no game.</p>
-            ) : (
-              <>
-                <p className="text-xs text-muted">
-                  {closed
-                    ? "Players can't book, hold, or reschedule onto this day."
-                    : "Players won't be able to book, hold, or reschedule onto this day. Existing bookings are not cancelled."}
-                </p>
-                <Input
-                  label="Reason (optional, shown to players)"
-                  placeholder="e.g. Field maintenance, Holiday"
-                  maxLength={200}
-                  value={closeReason}
-                  onChange={(e) => setCloseReason(e.target.value)}
-                />
-                {!closed && (bookedPlayers > 0 || privateGroups > 0) ? (
-                  <div className="rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
-                    This day already has bookings ({bookedPlayers > 0 ? `${bookedPlayers} player${bookedPlayers === 1 ? '' : 's'}` : `${privateGroups} private group${privateGroups === 1 ? '' : 's'}`}). Marking it as no game won't cancel them; move or cancel them in Reservations.
-                  </div>
-                ) : null}
-                <div className="flex flex-wrap gap-2">
-                  {closed ? (
-                    <>
-                      <Button size="sm" variant="ghost" disabled={saving || closeReason.trim() === (closed.reason || '')} onClick={closeDay}>Save reason</Button>
-                      <Button size="sm" variant="primary" disabled={saving} onClick={reopenDay}><FiCalendar /> Reopen for games</Button>
-                    </>
-                  ) : confirmClose ? (
-                    <>
-                      <Button size="sm" variant="danger" disabled={saving} onClick={closeDay}><FiSlash /> Yes, no game this day</Button>
-                      <Button size="sm" variant="ghost" disabled={saving} onClick={() => setConfirmClose(false)}>Cancel</Button>
-                    </>
-                  ) : (
-                    <Button size="sm" variant="danger-soft" disabled={saving} onClick={() => setConfirmClose(true)}><FiSlash /> Mark as no game</Button>
-                  )}
-                </div>
-              </>
-            )}
-          </div>
-        ) : null}
-
-        {cause && !canEdit ? (
+        {!canEdit && cause ? (
           <div className="rounded-2xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm">
             <div className="flex items-center gap-2 font-bold text-rose-600 dark:text-rose-400"><FiHeart /> {cause.title}</div>
             {cause.beneficiary ? <div className="mt-1 text-xs text-muted">For {cause.beneficiary}</div> : null}
@@ -509,51 +503,80 @@ function DayDialog({ dateISO, todayISO, capacity, cause, closed, editable, onClo
           </div>
         ) : null}
 
-        {canEdit && !closed ? (
-          <div className="space-y-3 rounded-2xl border border-rose-500/25 bg-rose-500/5 p-4">
-            <div className="flex items-center gap-2 text-sm font-bold"><FiHeart className="text-rose-500" /> Game for a cause</div>
-            <p className="text-xs text-muted">
-              Players see this on the landing page and when they hover the date in Book a game. Reports count the share of that day's bookings reserved for the donation.
-            </p>
-            <Input label="Cause" placeholder="e.g. Typhoon relief drive" maxLength={80} value={form.title} onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))} />
-            <Input label="Beneficiary (optional)" placeholder="e.g. Brgy. Salawag evacuees" maxLength={120} value={form.beneficiary} onChange={(e) => setForm((f) => ({ ...f, beneficiary: e.target.value }))} />
-            <label className="block">
-              <div className="mb-2 text-sm font-semibold">Details (optional)</div>
-              <textarea
-                rows={3}
-                maxLength={500}
-                value={form.description}
-                onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
-                className="w-full rounded-xl border border-white/10 bg-background px-4 py-3 text-sm text-text focus:outline-none focus:ring-2 focus:ring-accent/60"
-              />
-            </label>
-            <Input
-              label="Share of bookings for the donation (%)"
-              type="number"
-              min={1}
-              max={100}
-              value={form.donationPercent}
-              onChange={(e) => setForm((f) => ({ ...f, donationPercent: e.target.value }))}
-              hint="100% gives everything paid for that day's bookings."
-            />
-            {cause ? (
-              confirmRemove ? (
-                <div className="flex flex-wrap gap-2">
-                  <Button size="sm" variant="danger" disabled={saving} onClick={remove}><FiTrash2 /> Yes, make it a regular day</Button>
-                  <Button size="sm" variant="ghost" disabled={saving} onClick={() => setConfirmRemove(false)}>Keep it</Button>
-                </div>
-              ) : (
-                <Button size="sm" variant="danger-soft" disabled={saving} onClick={() => setConfirmRemove(true)}><FiTrash2 /> Remove game for a cause</Button>
-              )
-            ) : null}
-          </div>
-        ) : editable && past && !cause && !closed ? (
-          <div className="text-xs text-muted">Past days can't be made a game for a cause.</div>
+        {editable && past && !cause && !closed ? (
+          <div className="text-xs text-muted">Past days can't be changed.</div>
         ) : null}
 
-        {capacity ? <DaySlotsTable day={capacity} past={past} /> : (
-          <div className="text-xs text-muted">Weekdays are private games for your own group.</div>
-        )}
+        {canEdit ? (
+          <div className="space-y-4 border-t border-[rgba(var(--text),0.08)] pt-4">
+            <div>
+              <div className="mb-2 text-sm font-semibold">This day is a…</div>
+              <div className="flex gap-1 rounded-xl border border-white/10 bg-white/5 p-1">
+                {modeButton('regular', 'Regular game', <FiCalendar className="h-4 w-4" />)}
+                {modeButton('cause', 'For a cause', <FiHeart className="h-4 w-4" />)}
+                {modeButton('closed', 'No game', <FiSlash className="h-4 w-4" />)}
+              </div>
+            </div>
+
+            {mode === 'regular' ? (
+              <p className="text-xs text-muted">
+                {closed ? 'Reopening lets players book this day again.'
+                  : cause ? 'Removing the cause makes this an ordinary game day. Bookings stay as they are.'
+                  : 'Games run as usual. Pick "For a cause" or "No game" to change this day.'}
+              </p>
+            ) : null}
+
+            {mode === 'cause' ? (
+              <div className="space-y-3">
+                <p className="text-xs text-muted">
+                  Players see this on the landing page and in Book a game. Reports set aside this share of the day's bookings for the donation.
+                </p>
+                <Input label="Cause" placeholder="e.g. Typhoon relief drive" maxLength={80} value={form.title} onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))} />
+                <div className="grid gap-3 sm:grid-cols-[1fr_9rem]">
+                  <Input label="Beneficiary (optional)" placeholder="e.g. Brgy. Salawag evacuees" maxLength={120} value={form.beneficiary} onChange={(e) => setForm((f) => ({ ...f, beneficiary: e.target.value }))} />
+                  <Input
+                    label="Donation share (%)"
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={form.donationPercent}
+                    onChange={(e) => setForm((f) => ({ ...f, donationPercent: e.target.value }))}
+                  />
+                </div>
+                <label className="block">
+                  <div className="mb-2 text-sm font-semibold">Details (optional)</div>
+                  <textarea
+                    rows={3}
+                    maxLength={500}
+                    value={form.description}
+                    onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+                    className="w-full rounded-xl border border-white/10 bg-background px-4 py-3 text-sm text-text focus:outline-none focus:ring-2 focus:ring-accent/60"
+                  />
+                </label>
+                {closed ? <p className="text-xs text-muted">Saving also reopens this day for games.</p> : null}
+              </div>
+            ) : null}
+
+            {mode === 'closed' ? (
+              <div className="space-y-3">
+                <p className="text-xs text-muted">Players can't book, hold or reschedule onto this day. Existing bookings are not cancelled.</p>
+                <Input
+                  label="Reason (optional, shown to players)"
+                  placeholder="e.g. Field maintenance, Holiday"
+                  maxLength={200}
+                  value={closeReason}
+                  onChange={(e) => setCloseReason(e.target.value)}
+                />
+                {!closed && hasBookings ? (
+                  <div className="rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+                    This day already has bookings ({bookedPlayers > 0 ? `${bookedPlayers} player${bookedPlayers === 1 ? '' : 's'}` : `${privateGroups} private group${privateGroups === 1 ? '' : 's'}`}). They won't be cancelled; move or cancel them in Reservations.
+                  </div>
+                ) : null}
+                {cause && !closed ? <p className="text-xs text-muted">This also removes the game for a cause.</p> : null}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </Modal>
   )

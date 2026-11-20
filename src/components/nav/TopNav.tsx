@@ -5,7 +5,8 @@ import { Link, useNavigate } from 'react-router-dom'
 import { ThemeToggle } from './ThemeToggle'
 import { useTheme } from '../../context/ThemeContext'
 import { useAuth } from '../../context/AuthContext'
-import { useNotifications } from '../../context/NotificationContext'
+import { useNotifications, type NotificationItem } from '../../context/NotificationContext'
+import { NotificationDetailModal } from './NotificationDetailModal'
 import { resolveNotificationRoute } from '../../utils/notificationRoutes'
 import { kindOf, timeLabel } from '../../utils/notificationDisplay'
 
@@ -14,6 +15,8 @@ function NotificationBell({ userId, role }: { userId: string; role?: string }) {
   const roleNotifs = useMemo(() => getNotificationsForRole(role || 'user', userId), [getNotificationsForRole, role, userId])
   const count = roleNotifs.filter((n) => !n.read).length
   const [open, setOpen] = React.useState(false)
+  // The notification opened from the list: shown in a pop-up with a button to its page.
+  const [detail, setDetail] = React.useState<NotificationItem | null>(null)
   const navigate = useNavigate()
   const dropdownRef = React.useRef<HTMLDivElement>(null)
 
@@ -93,12 +96,9 @@ function NotificationBell({ userId, role }: { userId: string; role?: string }) {
                     <button
                       key={n.id}
                       type="button"
-                      title={`${n.title}\n${n.message}`}
                       onClick={() => {
                         markAsRead(n.id)
-                        const destination = resolveNotificationRoute(n, role, userId)
-                        if (destination) navigate(destination)
-                        else navigate('/app/notifications')
+                        setDetail(n)
                         setOpen(false)
                       }}
                       className={`hover-row flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2.5 text-left ${!n.read ? 'bg-accent/10' : ''}`}
@@ -136,6 +136,8 @@ function NotificationBell({ userId, role }: { userId: string; role?: string }) {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {detail ? <NotificationDetailModal notification={detail} role={role} userId={userId} onClose={() => setDetail(null)} /> : null}
     </div>
   )
 }
@@ -195,7 +197,7 @@ export function TopNav({
             />
             <div className="hidden leading-tight sm:block">
               <div className="text-sm font-bold">Chill Shooters</div>
-              <div className="text-[11px] text-muted">Airsoft Gaming Center</div>
+              <div className="text-[11px] text-muted">Airsoft Game Center</div>
             </div>
           </Link>
         </div>

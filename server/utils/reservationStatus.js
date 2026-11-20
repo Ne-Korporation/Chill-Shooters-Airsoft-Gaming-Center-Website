@@ -1,4 +1,5 @@
 import { releaseBookingInventory } from './inventoryHolds.js'
+import { normalizeLocationId, syncPublicGrounds } from './bookingSlots.js'
 import { getPaymentProgress } from './paymentRules.js'
 import { getActorName } from './actors.js'
 
@@ -76,6 +77,14 @@ export async function updateReservationStatusAtomically({
       )
       if (nextStatus === 'cancelled') {
         await releaseBookingInventory(db, reservationId, session)
+        // A public group leaving can shrink the grounds the rest of the slot needs.
+        if (String(current.sessionType || 'public').toLowerCase() !== 'private') {
+          await syncPublicGrounds(db, {
+            locationId: normalizeLocationId(current.locationId || current.location || current.locationName),
+            reservationDate: String(current.reservationDate || current.dateISO || ''),
+            reservationTime: String(current.reservationTime || current.slot || '').toLowerCase(),
+          }, session)
+        }
         // Proofs nobody verified yet no longer need review, and stop counting as money pending.
         // Verified payments are kept as they are for the financial record.
         const reservationIds = [current.id, current._id].filter(Boolean).map(String)
