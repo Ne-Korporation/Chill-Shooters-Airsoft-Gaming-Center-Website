@@ -71,6 +71,8 @@ export async function getBookingInventoryRequirements({
   const mode = String(payload.selectionMode || '').toLowerCase()
   const branch = normalizeLocationId(payload.locationId || payload.location || payload.locationName)
   const ownWeaponCount = Math.max(0, Math.round(Number(payload.verifiedOwnWeaponCount) || 0))
+  // Players bringing their own gun and gear get nothing from a package, so nothing is reserved for them.
+  players =Math.max(0, players - Math.min(players, Math.max(0, Math.round(Number(payload.verifiedOwnGearCount) || 0))))
   const freeUnits = (item, collection) =>
     Math.max(0, stockQuantity(item, collection) - Number(heldQuantities.get(holdKey(collection, String(item.id || item._id))) || 0))
   const requirement = (item, collection) => ({

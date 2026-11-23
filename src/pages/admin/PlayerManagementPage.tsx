@@ -1,7 +1,7 @@
 import React from 'react'
 import { confirmDialog, promptDialog } from '../../components/ui/ConfirmDialog'
 import { useLiveRefresh } from '../../utils/liveUpdates'
-import { FiAlertTriangle, FiCheck, FiEye, FiRotateCcw, FiShield, FiSlash, FiUserX, FiX } from 'react-icons/fi'
+import { FiAlertTriangle, FiCheck, FiCopy, FiEye, FiRotateCcw, FiShield, FiSlash, FiUserX, FiX } from 'react-icons/fi'
 import toast from 'react-hot-toast'
 import { ActionGroup, Button } from '../../components/ui/Button'
 import { FilterTabs } from '../../components/ui/FilterTabs'
@@ -11,6 +11,26 @@ import { apiGet, apiGetAll, apiPost, apiPut } from '../../utils/apiClient'
 import { Paged } from '../../components/ui/Pagination'
 import { PlayerStatsCard } from '../../components/players/PlayerStatsCard'
 import { CloseAccountDialog } from './CloseAccountDialog'
+
+async function copyAccountId(id: string) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(id)
+    } else {
+      const ta = document.createElement('textarea')
+      ta.value = id
+      ta.style.position = 'fixed'
+      ta.style.opacity = '0'
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+    }
+    toast.success('Account ID copied')
+  } catch {
+    toast.error('Could not copy account ID')
+  }
+}
 
 export function PlayerManagementPage() {
   const [activeView, setActiveView] = React.useState<'players' | 'staff'>('players')
@@ -267,6 +287,21 @@ export function PlayerManagementPage() {
         <div>
           <div className="text-sm font-semibold">{pl.name}</div>
           <div className="mt-1 text-xs text-muted">{pl.email}</div>
+          {pl.id ? (
+            <div className="mt-1 flex items-center gap-1.5 text-xs text-muted">
+              <span>Account ID:</span>
+              <code className="rounded bg-black/30 px-1.5 py-0.5 font-mono text-[11px] text-text">{pl.id}</code>
+              <button
+                type="button"
+                onClick={() => copyAccountId(String(pl.id))}
+                className="inline-flex items-center rounded p-1 text-muted transition hover:bg-white/10 hover:text-text"
+                title="Copy account ID"
+                aria-label={`Copy account ID for ${pl.name}`}
+              >
+                <FiCopy />
+              </button>
+            </div>
+          ) : null}
           <div className="mt-2 flex flex-wrap items-center gap-2">
             {pl.erased ? (
               <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] font-semibold text-muted" title={pl.closedReason || undefined}>Closed · data erased</span>

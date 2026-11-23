@@ -1,13 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
-import { FiAlertTriangle, FiCrosshair } from 'react-icons/fi'
+import { FiAlertTriangle, FiCrosshair, FiPlus } from 'react-icons/fi'
 import { Card } from '../../components/ui/Card'
+import { FilterTabs } from '../../components/ui/FilterTabs'
+import { Modal } from '../../components/ui/Modal'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { ItemCombobox, type ComboItem } from '../../components/ui/ItemCombobox'
 import { apiGet, apiPost, apiPut, apiGetAll } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
 import { Paged } from '../../components/ui/Pagination'
+import { DamageReportForm, type FiledReport, type InventoryItem } from './DamageReportForm'
 
 type Actor = { actorEmail?: string; actorRole?: string }
 
@@ -52,7 +55,6 @@ type DamageReport = {
   repairId?: string
 }
 
-type InventoryItem = { id: string; name: string }
 
 const selectClass = 'w-full rounded-xl border border-white/10 bg-background px-4 py-3 text-sm text-text focus:outline-none focus:ring-2 focus:ring-accent/40 [&>option]:bg-background'
 
@@ -91,9 +93,12 @@ export function SafetyLogPage({ embedded = false, tab: tabFromPage, onRepairOpen
   // The manual reading form, closed unless a gun outside the inventory needs testing.
   const [fpsFormOpen, setFpsFormOpen] = useState(false)
   const [fpsForm, setFpsForm] = useState({ weaponId: '', weaponName: '', weaponClass: 'aeg', fps: '', playerName: '', notes: '' })
-  const [damageForm, setDamageForm] = useState({ kind: 'damage', itemType: 'weapon', itemId: '', itemName: '', reservationId: '', playerName: '', description: '' })
   const [review, setReview] = useState<{ id: string; amount: string; note: string; overrideReason: string; quote: PenaltyQuote | null } | null>(null)
   const [handlingFee, setHandlingFee] = useState('')
+  const [editingFee, setEditingFee] = useState(false)
+  // The report form (in a pop-up) loads today's games itself each time it opens.
+  const [damageFormOpen, setDamageFormOpen] = useState(false)
+  const [reportFilter, setReportFilter] = useState<'reported' | 'billed' | 'waived' | 'all'>('all')
 
   useEffect(() => {
     apiGet<{ ok: boolean; data: { handlingFeePercent: number } }>('/api/penalty-rules')
@@ -176,26 +181,17 @@ export function SafetyLogPage({ embedded = false, tab: tabFromPage, onRepairOpen
     }
   }
 
-  const submitDamage = async (event: React.FormEvent) => {
-    event.preventDefault()
-    setSaving(true)
-    try {
-      const res = await apiPost<{ ok: boolean; data: DamageReport; repair?: { id: string } | null }>('/api/damage-reports', damageForm)
-      toast.success(
-        damageForm.kind === 'loss'
-          ? 'Loss report filed. The item was taken out of rental.'
-          : res.repair
-            ? `Damage report filed and repair ${res.repair.id} opened. Mark it repaired once the gunsmith is done.`
-            : 'Damage report filed. The item was moved to maintenance.',
-      )
-      setDamageForm({ kind: damageForm.kind, itemType: damageForm.itemType, itemId: '', itemName: '', reservationId: '', playerName: '', description: '' })
-      await load()
-      if (res.repair) onRepairOpened?.()
-    } catch (err: any) {
-      toast.error(err?.message || 'Unable to file report')
-    } finally {
-      setSaving(false)
-    }
+  const handleReportFiled = async (res: FiledReport) => {
+    toast.success(
+      res.kind === 'loss'
+        ? 'Loss report filed. The item was taken out of rental.'
+        : res.repair
+          ? `Damage report filed and repair ${res.repair.id} opened. Mark it repaired once the gunsmith is done.`
+          : 'Damage report filed. The item was moved to maintenance.',
+    )
+    setDamageFormOpen(false)
+    await load()
+    if (res.repair) onRepairOpened?.()
   }
 
   const submitReview = async (decision: 'bill' | 'waive') => {
@@ -218,17 +214,22 @@ export function SafetyLogPage({ embedded = false, tab: tabFromPage, onRepairOpen
     }
   }
 
-  const damageItems = damageForm.itemType === 'weapon' ? weapons : equipment
+  const reportCounts = useMemo(() => ({
+    reported: reports.filter((r) => r.status === 'reported').length,
+    billed: reports.filter((r) => r.status === 'billed').length,
+    waived: reports.filter((r) => r.status === 'waived').length,
+  }), [reports])
+  const visibleReports = reportFilter === 'all' ? reports : reports.filter((r) => r.status === reportFilter)
+
   const weaponOptions = weapons.map(toOption)
 
   return (
     <div className="space-y-4">
       {embedded ? (
-        <p className="text-sm text-muted">
-          {tab === 'fps'
-            ? `Chronograph checks: AEG limit ${limits.aeg} FPS, sniper/VSR ${limits.sniper} FPS.`
-            : 'Damage and loss reports, with penalty billing to the reservation.'}
-        </p>
+        // The damage view writes its own section header (with counts and the File report button).
+        tab === 'fps' ? (
+          <p className="text-sm text-muted">{`Chronograph checks: AEG limit ${limits.aeg} FPS, sniper/VSR ${limits.sniper} FPS.`}</p>
+        ) : null
       ) : (
       <div>
         <h1 className="text-3xl font-bold">Safety Logs</h1>
@@ -353,134 +354,116 @@ export function SafetyLogPage({ embedded = false, tab: tabFromPage, onRepairOpen
           </Card>
         </div>
       ) : (
-        <div className="grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
-          <div className="space-y-4">
-          <Card className="p-4 md:p-5">
-            <div className="flex items-center gap-2 text-sm font-bold"><FiAlertTriangle /> File a damage or loss report</div>
-            <form className="mt-4 space-y-3" onSubmit={submitDamage}>
-              <div className="grid grid-cols-2 gap-2">
-                {([['damage', 'Damaged'], ['loss', 'Lost']] as const).map(([value, label]) => (
-                  <button
-                    key={value}
-                    type="button"
-                    onClick={() => setDamageForm((c) => ({ ...c, kind: value }))}
-                    className={[
-                      'rounded-xl border px-3 py-2 text-sm font-semibold transition',
-                      damageForm.kind === value ? 'border-accent/40 bg-accent/15 text-accent' : 'border-white/10 bg-white/5 text-muted hover:text-text',
-                    ].join(' ')}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="block">
-                  <div className="mb-2 text-sm font-semibold text-text">Item type</div>
-                  <select
-                    value={damageForm.itemType}
-                    onChange={(e) => setDamageForm((c) => ({ ...c, itemType: e.target.value, itemId: '' }))}
-                    className={selectClass}
-                  >
-                    <option value="weapon">Weapon</option>
-                    <option value="equipment">Gear</option>
-                  </select>
-                </label>
-                <ItemCombobox
-                  key={damageForm.itemType}
-                  label="Item"
-                  placeholder={damageForm.itemType === 'weapon' ? 'Type or pick a weapon' : 'Type or pick gear'}
-                  items={damageItems.map(toOption)}
-                  selectedKey={damageForm.itemId}
-                  onSelect={(item) => setDamageForm((c) => ({ ...c, itemId: item?.key || '' }))}
-                  allowCustom
-                  customText={damageForm.itemName}
-                  onCustomText={(text) => setDamageForm((c) => ({ ...c, itemName: text }))}
-                />
-              </div>
-              <Input
-                label="Reservation ID"
-                hint="Needed to bill a damage charge to the responsible booking."
-                placeholder="e.g. R-…"
-                value={damageForm.reservationId}
-                onChange={(e) => setDamageForm((c) => ({ ...c, reservationId: e.target.value.trim() }))}
-              />
-              <Input
-                label="Responsible player (optional)"
-                value={damageForm.playerName}
-                onChange={(e) => setDamageForm((c) => ({ ...c, playerName: e.target.value }))}
-              />
-              <label className="block">
-                <div className="mb-2 text-sm font-semibold text-text">What happened</div>
-                <textarea
-                  value={damageForm.description}
-                  onChange={(e) => setDamageForm((c) => ({ ...c, description: e.target.value.slice(0, 1000) }))}
-                  rows={3}
-                  className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-text focus:outline-none focus:ring-2 focus:ring-accent/40"
-                />
-              </label>
-              <Button type="submit" className="w-full" disabled={saving || !damageForm.description.trim()}>
-                {saving ? 'Saving…' : 'File report'}
-              </Button>
-            </form>
-          </Card>
-
-          <Card className="p-4 md:p-5">
-            <div className="text-xs uppercase tracking-widest text-muted">Penalty rules</div>
-            <div className="mt-2 space-y-1 text-sm text-muted">
-              <div><span className="font-semibold text-text">Lost item:</span> the item's replacement value (set on the Weapons / Gear page).</div>
-              <div><span className="font-semibold text-text">Damaged item:</span> gunsmith repair cost (parts + labor) plus a {handlingFee || 0}% handling fee.</div>
-              <div>Billing a different amount needs a written reason.</div>
+        <section className="space-y-3">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h2 className="flex items-center gap-2 text-lg font-bold"><FiAlertTriangle /> Damage &amp; loss reports</h2>
+              <p className="mt-0.5 text-xs text-muted">
+                {reportCounts.reported > 0
+                  ? <><span className="font-semibold text-amber-400">{reportCounts.reported} waiting for a charge decision</span> · {reports.length} total</>
+                  : `${reports.length} report${reports.length === 1 ? '' : 's'}, none waiting for a decision`}
+              </p>
             </div>
-            {isAdmin ? (
-              <div className="mt-3 flex items-end gap-2">
-                <Input label="Handling fee (%)" type="number" min={0} max={100} value={handlingFee} onChange={(e) => setHandlingFee(e.target.value)} />
-                <Button variant="secondary" onClick={saveHandlingFee} disabled={handlingFee === ''}>Save</Button>
-              </div>
-            ) : null}
-          </Card>
+            <Button size="sm" onClick={() => setDamageFormOpen(true)}><FiPlus /> File report</Button>
           </div>
 
-          <Card className="p-4 md:p-5">
-            <div className="text-xs uppercase tracking-widest text-muted">Reports</div>
-            <div className="mt-3 divide-y divide-white/5">
-              {loading ? <div className="py-3 text-sm text-muted">Loading…</div> : null}
-              {!loading && reports.length === 0 ? <div className="py-3 text-sm text-muted">No damage reports.</div> : null}
-              <Paged items={reports}>{(pageItems) => pageItems.map((report) => (
-                <div key={report.id} className="py-3">
+          {/* Penalty rules in one line; admins can change the handling fee in place. */}
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-muted">
+            <span><span className="font-semibold text-text">Lost:</span> replacement value</span>
+            <span><span className="font-semibold text-text">Damaged:</span> repair cost + {handlingFee || 0}% handling fee</span>
+            <span>A different amount needs a written reason.</span>
+            {isAdmin ? (
+              editingFee ? (
+                <span className="ml-auto flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={handlingFee}
+                    onChange={(e) => setHandlingFee(e.target.value)}
+                    aria-label="Handling fee (%)"
+                    className="w-20 rounded-lg border border-white/10 bg-background px-2 py-1 text-xs text-text"
+                  />
+                  <span>%</span>
+                  <Button size="xs" variant="secondary" disabled={handlingFee === ''} onClick={async () => { await saveHandlingFee(); setEditingFee(false) }}>Save</Button>
+                  <Button size="xs" variant="ghost" onClick={() => setEditingFee(false)}>Cancel</Button>
+                </span>
+              ) : (
+                <button type="button" onClick={() => setEditingFee(true)} className="ml-auto font-semibold text-accent hover:underline">Edit handling fee</button>
+              )
+            ) : null}
+          </div>
+
+          <FilterTabs
+            size="sm"
+            ariaLabel="Filter reports by status"
+            value={reportFilter}
+            onChange={setReportFilter}
+            options={[
+              { value: 'reported', label: 'Needs decision', count: reportCounts.reported },
+              { value: 'billed', label: 'Billed', count: reportCounts.billed },
+              { value: 'waived', label: 'Waived', count: reportCounts.waived },
+              { value: 'all', label: 'All', count: reports.length },
+            ]}
+          />
+
+          {damageFormOpen ? (
+          <Modal title="File a damage or loss report" eyebrow="Weapons & gear" size="md" onClose={() => setDamageFormOpen(false)}>
+            <DamageReportForm weapons={weapons} equipment={equipment} onFiled={handleReportFiled} />
+          </Modal>
+          ) : null}
+
+          <Card className="p-2 md:p-3">
+            <div className="divide-y divide-white/5">
+              {loading ? <div className="px-2 py-3 text-sm text-muted">Loading…</div> : null}
+              {!loading && visibleReports.length === 0 ? (
+                <div className="px-2 py-8 text-center text-sm text-muted">
+                  {reportFilter === 'reported' ? 'Nothing waiting for a decision.' : reportFilter === 'all' ? 'No damage or loss reports yet.' : `No ${reportFilter} reports.`}
+                </div>
+              ) : null}
+              <Paged items={visibleReports} resetKey={reportFilter}>{(pageItems) => pageItems.map((report) => (
+                <div key={report.id} className="px-2 py-3">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <div className="text-sm font-semibold">
-                        {report.itemName} <span className="text-xs text-muted">({report.itemType}{report.kind === 'loss' ? ', lost' : ''})</span>
-                      </div>
-                      <div className="mt-0.5 text-xs text-muted">
-                        {report.id} · {formatDateTime(report.reportedAtISO)} · {report.reservationId || 'no reservation'}
-                        {report.playerName ? ` · ${report.playerName}` : ''}
-                        {report.repairId ? <> · <span className="font-semibold text-accent">Repair {report.repairId}</span></> : null}
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm font-semibold">{report.itemName}</span>
+                        <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${report.kind === 'loss' ? 'border-danger/30 bg-danger/10 text-danger' : 'border-white/10 bg-white/5 text-muted'}`}>
+                          {report.kind === 'loss' ? 'Lost' : 'Damaged'} · {report.itemType === 'weapon' ? 'Weapon' : 'Gear'}
+                        </span>
                       </div>
                       <div className="mt-1 text-sm text-muted">{report.description}</div>
+                      <div className="mt-1 flex flex-wrap gap-x-2 text-[11px] text-muted">
+                        <span>{report.id}</span>
+                        <span>· {formatDateTime(report.reportedAtISO)}</span>
+                        <span>· {report.reservationId ? `Booking ${report.reservationId}` : 'No booking linked'}</span>
+                        {report.playerName ? <span>· {report.playerName}</span> : null}
+                        {report.repairId ? <span>· <span className="font-semibold text-accent">Repair {report.repairId}</span></span> : null}
+                      </div>
                       {report.reviewNote ? <div className="mt-1 text-xs text-muted">Review: {report.reviewNote}</div> : null}
                       {report.penalty?.overridden ? (
-                        <div className="mt-1 text-xs text-warning">
+                        <div className="mt-1 text-xs text-amber-400">
                           Override{report.penalty.computedAmount != null ? ` (rule gave ₱${report.penalty.computedAmount.toLocaleString()})` : ''}: {report.penalty.overrideReason}
                         </div>
                       ) : null}
                     </div>
-                    <div className="text-right">
-                      <span className={`text-[10px] font-semibold uppercase tracking-[0.15em] ${report.status === 'billed' ? 'text-danger' : report.status === 'waived' ? 'text-success' : 'text-warning'}`}>
-                        {report.status}
+                    <div className="flex shrink-0 flex-col items-end gap-2">
+                      <span className={`rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${report.status === 'billed' ? 'border-danger/30 bg-danger/10 text-danger' : report.status === 'waived' ? 'border-success/30 bg-success/10 text-success' : 'border-amber-400/30 bg-amber-400/10 text-amber-400'}`}>
+                        {report.status === 'reported' ? 'Needs decision' : report.status === 'billed' ? `Billed ₱${report.chargeAmount.toLocaleString()}` : 'Waived'}
                       </span>
-                      {report.status === 'billed' ? <div className="text-sm font-bold">₱{report.chargeAmount.toLocaleString()}</div> : null}
+                      {isAdmin && report.status === 'reported' && review?.id !== report.id ? (
+                        <Button size="xs" variant="secondary" onClick={() => void openReview(report)}>Review charge</Button>
+                      ) : null}
                     </div>
                   </div>
 
-                  {isAdmin && report.status === 'reported' ? (
-                    review?.id === report.id ? (
+                  {isAdmin && report.status === 'reported' && review?.id === report.id ? (
+                    (
                       <div className="mt-3 grid gap-2 rounded-xl border border-white/10 bg-white/5 p-3 sm:grid-cols-2">
                         <div className="text-xs sm:col-span-2">
                           {!review.quote ? (
                             <span className="text-muted">Computing penalty…</span>
                           ) : review.quote.amount === null ? (
-                            <span className="text-warning">{review.quote.missing}</span>
+                            <span className="text-amber-400">{review.quote.missing}</span>
                           ) : (
                             <div className="space-y-0.5">
                               {(review.quote.lines || []).map((line) => (
@@ -514,11 +497,7 @@ export function SafetyLogPage({ embedded = false, tab: tabFromPage, onRepairOpen
                           <Button variant="secondary" disabled={saving} onClick={() => submitReview('waive')}>Waive</Button>
                           <Button variant="ghost" disabled={saving} onClick={() => setReview(null)}>Cancel</Button>
                         </div>
-                        {!report.reservationId ? <div className="text-xs text-warning sm:col-span-2">No reservation linked, so this can only be waived.</div> : null}
-                      </div>
-                    ) : (
-                      <div className="mt-2">
-                        <Button variant="ghost" onClick={() => void openReview(report)}>Review charge</Button>
+                        {!report.reservationId ? <div className="text-xs text-amber-400 sm:col-span-2">No reservation linked, so this can only be waived.</div> : null}
                       </div>
                     )
                   ) : null}
@@ -526,7 +505,7 @@ export function SafetyLogPage({ embedded = false, tab: tabFromPage, onRepairOpen
               ))}</Paged>
             </div>
           </Card>
-        </div>
+        </section>
       )}
     </div>
   )

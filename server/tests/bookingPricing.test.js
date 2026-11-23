@@ -267,3 +267,42 @@ test('an all-weapons package charges every listed weapon per player; own guns re
   // 2 players bring their own gun: they still rent grenades
   assert.equal((await price(3, 2)).totalAmount, 3 * 850 - 2 * 500)
 })
+
+test('a package player and an own-gun-and-gear player: the second pays the entrance fee only', async () => {
+  // Full Package for 2: one gets the rifle, mask and vest (₱750); the other brings their own gun
+  // and gear and pays the ₱150 entrance only.
+  const result = await calculateBookingPrice({
+    db: {},
+    payload: { selectionMode: 'package', selectedPackageId: 'full-package', sessionType: 'public', verifiedOwnGearCount: 1 },
+    players: 2,
+    findDocumentById,
+    userId: 'player',
+  })
+  assert.equal(result.totalAmount, 900)
+  assert.deepEqual(result.loadoutUnitCosts, { package: 750, own_gun: 250, own_gear: 150 })
+  assert.ok(result.pricingBreakdown.some((line) => /Own gun and gear \(1\)/.test(line.label)))
+})
+
+test('a per-player set price leaves out a player bringing their own gear: they pay the entrance fee instead', async () => {
+  // Full Rental is ₱750 per player. Two players: one gets it, one brings their own (₱150 entrance).
+  const result = await calculateBookingPrice({
+    db: {},
+    payload: { selectionMode: 'package', selectedPackageId: 'full-rental', sessionType: 'public', verifiedOwnGearCount: 1 },
+    players: 2,
+    findDocumentById,
+    userId: 'player',
+  })
+  assert.equal(result.totalAmount, 900)
+  assert.equal(result.loadoutUnitCosts.own_gear, 150)
+})
+
+test('a price for a whole group cannot leave out a player bringing their own gear', async () => {
+  records.packages.push({ id: 'duo-squad', name: 'Duo Squad', status: 'active', settledAmount: 1400, players: 2 })
+  await assert.rejects(calculateBookingPrice({
+    db: {},
+    payload: { selectionMode: 'package', selectedPackageId: 'duo-squad', sessionType: 'public', verifiedOwnGearCount: 1 },
+    players: 2,
+    findDocumentById,
+    userId: 'player',
+  }), /group of 2/)
+})

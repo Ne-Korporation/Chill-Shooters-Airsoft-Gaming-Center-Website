@@ -34,7 +34,11 @@ export function groupOf(iso: string, now: Date) {
   if (time >= today) return 'Today'
   if (time >= today - day) return 'Yesterday'
   if (time >= today - 6 * day) return 'This week'
-  return 'Earlier'
+  if (time >= today - 13 * day) return 'Last week'
+  const date = new Date(time)
+  if (date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth()) return 'Earlier this month'
+  // Older ones are grouped by month: "October", or "October 2025" from another year.
+  return date.toLocaleString('en-PH', { month: 'long', ...(date.getFullYear() === now.getFullYear() ? {} : { year: 'numeric' }) })
 }
 
 export function timeLabel(iso: string, now: Date) {

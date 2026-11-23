@@ -2,6 +2,7 @@ import { getGcashAmountDue, getPaymentProgress, getSplitPayerIds } from './payme
 import { updateReservationStatusAtomically } from './reservationStatus.js'
 import { nextShortId } from './shortIds.js'
 import { publicAppUrl } from './appUrl.js'
+import { roleReceivesNotification } from './roleNotifications.js'
 
 // How long a pending reservation keeps its slot while it is paid. After this the booking is
 // released and the slot opens for anyone again. A captain paying alone has 30 minutes; a team
@@ -63,8 +64,11 @@ export async function notifyUser(db, { userId, targetRole, type, title, message,
   }
 }
 
-export function notifyRole(db, { role, ...rest }) {
-  return notifyUser(db, { ...rest, userId: 'broadcast', targetRole: role })
+// Sends to everyone with `role`, unless that role doesn't take this kind of notification
+// (see roleNotifications.js). `topic` tags what it's about when the type alone doesn't say.
+export async function notifyRole(db, { role, topic, fields, ...rest }) {
+  if (!roleReceivesNotification(role, { type: rest.type, topic })) return
+  return notifyUser(db, { ...rest, userId: 'broadcast', targetRole: role, fields: { ...(fields || {}), ...(topic ? { topic } : {}) } })
 }
 
 function reservationLabel(reservation) {
@@ -289,7 +293,7 @@ export async function sendSplitPaymentWarnings(db, { force = false } = {}) {
         dueLabel,
         timeLeftLabel,
         stage: current.stage,
-        payLink: appUrl ? `${appUrl}/app/split-payments` : '',
+        payLink: appUrl ? `${appUrl}/app/my-reservations#split-payments` : '',
       })
       warned += 1
     }

@@ -67,3 +67,19 @@ export function slotHasStarted(hours, slot, dateISO, todayISO, now = new Date())
   const start = toMinutes(range?.start)
   return start === null ? false : manilaMinutesNow(now) >= start
 }
+
+// A slot is over once its end time has passed (any slot on an earlier day is over).
+export function slotHasEnded(hours, slot, dateISO, todayISO, now = new Date()) {
+  if (dateISO !== todayISO) return dateISO < todayISO
+  const range = (hours || DEFAULT_SLOT_HOURS)[slot] || DEFAULT_SLOT_HOURS[slot]
+  const end = toMinutes(range?.end)
+  return end === null ? true : manilaMinutesNow(now) >= end
+}
+
+// "5:00 PM" from "17:00", for messages.
+export function formatSlotTime(time) {
+  const minutes = toMinutes(time)
+  if (minutes === null) return String(time || '')
+  const hour = Math.floor(minutes / 60)
+  return `${hour % 12 || 12}:${String(minutes % 60).padStart(2, '0')} ${hour < 12 ? 'AM' : 'PM'}`
+}

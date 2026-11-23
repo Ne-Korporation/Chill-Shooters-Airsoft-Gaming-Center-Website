@@ -1,4 +1,5 @@
 import { nextShortId } from './shortIds.js'
+import { notifyRole } from './paymentProgress.js'
 
 function reservationKey(reservation) {
   return String(reservation?.id || reservation?._id || '')
@@ -40,7 +41,17 @@ export async function ensureGameplayForReservation(db, reservation) {
     return { gameplay: already, created: false }
   }
   const id = await nextShortId(db, 'gameplay', 'GP')
-  const insert = await db.collection('gameplay').insertOne({ ...mapReservationToGameplay(reservation), id })
+  const game = mapReservationToGameplay(reservation)
+  const insert = await db.collection('gameplay').insertOne({ ...game, id })
+  // A new game on the board is the one thing marshals are notified about.
+  const players = reservation?.numberOfPlayers ? `, ${reservation.numberOfPlayers} players` : ''
+  await notifyRole(db, {
+    role: 'marshal',
+    type: 'gameplay_created',
+    title: 'New game booked',
+    message: `${game.Package !== '—' ? game.Package : 'A game'} on ${game.Schedule || 'an upcoming date'}${game.Location ? ` at ${game.Location}` : ''}${players}.`,
+    linkedResourceId: id,
+  })
   return { gameplay: await db.collection('gameplay').findOne({ _id: insert.insertedId }), created: true }
 }
 

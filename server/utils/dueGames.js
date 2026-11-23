@@ -1,12 +1,13 @@
 import { fpsBlockReason, gameFpsStatus } from './fpsChecks.js'
 import { manilaDateISO } from './reminders.js'
 import { getSlotHours, slotHasStarted } from './slotHours.js'
-import { notifyRole } from './paymentProgress.js'
+import { getReservationPayments, notifyRole } from './paymentProgress.js'
+import { unpaidStartReason } from './bookingBalance.js'
 
 // Today's games whose slot has begun but that are still Scheduled. Each one is started
-// automatically when every gun in it has passed today's chronograph (FPS) check, the same rule
-// as the Start button. Otherwise it stays Scheduled, marked "due to start" with what's missing,
-// and the marshals are told once, so a person still checks the guns before play.
+// automatically when its booking balance is paid and every gun in it has passed today's
+// chronograph (FPS) check, the same rules as the Start button. Otherwise it stays Scheduled,
+// marked "due to start" with what's missing, and admins are told once.
 
 const slotOfSchedule = (schedule) => String(schedule || '').split('•')[1]?.trim().toLowerCase() || ''
 
@@ -15,6 +16,7 @@ export async function startDueGames(db, {
   todayISO = manilaDateISO(),
   hours,
   fpsStatusOf = (reservation) => gameFpsStatus(db, reservation, { now }),
+  paymentsOf = (reservation) => getReservationPayments(db, reservation),
 } = {}) {
   const slotHours = hours || (await getSlotHours(db)).hours
   const scheduled = await db.collection('gameplay')
@@ -31,7 +33,10 @@ export async function startDueGames(db, {
     // A cancelled booking's game isn't started; the day-end sweep marks it Cancelled.
     if (reservation && String(reservation.reservationStatus || '').toLowerCase() === 'cancelled') continue
 
-    const reason = reservation ? fpsBlockReason(await fpsStatusOf(reservation)) : ''
+    // Same rules as the Start button: the booking balance is paid and every gun passed the chronograph.
+    const reason = reservation
+      ? unpaidStartReason(reservation, await paymentsOf(reservation)) || fpsBlockReason(await fpsStatusOf(reservation))
+      : ''
     if (!reason) {
       const started = await db.collection('gameplay').updateOne(
         // Re-check the status so a game staff changed in the meantime isn't touched.
@@ -52,8 +57,10 @@ export async function startDueGames(db, {
     )
     if (firstTime) {
       const slot = slotOfSchedule(game.Schedule)
+      // Marshals are only notified of new bookings, so admins get this one (the games board
+      // still shows the game as due to start, with what's missing).
       await notifyRole(db, {
-        role: 'marshal',
+        role: 'admin',
         type: 'game_due_to_start',
         title: 'Game due to start',
         message: `${game.id || 'A game'} (${slot || 'today'}${game.Location ? `, ${game.Location}` : ''}) is due to start but can't start yet. ${reason}`,

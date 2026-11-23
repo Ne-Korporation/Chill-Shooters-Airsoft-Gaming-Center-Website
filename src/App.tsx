@@ -17,7 +17,6 @@ import { WaiverPage } from './pages/waiver/WaiverPage'
 import { PaymentPage } from './pages/payments/PaymentPage'
 import { PaymentCompletePage } from './pages/payments/PaymentCompletePage'
 import { DemoPaymentPage } from './pages/payments/DemoPaymentPage'
-import { SplitPaymentPage } from './pages/payments/SplitPaymentPage'
 import { PlayerProfilePage } from './pages/players/PlayerProfilePage'
 import { MyWeaponsAndEquipmentPage } from './pages/players/MyWeaponsAndEquipmentPage'
 
@@ -154,7 +153,8 @@ export default function App() {
         <Route path="waiver" element={<RequireRole roles={['user']}><WaiverPage /></RequireRole>} />
         <Route path="payment" element={<RequireRole roles={['user']}><PaymentPage /></RequireRole>} />
         <Route path="payment/complete" element={<RequireRole roles={['user']}><PaymentCompletePage /></RequireRole>} />
-        <Route path="split-payments" element={<RequireRole roles={['user']}><SplitPaymentPage /></RequireRole>} />
+        {/* Split payments moved into My Reservations; old links and notifications still land there. */}
+        <Route path="split-payments" element={<Navigate to="/app/my-reservations#split-payments" replace />} />
         <Route path="feedback" element={<RequireRole roles={['user']}><PlayerFeedbackPage /></RequireRole>} />
         <Route path="notifications" element={<RequireRole roles={['user', 'admin', 'registrar', 'marshal']}><NotificationsPageForRole /></RequireRole>} />
         <Route path="players/:playerId" element={<RequireOwnProfile><PlayerProfilePage /></RequireOwnProfile>} />

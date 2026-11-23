@@ -7,6 +7,7 @@ import { FiAlertCircle, FiCalendar, FiEye, FiFileText, FiRefreshCw, FiXCircle } 
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { apiDelete, apiGet, apiPost } from '../../utils/apiClient'
+import { SPLIT_PAYMENTS_CHANGED_EVENT, SplitPaymentsSection } from '../payments/SplitPaymentPage'
 import { useAuth } from '../../context/AuthContext'
 import { isVerifiedPayment, type ReceiptPayment } from '../../utils/receiptPrint'
 import { ReceiptModal } from '../../components/payments/ReceiptModal'
@@ -163,6 +164,12 @@ export function MyReservationsPage() {
   }, [])
 
   useLiveRefresh(['reservations', 'payments'], () => load(true))
+  // Declining a team booking (in the split payments above) takes it off this list.
+  useEffect(() => {
+    const reload = () => { void load(true) }
+    window.addEventListener(SPLIT_PAYMENTS_CHANGED_EVENT, reload)
+    return () => window.removeEventListener(SPLIT_PAYMENTS_CHANGED_EVENT, reload)
+  }, [load])
 
   // Payment status changes as teammates pay their shares, so keep it current while open.
   useEffect(() => {
@@ -305,13 +312,18 @@ export function MyReservationsPage() {
   )
 
   // Upcoming games first (soonest on top); past games in their own tab (most recent on top).
-  const [tab, setTab] = useState<'upcoming' | 'past'>('upcoming')
-  const upcoming = useMemo(
+  const [tab, setTab] = useState<'upcoming' | 'pending' | 'past'>('upcoming')
+  // Games still ahead, soonest first; split into confirmed (Upcoming) and not yet confirmed (Pending:
+  // waiting for payment or for review).
+  const ahead = useMemo(
     () => sorted.filter((item) => !dateOf(item) || dateOf(item) >= today).sort((a, b) => (dateOf(a) || '9999').localeCompare(dateOf(b) || '9999')),
     [sorted, today],
   )
+  const isPending = (item: ReservationDoc) => ['pending', 'needs review'].includes(String(item.reservationStatus || '').toLowerCase())
+  const pending = useMemo(() => ahead.filter(isPending), [ahead])
+  const upcoming = useMemo(() => ahead.filter((item) => !isPending(item)), [ahead])
   const past = useMemo(() => sorted.filter((item) => dateOf(item) && dateOf(item) < today), [sorted, today])
-  const shown = tab === 'upcoming' ? upcoming : past
+  const shown = tab === 'upcoming' ? upcoming : tab === 'pending' ? pending : past
   const { page, setPage, pageCount, pageItems, total } = usePagination(shown, 10, tab)
 
   const startEditing = (reservation: ReservationDoc) => {
@@ -381,12 +393,16 @@ export function MyReservationsPage() {
         </Button>
       </div>
 
+      {/* Split payments to pay or wait on, above the list (shown only while there is one). */}
+      <SplitPaymentsSection />
+
       <FilterTabs
         ariaLabel="Show reservations"
         value={tab}
         onChange={setTab}
         options={[
           { value: 'upcoming', label: 'Upcoming', count: upcoming.length },
+          { value: 'pending', label: 'Pending', count: pending.length },
           { value: 'past', label: 'Past', count: past.length },
         ]}
       />
@@ -428,8 +444,10 @@ export function MyReservationsPage() {
       {loading ? <Card className="p-4 text-sm text-muted">Loading your reservations…</Card> : null}
       {!loading && shown.length === 0 ? (
         <Card className="p-6 text-center text-sm text-muted">
-          {tab === 'upcoming' ? 'No upcoming games.' : 'No past games yet.'}
-          {tab === 'upcoming' ? (
+          {tab === 'upcoming'
+            ? (pending.length ? `No confirmed games yet. ${pending.length} booking${pending.length === 1 ? ' is' : 's are'} pending.` : 'No upcoming games.')
+            : tab === 'pending' ? 'Nothing pending. Bookings waiting for payment or review show here.' : 'No past games yet.'}
+          {tab === 'upcoming' && !pending.length ? (
             <div className="mt-3"><Button variant="primary" onClick={() => navigate('/app/reservations')}><FiCalendar /> Book a game</Button></div>
           ) : null}
         </Card>
@@ -534,9 +552,9 @@ export function MyReservationsPage() {
               ) : null}
               <ReservationIdTag id={id} className="ml-auto text-[11px] text-muted" />
             </div>
-            {tab === 'upcoming' && statusAllows && !sentBack && alreadyRescheduled && daysLeft >= 0 ? (
+            {tab !== 'past' && statusAllows && !sentBack && alreadyRescheduled && daysLeft >= 0 ? (
               <div className="mt-2 text-xs text-muted">This booking was already rescheduled once, so it can't be moved again.</div>
-            ) : tab === 'upcoming' && statusAllows && !sentBack && daysLeft >= 0 && daysLeft < RESCHEDULE_CUTOFF_DAYS ? (
+            ) : tab !== 'past' && statusAllows && !sentBack && daysLeft >= 0 && daysLeft < RESCHEDULE_CUTOFF_DAYS ? (
               <div className="mt-2 text-xs text-muted">Rescheduling closed on {formatShortDate(cutoffDate)} ({RESCHEDULE_CUTOFF_DAYS} days before the game).</div>
             ) : null}
 

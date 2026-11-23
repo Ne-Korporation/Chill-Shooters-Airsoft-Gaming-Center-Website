@@ -61,7 +61,9 @@ export function getGcashAmountDue(reservation, payments, payerId) {
     invalidSplit.statusCode = 400
     throw invalidSplit
   }
-  const share = Math.round((depositAmount / teamSize) * 100) / 100
+  // Uneven shares (players who get different things, see utils/splitShares.js), else an even split.
+  const recorded = reservation.splitShares && payerId != null ? Number(reservation.splitShares[String(payerId)]) : NaN
+  const share = Number.isFinite(recorded) ? recorded : Math.round((depositAmount / teamSize) * 100) / 100
   // Older reservations have no recorded payer list; keep their one-share-at-a-time rule.
   if (!payerId || !Array.isArray(reservation.splitPayerIds)) return Math.min(share, remainingDeposit)
 

@@ -141,9 +141,16 @@ export async function calculateBookingPrice({ db, payload, players, findDocument
   // Set by the server after checking which players have an approved weapon on file;
   // each one replaces one rental weapon.
   const ownWeaponCount = Math.max(0, Math.round(Number(payload.verifiedOwnWeaponCount) || 0))
+  // Players bringing their own gun AND gear (verified by the server): they pay the entrance fee
+  // only, and get nothing from the package. Everyone else is a "rental player".
+  const ownGearCount = Math.min(players, Math.max(0, Math.round(Number(payload.verifiedOwnGearCount) || 0)))
+  const rentalPlayers = Math.max(0, players - ownGearCount)
   let subtotal = entranceFee
   let packageDiscount = 0
   let isOwnGear = false
+  // What one player of each kind costs before discounts, so a split payment can charge each
+  // player for what they get (see utils/splitShares.js). Package bookings only.
+  let loadoutUnitCosts = null
   const breakdown = [{ label: 'Player entrance fee', amount: entranceFee }]
 
   if (selectionMode === 'package') {
@@ -155,14 +162,18 @@ export async function calculateBookingPrice({ db, payload, players, findDocument
     }
 
     const settledPrice = numberOrZero(pkg.settledAmount, 'Package')
+    const fixedPlayers = Math.round(Number(pkg.players || 0))
+    // A price set for a whole group can't leave a player out; a price set per player can.
+    if (settledPrice > 0 && fixedPlayers > 1 && ownGearCount > 0) {
+      throw new Error(`This package is one price for a group of ${fixedPlayers}, so nobody can be left out of it. Pick another package for players bringing their own.`)
+    }
     if (settledPrice > 0) {
-      // A set price for 1 player is charged per player; a set price for a group of N (2 or more)
-      // only fits exactly N players. Mirrors src/utils/packagePricing.ts.
-      const fixedPlayers = Math.round(Number(pkg.players || 0))
+      // A set price for 1 player is charged per package player; a set price for a group of N
+      // (2 or more) only fits exactly N players. Mirrors src/utils/packagePricing.ts.
       if (fixedPlayers > 1 && fixedPlayers !== players) {
         throw new Error(`The selected package is priced for a group of ${fixedPlayers} players.`)
       }
-      subtotal = Math.round(settledPrice) * (fixedPlayers > 1 ? 1 : Math.max(1, players))
+      subtotal = Math.round(settledPrice) * (fixedPlayers > 1 ? 1 : rentalPlayers)
       const discountedTotal = applyDiscount(subtotal, {
         ...pkg,
         discountMode: pkg.discountMode === 'settled' ? 'none' : pkg.discountMode,
@@ -170,7 +181,20 @@ export async function calculateBookingPrice({ db, payload, players, findDocument
       packageDiscount = subtotal - discountedTotal
       subtotal = discountedTotal
       breakdown.length = 0
-      breakdown.push({ label: pkg.name || 'Rental package', amount: subtotal })
+      if (rentalPlayers) breakdown.push({ label: pkg.name || 'Rental package', amount: subtotal })
+      // Players bringing their own gun and gear pay the entrance fee instead of the package.
+      if (ownGearCount) {
+        const ownGearEntrance = Math.round(config.entranceFeePerPlayer * ownGearCount * sessionMultiplier)
+        subtotal += ownGearEntrance
+        breakdown.push({ label: `Entrance fee, own gun and gear (${ownGearCount})`, amount: ownGearEntrance })
+      }
+      if (fixedPlayers <= 1) {
+        loadoutUnitCosts = {
+          package: Math.round(settledPrice),
+          own_gun: Math.round(settledPrice),
+          own_gear: config.entranceFeePerPlayer * sessionMultiplier,
+        }
+      }
     } else {
       const basePrice = numberOrZero(pkg.basePrice, 'Package')
       const weaponIds = Array.isArray(pkg.weaponIds) ? pkg.weaponIds.map(String) : []
@@ -188,18 +212,23 @@ export async function calculateBookingPrice({ db, payload, players, findDocument
       // Mirrors packageWeaponRental in src/utils/packagePricing.ts.
       const weaponPrices = weapons.map((item) => numberOrZero(item.price, 'Weapon'))
       const listedWeaponPrice = weaponPrices.reduce((sum, price) => sum + price, 0)
-      // Every player gets one of each listed weapon (a rifle and grenades = 2); an approved own
-      // gun replaces the first (main) one.
+      // Every rental player gets one of each listed weapon (a rifle and grenades = 2); an approved
+      // own gun replaces the first (main) one. Own-gear players get none of it.
       const packageWeaponCount = weaponPrices.length
-      const replaced = packageWeaponCount ? Math.min(ownWeaponCount, players) : 0
-      const rentedWeaponCount = packageWeaponCount * players - replaced
-      const weaponRentalTotal = packageWeaponCount ? listedWeaponPrice * players - weaponPrices[0] * replaced : 0
+      const replaced = packageWeaponCount ? Math.min(ownWeaponCount, rentalPlayers) : 0
+      const rentedWeaponCount = packageWeaponCount * rentalPlayers - replaced
+      const weaponRentalTotal = packageWeaponCount ? listedWeaponPrice * rentalPlayers - weaponPrices[0] * replaced : 0
       const weaponsTotal = Math.round(weaponRentalTotal * sessionMultiplier)
-      const equipmentTotal = Math.round(
-        equipment.reduce((sum, item, index) => sum + numberOrZero(item.price, 'Equipment') * packageEquipmentQty(pkg, equipmentIds[index]), 0)
-          * players * sessionMultiplier,
-      )
-      const packageBase = Math.round(basePrice * players * sessionMultiplier)
+      const equipmentUnit = equipment.reduce((sum, item, index) => sum + numberOrZero(item.price, 'Equipment') * packageEquipmentQty(pkg, equipmentIds[index]), 0)
+      const equipmentTotal = Math.round(equipmentUnit * rentalPlayers * sessionMultiplier)
+      const packageBase = Math.round(basePrice * rentalPlayers * sessionMultiplier)
+      const entranceUnit = config.entranceFeePerPlayer * sessionMultiplier
+      const packageUnit = (basePrice + listedWeaponPrice + equipmentUnit) * sessionMultiplier + entranceUnit
+      loadoutUnitCosts = {
+        package: packageUnit,
+        own_gun: packageUnit - (packageWeaponCount ? weaponPrices[0] * sessionMultiplier : 0),
+        own_gear: entranceUnit,
+      }
       const preDiscount = packageBase + weaponsTotal + equipmentTotal + entranceFee
       subtotal = applyDiscount(preDiscount, pkg)
       packageDiscount = preDiscount - subtotal
@@ -207,13 +236,14 @@ export async function calculateBookingPrice({ db, payload, players, findDocument
       if (packageBase) breakdown.push({ label: pkg.name || 'Package fee', amount: packageBase })
       const weaponLabel = [...new Set(weapons.map(modelOf))].join(' / ') || 'Rental weapons'
       if (weaponsTotal) breakdown.push({ label: `${weaponLabel} rental (${rentedWeaponCount})`, amount: weaponsTotal })
-      if (ownWeaponCount && packageWeaponCount) breakdown.push({ label: `Own weapons (${Math.min(ownWeaponCount, packageWeaponCount * players)}) — no rental charge`, amount: 0 })
+      if (replaced) breakdown.push({ label: `Own weapons (${replaced}) — no rental charge`, amount: 0 })
       equipment.forEach((item, index) => {
-        const pieces = players * packageEquipmentQty(pkg, equipmentIds[index])
+        const pieces = rentalPlayers * packageEquipmentQty(pkg, equipmentIds[index])
         const amount = Math.round(numberOrZero(item.price, 'Equipment') * pieces * sessionMultiplier)
         if (amount) breakdown.push({ label: `${modelOf(item)} rental (${pieces})`, amount })
       })
       breakdown.push({ label: 'Player entrance fee', amount: entranceFee })
+      if (ownGearCount) breakdown.push({ label: `Own gun and gear (${ownGearCount}) — entrance fee only`, amount: 0 })
       if (packageDiscount) breakdown.push({ label: 'Package discount', amount: -packageDiscount })
     }
   } else if (selectionMode === 'custom') {
@@ -246,7 +276,8 @@ export async function calculateBookingPrice({ db, payload, players, findDocument
   }
 
   if (selectionMode === 'package') {
-    breakdown.push({ label: `BB reloads included (${INCLUDED_RELOADS_PER_PLAYER * players}) — free`, amount: 0 })
+    // Included BBs come with the package, so own-gear players don't get them.
+    if (rentalPlayers) breakdown.push({ label: `BB reloads included (${INCLUDED_RELOADS_PER_PLAYER * rentalPlayers}) — free`, amount: 0 })
   }
 
   const extraAmmoReloads = normalizeExtraAmmoReloads(payload.extraAmmoReloads)
@@ -279,5 +310,8 @@ export async function calculateBookingPrice({ db, payload, players, findDocument
     pricingConfigVersion: 1,
     packageDiscountAmount: packageDiscount,
     paymentDepositPolicy: isOwnGear ? 'fixed_350_capped_at_total' : 'percentage',
+    // Per-player costs for uneven split shares, plus the price of one extra reload (players can
+    // each buy their own; see utils/splitShares.js).
+    loadoutUnitCosts: loadoutUnitCosts ? { ...loadoutUnitCosts, ammo: getAmmoReloadPrice() } : null,
   }
 }

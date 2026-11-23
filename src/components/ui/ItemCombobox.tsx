@@ -115,7 +115,7 @@ export function ItemCombobox({
   return (
     <div className="relative">
       <label className="block">
-        <div className="mb-2 text-sm font-semibold text-text">{label}</div>
+        {label ? <div className="mb-2 text-sm font-semibold text-text">{label}</div> : null}
         <input
           value={text}
           onChange={(event) => {

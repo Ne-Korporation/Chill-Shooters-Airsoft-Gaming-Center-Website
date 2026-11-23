@@ -14,7 +14,7 @@ export function resolveNotificationRoute(notification: NotificationItem, role?: 
   if (notificationType === 'announcement') return null
   if (notification.userId === 'broadcast' && !isStaffRole(currentRole)) return null
 
-  if (notificationType.startsWith('split_payment_')) return '/app/split-payments'
+  if (notificationType.startsWith('split_payment_')) return '/app/my-reservations#split-payments'
 
   // A message from a player opens the admin Inbox.
   if (notificationType === 'contact_message') return currentRole === 'admin' ? '/app/admin/inbox' : null

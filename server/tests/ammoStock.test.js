@@ -42,15 +42,16 @@ function fakeDb(items) {
 test('staff are told once when ammo runs low, and again after a restock and a new drop', async () => {
   const db = fakeDb([{ _id: 'a', id: 'EQ-A-001', name: 'BB Ammo', category: 'ammo', stockGrams: 1500 }])
   await checkAmmoStock(db, { env: {} })
-  assert.equal(db.notes.length, 2) // admins and marshals
+  assert.equal(db.notes.length, 1) // admins only; marshals just get new bookings
+  assert.equal(db.notes[0].targetRole, 'admin')
   assert.match(db.notes[0].message, /1,500 g left/)
 
   await checkAmmoStock(db, { env: {} })
-  assert.equal(db.notes.length, 2, 'not repeated while still low')
+  assert.equal(db.notes.length, 1, 'not repeated while still low')
 
   db.items.get('a').stockGrams = 8000
   await checkAmmoStock(db, { env: {} })
   db.items.get('a').stockGrams = 900
   await checkAmmoStock(db, { env: {} })
-  assert.equal(db.notes.length, 4, 'told again after restocking and running low again')
+  assert.equal(db.notes.length, 2, 'told again after restocking and running low again')
 })

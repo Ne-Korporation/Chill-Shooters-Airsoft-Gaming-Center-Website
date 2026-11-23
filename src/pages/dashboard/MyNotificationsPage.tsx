@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react'
 import { confirmDialog } from '../../components/ui/ConfirmDialog'
 import toast from 'react-hot-toast'
-import { FiArrowLeft, FiBell, FiCheck, FiTrash2, FiX } from 'react-icons/fi'
+import { FiArrowLeft, FiBell, FiCheck, FiCheckCircle, FiMail, FiTrash2, FiX } from 'react-icons/fi'
 import { useNavigate } from 'react-router-dom'
 import { Button } from '../../components/ui/Button'
 import { FilterTabs } from '../../components/ui/FilterTabs'
@@ -19,7 +19,7 @@ type Filter = 'all' | 'unread'
 export function MyNotificationsPage() {
   const { user } = useAuth()
   const navigate = useNavigate()
-  const { loading, getNotificationsForRole, markAsRead, markAllAsRead, deleteNotification, clearNotificationsByIds } = useNotifications()
+  const { loading, getNotificationsForRole, markAsRead, markAsUnread, markAllAsRead, deleteNotification, clearNotificationsByIds } = useNotifications()
   const [filter, setFilter] = useState<Filter>('all')
   const [shown, setShown] = useState(PAGE_SIZE)
   // The notification opened in its detail pop-up (same pop-up as the bell).
@@ -89,9 +89,9 @@ export function MyNotificationsPage() {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {unread > 0 ? (
-              <Button size="sm" variant="ghost" onClick={() => user?.id && markAllAsRead(user.id, role)}>
-                <FiCheck /> Mark all as read
+            {all.length > 0 ? (
+              <Button size="sm" variant="ghost" disabled={unread === 0} onClick={() => { if (user?.id) { markAllAsRead(user.id, role); toast.success('All notifications marked as read') } }}>
+                <FiCheckCircle /> Mark all as read
               </Button>
             ) : null}
             {all.length > 0 ? (
@@ -125,50 +125,70 @@ export function MyNotificationsPage() {
             <div className="text-xs text-muted">Booking, payment and waiver updates will show up here.</div>
           </div>
         ) : (
-          <div className="space-y-2">
-            {groups.map((group) => (
+          <div className="space-y-3">
+            {groups.map((group) => {
+              const groupUnread = group.items.filter((item) => !item.read).length
+              return (
               <section key={group.label}>
-                <h2 className="px-2 pb-0.5 pt-1 text-[11px] font-semibold uppercase tracking-wider text-muted">{group.label}</h2>
-                <ul className="divide-y divide-white/5">
+                <h2 className="flex items-center gap-2 px-2 pb-1 pt-1 text-[11px] font-semibold uppercase tracking-wider text-muted">
+                  {group.label}
+                  <span className="font-medium normal-case tracking-normal">· {group.items.length}{groupUnread ? `, ${groupUnread} unread` : ''}</span>
+                </h2>
+                <ul className="space-y-0.5">
                   {group.items.map((item) => {
                     const kind = kindOf(item)
                     const Icon = kind.icon
-                    // One compact row: icon, title and time on one line, the message on one line under it.
+                    // One row: [unread dot] [icon] [title + message] [time, swapped for the actions on hover].
                     return (
-                      <li key={item.id} className="group relative">
+                      <li key={item.id} className={`group hover-row flex items-center gap-2 rounded-lg pl-1.5 pr-2 ${item.read ? '' : 'bg-accent/5'}`}>
+                        <span className="flex w-2 shrink-0 justify-center" aria-hidden={item.read}>
+                          {!item.read ? <span className="h-2 w-2 rounded-full bg-accent" aria-label="Unread" /> : null}
+                        </span>
                         <button
                           type="button"
                           onClick={() => open(item)}
                           title={kind.label}
-                          className={`hover-row flex w-full items-center gap-3 rounded-lg px-2.5 py-2.5 pr-10 text-left ${item.read ? '' : 'bg-accent/5'}`}
+                          className="flex min-w-0 flex-1 items-center gap-3 py-2.5 text-left"
                         >
-                          <span className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg ${item.read ? 'bg-[rgba(var(--text),0.06)] text-muted' : 'bg-accent/15 text-accent'}`}>
+                          <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg ${item.read ? 'bg-[rgba(var(--text),0.06)] text-muted' : 'bg-accent/15 text-accent'}`}>
                             <Icon className="h-4 w-4" />
                           </span>
                           <span className="min-w-0 flex-1">
-                            <span className="flex items-baseline gap-2">
-                              {!item.read ? <span className="h-1.5 w-1.5 shrink-0 self-center rounded-full bg-accent" aria-label="Unread" /> : null}
-                              <span className={`min-w-0 flex-1 truncate text-sm ${item.read ? 'font-medium' : 'font-semibold'}`}>{item.title}</span>
-                              <span className="shrink-0 text-[11px] text-muted">{timeLabel(item.createdAtISO, now)}</span>
-                            </span>
+                            <span className={`block truncate text-sm ${item.read ? 'font-medium text-muted' : 'font-semibold text-text'}`}>{item.title}</span>
                             <span className="mt-0.5 block truncate text-xs text-muted">{item.message}</span>
                           </span>
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => dismiss(item)}
-                          aria-label="Remove notification"
-                          title="Remove"
-                          className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-muted transition hover:bg-danger/10 hover:text-danger sm:opacity-0 sm:focus:opacity-100 sm:group-hover:opacity-100"
-                        >
-                          <FiX className="h-3.5 w-3.5" />
-                        </button>
+                        <div className="flex min-h-[28px] shrink-0 flex-col items-end justify-center gap-1">
+                          <span className="whitespace-nowrap text-[11px] text-muted sm:group-focus-within:hidden sm:group-hover:hidden">{timeLabel(item.createdAtISO, now)}</span>
+                        <div className="flex items-center gap-0.5 sm:hidden sm:group-focus-within:flex sm:group-hover:flex">
+                          <button
+                            type="button"
+                            onClick={() => (item.read ? markAsUnread(item.id) : markAsRead(item.id))}
+                            aria-label={item.read ? 'Mark as unread' : 'Mark as read'}
+                            title={item.read ? 'Mark as unread' : 'Mark as read'}
+                            className="inline-flex items-center gap-1 whitespace-nowrap rounded-lg border border-white/10 bg-background/80 px-2 py-1 text-[11px] font-semibold text-muted transition hover:border-accent/30 hover:bg-accent/10 hover:text-accent"
+                          >
+                            {item.read ? <FiMail className="h-3.5 w-3.5" /> : <FiCheck className="h-3.5 w-3.5" />}
+                            {item.read ? 'Mark unread' : 'Mark read'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => dismiss(item)}
+                            aria-label="Remove notification"
+                            title="Remove"
+                            className="rounded-lg p-1.5 text-muted transition hover:bg-danger/10 hover:text-danger"
+                          >
+                            <FiX className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                        </div>
                       </li>
                     )
                   })}
                 </ul>
               </section>
-            ))}
+              )
+            })}
             {list.length > shown ? (
               <div className="pb-1 text-center">
                 <Button size="sm" variant="ghost" onClick={() => setShown((count) => count + PAGE_SIZE)}>

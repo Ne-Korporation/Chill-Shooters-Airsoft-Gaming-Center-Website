@@ -32,9 +32,8 @@ export async function checkAmmoStock(db, { env = process.env } = {}) {
       const grams = Math.max(0, Number(item.stockGrams) || 0)
       const title = 'BB ammo running low'
       const message = `${item.name || 'BB ammo'} has ${grams.toLocaleString()} g left (below ${lowStockLevel(item, env).toLocaleString()} g). Restock before the next games.`
-      for (const role of ['admin', 'marshal']) {
-        await notifyRole(db, { role, type: 'inventory_low_stock', title, message, linkedResourceId: item.id })
-      }
+      // Marshals are only notified of new bookings, so low stock goes to admins.
+      await notifyRole(db, { role: 'admin', type: 'inventory_low_stock', title, message, linkedResourceId: item.id })
       await db.collection('equipments').updateOne({ _id: item._id }, { $set: { lowStockNotifiedAtISO: new Date().toISOString() } })
       notified += 1
     } else if (!low && item.lowStockNotifiedAtISO) {

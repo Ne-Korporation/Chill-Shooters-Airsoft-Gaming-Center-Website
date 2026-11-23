@@ -67,9 +67,13 @@ export function TeamCheckIn({ session, reservationId }: { session: CheckInSessio
     if (!canEdit) return
     setSavingKey(player.key)
     try {
-      const res = await apiPut<{ ok: boolean; data: { checkedIn: boolean; atISO: string } }>('/api/field-checkin', {
+      const res = await apiPut<{ ok: boolean; data: { checkedIn: boolean; atISO: string; gear?: Array<{ itemName: string }>; released?: number } }>('/api/field-checkin', {
         ...session, playerKey: player.key, checkedIn: !player.checkedIn,
       })
+      // Checking in hands the player their booked rental pieces (see the Rentals tab).
+      const gear = res.data.gear || []
+      if (gear.length) toast.success(`${player.name} checked in with ${gear.map((g) => g.itemName).join(', ')}.`, { duration: 5000 })
+      if (res.data.released) toast(`${res.data.released} rental piece${res.data.released === 1 ? '' : 's'} given to ${player.name} went back to the booking.`)
       setTeam((current) => current && {
         ...current,
         players: current.players.map((p) => (p.key === player.key

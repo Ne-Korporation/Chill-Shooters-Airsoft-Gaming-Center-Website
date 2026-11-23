@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { FiAlertTriangle, FiCheck, FiClock, FiCreditCard, FiCrosshair, FiMapPin, FiPlusCircle, FiPrinter, FiRefreshCw, FiSearch, FiTarget, FiTrash2, FiUsers, FiZap } from 'react-icons/fi'
+import { FiAlertTriangle, FiCheck, FiChevronRight, FiClock, FiCreditCard, FiCrosshair, FiMapPin, FiPlusCircle, FiPrinter, FiRefreshCw, FiSearch, FiTarget, FiTrash2, FiUsers, FiZap } from 'react-icons/fi'
 
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
@@ -805,6 +805,14 @@ export function CounterPage() {
     const name = `${slot.charAt(0).toUpperCase()}${slot.slice(1)}`
     return range ? `${name} · ${range}` : name
   }
+  // A session header's when: "Afternoon · 12–5 PM" for today's games, the full date and slot otherwise.
+  const sessionWhen = (game: GameDoc) =>
+    String(game.Schedule || '').slice(0, 10) === manilaTodayISO() ? slotLabel(game) : formatSchedule(game)
+  // "Langkaan" from "Chill Shooters (Langkaan)": every branch is Chill Shooters.
+  const branchName = (game: GameDoc) => {
+    const full = locationName(game)
+    return /\(([^)]+)\)\s*$/.exec(full)?.[1] || full
+  }
 
   // Bookings in the same session (date + slot + field) share one header, so the schedule and
   // field aren't repeated on every card. Games come sorted by schedule, so order is kept.
@@ -950,50 +958,60 @@ export function CounterPage() {
       ) : (
         <>
         {view === 'today' ? <div className="text-sm font-semibold text-muted">{todayLabel}</div> : null}
+        {/* One card per session (slot + branch), two side by side on wide screens; each booking
+            in it is one compact row. */}
+        <div className="grid items-start gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {sessionGroups.map((group) => (
-        <section key={group.key} className="space-y-2">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-            <span className="flex items-center gap-1 font-bold"><FiClock /> {view === 'today' ? slotLabel(group.games[0]) : formatSchedule(group.games[0])}</span>
-            <span className="flex items-center gap-1 text-muted"><FiMapPin /> {locationName(group.games[0])}</span>
-            {group.type ? <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted">{group.type} game</span> : null}
-            <span className="text-xs text-muted">{group.games.length} booking{group.games.length === 1 ? '' : 's'}</span>
+        <section key={group.key} className="overflow-hidden rounded-2xl border border-white/10 bg-white/5">
+          {/* Card header: when on the first line; where, type and booking count on the second. */}
+          <div className="border-b border-white/10 px-4 py-3">
+            <div className="flex items-center gap-1.5 text-sm font-bold"><FiClock className="shrink-0" /> <span className="truncate">{sessionWhen(group.games[0])}</span></div>
+            <div className="mt-1 flex items-center gap-2 text-xs text-muted">
+              <span className="flex min-w-0 items-center gap-1" title={locationName(group.games[0])}><FiMapPin className="shrink-0" /> <span className="truncate">{branchName(group.games[0])}</span></span>
+              {group.type ? <span className="shrink-0 rounded-full border border-white/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider">{group.type}</span> : null}
+              <span className="ml-auto shrink-0">{group.games.length} booking{group.games.length === 1 ? '' : 's'}</span>
+            </div>
           </div>
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          <ul className="divide-y divide-white/5">
           {group.games.map((game) => {
             const booking = bookings.get(String(game.reservationId || ''))
             const ongoing = /^ongo/i.test(String(game.Status || ''))
             const arrival = arrivals.get(String(game.reservationId || ''))
+            const allIn = Boolean(arrival && arrival.total > 0 && arrival.arrived === arrival.total)
+            const packageName = booking?.packageName || game.Package
             return (
+              <li key={gameKey(game)}>
               <button
-                key={gameKey(game)}
                 type="button"
                 disabled={!game.reservationId}
                 onClick={() => game.reservationId && setOpen({ reservationId: game.reservationId, game })}
-                className="rounded-2xl border border-white/10 bg-white/5 p-4 text-left transition hover:border-accent/40 hover:bg-accent/5 disabled:opacity-50"
+                className="flex w-full items-center gap-3 px-4 py-3 text-left transition hover:bg-accent/5 disabled:opacity-50"
               >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="truncate font-bold">{gameTitle(game)}</div>
-                    <div className="text-[11px] text-muted">{game.id} · {game.reservationId}</div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="min-w-0 truncate font-bold">{gameTitle(game)}</span>
+                    <span className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${ongoing ? 'border-success/30 bg-success/15 text-success' : 'border-accent/30 bg-accent/15 text-accent'}`}>
+                      {ongoing ? <FiZap /> : null}{String(game.Status || 'Scheduled').toUpperCase()}
+                    </span>
                   </div>
-                  <span className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${ongoing ? 'border-success/30 bg-success/15 text-success' : 'border-accent/30 bg-accent/15 text-accent'}`}>
-                    {ongoing ? <FiZap /> : null}{String(game.Status || 'Scheduled').toUpperCase()}
-                  </span>
+                  <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted">
+                    {packageName ? <span className="flex items-center gap-1"><FiTarget /> {packageName}</span> : null}
+                    {arrival ? (
+                      <span className={`flex items-center gap-1 ${allIn ? 'font-semibold text-success' : ''}`}><FiUsers /> {arrival.arrived} of {arrival.total} checked in</span>
+                    ) : booking?.numberOfPlayers ? <span className="flex items-center gap-1"><FiUsers /> {booking.numberOfPlayers} players</span> : null}
+                  </div>
+                  {/* Long reservation IDs are cut short here; the full one is in the game's pop-up. */}
+                  <div className="mt-0.5 truncate text-[11px] text-muted/80" title={`${game.id} · ${game.reservationId}`}>{game.id} · {game.reservationId}</div>
                 </div>
-                <div className="mt-3 space-y-1 text-xs text-muted">
-                  {booking?.packageName || game.Package ? <div className="flex items-center gap-1 truncate"><FiTarget /> {booking?.packageName || game.Package}</div> : null}
-                  {arrival ? (
-                    <div className={`flex items-center gap-1 ${arrival.total > 0 && arrival.arrived === arrival.total ? 'font-semibold text-success' : ''}`}>
-                      <FiUsers /> {arrival.arrived} of {arrival.total} checked in
-                    </div>
-                  ) : booking?.numberOfPlayers ? <div className="flex items-center gap-1"><FiUsers /> {booking.numberOfPlayers} players</div> : null}
-                </div>
+                <FiChevronRight className="shrink-0 text-muted" aria-hidden />
               </button>
+              </li>
             )
           })}
-        </div>
+          </ul>
         </section>
         ))}
+        </div>
         </>
       )}
 

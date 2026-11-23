@@ -132,6 +132,9 @@ type ReservationRecord = {
 }
 
 type SelectionMode = 'package' | 'custom'
+// package_all: everyone gets the package · own_all: everyone brings their own gun and gear
+// (entrance only) · hybrid: chosen per player · custom: pick pieces one by one (solo only).
+type RentMode = 'package_all' | 'own_all' | 'hybrid' | 'custom'
 
 // Must match GAME_MODES in server/routes/crud.js
 const GAME_MODES = [
@@ -421,14 +424,13 @@ export function ReservationCalendarPage() {
   // Players can book up to a year ahead. The calendar shows two months at a time; the arrows page
   // through from this month to the month of the last bookable date.
   const lastBookableISO = addDaysISO(manilaTodayISO(), BOOKING_WINDOW_DAYS)
-  const maxMonthOffset = Math.max(0, monthsBetween(manilaTodayISO(), lastBookableISO) - 1)
+  // One month at a time (no scrolling inside the calendar); the arrows move a month, up to the
+  // month of the last bookable day.
+  const maxMonthOffset = Math.max(0, monthsBetween(manilaTodayISO(), lastBookableISO))
   const [monthOffset, setMonthOffset] = useState(0)
 
   const monthCalendars = useMemo(() => {
-    const monthStarts = [
-      new Date(today.getFullYear(), today.getMonth() + monthOffset, 1),
-      new Date(today.getFullYear(), today.getMonth() + monthOffset + 1, 1),
-    ]
+    const monthStarts = [new Date(today.getFullYear(), today.getMonth() + monthOffset, 1)]
 
     return monthStarts.map((start) => {
       const year = start.getFullYear()
@@ -496,7 +498,7 @@ export function ReservationCalendarPage() {
   // Open the calendar on the months holding the picked date (e.g. a saved draft months ahead).
   useEffect(() => {
     const offset = monthsBetween(todayDateISO, dateISO)
-    setMonthOffset((current) => (offset < current || offset > current + 1 ? Math.min(Math.max(0, offset), maxMonthOffset) : current))
+    setMonthOffset(Math.min(Math.max(0, offset), maxMonthOffset))
     // Only when the date changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dateISO])
@@ -665,6 +667,10 @@ export function ReservationCalendarPage() {
   const [selectedPackageId, setSelectedPackageId] = useState<string>(() => draftState.selectedPackageId ?? '')
 
   const [selectionMode, setSelectionMode] = useState<SelectionMode>(() => draftState.selectionMode ?? 'package')
+  // How the group rents (step 3). Teams: everyone gets a package, everyone brings their own gun and
+  // gear (entrance only), or a hybrid chosen per player. Solo players can also pick items one by one.
+  // Each sets up the package / custom selection underneath (see chooseRentMode).
+  const [rentMode, setRentMode] = useState<RentMode>(() => draftState.rentMode ?? (draftState.selectionMode === 'custom' ? 'custom' : 'package_all'))
   const [customWeaponIds, setCustomWeaponIds] = useState<string[]>(() => draftState.customWeaponIds ?? [])
   const [customEquipmentIds, setCustomEquipmentIds] = useState<string[]>(() => draftState.customEquipmentIds ?? [])
   const [ownWeapons, setOwnWeapons] = useState<string>(() => draftState.ownWeapons ?? '')
@@ -677,6 +683,8 @@ export function ReservationCalendarPage() {
   // How many players the group said will bring their own weapon, and which teammates were assigned.
   const [ownWeaponTarget, setOwnWeaponTarget] = useState<number>(() => draftState.ownWeaponTarget ?? Math.max(0, Math.round(packagePrefill?.ownWeapons ?? 0)))
   const [teammateOwnWeaponIds, setTeammateOwnWeaponIds] = useState<string[]>(() => draftState.teammateOwnWeaponIds ?? [])
+  // Players (the booker included) bringing their own gun AND gear: entrance fee only (packages).
+  const [ownGearIds, setOwnGearIds] = useState<string[]>(() => draftState.ownGearIds ?? [])
   const [noWeaponWarning, setNoWeaponWarning] = useState<TeamMember | null>(null)
   const [slotHoldExpiresAt, setSlotHoldExpiresAt] = useState<string | null>(null)
   const [placingHold, setPlacingHold] = useState(false)
@@ -939,11 +947,72 @@ export function ReservationCalendarPage() {
   const pickedPackage = packages.find((p) => p.id === selectedPackageId)
   const packageAllowsOwnWeapons = Boolean(pickedPackage) && !(Number(pickedPackage?.settledAmount) > 0) && (pickedPackage?.weaponIds.length || 0) > 0
   const ownWeaponsAllowed = selectionMode === 'custom' || (selectionMode === 'package' && packageAllowsOwnWeapons)
-  const captainBringsOwnWeapon = ownWeaponsAllowed && selectedOwnWeaponIds.length > 0
+  // Package bookings: each player gets the package, brings their own gun (rents the rest), or brings
+  // their own gun and gear (entrance fee only). Own options need an approved gun on file.
+  // Bringing their own gun and gear works with any package priced per player; only one price for a
+  // whole group (e.g. "for 2 players only") can't leave anyone out. Mirrors the server.
+  const packageIsGroupPrice = Boolean(pickedPackage) && Number(pickedPackage?.settledAmount) > 0 && Math.round(Number(pickedPackage?.players ?? 0)) > 1
+  const packageAllowsOwnGear = Boolean(pickedPackage) && !packageIsGroupPrice
+  const ownGearAllowed = rentMode === 'hybrid' && selectionMode === 'package' && packageAllowsOwnGear
+  const captainHasGun = playerApprovedWeapons.length > 0
+  // The booker marks who brings their own; no registered gear is needed. Minors always get the package.
+  const validOwnGearIds = useMemo(() => (ownGearAllowed
+    ? ownGearIds.filter((id) => id === user?.id || selectedTeammates.some((member) => member.id === id && !member.isMinor))
+    : []), [ownGearAllowed, ownGearIds, user?.id, selectedTeammates])
+  const captainOwnGear = Boolean(user?.id) && validOwnGearIds.includes(String(user?.id))
+  // Players who actually get the package (Hybrid players bringing their own get nothing from it):
+  // what the included items, the stock check and the gear count are based on.
+  const rentalPlayers = Math.max(0, players - validOwnGearIds.length)
+  // Only a solo player picking items marks an own gun this way (Hybrid is package or own gun + gear).
+  const captainBringsOwnWeapon = ownWeaponsAllowed && rentMode === 'custom' && !captainOwnGear && selectedOwnWeaponIds.length > 0
   const verifiedTeammateBringers = useMemo(
-    () => selectedTeammates.filter((member) => teammateOwnWeaponIds.includes(member.id) && member.hasApprovedWeapon),
-    [selectedTeammates, teammateOwnWeaponIds],
+    () => selectedTeammates.filter((member) => teammateOwnWeaponIds.includes(member.id) && member.hasApprovedWeapon && !validOwnGearIds.includes(member.id)),
+    [selectedTeammates, teammateOwnWeaponIds, validOwnGearIds],
   )
+  // What each player gets, for the table: 'package' | 'own_gun' | 'own_gear'.
+  type Loadout = 'package' | 'own_gun' | 'own_gear'
+  const loadoutOf = (id: string): Loadout => {
+    if (validOwnGearIds.includes(id)) return 'own_gear'
+    if (id === user?.id) return captainBringsOwnWeapon ? 'own_gun' : 'package'
+    return verifiedTeammateBringers.some((member) => member.id === id) ? 'own_gun' : 'package'
+  }
+  // Picking how the group rents sets up the package / custom selection underneath.
+  const chooseRentMode = (mode: RentMode) => {
+    setRentMode(mode)
+    if (mode === 'package_all' || mode === 'hybrid') {
+      setSelectionMode('package')
+      // Each player either gets the full package or brings their own gun and gear (Hybrid), so an
+      // "own gun, rent the gear" pick from before doesn't carry over.
+      setTeammateOwnWeaponIds([])
+      setSelectedOwnWeaponIds([])
+      if (mode === 'package_all') setOwnGearIds([])
+    } else {
+      setSelectionMode('custom')
+      setSelectedPackageId('')
+      if (mode === 'own_all') {
+        // Nothing rented: everyone pays the entrance fee only.
+        setCustomWeaponIds([])
+        setCustomEquipmentIds([])
+      }
+    }
+  }
+  // Everyone bringing their own: every player needs an approved gun on file (minors can't).
+  // Everyone bringing their own: minors can't (they need rental gear).
+  const ownAllMissing = rentMode === 'own_all'
+    ? selectedTeammates.filter((member) => member.isMinor).map((member) => member.name)
+    : []
+  const setLoadout = (id: string, loadout: Loadout) => {
+    setOwnGearIds((current) => (loadout === 'own_gear' ? [...current.filter((x) => x !== id), id] : current.filter((x) => x !== id)))
+    if (id === user?.id) {
+      // The booker's own gun is one of their approved weapons: pick the first if none is ticked.
+      if (loadout === 'own_gun' && selectedOwnWeaponIds.length === 0 && playerApprovedWeapons[0]) {
+        setSelectedOwnWeaponIds([String(playerApprovedWeapons[0].id || playerApprovedWeapons[0]._id)])
+      }
+      if (loadout === 'package') setSelectedOwnWeaponIds([])
+    } else {
+      setTeammateOwnWeaponIds((current) => (loadout === 'own_gun' ? [...current.filter((x) => x !== id), id] : current.filter((x) => x !== id)))
+    }
+  }
   const verifiedOwnWeaponCount = ownWeaponsAllowed
     ? Math.min(players, (captainBringsOwnWeapon ? 1 : 0) + verifiedTeammateBringers.length)
     : 0
@@ -978,6 +1047,8 @@ export function ReservationCalendarPage() {
         customWeaponIds,
         customEquipmentIds,
         verifiedOwnWeaponCount,
+        // Hybrid players bringing their own get nothing from the package, so nothing is needed for them.
+        verifiedOwnGearCount: validOwnGearIds.length,
       })
         .then((res) => { if (!cancelled) setStockCheck({ enough: res.enough !== false, message: res.message || '', shortModels: res.shortModels || [] }) })
         .catch(() => { if (!cancelled) setStockCheck(null) })
@@ -987,7 +1058,7 @@ export function ReservationCalendarPage() {
       cancelled = true
       window.clearTimeout(timer)
     }
-  }, [dateISO, slot, step, selectedLocation, players, selectionMode, selectedPackageId, customWeaponIds, customEquipmentIds, verifiedOwnWeaponCount])
+  }, [dateISO, slot, step, selectedLocation, players, selectionMode, selectedPackageId, customWeaponIds, customEquipmentIds, verifiedOwnWeaponCount, validOwnGearIds.length])
   const stockShort = Boolean(stockCheck && !stockCheck.enough)
   // A model is flagged short when the server named it (or named nothing in particular).
   const modelShort = useCallback((model: string) => Boolean(stockCheck && !stockCheck.enough
@@ -1033,10 +1104,10 @@ export function ReservationCalendarPage() {
   // own gun replaces the first, main one), from the free pieces of each model.
   const packageWeaponStock = useCallback((pkg: RentalPackage) => {
     const models = modelsOfIds(allRentalWeapons, pkg.weaponIds)
-    const needs = models.map((_, index) => Math.max(0, players - (index === 0 ? Math.min(verifiedOwnWeaponCount, players) : 0)))
+    const needs = models.map((_, index) => Math.max(0, rentalPlayers - (index === 0 ? Math.min(verifiedOwnWeaponCount, rentalPlayers) : 0)))
     const needed = needs.reduce((sum, n) => sum + n, 0)
     return { needed }
-  }, [modelsOfIds, allRentalWeapons, players, verifiedOwnWeaponCount])
+  }, [modelsOfIds, allRentalWeapons, rentalPlayers, verifiedOwnWeaponCount])
 
   // Only packages that fit the headcount can be picked (a group package fits exactly its size).
   const cheapestPackage = useMemo(() => {
@@ -1061,6 +1132,13 @@ export function ReservationCalendarPage() {
       setSelectedPackageId('')
     }
   }, [noPackages, selectionMode])
+  // Picking items one by one is for a solo player; a team uses Hybrid instead, and Hybrid needs a team.
+  useEffect(() => {
+    if (noPackages) return
+    if (players > 1 && rentMode === 'custom') chooseRentMode('package_all')
+    if (players <= 1 && rentMode === 'hybrid') chooseRentMode('package_all')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [players, rentMode, noPackages])
 
   // Pre-pick a package only in package mode; choosing Custom Selection clears the package and
   // must not be undone by this effect.
@@ -1370,6 +1448,7 @@ export function ReservationCalendarPage() {
       equipment: packageEquipment,
       entranceFeePerPlayer: ENTRANCE_FEE_PER_PLAYER,
       ownWeapons: verifiedOwnWeaponCount,
+      ownGear: validOwnGearIds.length,
     })
 
     return {
@@ -1388,7 +1467,21 @@ export function ReservationCalendarPage() {
       totalBeforeOverall: packagePricing.total,
       details: packagePricing,
     }
-  }, [players, selectedPackage, packageWeapons, packageEquipment, equipmentTotalPerPlayer, selectionMode, customTotal, customPerPlayerTotal, verifiedOwnWeaponCount])
+  }, [players, selectedPackage, packageWeapons, packageEquipment, equipmentTotalPerPlayer, selectionMode, customTotal, customPerPlayerTotal, verifiedOwnWeaponCount, validOwnGearIds.length])
+
+  // What the picked package costs for one player (the Hybrid table's "Package for 1 player").
+  // Not shown for a price set for a whole group.
+  const packageOnePlayerPrice = useMemo(() => {
+    if (!selectedPackage || packageIsGroupPrice) return null
+    return calculatePackagePricing({
+      pkg: selectedPackage,
+      players: 1,
+      sessionMultiplier: 1,
+      weapons: packageWeapons,
+      equipment: packageEquipment,
+      entranceFeePerPlayer: ENTRANCE_FEE_PER_PLAYER,
+    }).total
+  }, [selectedPackage, packageIsGroupPrice, packageWeapons, packageEquipment])
 
   const extraAmmoTotal = Math.round(extraAmmoReloads * ammoReloadPrice)
   const dynamicPricing = useMemo(() => {
@@ -1658,14 +1751,14 @@ export function ReservationCalendarPage() {
         step, selectedLocation, selectedFieldIds, dateISO, slot, selectedSlots, fullDay, players, notes, teamName, gameModePreference,
         layoutRequest, layoutBlueprintUrl, selectedPackageId, selectionMode, customWeaponIds, customEquipmentIds,
         ownWeapons, ownEquipment, selectedOwnWeaponIds, selectedOwnEquipmentIds, ownWeaponTarget, teammateOwnWeaponIds,
-        selectedTeammates, paymentMode, paymentPlan, extraAmmoReloads, fieldLayoutItems, budgetInput,
+        ownGearIds, rentMode, selectedTeammates, paymentMode, paymentPlan, extraAmmoReloads, fieldLayoutItems, budgetInput,
       },
     })
   }, [
     user?.id, step, draftLabel, selectedLocation, selectedFieldIds, dateISO, slot, selectedSlots, fullDay, players, notes, teamName,
     gameModePreference, layoutRequest, layoutBlueprintUrl, selectedPackageId, selectionMode, customWeaponIds,
     customEquipmentIds, ownWeapons, ownEquipment, selectedOwnWeaponIds, selectedOwnEquipmentIds, ownWeaponTarget,
-    teammateOwnWeaponIds, selectedTeammates, paymentMode, paymentPlan, extraAmmoReloads, fieldLayoutItems, budgetInput,
+    teammateOwnWeaponIds, ownGearIds, rentMode, selectedTeammates, paymentMode, paymentPlan, extraAmmoReloads, fieldLayoutItems, budgetInput,
   ])
 
   // Coming back to a draft: hold the slot again (it may have been taken in the meantime).
@@ -1818,8 +1911,12 @@ export function ReservationCalendarPage() {
         payerShareAmount,
         ownWeaponTarget: ownWeaponsAllowed ? ownWeaponTarget : 0,
         ownWeaponBringerIds: ownWeaponsAllowed
-          ? [...(captainBringsOwnWeapon ? [user.id] : []), ...teammateOwnWeaponIds]
+          ? [...(captainBringsOwnWeapon ? [user.id] : []), ...teammateOwnWeaponIds.filter((id) => !validOwnGearIds.includes(id))]
           : [],
+        // Players bringing their own gun and gear: entrance fee only (checked again by the server).
+        ownGearPlayerIds: validOwnGearIds,
+        // 'own_all': everyone brings their own gun and gear (the server checks each has an approved gun).
+        rentMode,
       }
 
       if (selectionMode === 'package') {
@@ -1987,7 +2084,7 @@ export function ReservationCalendarPage() {
                 <div>
                   <div className="flex items-center justify-between gap-2">
                     <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Date</div>
-                    {/* Two months at a time, up to a year ahead. */}
+                    {/* One month at a time, up to a year ahead. */}
                     <div className="flex items-center gap-1">
                       <button
                         type="button"
@@ -2010,7 +2107,7 @@ export function ReservationCalendarPage() {
                     </div>
                   </div>
                   <div className="mt-1 text-[11px] text-muted">Book up to 1 year ahead (until {new Date(`${lastBookableISO}T12:00:00`).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' })}).</div>
-                  <div className="mt-2 space-y-4 max-h-96 overflow-y-auto pr-1">
+                  <div className="mt-2">
                     {monthCalendars.map((month) => (
                       <div key={month.key} className="rounded-2xl border border-white/10 bg-black/20 p-3">
                         <div className="text-sm font-bold text-white">{month.label}</div>
@@ -2758,37 +2855,52 @@ export function ReservationCalendarPage() {
               <div className="flex items-center gap-2 text-sm font-bold">
                 <FiSliders /> <span>How do you want to rent?</span>
               </div>
-              <p className="mt-1 text-xs text-muted">Pick one. Bringing your own weapon works with either.</p>
+              <p className="mt-1 text-xs text-muted">
+                {players > 1 ? 'Pick one for the whole team, or choose per player with Hybrid.' : 'Pick one.'}
+              </p>
 
-              {/* Two choices, one at a time: a radio-style card for each. */}
-              <div className="mt-4 grid gap-3 sm:grid-cols-2" role="radiogroup" aria-label="How do you want to rent?">
+              {/* Three choices, one at a time: a radio-style card for each. A solo player gets
+                  "Pick items yourself" in place of Hybrid (which needs a team). */}
+              <div className="mt-4 grid gap-3 sm:grid-cols-3" role="radiogroup" aria-label="How do you want to rent?">
                 {([
                   {
-                    mode: 'package' as const,
+                    mode: 'package_all' as const,
                     icon: <FiPackage className="text-gold" />,
-                    title: 'Rental package',
+                    title: players > 1 ? 'Everyone gets a package' : 'Rental package',
                     tag: 'Best value',
-                    lines: ['A ready set for each player: weapon, vest, mask and BBs.', 'Cheaper than renting each item.'],
+                    lines: [players > 1 ? 'Every player gets the package: weapon, vest, mask and BBs.' : 'A ready set: weapon, vest, mask and BBs.', 'Cheaper than renting each item.'],
                   },
                   {
-                    mode: 'custom' as const,
-                    icon: <FiTool className="text-gold" />,
-                    title: 'Pick items yourself',
+                    mode: 'own_all' as const,
+                    icon: <FiCrosshair className="text-gold" />,
+                    title: players > 1 ? 'Everyone brings their own' : 'I bring my own',
                     tag: '',
-                    lines: ['Choose exactly which weapons and gear to rent, and how many.', 'Good if some players bring their own vest or mask.'],
+                    lines: [`Own gun and gear, nothing rented. Entrance fee only (${formatCurrency(ENTRANCE_FEE_PER_PLAYER)} each).`, 'Guns are still tested on the chronograph before the game.'],
                   },
+                  players > 1
+                    ? {
+                      mode: 'hybrid' as const,
+                      icon: <FiUsers className="text-gold" />,
+                      title: 'Hybrid',
+                      tag: '',
+                      lines: ['Choose per player: package, own gun, or own gun and gear.', 'Each pays for what they get.'],
+                    }
+                    : {
+                      mode: 'custom' as const,
+                      icon: <FiTool className="text-gold" />,
+                      title: 'Pick items yourself',
+                      tag: '',
+                      lines: ['Choose exactly which weapons and gear to rent.', 'Good if you bring your own vest or mask.'],
+                    },
                 ]).map((option) => {
-                  const active = selectionMode === option.mode
+                  const active = rentMode === option.mode
                   return (
                     <button
                       key={option.mode}
                       type="button"
                       role="radio"
                       aria-checked={active}
-                      onClick={() => {
-                        setSelectionMode(option.mode)
-                        if (option.mode === 'custom') setSelectedPackageId('')
-                      }}
+                      onClick={() => chooseRentMode(option.mode)}
                       className={[
                         'flex items-start gap-3 rounded-2xl border p-4 text-left transition',
                         active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
@@ -2816,7 +2928,7 @@ export function ReservationCalendarPage() {
               <>
                 <Card className="p-4 md:p-6">
                   <div className="flex items-center gap-2 text-sm font-bold">
-                    <FiTag /> <span>Available Packages</span>
+                    <FiTag /> <span>Choose a package</span>
                   </div>
                   <p className="mt-1 text-xs text-muted">Select a rental package, or enter your budget and we will show the packages that match your group and fit it.</p>
 
@@ -2959,14 +3071,93 @@ export function ReservationCalendarPage() {
                   )}
                 </Card>
 
-                {/* Included items: each player gets a piece of every model; the player may pick which pieces */}
-                {selectedPackage && (packageWeaponGroups.length > 0 || packageEquipmentGroups.length > 0) && (
+                {/* Hybrid: the booker decides for each player whether they get the package or bring their own gun and gear. */}
+                {rentMode === 'hybrid' ? (
+                <Card className="p-4 md:p-6">
+                  <div className="flex items-center gap-2 text-sm font-bold">
+                    <FiUsers /> <span>Who gets the package</span>
+                  </div>
+                  <p className="mt-1 text-xs text-muted">
+                    Choose for each player: the package for 1 player, or they bring their own gun and gear and pay the entrance fee only. Each player pays for what they get.
+                  </p>
+                  {selectedPackage && packageIsGroupPrice ? (
+                    <div className="mt-2 rounded-xl border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs">
+                      <span className="font-semibold">{selectedPackage.name}</span> is one price for a group of {Math.round(Number(selectedPackage.players ?? 0))}, so nobody can be left out of it. Pick a package priced per player above to let players bring their own.
+                    </div>
+                  ) : null}
+                  <div className="mt-3 overflow-x-auto rounded-xl border border-white/10">
+                    <table className="w-full min-w-[460px] text-sm">
+                      <thead>
+                        <tr className="border-b border-white/10 bg-white/5 text-left text-[11px] uppercase tracking-wider text-muted">
+                          <th className="px-3 py-2 font-semibold">Player</th>
+                          <th className="px-3 py-2 text-center font-semibold">
+                            Package for 1 player
+                            <div className="font-normal normal-case tracking-normal">
+                              {selectedPackage
+                                ? `${selectedPackage.name}${packageOnePlayerPrice !== null ? ` · ${formatCurrency(packageOnePlayerPrice)}` : ''}`
+                                : 'Pick one above'}
+                            </div>
+                          </th>
+                          <th className="px-3 py-2 text-center font-semibold">
+                            Brings their own
+                            <div className="font-normal normal-case tracking-normal">Own gun + gear · entrance {formatCurrency(ENTRANCE_FEE_PER_PLAYER)} only</div>
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-white/5">
+                        {[
+                          { id: String(user?.id || ''), name: user?.name || 'You', isMe: true, isMinor: false },
+                          ...selectedTeammates.map((member) => ({ id: member.id, name: member.name, isMe: false, isMinor: Boolean(member.isMinor) })),
+                        ].filter((row) => row.id).map((row) => {
+                          const canBringOwn = !row.isMinor && !(selectedPackage && packageIsGroupPrice)
+                          const bringsOwn = canBringOwn && ownGearIds.includes(row.id)
+                          const cell = (own: boolean) => (
+                            <td className="px-3 py-2 text-center">
+                              <input
+                                type="radio"
+                                name={`loadout-${row.id}`}
+                                checked={own ? bringsOwn : !bringsOwn}
+                                disabled={own && !canBringOwn}
+                                onChange={() => setLoadout(row.id, own ? 'own_gear' : 'package')}
+                                aria-label={`${row.name}: ${own ? 'brings their own gun and gear' : 'gets the package'}`}
+                                className="h-4 w-4 accent-[var(--color-accent)] disabled:opacity-30"
+                              />
+                            </td>
+                          )
+                          return (
+                            <tr key={row.id} className={row.isMe ? 'bg-accent/5' : ''}>
+                              <td className="px-3 py-2">
+                                <div className="font-semibold">{row.name}{row.isMe ? <span className="ml-1.5 text-xs font-normal text-muted">(you)</span> : null}</div>
+                                {row.isMinor ? <div className="text-[11px] text-muted">Minor: gets the package</div> : null}
+                              </td>
+                              {cell(false)}
+                              {cell(true)}
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="mt-2 text-xs text-muted">
+                    {(() => {
+                      const own = validOwnGearIds.length
+                      const total = selectedTeammates.length + 1
+                      return `${total - own} with the package · ${own} bringing their own`
+                    })()}
+                  </div>
+                </Card>
+                ) : null}
+
+                {/* Included items, for the players who get the package (not those bringing their own). */}
+                {selectedPackage && rentalPlayers > 0 && (packageWeaponGroups.length > 0 || packageEquipmentGroups.length > 0) && (
                   <Card className="p-4 md:p-6">
                     <div className="flex items-center gap-2 text-sm font-bold">
-                      <FiShield /> <span>Included Weapons &amp; Gear</span>
+                      <FiShield /> <span>What the package includes</span>
                     </div>
                     <p className="mt-1 text-xs text-muted">
-                      Each player gets the items below. Everything is assigned automatically from what's free for your slot.
+                      For the {rentalPlayers} player{rentalPlayers === 1 ? '' : 's'} getting the package
+                      {validOwnGearIds.length ? ` (${validOwnGearIds.length} bringing their own get none)` : ''}.
+                      Everything is assigned automatically from what's free for your slot.
                     </p>
 
                     <div className="mt-4 grid gap-2 sm:grid-cols-2">
@@ -2983,7 +3174,7 @@ export function ReservationCalendarPage() {
                           )
                         })()}
                         {packageEquipmentGroups.map((group) => {
-                          const needed = players * equipmentPerPlayer(group.model)
+                          const needed = rentalPlayers * equipmentPerPlayer(group.model)
                           const short = modelShort(group.model)
                           return (
                             <div key={group.model} className={['flex items-center justify-between gap-3 rounded-2xl border p-3', short ? 'border-danger/30 bg-danger/10' : 'border-white/10 bg-white/5'].join(' ')}>
@@ -3000,6 +3191,34 @@ export function ReservationCalendarPage() {
                   </Card>
                 )}
               </>
+            ) : rentMode === 'own_all' ? (
+              // Everyone brings their own gun and gear: nothing to rent, entrance fee only.
+              <Card className="p-4 md:p-6">
+                <div className="flex items-center gap-2 text-sm font-bold">
+                  <FiCrosshair /> <span>{players > 1 ? 'Everyone brings their own gun and gear' : 'You bring your own gun and gear'}</span>
+                </div>
+                <p className="mt-1 text-xs text-muted">
+                  Nothing is rented, so each player pays the entrance fee only ({formatCurrency(ENTRANCE_FEE_PER_PLAYER)}). Guns are still tested on the chronograph before the game.
+                </p>
+                <ul className="mt-3 divide-y divide-white/5 rounded-xl border border-white/10">
+                  {[
+                    { id: String(user?.id || 'me'), name: `${user?.name || 'You'} (you)`, isMinor: false },
+                    ...selectedTeammates.map((member) => ({ id: member.id, name: member.name, isMinor: Boolean(member.isMinor) })),
+                  ].map((row) => (
+                    <li key={row.id} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
+                      <span className="font-semibold">{row.name}</span>
+                      {row.isMinor
+                        ? <span className="flex items-center gap-1 text-xs text-danger"><FiAlertTriangle /> Minors need the package</span>
+                        : <span className="text-xs text-muted">Entrance {formatCurrency(ENTRANCE_FEE_PER_PLAYER)}</span>}
+                    </li>
+                  ))}
+                </ul>
+                {ownAllMissing.length ? (
+                  <div className="mt-3 text-xs text-danger">
+                    {ownAllMissing.join(', ')} can't bring their own. Choose Hybrid so they get the package.
+                  </div>
+                ) : null}
+              </Card>
             ) : (
               <>
                 {/* Custom mode: pick individual pieces */}
@@ -3060,15 +3279,9 @@ export function ReservationCalendarPage() {
               ) : null}
             </Card>
 
-            {/* A fixed group price can't drop a weapon, so own weapons don't apply to that package. */}
-            {selectionMode === 'package' && pickedPackage && !packageAllowsOwnWeapons && pickedPackage.weaponIds.length > 0 ? (
-              <Card className="p-4 text-xs text-muted md:p-6">
-                <span className="font-semibold text-text">Bringing your own weapon?</span> This package has a fixed group price, so it can't leave a weapon out. Use Custom Selection to rent only what you need.
-              </Card>
-            ) : null}
-
             {/* Bring Your Own: with a custom selection, or with a package (that player skips its weapon). */}
-            {ownWeaponsAllowed && (
+            {/* A solo player picking items marks the gun or gear they bring (Hybrid decides per player in its table). */}
+            {ownWeaponsAllowed && rentMode === 'custom' && (
             <Card className="p-4 md:p-6">
               <div className="flex items-center gap-2 text-sm font-bold">
                 <FiTool /> <span>Bring Your Own (Free)</span>
@@ -3174,7 +3387,7 @@ export function ReservationCalendarPage() {
                 </div>
               )}
 
-              {selectedTeammates.some((member) => !member.isMinor) ? (
+              {!ownGearAllowed && selectedTeammates.some((member) => !member.isMinor) ? (
                 <div className="mt-4">
                   <div className="mb-2 text-xs font-bold uppercase tracking-[0.18em] text-muted">Teammates bringing their own weapon</div>
                   <div className="flex flex-wrap gap-2">
@@ -3299,6 +3512,7 @@ export function ReservationCalendarPage() {
                     players < effectiveMinPlayers ||
                     !canProceed ||
                     (selectionMode === 'package' && !selectedPackage) ||
+                    ownAllMissing.length > 0 ||
                     hasInsufficientEquipmentStock
                   }
                   onClick={() => {

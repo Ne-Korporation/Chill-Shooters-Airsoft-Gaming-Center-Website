@@ -24,6 +24,7 @@ type ActivityItem = {
 type DashboardState = {
   totalReservations: number
   upcomingReservations: number
+  // Bookings still ahead that aren't confirmed yet (waiting for payment or review).
   pendingPayments: number
   waiverStatus: string
   statusLabel: string
@@ -145,14 +146,17 @@ export function DashboardHomePage() {
           || matchesUserRecord(waiver?.accountId, user.id),
         )
 
-        const upcomingReservations = myReservations.filter((reservation) => {
+        // Same split as My Reservations: games still ahead are Upcoming once confirmed, Pending while
+        // they wait for payment or review. Past games count in neither.
+        const todayISO = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(new Date())
+        const ahead = myReservations.filter((reservation) => String(reservation?.reservationDate || reservation?.date || '') >= todayISO)
+        const upcomingReservations = ahead.filter((reservation) => {
           const status = normalize(reservation?.reservationStatus)
           return status === 'confirmed' || status === 'approved'
         }).length
-
-        const pendingPayments = myPayments.filter((payment) => {
-          const status = normalize(payment?.paymentStatus || payment?.status)
-          return status === 'pending' || status === 'submitted' || status === 'review'
+        const pendingPayments = ahead.filter((reservation) => {
+          const status = normalize(reservation?.reservationStatus)
+          return status === 'pending' || status === 'needs review'
         }).length
 
         const waiverEntry = myWaivers
@@ -161,7 +165,6 @@ export function DashboardHomePage() {
         const waiverStatus = waiverEntry ? formatStatus(waiverEntry.status) : 'Not submitted'
 
         // The soonest confirmed booking from today on (game dates are YYYY-MM-DD, Manila time).
-        const todayISO = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(new Date())
         const slotOrder = ['morning', 'afternoon', 'evening']
         const upcomingBookings = myReservations
           .filter((reservation) => {
@@ -224,7 +227,7 @@ export function DashboardHomePage() {
           upcomingReservations,
           pendingPayments,
           waiverStatus,
-          statusLabel: pendingPayments > 0 ? 'You have payments to follow up on' : 'You are all set for your next session',
+          statusLabel: pendingPayments > 0 ? 'You have bookings waiting for payment' : 'You are all set for your next session',
           statusTone: pendingPayments > 0 ? 'danger' : 'success',
           upcoming: upcomingBookings.map((reservation, index) => ({
             id: String(reservation.id || reservation._id || index),
@@ -299,9 +302,9 @@ export function DashboardHomePage() {
             <StatTile compact label="Upcoming" value={dashboard.upcomingReservations} hint="Confirmed" loading={loading} />
             <StatTile
               compact
-              label="To pay"
+              label="Pending"
               value={dashboard.pendingPayments}
-              hint={dashboard.pendingPayments > 0 ? 'Follow up' : 'Settled'}
+              hint={dashboard.pendingPayments > 0 ? 'Not confirmed' : 'None'}
               attention={dashboard.pendingPayments > 0}
               loading={loading}
             />
