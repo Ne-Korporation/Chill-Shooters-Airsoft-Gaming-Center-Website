@@ -52,6 +52,26 @@ export async function ensureGameplayForReservation(db, reservation) {
     message: `${game.Package !== '—' ? game.Package : 'A game'} on ${game.Schedule || 'an upcoming date'}${game.Location ? ` at ${game.Location}` : ''}${players}.`,
     linkedResourceId: id,
   })
+  // Players bringing their own weapons: marshals chronograph each one before play.
+  const ownWeaponIds = (reservation?.selectedOwnWeaponIds || []).map(String).filter(Boolean)
+  const bringers = new Set([
+    ...(reservation?.ownWeaponBringerIds || []).map(String),
+    ...(reservation?.ownGearPlayerIds || []).map(String),
+  ].filter(Boolean))
+  const picked = ownWeaponIds.length
+    ? await db.collection('weapons').find({ id: { $in: ownWeaponIds } }, { projection: { name: 1, submittedBy: 1 } }).toArray()
+    : []
+  for (const weapon of picked) if (weapon.submittedBy) bringers.add(String(weapon.submittedBy))
+  if (bringers.size > 0) {
+    const names = picked.map((w) => w.name).filter(Boolean)
+    await notifyRole(db, {
+      role: 'marshal',
+      type: 'own_weapons_incoming',
+      title: `Player weapons to check: ${game.Schedule || 'upcoming game'}`,
+      message: `${bringers.size} player${bringers.size === 1 ? ' is' : 's are'} bringing their own weapon to ${game.Location || 'the field'} for ${game.Schedule || 'an upcoming game'}${names.length ? ` (${names.join(', ')})` : ''}. Chronograph each one before play.`,
+      linkedResourceId: id,
+    })
+  }
   return { gameplay: await db.collection('gameplay').findOne({ _id: insert.insertedId }), created: true }
 }
 

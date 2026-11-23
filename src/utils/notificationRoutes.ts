@@ -15,6 +15,15 @@ export function resolveNotificationRoute(notification: NotificationItem, role?: 
   if (notification.userId === 'broadcast' && !isStaffRole(currentRole)) return null
 
   if (notificationType.startsWith('split_payment_')) return '/app/my-reservations#split-payments'
+  // Game invites to answer, and spots a teammate left open.
+  if (notificationType.startsWith('team_')) return '/app/my-reservations#invitations'
+  // Money to collect at the counter, and players' own weapons coming to a game.
+  if (notificationType === 'onsite_payment_due') {
+    if (currentRole === 'admin') return '/app/admin/reservations'
+    if (currentRole === 'registrar') return '/app/registrar/reservations'
+    return '/app/my-reservations'
+  }
+  if (notificationType === 'own_weapons_incoming') return isStaffRole(currentRole) ? '/app/games' : '/app'
 
   // A message from a player opens the admin Inbox.
   if (notificationType === 'contact_message') return currentRole === 'admin' ? '/app/admin/inbox' : null

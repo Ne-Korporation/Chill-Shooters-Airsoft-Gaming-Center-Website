@@ -8,6 +8,7 @@ import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { apiDelete, apiGet, apiPost } from '../../utils/apiClient'
 import { SPLIT_PAYMENTS_CHANGED_EVENT, SplitPaymentsSection } from '../payments/SplitPaymentPage'
+import { InvitationsSection } from './InvitationsSection'
 import { useAuth } from '../../context/AuthContext'
 import { isVerifiedPayment, type ReceiptPayment } from '../../utils/receiptPrint'
 import { ReceiptModal } from '../../components/payments/ReceiptModal'
@@ -59,6 +60,9 @@ type ReservationDoc = ReservationDetails & {
   cancellationReason?: string
   pricingBreakdown?: Array<{ label?: string; amount?: number }>
   sentBack?: { note: string; atISO: string }
+  // Team invites (see server/utils/teamInvites.js); the latest one per player counts.
+  invites?: Array<{ playerId: string; status: string; reason?: string; answeredAtISO?: string }>
+  teamMembers?: Array<{ id: string }>
 }
 
 type PaymentDoc = ReceiptPayment & { reservationId?: string }
@@ -113,6 +117,25 @@ function statusTone(status: string) {
   if (['needs review', 'rejected', 'declined'].includes(status)) return 'bg-danger/15 text-danger'
   if (status === 'pending') return 'bg-accent/15 text-accent'
   return 'bg-[rgba(var(--text),0.08)] text-muted'
+}
+
+// The player's latest invite on a booking someone else made, if any.
+function myInviteOf(reservation: ReservationDoc, userId: string) {
+  const mine = (reservation.invites || []).filter((invite) => String(invite.playerId) === userId)
+  return mine[mine.length - 1] || null
+}
+
+// Invites the player turned down, didn't answer in time, or that closed because they were already
+// playing in that slot: kept in the Archive as rejected games.
+const REJECTED_INVITE_LABEL: Record<string, string> = {
+  declined: 'Declined',
+  expired: 'Void: not answered',
+  expired_unpaid: 'Void: not paid',
+  unavailable: 'Auto-declined: slot taken',
+}
+function rejectedLabel(invite: { status: string; reason?: string } | null) {
+  if (!invite || !['declined', 'expired', 'unavailable'].includes(invite.status)) return ''
+  return REJECTED_INVITE_LABEL[invite.reason || invite.status] || REJECTED_INVITE_LABEL[invite.status] || 'Rejected'
 }
 
 function formatPHP(value?: number) {
@@ -305,14 +328,30 @@ export function MyReservationsPage() {
     return () => window.clearInterval(timer)
   }, [draft, user?.id])
 
+  const me = String(user?.id || '')
+  // Games the player turned down (or whose invite closed): only shown in the Archive.
+  const rejectedOf = useCallback((reservation: ReservationDoc) => (
+    String(reservation.userId || '') === me ? '' : rejectedLabel(myInviteOf(reservation, me))
+  ), [me])
+  // An invite still waiting for an answer is shown under Game invites, not as one of the player's games.
+  const awaitingAnswer = useCallback((reservation: ReservationDoc) => (
+    String(reservation.userId || '') !== me && myInviteOf(reservation, me)?.status === 'pending'
+  ), [me])
   const sorted = useMemo(
     // Cancelled bookings are no longer listed (there is no cancellation policy).
-    () => reservations.filter((reservation) => statusOf(reservation) !== 'cancelled').sort((a, b) => dateOf(b).localeCompare(dateOf(a))),
-    [reservations],
+    () => reservations
+      .filter((reservation) => statusOf(reservation) !== 'cancelled' && !rejectedOf(reservation) && !awaitingAnswer(reservation))
+      .sort((a, b) => dateOf(b).localeCompare(dateOf(a))),
+    [reservations, rejectedOf, awaitingAnswer],
+  )
+  const rejected = useMemo(
+    () => reservations.filter((reservation) => rejectedOf(reservation)).sort((a, b) => dateOf(b).localeCompare(dateOf(a))),
+    [reservations, rejectedOf],
   )
 
-  // Upcoming games first (soonest on top); past games in their own tab (most recent on top).
-  const [tab, setTab] = useState<'upcoming' | 'pending' | 'past'>('upcoming')
+  // Upcoming games first (soonest on top); played and rejected games in the Archive (most recent on top).
+  const [tab, setTab] = useState<'upcoming' | 'pending' | 'archive'>('upcoming')
+  const [archiveFilter, setArchiveFilter] = useState<'all' | 'confirmed' | 'rejected'>('all')
   // Games still ahead, soonest first; split into confirmed (Upcoming) and not yet confirmed (Pending:
   // waiting for payment or for review).
   const ahead = useMemo(
@@ -323,8 +362,14 @@ export function MyReservationsPage() {
   const pending = useMemo(() => ahead.filter(isPending), [ahead])
   const upcoming = useMemo(() => ahead.filter((item) => !isPending(item)), [ahead])
   const past = useMemo(() => sorted.filter((item) => dateOf(item) && dateOf(item) < today), [sorted, today])
-  const shown = tab === 'upcoming' ? upcoming : tab === 'pending' ? pending : past
-  const { page, setPage, pageCount, pageItems, total } = usePagination(shown, 10, tab)
+  // Archive: games already played (confirmed) and games the player rejected, newest first.
+  const archive = useMemo(
+    () => [...past, ...rejected].sort((a, b) => dateOf(b).localeCompare(dateOf(a))),
+    [past, rejected],
+  )
+  const archiveShown = archiveFilter === 'confirmed' ? past : archiveFilter === 'rejected' ? rejected : archive
+  const shown = tab === 'upcoming' ? upcoming : tab === 'pending' ? pending : archiveShown
+  const { page, setPage, pageCount, pageItems, total } = usePagination(shown, 10, `${tab}|${archiveFilter}`)
 
   const startEditing = (reservation: ReservationDoc) => {
     setEditingId(reservationIdOf(reservation))
@@ -376,7 +421,7 @@ export function MyReservationsPage() {
       <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
           <h1 className="text-3xl font-bold">My Reservations</h1>
-          <p className="mt-1 text-sm text-muted">Your upcoming and past games.</p>
+          <p className="mt-1 text-sm text-muted">Your upcoming games, invites, and archive.</p>
           <ul className="mt-3 flex flex-wrap gap-2 text-xs">
             <li className="inline-flex items-center gap-1.5 rounded-full bg-[rgba(var(--text),0.06)] px-3 py-1.5">
               <FiRefreshCw className="shrink-0 text-accent" />
@@ -393,7 +438,8 @@ export function MyReservationsPage() {
         </Button>
       </div>
 
-      {/* Split payments to pay or wait on, above the list (shown only while there is one). */}
+      {/* Invites to answer and open spots to fill, then split payments (each shown only while there is one). */}
+      <InvitationsSection />
       <SplitPaymentsSection />
 
       <FilterTabs
@@ -403,9 +449,22 @@ export function MyReservationsPage() {
         options={[
           { value: 'upcoming', label: 'Upcoming', count: upcoming.length },
           { value: 'pending', label: 'Pending', count: pending.length },
-          { value: 'past', label: 'Past', count: past.length },
+          { value: 'archive', label: 'Archive', count: archive.length },
         ]}
       />
+
+      {tab === 'archive' ? (
+        <FilterTabs
+          ariaLabel="Filter the archive"
+          value={archiveFilter}
+          onChange={setArchiveFilter}
+          options={[
+            { value: 'all', label: 'All', count: archive.length },
+            { value: 'confirmed', label: 'Confirmed', count: past.length },
+            { value: 'rejected', label: 'Rejected', count: rejected.length },
+          ]}
+        />
+      ) : null}
 
       {draft && draftSecondsLeft > 0 ? (
         <Card className="flex flex-col gap-3 border-accent/40 p-4 sm:flex-row sm:items-center sm:justify-between">
@@ -446,7 +505,9 @@ export function MyReservationsPage() {
         <Card className="p-6 text-center text-sm text-muted">
           {tab === 'upcoming'
             ? (pending.length ? `No confirmed games yet. ${pending.length} booking${pending.length === 1 ? ' is' : 's are'} pending.` : 'No upcoming games.')
-            : tab === 'pending' ? 'Nothing pending. Bookings waiting for payment or review show here.' : 'No past games yet.'}
+            : tab === 'pending' ? 'Nothing pending. Bookings waiting for payment or review show here.'
+              : archiveFilter === 'rejected' ? 'No rejected games. Invites you decline, or that expire, show here.'
+                : archiveFilter === 'confirmed' ? 'No played games yet.' : 'Nothing in the archive yet.'}
           {tab === 'upcoming' && !pending.length ? (
             <div className="mt-3"><Button variant="primary" onClick={() => navigate('/app/reservations')}><FiCalendar /> Book a game</Button></div>
           ) : null}
@@ -456,8 +517,9 @@ export function MyReservationsPage() {
       {pageItems.map((reservation) => {
         const id = reservationIdOf(reservation)
         const date = dateOf(reservation)
-        const status = statusOf(reservation)
-        const statusLabel = reservationStatusLabel(reservation)
+        const rejectedAs = rejectedOf(reservation)
+        const status = rejectedAs ? 'rejected' : statusOf(reservation)
+        const statusLabel = rejectedAs || reservationStatusLabel(reservation)
         const daysLeft = date ? daysBetweenISO(today, date) : -1
         const statusAllows = RESCHEDULABLE_STATUSES.includes(status)
         // Staff sent it back: the player can always pick a new date, whatever the cutoff.
@@ -552,9 +614,9 @@ export function MyReservationsPage() {
               ) : null}
               <ReservationIdTag id={id} className="ml-auto text-[11px] text-muted" />
             </div>
-            {tab !== 'past' && statusAllows && !sentBack && alreadyRescheduled && daysLeft >= 0 ? (
+            {tab !== 'archive' && statusAllows && !sentBack && alreadyRescheduled && daysLeft >= 0 ? (
               <div className="mt-2 text-xs text-muted">This booking was already rescheduled once, so it can't be moved again.</div>
-            ) : tab !== 'past' && statusAllows && !sentBack && daysLeft >= 0 && daysLeft < RESCHEDULE_CUTOFF_DAYS ? (
+            ) : tab !== 'archive' && statusAllows && !sentBack && daysLeft >= 0 && daysLeft < RESCHEDULE_CUTOFF_DAYS ? (
               <div className="mt-2 text-xs text-muted">Rescheduling closed on {formatShortDate(cutoffDate)} ({RESCHEDULE_CUTOFF_DAYS} days before the game).</div>
             ) : null}
 

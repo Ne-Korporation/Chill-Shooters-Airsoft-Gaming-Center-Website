@@ -187,8 +187,8 @@ router.get('/players/:id/stats', requireAuth, async (req, res) => {
     const played = new Set(playedGames.map((game) => String(game.reservationId)))
 
     const [weapons, equipment] = await Promise.all([
-      db.collection('weapons').find({ submittedBy: id, approvalStatus: { $ne: 'rejected' } }, { projection: { id: 1, name: 1, category: 1 } }).toArray(),
-      db.collection('equipments').find({ submittedBy: id, approvalStatus: { $ne: 'rejected' } }, { projection: { id: 1, name: 1, category: 1 } }).toArray(),
+      db.collection('weapons').find({ submittedBy: id }, { projection: { id: 1, name: 1, category: 1 } }).toArray(),
+      db.collection('equipments').find({ submittedBy: id }, { projection: { id: 1, name: 1, category: 1 } }).toArray(),
     ])
 
     return res.json({
@@ -1089,7 +1089,7 @@ router.get('/reservations/:id/game-items', requireAuth, requireRole(...STAFF), a
     }
 
     // Players' own guns and gear (what the booking picked from their registered gear, plus the
-    // approved guns of anyone who said they'd bring their own), each bound to its owner.
+    // guns of anyone who said they'd bring their own), each bound to its owner.
     const bringers = new Set((reservation.ownWeaponBringerIds || []).map(String))
     const pickedOwn = {
       weapons: (reservation.selectedOwnWeaponIds || []).map(String),
@@ -1098,13 +1098,13 @@ router.get('/reservations/:id/game-items', requireAuth, requireRole(...STAFF), a
     for (const collection of RENTAL_COLLECTIONS) {
       if (!memberIds.length) break
       const docs = await db.collection(collection).find(
-        { source: 'player', submittedBy: { $in: memberIds }, approvalStatus: { $ne: 'rejected' } },
-        { projection: { id: 1, name: 1, submittedBy: 1, approvalStatus: 1 } },
+        { source: 'player', submittedBy: { $in: memberIds } },
+        { projection: { id: 1, name: 1, submittedBy: 1 } },
       ).toArray()
       for (const doc of docs) {
         const itemId = String(doc.id || '')
         const owner = String(doc.submittedBy)
-        const brought = pickedOwn[collection].includes(itemId) || (collection === 'weapons' && bringers.has(owner) && doc.approvalStatus === 'approved')
+        const brought = pickedOwn[collection].includes(itemId) || (collection === 'weapons' && bringers.has(owner))
         if (!itemId || !brought || seen.has(itemId)) continue
         seen.add(itemId)
         items.push({
@@ -1158,16 +1158,15 @@ router.get('/reservations/:id/own-gear', requireAuth, requireRole(...STAFF), asy
     for (const collection of ['weapons', 'equipments']) {
       const docs = memberIds.length
         ? await db.collection(collection).find(
-          { source: 'player', submittedBy: { $in: memberIds }, approvalStatus: { $ne: 'rejected' } },
-          { projection: { id: 1, name: 1, category: 1, submittedBy: 1, approvalStatus: 1 } },
+          { source: 'player', submittedBy: { $in: memberIds } },
+          { projection: { id: 1, name: 1, category: 1, submittedBy: 1 } },
         ).toArray()
         : []
       for (const doc of docs) {
         const owner = String(doc.submittedBy)
         const picked = pickedIds[collection].includes(String(doc.id))
-        // A gun counts when the booking picked it, or when its owner said they'd bring their own
-        // gun and it is approved.
-        const brought = picked || (collection === 'weapons' && bringers.has(owner) && doc.approvalStatus === 'approved')
+        // A gun counts when the booking picked it, or when its owner said they'd bring their own gun.
+        const brought = picked || (collection === 'weapons' && bringers.has(owner))
         if (!brought) continue
         data.push({ playerId: owner, collection, id: String(doc.id), name: doc.name || 'Own item', category: String(doc.category || '').toLowerCase() })
       }

@@ -1,9 +1,8 @@
 import React from 'react'
 import { confirmDialog } from '../../components/ui/ConfirmDialog'
-import { FiCheck, FiEdit2, FiPlus, FiTrash2, FiX } from 'react-icons/fi'
+import { FiEdit2, FiPlus, FiTrash2 } from 'react-icons/fi'
 import toast from 'react-hot-toast'
 import { ActionGroup, Button } from '../../components/ui/Button'
-import { FilterTabs } from '../../components/ui/FilterTabs'
 import { BRANCHES, branchLabel } from '../../utils/branches'
 import { Card } from '../../components/ui/Card'
 import { Input } from '../../components/ui/Input'
@@ -79,18 +78,17 @@ export function AdminEquipmentPage() {
   const [inventory, setInventory] = React.useState<InventoryItem[]>([])
   const [loading, setLoading] = React.useState(true)
   const [saving, setSaving] = React.useState(false)
-  const [sourceFilter, setSourceFilter] = React.useState<'business' | 'player'>('business')
   const [form, setForm] = React.useState(emptyForm())
   const [selectedItemId, setSelectedItemId] = React.useState<string | null>(null)
   // The add/edit form opens in a pop-up.
   const [formOpen, setFormOpen] = React.useState(false)
-  const [rejectionTargetId, setRejectionTargetId] = React.useState<string | null>(null)
-  const [rejectionReason, setRejectionReason] = React.useState('')
 
   const refresh = React.useCallback(async () => {
     setLoading(true)
     try {
-      const equipmentDocs = await apiGetAll<any>('equipments')
+      // Players' own gear isn't center inventory: it's only noted on the player's profile and
+      // picked when booking, so it's left out here.
+      const equipmentDocs = (await apiGetAll<any>('equipments')).filter((d: any) => !(d.source === 'player' || (!d.source && d.submittedBy)))
 
       const equipmentItems = equipmentDocs.map((d: any) => ({
         id: d.id ?? (d._id ? String(d._id) : undefined),
@@ -108,9 +106,7 @@ export function AdminEquipmentPage() {
         description: d.description || d.note || '',
         createdAtISO: d.createdAtISO || null,
         submittedBy: d.submittedBy,
-        source: (d.source || (d.submittedBy ? 'player' : 'business')) as 'business' | 'player',
-        approvalStatus: (d.approvalStatus || (d.source === 'player' || d.submittedBy ? 'pending' : 'approved')) as 'pending' | 'approved' | 'rejected',
-        rejectionReason: d.rejectionReason || '',
+        source: 'business' as const,
         partnerId: d.partnerId || '',
         locationId: d.locationId || '',
       }))
@@ -132,26 +128,21 @@ export function AdminEquipmentPage() {
   const filtered = React.useMemo(() => {
     const term = search.trim().toLowerCase()
     return inventory.filter((item) => {
-      if (item.source === 'player' && item.approvalStatus === 'rejected') return false
       const matchesCategory = activeCategory === 'all' ? true : item.category === activeCategory
       const matchesStatus = status === 'all' ? true : item.status === status
-      const matchesSource = item.source === sourceFilter
-      const matchesBranch = branchFilter === 'all' || item.source === 'player' || (item.locationId || 'none') === branchFilter
+      const matchesBranch = branchFilter === 'all' || (item.locationId || 'none') === branchFilter
       const matchesSearch = !term || [item.id, item.name, item.model, item.description].some((value) => String(value || '').toLowerCase().includes(term))
-      return matchesCategory && matchesStatus && matchesSource && matchesBranch && matchesSearch
+      return matchesCategory && matchesStatus && matchesBranch && matchesSearch
     })
-  }, [inventory, activeCategory, status, sourceFilter, branchFilter, search])
-  const { page, setPage, pageCount, pageItems, total } = usePagination(filtered, undefined, `${activeCategory}|${status}|${sourceFilter}|${search}`)
+  }, [inventory, activeCategory, status, branchFilter, search])
+  const { page, setPage, pageCount, pageItems, total } = usePagination(filtered, undefined, `${activeCategory}|${status}|${branchFilter}|${search}`)
 
-  const rentalPieces = inventory.filter((item) => item.source !== 'player')
-  const totalInStock = rentalPieces.length
+  const totalInStock = inventory.length
   // BB ammo below its warning level (center stock only).
-  const lowAmmo = inventory.filter((item) => item.source !== 'player' && isLowOnAmmo(item))
+  const lowAmmo = inventory.filter((item) => isLowOnAmmo(item))
   const models = summarizeModels(inventory)
   const maintenanceCount = inventory.filter((item) => item.status === 'maintenance').length
   const rentedCount = inventory.filter((item) => item.status === 'rented').length
-  const pendingPlayerItems = inventory.filter((item) => item.source === 'player' && item.approvalStatus === 'pending')
-  const pendingPlayerItemsCount = pendingPlayerItems.length
 
   // Each physical item is its own record: adding 5 masks creates Mask #1 … #5 with their own IDs.
   const handleCreate = async () => {
@@ -264,7 +255,7 @@ export function AdminEquipmentPage() {
   // Tick boxes appear only after "Select items"; "Update" opens the bulk changes pop-up.
   const [selecting, setSelecting] = React.useState(false)
   const [bulkOpen, setBulkOpen] = React.useState(false)
-  React.useEffect(() => setSelectedIds([]), [activeCategory, status, sourceFilter, search])
+  React.useEffect(() => setSelectedIds([]), [activeCategory, status, branchFilter, search])
   const stopSelecting = () => {
     setSelecting(false)
     setSelectedIds([])
@@ -295,45 +286,6 @@ export function AdminEquipmentPage() {
     else toast.success(`Removed ${selectedIds.length} item${selectedIds.length === 1 ? '' : 's'}.`)
     stopSelecting()
     await refresh()
-  }
-
-  const handleApprovePlayerItem = async (id: string) => {
-    try {
-      await apiPut<any>(`/api/equipments/${encodeURIComponent(id)}`, {
-        approvalStatus: 'approved',
-        status: 'available',
-        updatedAtISO: new Date().toISOString(),
-      })
-      toast.success('Player item approved')
-      await refresh()
-    } catch (e: any) {
-      toast.error(String(e?.message || e))
-    }
-  }
-
-  const openRejectDialog = (id: string) => {
-    setRejectionTargetId(id)
-    setRejectionReason('')
-  }
-
-  const handleRejectPlayerItem = async () => {
-    if (!rejectionTargetId || !rejectionReason.trim()) {
-      toast.error('Please enter a rejection reason')
-      return
-    }
-    try {
-      await apiPut<any>(`/api/equipments/${encodeURIComponent(rejectionTargetId)}`, {
-        approvalStatus: 'rejected',
-        rejectionReason: rejectionReason.trim(),
-        updatedAtISO: new Date().toISOString(),
-      })
-      toast.success('Player item rejected')
-      setRejectionTargetId(null)
-      setRejectionReason('')
-      await refresh()
-    } catch (e: any) {
-      toast.error(String(e?.message || e))
-    }
   }
 
   const handleUpdate = async () => {
@@ -435,21 +387,12 @@ export function AdminEquipmentPage() {
           <div className="mt-0.5 text-base font-bold text-danger">{rentedCount}</div>
         </Card>
         <Card className="rounded-xl px-3 py-2 md:px-3 md:py-2">
-          <div className="truncate text-[10px] uppercase tracking-wider text-muted">Pending player items</div>
-          <div className="mt-0.5 text-base font-bold text-success">{pendingPlayerItemsCount}</div>
+          <div className="truncate text-[10px] uppercase tracking-wider text-muted">In maintenance</div>
+          <div className="mt-0.5 text-base font-bold text-warning">{maintenanceCount}</div>
         </Card>
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <FilterTabs
-          ariaLabel="Show rental gear or players' gear"
-          value={sourceFilter}
-          onChange={setSourceFilter}
-          options={[
-            { value: 'business', label: 'Rental gear' },
-            { value: 'player', label: "Players' gear", ...(pendingPlayerItemsCount > 0 ? { count: pendingPlayerItemsCount } : {}) },
-          ]}
-        />
+      <div className="flex flex-wrap items-center justify-end gap-3">
         <InventoryToolbar
           selecting={selecting}
           selectedCount={selectedIds.length}
@@ -510,7 +453,6 @@ export function AdminEquipmentPage() {
               </select>
             </div>
 
-            {sourceFilter === 'business' ? (
             <div>
               <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-muted">Branch</div>
               <select
@@ -523,43 +465,10 @@ export function AdminEquipmentPage() {
                 <option value="none">Unassigned</option>
               </select>
             </div>
-            ) : null}
           </div>
         </div>
 
-        {sourceFilter === 'player' && pendingPlayerItemsCount > 0 ? (
-          <div className="mt-4 rounded-2xl border border-accent/20 bg-accent/10 p-4">
-            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-              <div>
-                <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-accent">Pending player submissions</div>
-                <div className="mt-1 text-sm text-text">These items are waiting for your approval before they are treated as active inventory.</div>
-              </div>
-              <div className="rounded-full border border-accent/20 bg-background/50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-accent">
-                {pendingPlayerItemsCount} awaiting review
-              </div>
-            </div>
-            <div className="mt-3 grid gap-2 md:grid-cols-2">
-              {pendingPlayerItems.map((item) => (
-                <div key={item.id} className="rounded-xl border border-white/10 bg-background/50 p-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="min-w-0 text-sm font-semibold">{item.name}</div>
-                    <ActionGroup>
-                      <Button size="xs" variant="success-soft" onClick={(e) => { e.stopPropagation(); handleApprovePlayerItem(item.id) }}>
-                        <FiCheck /> Approve
-                      </Button>
-                      <Button size="xs" variant="danger-soft" onClick={(e) => { e.stopPropagation(); openRejectDialog(item.id) }}>
-                        <FiX /> Reject
-                      </Button>
-                    </ActionGroup>
-                  </div>
-                  <div className="mt-1 text-xs text-muted">{item.description || item.note}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : null}
-
-        {sourceFilter === 'business' ? <ModelSummaryStrip models={models} unit="piece" /> : null}
+        <ModelSummaryStrip models={models} unit="piece" />
 
         {bulkOpen ? (
           <BulkUpdateModal
@@ -602,25 +511,16 @@ export function AdminEquipmentPage() {
                       <span className="rounded-full bg-white/10 px-2 py-1 text-[10px] uppercase tracking-[0.15em] text-muted">
                         {item.category}
                       </span>
-                      {item.source === 'player' ? (
-                        <span className="rounded-full border border-accent/20 bg-accent/10 px-2 py-1 text-[10px] uppercase tracking-[0.15em] text-accent">
-                          Player owned
-                        </span>
-                      ) : item.category !== 'ammo' ? (
+                      {item.category !== 'ammo' ? (
                         <span className={`rounded-full border px-2 py-1 text-[10px] uppercase tracking-[0.15em] ${item.locationId ? 'border-white/10 bg-white/5 text-muted' : 'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400'}`}>
                           {branchLabel(item.locationId)}
-                        </span>
-                      ) : null}
-                      {item.source === 'player' && item.approvalStatus === 'pending' ? (
-                        <span className="rounded-full border border-warning/20 bg-warning/10 px-2 py-1 text-[10px] uppercase tracking-[0.15em] text-warning">
-                          Pending review
                         </span>
                       ) : null}
                     </div>
                     <div className="mt-1 text-xs text-muted md:truncate">{item.description || item.note}</div>
                   </div>
                   <div data-label="Piece" className="col-span-1 text-right text-sm font-semibold">
-                    {isAmmo(item) ? `${item.stockGrams.toLocaleString()} g` : item.source === 'player' || !item.unitNumber ? '—' : `#${item.unitNumber}`}
+                    {isAmmo(item) ? `${item.stockGrams.toLocaleString()} g` : !item.unitNumber ? '—' : `#${item.unitNumber}`}
                     {isLowOnAmmo(item) ? <span className="mt-0.5 block text-[10px] font-semibold uppercase text-danger">Low stock</span> : null}
                   </div>
                   <div data-label="Price" className="col-span-1 text-right text-sm text-accent">₱{item.price}{isAmmo(item) ? <span className="block text-[10px] text-muted">per refill</span> : null}</div>
@@ -632,16 +532,6 @@ export function AdminEquipmentPage() {
                       <Button size="xs" variant="ghost" onClick={(e) => { e.stopPropagation(); handleSelect(item) }}>
                         <FiEdit2 /> Edit
                       </Button>
-                      {item.source === 'player' && item.approvalStatus === 'pending' ? (
-                        <>
-                          <Button size="xs" variant="success-soft" onClick={(e) => { e.stopPropagation(); handleApprovePlayerItem(item.id) }}>
-                            <FiCheck /> Approve
-                          </Button>
-                          <Button size="xs" variant="danger-soft" onClick={(e) => { e.stopPropagation(); openRejectDialog(item.id) }}>
-                            <FiX /> Reject
-                          </Button>
-                        </>
-                      ) : null}
                       <Button size="xs" variant="danger-soft" onClick={(e) => { e.stopPropagation(); handleRemove(item.id) }}>
                         <FiTrash2 /> Remove
                       </Button>
@@ -857,26 +747,6 @@ export function AdminEquipmentPage() {
           </Card>
         </div>
       </Card>
-      {rejectionTargetId ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-3 sm:p-4" role="dialog" aria-modal="true" aria-labelledby="equipment-rejection-title">
-          <div className="max-h-[90dvh] overflow-y-auto overscroll-contain w-full max-w-lg rounded-2xl border border-white/10 bg-background p-5 shadow-2xl">
-            <div id="equipment-rejection-title" className="text-lg font-bold">Reject player gear</div>
-            <p className="mt-1 text-sm text-muted">Add a comment explaining why this submission was rejected.</p>
-            <textarea
-              autoFocus
-              value={rejectionReason}
-              onChange={(event) => setRejectionReason(event.target.value)}
-              placeholder="Reason for rejection"
-              rows={4}
-              className="mt-4 w-full resize-y rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-text outline-none focus:border-danger/50"
-            />
-            <div className="mt-4 flex justify-end gap-2">
-              <Button variant="ghost" onClick={() => setRejectionTargetId(null)}>Cancel</Button>
-              <Button onClick={handleRejectPlayerItem} disabled={!rejectionReason.trim()}>Reject gear</Button>
-            </div>
-          </div>
-        </div>
-      ) : null}
     </div>
   )
 }

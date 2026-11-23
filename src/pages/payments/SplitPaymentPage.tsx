@@ -255,7 +255,7 @@ export function SplitPaymentsSection() {
       <h2 className="flex items-center gap-2 text-base font-bold">
         {owed ? 'Your share is due' : 'Team payments in progress'}
         {owed ? <span className="grid h-5 min-w-[1.25rem] place-items-center rounded-full bg-danger px-1 text-[11px] font-bold leading-none text-white">{owed}</span> : null}
-        <span className="text-xs font-normal text-muted">· Teams have 24 hours to pay, or the slot is released.</span>
+        <span className="text-xs font-normal text-muted">· Teammates have 24 hours from their invite to pay, or their invite is void.</span>
       </h2>
 
       {/* One compact card per split payment; View opens everything (players, paying, progress). */}
@@ -387,7 +387,9 @@ function SplitPaymentDetails({ item, onDeclined }: { item: SplitPaymentItem; onD
   const decline = async () => {
     const ok = await confirmDialog({
       title: 'Decline this game?',
-      message: `You'll be taken off ${item.captainName}'s booking for ${item.reservation.reservationDate} (${item.reservation.reservationTime}). The booking drops to ${Math.max(1, item.reservation.numberOfPlayers - 1)} players and is re-priced, and the other shares are re-split. ${item.captainName} will be notified. This can't be undone; they would have to add you again.`,
+      message: isPrivateSession(item.reservation.sessionType)
+        ? `You'll be taken off ${item.captainName}'s team for ${item.reservation.reservationDate} (${item.reservation.reservationTime}). Your spot stays on the booking: ${item.captainName} will be told to fill it or pay for it. They would have to invite you again.`
+        : `You'll be taken off ${item.captainName}'s booking for ${item.reservation.reservationDate} (${item.reservation.reservationTime}). The booking drops to ${Math.max(1, item.reservation.numberOfPlayers - 1)} players and is re-priced, and the other shares are re-split. ${item.captainName} will be notified. They would have to add you again.`,
       confirmLabel: 'Decline',
       danger: true,
     })
@@ -491,7 +493,7 @@ function SplitPaymentDetails({ item, onDeclined }: { item: SplitPaymentItem; onD
             <div className="mt-4 flex flex-col gap-2 rounded-2xl border border-danger/20 bg-danger/5 p-4 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <div className="text-sm font-semibold">Can't make it?</div>
-                <div className="text-xs text-muted">Decline before you pay and you're taken off the booking. The others' shares are re-split.</div>
+                <div className="text-xs text-muted">Decline before you pay and you're taken off the booking. {item.captainName} is told right away.</div>
               </div>
               <Button size="sm" variant="danger-soft" disabled={declining} onClick={decline}>
                 <FiX /> {declining ? 'Declining…' : 'Decline'}

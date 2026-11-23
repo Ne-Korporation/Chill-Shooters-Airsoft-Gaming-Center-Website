@@ -3,17 +3,17 @@ import { ObjectId } from 'mongodb'
 import { getDb, startDbSession } from '../db/mongo.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
 import { getGcashAmountDue, getPaymentProgress, getSplitPayerIds } from '../utils/paymentRules.js'
+import { expireOverdueReservations, getReservationPayments } from '../utils/paymentProgress.js'
+import { loadoutOf } from '../utils/splitShares.js'
 import {
-  expireOverdueReservations,
-  getReservationPayments,
-  notifyUser,
-  syncReservationPaymentState,
-} from '../utils/paymentProgress.js'
-import { calculateBookingPrice } from '../utils/bookingPricing.js'
-import { getBookingInventoryRequirements, getHeldQuantities, holdBookingInventory, releaseBookingInventory } from '../utils/inventoryHolds.js'
-import { syncPublicGrounds } from '../utils/bookingSlots.js'
-import { teamWithout } from '../utils/teamDecline.js'
-import { loadoutOf, withSplitShares } from '../utils/splitShares.js'
+  ACTIVE_BOOKING_STATUSES,
+  acceptInvite,
+  coverOpenSlot,
+  declineInvite,
+  fillOpenSlot,
+  latestInvite,
+} from '../utils/teamInvites.js'
+import { manilaDateISO } from '../utils/reminders.js'
 
 const router = express.Router()
 const OPEN_STATUSES = ['pending', 'needs review', 'confirmed']
@@ -67,6 +67,8 @@ router.get('/split-payments/mine', requireAuth, requireRole('user'), async (req,
       const payments = await getReservationPayments(db, reservation)
       const progress = getPaymentProgress(reservation, payments)
       const isCaptain = String(reservation.userId) === me
+      // An invite still waiting for an answer is shown under Game invites; the share comes after accepting.
+      if (!isCaptain && latestInvite(reservation, me)?.status === 'pending') continue
       const iHavePaid = progress.paidPayerIds.includes(me)
       if (progress.state === 'finalized' || (!isCaptain && iHavePaid)) continue
 
@@ -143,96 +145,112 @@ async function findById(db, collection, id) {
   return ObjectId.isValid(key) ? db.collection(collection).findOne({ _id: new ObjectId(key) }) : null
 }
 
-// POST /api/reservations/:id/decline — an invited player says no to a team booking, before paying
-// their share. The booking drops to one fewer player: it is re-priced, its gear is re-reserved for
-// the smaller group, and the remaining shares re-split. The person who booked (and anyone still to
-// pay) is told the new amount.
-router.post('/reservations/:id/decline', requireAuth, requireRole('user'), async (req, res) => {
-  const me = String(req.user.id)
-  let session
+const sendError = (res, err) => res.status(err?.statusCode || 500).json({ ok: false, error: err?.message || String(err) })
+
+// GET /api/invitations/mine — game invites waiting for this player's answer, and (as the one who
+// booked) spots on their bookings that a teammate left open.
+router.get('/invitations/mine', requireAuth, requireRole('user'), async (req, res) => {
+  try {
+    const db = await getDb()
+    const me = String(req.user.id)
+    const reservations = await db.collection('reservations').find({
+      reservationStatus: { $in: ACTIVE_BOOKING_STATUSES },
+      reservationDate: { $gte: manilaDateISO() },
+      $or: [
+        { invites: { $elemMatch: { playerId: me, status: 'pending' } } },
+        { userId: me, openSlots: { $elemMatch: { status: { $in: ['open', 'covering'] } } } },
+      ],
+    }).limit(50).toArray()
+    const accounts = await namesById(db, [...new Set(reservations.map((r) => String(r.userId)))])
+    const invites = []
+    const openSlots = []
+    for (const reservation of reservations) {
+      const mine = latestInvite(reservation, me)
+      if (mine?.status === 'pending' && String(reservation.userId) !== me) {
+        const split = String(reservation.paymentMode || 'self').toLowerCase() === 'split'
+        const recorded = Number(reservation.splitShares?.[me])
+        const share = split
+          ? (Number.isFinite(recorded) ? recorded : Math.round((Number(reservation.depositAmount || 0) / Math.max(1, Number(reservation.teamSize) || 1)) * 100) / 100)
+          : 0
+        invites.push({
+          reservation: summarize(reservation),
+          captainName: accounts.get(String(reservation.userId))?.name || 'Team captain',
+          invitedAtISO: mine.invitedAtISO,
+          deadlineISO: mine.deadlineISO,
+          myShare: share,
+          split,
+        })
+      }
+      if (String(reservation.userId) === me) {
+        for (const slot of (reservation.openSlots || []).filter((s) => ['open', 'covering'].includes(s.status))) {
+          openSlots.push({
+            reservation: summarize(reservation),
+            slot: { id: slot.id, playerId: slot.playerId, name: slot.name, amount: Number(slot.amount) || 0, status: slot.status, reason: slot.reason, deadlineISO: slot.deadlineISO },
+          })
+        }
+      }
+    }
+    return res.json({ ok: true, data: { invites, openSlots } })
+  } catch (err) {
+    return sendError(res, err)
+  }
+})
+
+// POST /api/reservations/:id/accept — the invited player says yes. Their other invites for the same
+// date and time slot are turned down, and those captains are told.
+router.post('/reservations/:id/accept', requireAuth, requireRole('user'), async (req, res) => {
   try {
     const db = await getDb()
     const reservation = await findById(db, 'reservations', req.params.id)
     if (!reservation) return res.status(404).json({ ok: false, error: 'Reservation not found' })
-    if (!['pending', 'needs review'].includes(String(reservation.reservationStatus || '').toLowerCase())) {
-      return res.status(409).json({ ok: false, error: 'This booking is already confirmed, so it can no longer be declined.' })
-    }
-    const payments = await getReservationPayments(db, reservation)
-    const paidAlready = payments.some((p) => String(p.userId) === me && !['failed', 'rejected'].includes(String(p.paymentStatus || p.status || '').toLowerCase()))
-    if (paidAlready) return res.status(409).json({ ok: false, error: 'You already paid your share, so you can no longer decline.' })
-
-    const { leaving, changes } = teamWithout(reservation, me)
-    const next = { ...reservation, ...changes }
-    let pricing
-    try {
-      pricing = await calculateBookingPrice({ db, payload: next, players: changes.numberOfPlayers, findDocumentById: findById, userId: reservation.userId })
-    } catch (err) {
-      return res.status(409).json({ ok: false, error: `The booking can't drop to ${changes.numberOfPlayers} player${changes.numberOfPlayers === 1 ? '' : 's'}: ${err.message} Ask the person who booked to change it.` })
-    }
-    Object.assign(next, pricing)
-    if (String(next.paymentPlan || '') === 'full') {
-      next.depositAmount = next.totalAmount
-      next.balanceAmount = 0
-    }
-    // Re-work out who owes what for the smaller team (uneven when players get different things).
-    Object.assign(next, withSplitShares(next))
-
-    const nowISO = new Date().toISOString()
-    const slot = { reservationDate: reservation.reservationDate, reservationTime: reservation.reservationTime }
-    session = startDbSession()
-    await session.withTransaction(async () => {
-      await db.collection('reservation_slot_locks').updateOne(
-        { _id: `${reservation.locationId}:${reservation.reservationDate}:${reservation.reservationTime}` },
-        { $inc: { version: 1 } },
-        { upsert: true, session },
-      )
-      // Give back what the bigger group had reserved, then reserve again for the smaller one.
-      await releaseBookingInventory(db, reservation.id, session)
-      const requirements = await getBookingInventoryRequirements({
-        db, payload: next, players: changes.numberOfPlayers, findDocumentById: findById,
-        heldQuantities: await getHeldQuantities(db, slot, session),
-      })
-      await holdBookingInventory({ db, session, reservationId: reservation.id, requirements, ...slot })
-      await db.collection('reservations').updateOne(
-        { _id: reservation._id },
-        {
-          $set: { ...changes, ...pricing, depositAmount: next.depositAmount, balanceAmount: next.balanceAmount, splitShares: next.splitShares, inventoryRequirements: requirements, updatedAtISO: nowISO },
-          $push: { declinedPlayers: { ...leaving, atISO: nowISO } },
-        },
-        { session },
-      )
-      if (String(reservation.sessionType || '').toLowerCase() !== 'private') {
-        await syncPublicGrounds(db, { locationId: reservation.locationId, ...slot }, session)
-      }
-    })
-
-    const updated = await db.collection('reservations').findOne({ _id: reservation._id })
-    await syncReservationPaymentState(db, updated)
-
-    const label = `${reservation.reservationDate} (${reservation.reservationTime})`
-    const total = `₱${Number(updated.totalAmount || 0).toLocaleString()}`
-    await notifyUser(db, {
-      userId: reservation.userId,
-      type: 'split_payment_updated',
-      title: `${leaving.name || 'A teammate'} declined your booking`,
-      message: `${leaving.name || 'A teammate'} won't play on ${label}. The booking is now ${updated.numberOfPlayers} player${updated.numberOfPlayers === 1 ? '' : 's'} at ${total}, and the remaining shares were re-split.`,
-      linkedResourceId: reservation.id,
-    })
-    const stillToPay = getSplitPayerIds(updated).filter((id) => id !== String(reservation.userId) && !payments.some((p) => String(p.userId) === id))
-    for (const userId of stillToPay) {
-      await notifyUser(db, {
-        userId,
-        type: 'split_payment_updated',
-        title: 'Your share changed',
-        message: `${leaving.name || 'A teammate'} left the booking for ${label}. It's now ${updated.numberOfPlayers} players at ${total}; check your new share in My Reservations.`,
-        linkedResourceId: reservation.id,
-      })
-    }
-    return res.json({ ok: true, data: { numberOfPlayers: updated.numberOfPlayers, totalAmount: updated.totalAmount } })
+    await acceptInvite(db, reservation, req.user.id)
+    return res.json({ ok: true })
   } catch (err) {
-    return res.status(err?.statusCode || 500).json({ ok: false, error: err?.message || String(err) })
-  } finally {
-    if (session) await session.endSession()
+    return sendError(res, err)
+  }
+})
+
+// POST /api/reservations/:id/decline — the invited player says no, before paying. In a private game
+// the spot stays and the captain pays for it, fills it, or re-invites; in a public game still being
+// paid the booking drops a player, is re-priced, and the other shares re-split.
+router.post('/reservations/:id/decline', requireAuth, requireRole('user'), async (req, res) => {
+  try {
+    const db = await getDb()
+    const reservation = await findById(db, 'reservations', req.params.id)
+    if (!reservation) return res.status(404).json({ ok: false, error: 'Reservation not found' })
+    const result = await declineInvite(db, reservation, req.user.id)
+    const updated = await db.collection('reservations').findOne({ _id: reservation._id })
+    return res.json({ ok: true, data: { mode: result.mode, numberOfPlayers: updated?.numberOfPlayers, totalAmount: updated?.totalAmount } })
+  } catch (err) {
+    return sendError(res, err)
+  }
+})
+
+// POST /api/reservations/:id/open-slots/:slotId/invite { playerId } — the captain fills a spot a
+// teammate left: another player, or the same one again. They get 24 hours to accept.
+router.post('/reservations/:id/open-slots/:slotId/invite', requireAuth, requireRole('user'), async (req, res) => {
+  try {
+    const db = await getDb()
+    const reservation = await findById(db, 'reservations', req.params.id)
+    if (!reservation) return res.status(404).json({ ok: false, error: 'Reservation not found' })
+    await fillOpenSlot(db, reservation, String(req.params.slotId), String(req.body?.playerId || ''), req.user.id)
+    return res.json({ ok: true })
+  } catch (err) {
+    return sendError(res, err)
+  }
+})
+
+// POST /api/reservations/:id/open-slots/:slotId/cover — the captain pays for a spot online; its
+// share is added to what they pay now (the page then opens the payment).
+router.post('/reservations/:id/open-slots/:slotId/cover', requireAuth, requireRole('user'), async (req, res) => {
+  try {
+    const db = await getDb()
+    const reservation = await findById(db, 'reservations', req.params.id)
+    if (!reservation) return res.status(404).json({ ok: false, error: 'Reservation not found' })
+    await coverOpenSlot(db, reservation, String(req.params.slotId), req.user.id)
+    return res.json({ ok: true })
+  } catch (err) {
+    return sendError(res, err)
   }
 })
 

@@ -323,16 +323,13 @@ export function MyWeaponsAndEquipmentPage() {
                       </div>
                       <div data-label="Notes" className="stack-wide col-span-4 min-w-0 text-sm text-muted">
                         <div className="md:truncate">{notesOf(item)}</div>
-                        {item.approvalStatus === 'rejected' && item.rejectionReason ? (
-                          <div className="mt-1 text-xs text-danger md:truncate">Reason: {item.rejectionReason}</div>
-                        ) : null}
                       </div>
                       <div data-label="Status" className="col-span-2">
-                        <span className={`whitespace-nowrap rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.15em] ${item.approvalStatus === 'rejected' || isDamaged(item)
+                        <span className={`whitespace-nowrap rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.15em] ${isDamaged(item)
                           ? 'border-danger/30 bg-danger/10 text-danger'
                           : 'border-success/30 bg-success/10 text-success'
                           }`}>
-                          {item.approvalStatus === 'rejected' ? 'Rejected' : isDamaged(item) ? 'Damaged' : 'Available'}
+                          {isDamaged(item) ? 'Damaged' : 'Available'}
                         </span>
                       </div>
                       <div data-label="Actions" className="stack-wide col-span-2 flex justify-end gap-1">

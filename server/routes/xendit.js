@@ -4,6 +4,7 @@ import { getDb, startDbSession, toObjectId } from '../db/mongo.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
 import { getGcashAmountDue, getSplitPayerIds } from '../utils/paymentRules.js'
 import { syncReservationPaymentState } from '../utils/paymentProgress.js'
+import { latestInvite } from '../utils/teamInvites.js'
 import { emailPaymentReceipt } from '../services/notificationEmails.js'
 import { createInvoice, paidPaymentOf, retrieveInvoice, verifyCallbackToken, XENDIT_CHANNELS, xenditEnabled } from '../utils/xendit.js'
 import { XENDIT_CHECKOUTS, recordXenditPayment } from '../utils/xenditPayments.js'
@@ -74,6 +75,7 @@ function checkoutReservationIds(checkout) {
 async function payableAmount(db, reservation, userId) {
   const fail = (statusCode, message) => Object.assign(new Error(message), { statusCode })
   if (!reservation || !getSplitPayerIds(reservation).includes(userId)) throw fail(404, 'Reservation not found.')
+  if (latestInvite(reservation, userId)?.status === 'pending') throw fail(409, 'Accept the game invite first, then pay your share.')
   if (reservation.pricingVerified !== true) throw fail(409, 'The reservation price has not been verified yet.')
   if (String(reservation.reservationStatus || 'pending').toLowerCase() !== 'pending') {
     throw fail(409, 'This reservation is no longer waiting for payment.')
@@ -120,6 +122,9 @@ router.post('/xendit/checkout', requireAuth, requireRole('user'), async (req, re
     const userId = String(req.user.id)
     if (!reservation || !getSplitPayerIds(reservation).includes(userId)) {
       return res.status(404).json({ ok: false, error: 'Reservation not found.' })
+    }
+    if (latestInvite(reservation, userId)?.status === 'pending') {
+      return res.status(409).json({ ok: false, error: 'Accept the game invite first, then pay your share.' })
     }
     if (reservation.pricingVerified !== true) return res.status(409).json({ ok: false, error: 'The reservation price has not been verified yet.' })
     if (String(reservation.reservationStatus || 'pending').toLowerCase() !== 'pending') {

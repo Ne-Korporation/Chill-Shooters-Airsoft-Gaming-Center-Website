@@ -34,7 +34,8 @@ const { default: weatherRouter } = await import('./routes/weather.js')
 const { default: childrenRouter } = await import('./routes/children.js')
 const { default: causeDaysRouter } = await import('./routes/causeDays.js')
 const { default: myGearRouter } = await import('./routes/myGear.js')
-const { expireOverdueReservations, notifyRole, sendSplitPaymentWarnings } = await import('./utils/paymentProgress.js')
+const { expireOverdueReservations, notifyRole } = await import('./utils/paymentProgress.js')
+const { sweepTeamInvites } = await import('./utils/teamInvites.js')
 const { expireOldIdentities } = await import('./utils/identityValidity.js')
 const { sendDueReminders } = await import('./utils/reminders.js')
 const { checkAmmoStock } = await import('./utils/ammoStock.js')
@@ -97,7 +98,9 @@ setInterval(() => {
     .then(async (db) => {
       const expired = await expireOverdueReservations(db, startDbSession, { force: true })
       if (expired > 0) bumpTopics('reservations', 'slots', 'notifications')
-      await sendSplitPaymentWarnings(db, { force: true })
+      // Team invites: reminders at 12h and 3h left, void after 24h, open spots moved to the field.
+      const invites = await sweepTeamInvites(db, { force: true })
+      if (invites.voided || invites.movedOnsite) bumpTopics('reservations', 'notifications')
       // One "waiting for payment" email for bookings left unpaid a few minutes.
       await sendUnpaidReservationEmails(db)
       await expireOldIdentities(db)

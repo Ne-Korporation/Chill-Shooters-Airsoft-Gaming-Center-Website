@@ -28,6 +28,15 @@ export type NotificationType =
   | 'reservation_payment_finalized'
   | 'reservation_reminder'
   | 'waiver_reminder'
+  // Team invites: sent, reminders, accepted, and spots a teammate left open.
+  | 'team_invite'
+  | 'team_invite_reminder'
+  | 'team_invite_accepted'
+  | 'team_spot_open'
+  | 'team_spot_onsite'
+  // Staff: money to collect at the counter (registrars), players' own weapons coming (marshals).
+  | 'onsite_payment_due'
+  | 'own_weapons_incoming'
   // Sent by an admin from the notifications page to an audience or one account.
   | 'announcement'
 
