@@ -1,15 +1,18 @@
 import React, { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { FiAlertTriangle, FiCheckCircle, FiClock, FiLoader } from 'react-icons/fi'
+import { FiAlertTriangle, FiCheckCircle, FiClock, FiLoader, FiXCircle } from 'react-icons/fi'
+import toast from 'react-hot-toast'
 
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { apiPost } from '../../utils/apiClient'
+import { confirmDialog } from '../../components/ui/ConfirmDialog'
 import { DEMO_PAY_CHANNEL, demoPayUrl } from '../../utils/xendit'
 
 type VerifyResult = {
   status: 'paid' | 'unpaid'
   reservationId?: string
+  reservationIds?: string[]
   reservationStatus?: string
   paymentState?: string
   waitingForGuardian?: boolean
@@ -80,6 +83,33 @@ export function PaymentCompletePage() {
   const paidOther = result?.status === 'paid' && !confirmed && !waitingGuardian
   const waitingForTab = waiting && !cancelled && (!result || result.status === 'unpaid')
 
+  // Nothing was paid, so the booking hasn't gone through: the player can cancel it right here
+  // (the server checks it's theirs and still unpaid). A full day cancels every slot in it.
+  const [cancelling, setCancelling] = useState(false)
+  const [bookingCancelled, setBookingCancelled] = useState(false)
+  const unpaidIds = result?.status === 'unpaid'
+    ? (result.reservationIds?.length ? result.reservationIds : [result.reservationId || '']).filter(Boolean)
+    : []
+  const cancelBooking = async () => {
+    if (!(await confirmDialog({
+      title: unpaidIds.length > 1 ? 'Cancel these reservations?' : 'Cancel this reservation?',
+      message: `Nothing has been paid, so ${unpaidIds.length > 1 ? `all ${unpaidIds.length} slots are` : 'the booking is'} cancelled and the slot opens for anyone to book. This can't be undone.`,
+      confirmLabel: 'Cancel reservation',
+      cancelLabel: 'Keep it',
+      danger: true,
+    }))) return
+    setCancelling(true)
+    try {
+      for (const id of unpaidIds) await apiPost(`/api/reservations/${encodeURIComponent(id)}/cancel`, {})
+      setBookingCancelled(true)
+      toast.success(unpaidIds.length > 1 ? 'Reservations cancelled.' : 'Reservation cancelled.')
+    } catch (err: any) {
+      toast.error(err?.message || 'Could not cancel the reservation')
+    } finally {
+      setCancelling(false)
+    }
+  }
+
   return (
     <div className="mx-auto max-w-xl space-y-4">
       <h1 className="text-3xl font-bold">Payment</h1>
@@ -123,12 +153,26 @@ export function PaymentCompletePage() {
         ) : (
           <>
             <div className="flex items-center gap-2 text-lg font-bold text-warning"><FiAlertTriangle /> {cancelled ? 'Payment cancelled' : 'Payment not completed'}</div>
-            <p className="text-sm">No money was taken. Your reservation is saved but not paid yet; pay from <b>My Reservations</b> before the deadline shown there, or the slot is released.</p>
+            {bookingCancelled ? (
+              <p className="text-sm">No money was taken, and your reservation is <b>cancelled</b>. The slot is open for anyone to book again.</p>
+            ) : (
+              <>
+                <p className="text-sm">No money was taken. Your reservation is saved but not paid yet; pay from <b>My Reservations</b> before the deadline shown there, or the slot is released.</p>
+                {unpaidIds.length ? (
+                  <p className="text-sm text-muted">Changed your mind? You can cancel it now, since nothing has been paid.</p>
+                ) : null}
+              </>
+            )}
           </>
         )}
         <div className="flex flex-wrap gap-2 pt-2">
           <Button variant="primary" onClick={() => navigate('/app/my-reservations')}>My Reservations</Button>
           <Button variant="ghost" onClick={() => navigate('/app')}>Dashboard</Button>
+          {unpaidIds.length && !bookingCancelled && !waitingForTab ? (
+            <Button variant="danger-soft" disabled={cancelling} onClick={() => void cancelBooking()}>
+              <FiXCircle /> {cancelling ? 'Cancelling…' : 'Cancel reservation'}
+            </Button>
+          ) : null}
         </div>
       </Card>
     </div>

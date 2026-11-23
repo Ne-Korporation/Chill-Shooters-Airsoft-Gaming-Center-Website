@@ -6,6 +6,7 @@ import { getGcashAmountDue, getSplitPayerIds } from '../utils/paymentRules.js'
 import { syncReservationPaymentState } from '../utils/paymentProgress.js'
 import { latestInvite } from '../utils/teamInvites.js'
 import { emailPaymentReceipt } from '../services/notificationEmails.js'
+import { notifyPaymentReceived } from '../utils/playerNotices.js'
 import { createInvoice, paidPaymentOf, retrieveInvoice, verifyCallbackToken, XENDIT_CHANNELS, xenditEnabled } from '../utils/xendit.js'
 import { XENDIT_CHECKOUTS, recordXenditPayment } from '../utils/xenditPayments.js'
 import { appUrlFrom } from './guardianApprovals.js'
@@ -33,7 +34,12 @@ async function findReservation(db, rawId) {
 
 // Checks the invoice with Xendit and, once paid, records the payment and updates the booking.
 async function settleCheckout(db, checkout) {
-  if (checkout.status !== 'paid' && checkout.demo) return { status: 'unpaid' }
+  // Unpaid: which booking(s) it was for, so the player can still cancel them while nothing is paid.
+  const unpaid = () => {
+    const ids = checkoutReservationIds(checkout)
+    return { status: 'unpaid', reservationId: String(checkout.reservationId || ''), ...(ids.length > 1 ? { reservationIds: ids } : {}) }
+  }
+  if (checkout.status !== 'paid' && checkout.demo) return unpaid()
   if (checkout.status !== 'paid') {
     const invoice = await retrieveInvoice(checkout.invoiceId)
     const paid = paidPaymentOf(invoice)
@@ -41,13 +47,14 @@ async function settleCheckout(db, checkout) {
       if (String(invoice?.status || '').toUpperCase() === 'EXPIRED') {
         await db.collection(XENDIT_CHECKOUTS).updateOne({ _id: checkout._id }, { $set: { status: 'expired' } })
       }
-      return { status: 'unpaid' }
+      return unpaid()
     }
     const { payment, created } = await recordXenditPayment({ db, startSession: startDbSession, checkout, paid })
     if (created) {
       const reservation = await db.collection('reservations').findOne({ id: checkout.reservationId })
       await syncReservationPaymentState(db, reservation)
       void emailPaymentReceipt(db, payment, payment.paymentStatus)
+      void notifyPaymentReceived(db, payment, reservation).catch(() => null)
     }
   }
   // A full-day checkout pays several bookings; report them together.
@@ -348,6 +355,7 @@ router.post('/demo-pay/:ref/pay', requireAuth, requireRole('user'), async (req, 
           const reservation = await db.collection('reservations').findOne({ id: part.checkout.reservationId })
           await syncReservationPaymentState(db, reservation)
           void emailPaymentReceipt(db, payment, payment.paymentStatus)
+          void notifyPaymentReceived(db, payment, reservation).catch(() => null)
         }
       }
       if (parts.length > 1) {

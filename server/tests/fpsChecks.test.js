@@ -55,3 +55,24 @@ test('the game needs a passing reading today for every rental and own gun (not g
   assert.equal(passed.allPassed, true)
   assert.equal(fpsBlockReason(passed), '')
 })
+
+test('a declared own gun (nothing registered) still has to pass the chronograph', async () => {
+  // P2 says they bring their own gun; P3 brings own gun and gear; P4 brings own gear but rents a gun.
+  const booking = {
+    id: 'R-2', userId: 'P1', bookerName: 'Chloe',
+    teamMembers: [{ id: 'P2', name: 'Juan' }, { id: 'P3', name: 'Ana' }, { id: 'P4', name: 'Ben' }],
+    ownWeaponBringerIds: ['P2'], ownGearPlayerIds: ['P3', 'P4'], playerGuns: { P4: ['W-9'] },
+  }
+  const none = await gameFpsStatus(fakeDb({}), booking, { now })
+  assert.deepEqual(none.items.map((i) => [i.weaponId, i.playerName, i.source]), [
+    ['own:R-2:P2', 'Juan', 'own'],
+    ['own:R-2:P3', 'Ana', 'own'],
+  ])
+  assert.match(fpsBlockReason(none), /2 not tested yet/)
+
+  const passed = await gameFpsStatus(fakeDb({ logs: [
+    { weaponId: 'own:R-2:P2', result: 'pass', fps: 400, limit: 450, testedAtISO: today(9) },
+    { weaponId: 'own:R-2:P3', result: 'pass', fps: 420, limit: 450, testedAtISO: today(9) },
+  ] }), booking, { now })
+  assert.equal(passed.allPassed, true)
+})

@@ -61,7 +61,11 @@ export type SplitPaymentItem = {
   isCaptain: boolean
   captainName: string
   // Everyone on the booking (names only), so invited players see who booked and who's playing.
-  players?: Array<{ id: string; name: string; isCaptain: boolean; isMe: boolean; loadout?: Loadout | null; rentOnly?: string[]; pickedGuns?: string[]; share?: number | null; paidBy?: string | null }>
+  players?: Array<{ id: string; name: string; isCaptain: boolean; isMe: boolean; loadout?: Loadout | null; rentOnly?: string[]; pickedGuns?: string[]; share?: number | null; paidBy?: string | null
+    // A parent's share split into their own part and each child's; a child's part of it.
+    ownPart?: number | null; forChildren?: Array<{ name: string; amount: number }>; childPart?: number | null }>
+  // Spots of teammates who left that the captain paid for online.
+  coveredSpots?: Array<{ name: string; amount: number; status: string; reason?: string }>
   myShareDue: number
   iHavePaid: boolean
   progress: { target: number; submitted: number; remaining: number; state: string; paidCount?: number; payerCount?: number }
@@ -173,10 +177,12 @@ function CaptainTracker({ item }: { item: SplitPaymentItem }) {
             {pending.length === 0 ? <li className="text-xs text-muted">Everyone has paid</li> : pending.map((member) => (
               <li key={member.id} className="flex items-center justify-between gap-2 text-amber-600 dark:text-amber-400">
                 <span className="flex items-center gap-1.5"><FiClock />{member.name}{member.isCaptain ? ' (you)' : ''}</span>
-                {/* What they still owe: their share. */}
+                {/* What they still owe: their share, less anything they already paid toward it. */}
                 {(() => {
                   const share = item.players?.find((player) => player.id === member.id)?.share
-                  return share != null ? <span className="text-xs tabular-nums">{formatPHP(share)}</span> : null
+                  if (share == null) return null
+                  const left = Math.max(0, Math.round((share - (member.amount || 0)) * 100) / 100)
+                  return <span className="text-xs tabular-nums">{member.amount > 0 ? `${formatPHP(left)} left` : formatPHP(share)}</span>
                 })()}
               </li>
             ))}
@@ -192,7 +198,10 @@ function CaptainTracker({ item }: { item: SplitPaymentItem }) {
 
 // Split payments the player has to act on: a share to pay, or (as captain) a team still paying.
 // Shown at the top of My Reservations, only while there is one; links to it use #split-payments.
-export function SplitPaymentsSection() {
+// The player's split payments (to pay, or as captain to track), kept live: re-read every few
+// seconds and on changes, with a toast when a teammate pays. My Reservations shows each one on its
+// booking's card.
+export function useSplitPayments() {
   const [items, setItems] = useState<SplitPaymentItem[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -220,7 +229,7 @@ export function SplitPaymentsSection() {
             toast.success(`A teammate paid their share (${after.progress.paidCount} of ${after.progress.payerCount}).`)
           }
         }
-        // Keep the "shares to pay" badge on My Reservations in step.
+        // Keep the "shares to pay" badge in step.
         const owedCount = (list: SplitPaymentItem[]) => list.filter((item) => !item.iHavePaid && item.myShareDue > 0).length
         if (previous.length !== next.length || owedCount(previous) !== owedCount(next)) window.dispatchEvent(new Event(SPLIT_PAYMENTS_CHANGED_EVENT))
       }
@@ -250,84 +259,30 @@ export function SplitPaymentsSection() {
     }
   }, [load])
 
-  // Jump here from a notification or the dashboard (/app/my-reservations#split-payments) once loaded.
-  const sectionRef = useRef<HTMLElement | null>(null)
-  useEffect(() => {
-    if (!loading && items.length && window.location.hash === '#split-payments') {
-      sectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    }
-  }, [loading, items.length])
+  return { items, loading, reload: load }
+}
 
-  // The split payment open in the pop-up; read from the list so it stays live while open.
-  const [viewId, setViewId] = useState<string | null>(null)
-  const viewing = items.find((item) => item.reservation.id === viewId) || null
-
-  // Nothing to pay or wait on: the section isn't shown at all.
-  if (loading || items.length === 0) return null
-  const owed = items.filter((item) => !item.iHavePaid && item.myShareDue > 0).length
-
+// The team payment in a pop-up: who plays and pays what, the fee breakdown, paying your share,
+// and (as captain) who has paid.
+export function SplitPaymentModal({ item, onClose, onDeclined }: { item: SplitPaymentItem; onClose: () => void; onDeclined: () => void }) {
   return (
-    <section ref={sectionRef} id="split-payments" className="scroll-mt-4 space-y-2">
-      <h2 className="flex items-center gap-2 text-base font-bold">
-        {owed ? 'Your share is due' : 'Team payments in progress'}
-        {owed ? <span className="grid h-5 min-w-[1.25rem] place-items-center rounded-full bg-danger px-1 text-[11px] font-bold leading-none text-white">{owed}</span> : null}
-        <span className="text-xs font-normal text-muted">· Teammates have 24 hours from their invite to pay, or their invite is void.</span>
-      </h2>
-
-      {/* One compact card per split payment; View opens everything (players, paying, progress). */}
-      <div className="grid gap-2 md:grid-cols-2">
-        {items.map((item) => {
-          const due = !item.iHavePaid && item.myShareDue > 0
-          const deadline = item.reservation.paymentDueAtISO
-          const urgent = Boolean(deadline) && new Date(deadline as string).getTime() - Date.now() < 2 * 3600_000
-          return (
-            <Card key={item.reservation.id} className={`flex items-center gap-3 p-3 ${due ? 'border-accent/30' : ''}`}>
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-semibold">
-                  {item.reservation.reservationDate} · <span className="capitalize">{item.reservation.reservationTime}</span>
-                </div>
-                <div className="truncate text-xs text-muted">
-                  {item.isCaptain ? 'You booked this' : <>Booked by <span className="text-text">{item.captainName}</span></>} · {item.reservation.locationName}
-                </div>
-                <div className="mt-0.5 flex flex-wrap gap-x-2 text-[11px] text-muted">
-                  <span>{item.progress.paidCount || 0} of {item.progress.payerCount || 0} shares in</span>
-                  {deadline ? <span className={urgent ? 'font-semibold text-danger' : ''}>· {timeLeft(deadline)}</span> : null}
-                </div>
-              </div>
-              <div className="flex shrink-0 flex-col items-end gap-1.5">
-                {due
-                  ? <span className="text-base font-bold text-gold">{formatPHP(item.myShareDue)}</span>
-                  : <span className="text-[11px] font-semibold text-muted">{item.iHavePaid ? 'Your share is in' : 'Waiting on team'}</span>}
-                <Button size="xs" variant={due ? 'primary' : 'ghost'} onClick={() => setViewId(item.reservation.id)}>
-                  <FiEye /> View
-                </Button>
-              </div>
-            </Card>
-          )
-        })}
-      </div>
-
-      {viewing ? (
-        <Modal
-          eyebrow="Split payment"
-          title={<>{viewing.reservation.reservationDate} · <span className="capitalize">{viewing.reservation.reservationTime}</span></>}
-          // Wide enough for the "Who pays what" table without wrapping every name.
-          size="xl"
-          confirmDiscard={false}
-          onClose={() => setViewId(null)}
-        >
-          <SplitPaymentDetails
-            item={viewing}
-            onDeclined={() => {
-              setViewId(null)
-              void load()
-              // The badge on My Reservations, and the booking list, change too.
-              window.dispatchEvent(new Event(SPLIT_PAYMENTS_CHANGED_EVENT))
-            }}
-          />
-        </Modal>
-      ) : null}
-    </section>
+    <Modal
+      eyebrow="Team payment"
+      title={<>{item.reservation.reservationDate} · <span className="capitalize">{item.reservation.reservationTime}</span></>}
+      // Wide enough for the "Who pays what" table without wrapping every name.
+      size="xl"
+      confirmDiscard={false}
+      onClose={onClose}
+    >
+      <SplitPaymentDetails
+        item={item}
+        onDeclined={() => {
+          onDeclined()
+          // The badge on My Reservations, and the booking list, change too.
+          window.dispatchEvent(new Event(SPLIT_PAYMENTS_CHANGED_EVENT))
+        }}
+      />
+    </Modal>
   )
 }
 
@@ -398,6 +353,160 @@ function FeeDetails({ item }: { item: SplitPaymentItem }) {
 
 // Everything about one split payment, shown in the View pop-up: the booking, who booked it and
 // who's playing, the player's share and Pay button, and the team's progress.
+// Who plays and what each one pays online (a parent pays their child's part; spots the captain
+// paid for are listed), whether they've paid (captain only), and the captain's Remove for a
+// teammate who hasn't paid. Shown in the team payment pop-up and the reservation details.
+export function TeamPaymentTable({ item, onChanged }: { item: SplitPaymentItem; onChanged: () => void }) {
+  // Captain: take a teammate who hasn't paid off the team, so a substitute can have the spot.
+  const [removingId, setRemovingId] = useState<string | null>(null)
+  const removePlayer = async (player: { id: string; name: string }, share: number) => {
+    const privateGame = isPrivateSession(item.reservation.sessionType)
+    const ok = await confirmDialog({
+      title: `Remove ${player.name}?`,
+      message: privateGame
+        ? `${player.name} is taken off the team and told. Their spot stays yours: their ${formatPHP(share)} share is added to what you pay at the counter before the game, so the booking can go through. Invite a substitute from My Reservations; if they pay online, it comes off your field balance.`
+        : `${player.name} is taken off the booking and told. The booking drops a player and is re-priced, and the other shares are re-split.`,
+      confirmLabel: 'Remove',
+      cancelLabel: 'Keep them',
+      danger: true,
+    })
+    if (!ok) return
+    setRemovingId(player.id)
+    try {
+      await apiPost(`/api/reservations/${encodeURIComponent(item.reservation.id)}/members/${encodeURIComponent(player.id)}/remove`, {})
+      toast.success(privateGame ? `${player.name} was removed. Invite a substitute from Open spots.` : `${player.name} was removed.`)
+      onChanged()
+    } catch (e: any) {
+      toast.error(e?.message || 'Could not remove the player')
+    } finally {
+      setRemovingId(null)
+    }
+  }
+  if (!item.players?.length) return null
+  return (
+    <>
+    {/* Who's playing and what each one pays online. Everyone sees the amounts; who has paid is
+        only shown to the captain. */}
+    {item.players?.length ? (
+      <div className="mt-4">
+        <div className="flex items-center gap-1.5 text-xs font-semibold text-muted"><FiUsers /> Who pays what ({item.players.length} players)</div>
+        <div className="mt-2 overflow-x-auto rounded-xl border border-white/10">
+          <table className="w-full min-w-[420px] text-sm">
+            <thead>
+              <tr className="border-b border-white/10 bg-white/5 text-left text-[11px] uppercase tracking-wider text-muted">
+                <th className="w-10 px-3 py-2 font-semibold">#</th>
+                <th className="px-3 py-2 font-semibold">Player</th>
+                {item.players.some((p) => p.loadout) ? <th className="px-3 py-2 font-semibold">Gets</th> : null}
+                <th className="px-3 py-2 text-right font-semibold">Pays online</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-white/5">
+              {item.players.map((player, index) => {
+                const status = item.members?.find((member) => member.id === player.id)
+                return (
+                  <tr key={player.id} className={player.isMe ? 'bg-accent/10' : ''}>
+                    <td className="px-3 py-2 text-muted">{index + 1}</td>
+                    <td className="px-3 py-2">
+                      <div className={`font-semibold ${player.isMe ? 'text-accent' : ''}`}>
+                        {player.name}{player.isMe ? <span className="ml-1.5 text-xs font-normal text-muted">(you)</span> : null}
+                      </div>
+                      <div className="text-[11px] text-muted">
+                        {player.isCaptain ? (isPrivateSession(item.reservation.sessionType) ? 'Captain · booked it' : 'Booked it') : 'Teammate'}
+                        {/* Captain: a teammate who hasn't paid anything can be swapped out. */}
+                        {item.isCaptain && !player.isCaptain && player.share != null && status && !status.paid && !(status.amount > 0) && item.progress.state !== 'finalized' ? (
+                          <button
+                            type="button"
+                            disabled={removingId === player.id}
+                            onClick={() => removePlayer(player, player.share || 0)}
+                            className="ml-2 font-semibold text-danger hover:underline disabled:opacity-50"
+                          >
+                            {removingId === player.id ? 'Removing…' : 'Remove'}
+                          </button>
+                        ) : null}
+                      </div>
+                    </td>
+                    {item.players?.some((p) => p.loadout) ? (
+                      <td className={`px-3 py-2 text-xs ${player.loadout === 'package' ? 'text-muted' : 'font-semibold text-accent'}`}>
+                        {loadoutLabel(player)}
+                      </td>
+                    ) : null}
+                    <td className="whitespace-nowrap px-3 py-2 text-right">
+                      {player.share === undefined ? (
+                        // Amount not sent (an older server): don't claim they pay nothing.
+                        <span className="text-xs text-muted">—</span>
+                      ) : player.share === null ? (
+                        <>
+                          {player.childPart != null ? <div className="font-semibold tabular-nums text-muted">{formatPHP(player.childPart)}</div> : null}
+                          <div className="text-[11px] text-muted">{player.paidBy ? `Included in ${player.paidBy}'s share` : 'Covered by the team'}</div>
+                        </>
+                      ) : (
+                        <>
+                          {(() => {
+                            // Everything this payer pays: their own part, each child's, and (the captain)
+                            // teammates' spots they paid for. Each part is listed so the total adds up.
+                            const spots = player.isCaptain ? (item.coveredSpots || []) : []
+                            const total = Math.round(((player.share || 0) + spots.reduce((sum, spot) => sum + spot.amount, 0)) * 100) / 100
+                            const parts = [
+                              ...(player.forChildren?.length || spots.length
+                                ? [`${formatPHP(player.forChildren?.length ? player.ownPart ?? 0 : player.share || 0)} ${player.isMe ? 'you' : 'own'}`]
+                                : []),
+                              ...(player.forChildren || []).map((child) => `${formatPHP(child.amount)} for ${child.name}`),
+                              ...spots.map((spot) => `${formatPHP(spot.amount)} for ${spot.name}'s spot`),
+                            ]
+                            const paidAmount = status?.amount || 0
+                            const fullyPaid = Boolean(status) && paidAmount >= total - 0.01
+                            return (
+                              <>
+                                <div className="font-semibold tabular-nums">{formatPHP(total)}</div>
+                                {parts.length ? <div className="text-[11px] text-muted">{parts.join(' + ')}</div> : null}
+                                {status ? (
+                                  <div className={`text-[11px] ${fullyPaid ? 'text-success' : 'text-amber-600 dark:text-amber-400'}`}>
+                                    {fullyPaid
+                                      ? `Paid ${formatPHP(paidAmount)}`
+                                      : paidAmount > 0
+                                        // Paid part of it (e.g. their share went up after paying): what's in and what's left.
+                                        ? `${formatPHP(paidAmount)} paid · ${formatPHP(Math.max(0, Math.round((total - paidAmount) * 100) / 100))} left`
+                                        : 'Not paid yet'}
+                                  </div>
+                                ) : null}
+                              </>
+                            )
+                          })()}
+                        </>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
+              {/* Spots of teammates who left, paid for by the captain: part of what the captain pays. */}
+              {(item.coveredSpots || []).map((spot, index) => (
+                <tr key={`spot-${index}`} className="bg-white/[0.02]">
+                  <td className="px-3 py-2 text-muted">—</td>
+                  <td className="px-3 py-2">
+                    <div className="font-semibold text-muted">{spot.name}'s spot</div>
+                    <div className="text-[11px] text-muted">{spot.reason === 'declined' ? 'Declined' : 'Left'} · {item.isCaptain ? 'you paid for it' : `${item.captainName} paid for it`}</div>
+                  </td>
+                  {item.players?.some((p) => p.loadout) ? <td className="px-3 py-2 text-xs text-muted">Spot kept for the team</td> : null}
+                  <td className="whitespace-nowrap px-3 py-2 text-right">
+                    <div className="font-semibold tabular-nums text-muted">{formatPHP(spot.amount)}</div>
+                    <div className={`text-[11px] ${spot.status === 'paid' ? 'text-success' : 'text-amber-600 dark:text-amber-400'}`}>
+                      {spot.status === 'paid' ? `Included in ${item.isCaptain ? 'your' : `${item.captainName}'s`} payment` : 'Being paid'}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {item.players.some((p) => p.share === null) ? (
+          <div className="mt-1 text-[11px] text-muted">Minors don't pay themselves: their parent or guardian on the team pays their part, so that parent's amount is higher (the breakdown is under it).</div>
+        ) : null}
+      </div>
+    ) : null}
+    </>
+  )
+}
+
 function SplitPaymentDetails({ item, onDeclined }: { item: SplitPaymentItem; onDeclined: () => void }) {
   const [declining, setDeclining] = useState(false)
   // An invited player who can't make it says no before paying: they leave the booking, which
@@ -406,7 +515,7 @@ function SplitPaymentDetails({ item, onDeclined }: { item: SplitPaymentItem; onD
     const ok = await confirmDialog({
       title: 'Decline this game?',
       message: isPrivateSession(item.reservation.sessionType)
-        ? `You'll be taken off ${item.captainName}'s team for ${item.reservation.reservationDate} (${item.reservation.reservationTime}). Your spot stays on the booking: ${item.captainName} will be told to fill it or pay for it. They would have to invite you again.`
+        ? `You'll be taken off ${item.captainName}'s team for ${item.reservation.reservationDate} (${item.reservation.reservationTime}). Your spot stays on the booking: your share is added to what ${item.captainName} pays at the counter, unless they find a substitute. They would have to invite you again.`
         : `You'll be taken off ${item.captainName}'s booking for ${item.reservation.reservationDate} (${item.reservation.reservationTime}). The booking drops to ${Math.max(1, item.reservation.numberOfPlayers - 1)} players and is re-priced, and the other shares are re-split. ${item.captainName} will be notified. They would have to add you again.`,
       confirmLabel: 'Decline',
       danger: true,
@@ -444,66 +553,8 @@ function SplitPaymentDetails({ item, onDeclined }: { item: SplitPaymentItem; onD
             </span>
           </div>
 
-          {/* Who's playing and what each one pays online. Everyone sees the amounts; who has paid is
-              only shown to the captain. */}
-          {item.players?.length ? (
-            <div className="mt-4">
-              <div className="flex items-center gap-1.5 text-xs font-semibold text-muted"><FiUsers /> Who pays what ({item.players.length} players)</div>
-              <div className="mt-2 overflow-x-auto rounded-xl border border-white/10">
-                <table className="w-full min-w-[420px] text-sm">
-                  <thead>
-                    <tr className="border-b border-white/10 bg-white/5 text-left text-[11px] uppercase tracking-wider text-muted">
-                      <th className="w-10 px-3 py-2 font-semibold">#</th>
-                      <th className="px-3 py-2 font-semibold">Player</th>
-                      {item.players.some((p) => p.loadout) ? <th className="px-3 py-2 font-semibold">Gets</th> : null}
-                      <th className="px-3 py-2 text-right font-semibold">Pays online</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-white/5">
-                    {item.players.map((player, index) => {
-                      const status = item.members?.find((member) => member.id === player.id)
-                      return (
-                        <tr key={player.id} className={player.isMe ? 'bg-accent/10' : ''}>
-                          <td className="px-3 py-2 text-muted">{index + 1}</td>
-                          <td className="px-3 py-2">
-                            <div className={`font-semibold ${player.isMe ? 'text-accent' : ''}`}>
-                              {player.name}{player.isMe ? <span className="ml-1.5 text-xs font-normal text-muted">(you)</span> : null}
-                            </div>
-                            <div className="text-[11px] text-muted">
-                              {player.isCaptain ? (isPrivateSession(item.reservation.sessionType) ? 'Captain · booked it' : 'Booked it') : 'Teammate'}
-                            </div>
-                          </td>
-                          {item.players?.some((p) => p.loadout) ? (
-                            <td className={`px-3 py-2 text-xs ${player.loadout === 'package' ? 'text-muted' : 'font-semibold text-accent'}`}>
-                              {loadoutLabel(player)}
-                            </td>
-                          ) : null}
-                          <td className="whitespace-nowrap px-3 py-2 text-right">
-                            {player.share === undefined ? (
-                              // Amount not sent (an older server): don't claim they pay nothing.
-                              <span className="text-xs text-muted">—</span>
-                            ) : player.share === null ? (
-                              <span className="text-xs text-muted">{player.paidBy ? `Paid by ${player.paidBy}` : "Covered by the team"}</span>
-                            ) : (
-                              <>
-                                <div className="font-semibold tabular-nums">{formatPHP(player.share)}</div>
-                                {status ? (
-                                  <div className={`text-[11px] ${status.paid ? 'text-success' : 'text-amber-600 dark:text-amber-400'}`}>{status.paid ? 'Paid' : 'Not paid yet'}</div>
-                                ) : null}
-                              </>
-                            )}
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
-              {item.players.some((p) => p.share === null) ? (
-                <div className="mt-1 text-[11px] text-muted">Minors don't pay themselves: their parent or guardian on the team pays for them, as part of their share.</div>
-              ) : null}
-            </div>
-          ) : null}
+          <TeamPaymentTable item={item} onChanged={onDeclined} />
+
 
           <FeeDetails item={item} />
 

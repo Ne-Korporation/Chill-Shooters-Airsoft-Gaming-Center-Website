@@ -287,7 +287,7 @@ router.post('/scan-id', requireAuth, (req, res, next) => {
     if (req.user.role === 'user') {
       const db = await getDb()
       const who = account.name || account.id
-      for (const role of ['admin', 'registrar']) {
+      { const role = 'registrar' // admins get a copy (notifyRole)
         await notifyRole(db, {
           role,
           topic: 'identity',

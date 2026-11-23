@@ -1,12 +1,14 @@
-// Which automatic notifications each staff role receives. Roles not listed here (admins) get
-// everything sent to them. Announcements an admin sends by hand always go through.
-//   - Marshals: when a game is booked (a confirmed reservation lands on the games board), and the
-//     players' own weapons coming to it (each is chronographed before play).
+// Which automatic notifications each staff role receives. Admins aren't listed: they get
+// everything, including a copy of what goes to marshals and registrars (see notifyRole).
+// Announcements an admin sends by hand always go through.
+//   - Marshals: every game booked (as soon as it's booked, walk-ins included), when it's
+//     confirmed onto the games board, and the players' own weapons coming to it (each is
+//     chronographed before play).
 //   - Registrars: payments (including balances to collect onsite), waivers (guardian approvals
-//     count as waiver work), and players' IDs submitted for verification.
+//     count as waiver work), and every player ID submitted for verification.
 // A notification qualifies by its type, or by the `topic` it was sent with.
 export const ROLE_NOTIFICATION_RULES = {
-  marshal: { types: ['gameplay_created', 'own_weapons_incoming'], topics: ['game_booked'] },
+  marshal: { types: ['game_booked', 'gameplay_created', 'own_weapons_incoming'], topics: ['game_booked'] },
   registrar: { types: ['reservation_payment_finalized', 'waiver_submitted', 'onsite_payment_due', 'player_id_submitted'], topics: ['payment', 'waiver', 'identity'] },
 }
 

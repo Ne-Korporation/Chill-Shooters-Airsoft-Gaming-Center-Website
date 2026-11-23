@@ -57,6 +57,8 @@ export function FpsCheckPanel({ reservationId, gameplayId, active = true, onChan
     try {
       const res = await apiPost<{ data: { result: string; limit: number }; weaponPulled?: boolean }>('/api/fps-logs', {
         weaponId: gun.weaponId,
+        // A gun a player brought from home isn't in inventory: the log keeps its name.
+        ...(gun.source === 'own' ? { weaponName: gun.playerName ? `${gun.name} (${gun.playerName})` : gun.name } : {}),
         fps,
         playerName: gun.playerName,
         gameplayId: gameplayId || '',

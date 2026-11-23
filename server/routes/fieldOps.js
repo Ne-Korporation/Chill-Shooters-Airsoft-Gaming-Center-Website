@@ -6,6 +6,7 @@ import { requireAuth, requireRole } from '../middleware/auth.js'
 import { nextShortId } from '../utils/shortIds.js'
 import { getReservationPayments, syncReservationPaymentState } from '../utils/paymentProgress.js'
 import { emailDamageCharge } from '../services/notificationEmails.js'
+import { notifyDamageCharge, notifyGameStatus } from '../utils/playerNotices.js'
 import { getExperienceLevel, getAgeGroup, suggestBalancedTeams, TEAM_COLORS } from '../utils/teamBalancing.js'
 import { createPieces, modelFilter } from '../utils/inventoryPieces.js'
 import { pieceAtBranch } from '../utils/inventoryHolds.js'
@@ -659,6 +660,7 @@ router.post('/payments/onsite', requireAuth, requireRole('admin', 'registrar'), 
           { $set: { Status: 'Completed', completedAtISO: nowISO, completedBy: actorOf(req), autoCompletedBy: 'final payment', updatedAtISO: nowISO } },
         )
         gameCompleted = result.modifiedCount > 0
+        if (gameCompleted) await notifyGameStatus(db, reservation, 'completed').catch(() => null)
       }
     }
     const payments = await getReservationPayments(db, reservation)
@@ -1511,12 +1513,14 @@ router.put('/repairs/:id/complete', requireAuth, requireRole('admin', 'marshal')
       await session.endSession()
     }
     if (penaltyAmount > 0) {
-      void emailDamageCharge(db, reservation, {
+      const charge = {
         id: repair.id,
         itemName: repair.itemName,
         chargeAmount: penaltyAmount,
         reviewNote: update.partsReplaced ? `Repair: ${update.partsReplaced}` : '',
-      })
+      }
+      void emailDamageCharge(db, reservation, charge)
+      void notifyDamageCharge(db, reservation, charge).catch(() => null)
     }
     if (body.returnToService !== false) {
       await db.collection(repair.itemCollection).updateOne(

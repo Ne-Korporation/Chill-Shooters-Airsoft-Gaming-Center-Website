@@ -60,6 +60,34 @@ export function computeSplitShares(reservation) {
   return shares
 }
 
+// What one player gets, priced the way the split weighs it (0 without per-player costs).
+export function playerCost(reservation, playerId) {
+  const costs = reservation.loadoutUnitCosts
+  if (!costs) return 0
+  const id = String(playerId)
+  const ammo = Math.max(0, Math.round(Number(reservation.extraAmmoByPlayer?.[id]) || 0)) * Math.max(0, Number(costs.ammo) || 0)
+  const singles = rentOnlyOf(reservation, id).reduce((sum, piece) => sum + Math.max(0, Number(costs[`rent_${piece}`]) || 0), 0)
+  const guns = Math.max(0, Number(reservation.playerGunCosts?.[id]) || 0)
+  return Math.max(0, Number(costs[loadoutOf(reservation, id)]) || 0) + singles + guns + ammo
+}
+
+// How a payer's recorded share is made up: their own part and each child's part they pay for,
+// in the same proportion the split used. { own, children: [{ id, name, amount }] }.
+export function shareBreakdown(reservation, payerId, share) {
+  const id = String(payerId)
+  const total = Math.max(0, Number(share) || 0)
+  const children = (reservation.teamMembers || []).filter((member) => member?.isMinor && String(member.guardianId || '') === id)
+  if (!children.length) return { own: total, children: [] }
+  const evenWeight = !reservation.loadoutUnitCosts
+  const weightOf = (playerId) => (evenWeight ? 1 : playerCost(reservation, playerId))
+  const ownWeight = weightOf(id)
+  const childWeights = children.map((child) => weightOf(child.id))
+  const sum = ownWeight + childWeights.reduce((a, b) => a + b, 0)
+  if (sum <= 0) return { own: total, children: children.map((child) => ({ id: String(child.id), name: child.name || 'Child', amount: 0 })) }
+  const parts = children.map((child, index) => ({ id: String(child.id), name: child.name || 'Child', amount: round2((total * childWeights[index]) / sum) }))
+  return { own: round2(total - parts.reduce((a, part) => a + part.amount, 0)), children: parts }
+}
+
 // Sets (or clears) reservation.splitShares from its current team and price.
 export function withSplitShares(reservation) {
   const shares = computeSplitShares(reservation)

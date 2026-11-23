@@ -12,11 +12,17 @@ export type ReceiptReservation = {
   packageName?: string
   totalAmount?: number
   pricingBreakdown?: Array<{ label?: string; amount?: number }>
+  userId?: string
+  paymentMode?: string
+  splitShares?: Record<string, number> | null
+  // Teammates' spots the captain paid for (see server/utils/teamInvites.js).
+  openSlots?: Array<{ name?: string; amount?: number; status?: string; captainPaid?: boolean }>
 }
 
 export type ReceiptPayment = {
   id?: string
   _id?: string
+  userId?: string
   amount?: number
   paymentMethod?: string
   paymentStatus?: string
@@ -39,20 +45,49 @@ const esc = (v: unknown) =>
 
 const php = (value: unknown) => `₱${Number(value || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
+// Who made a payment: payments with no payer recorded are the captain's.
+export function payerIdOf(payment: ReceiptPayment, reservation?: ReceiptReservation | null) {
+  return String(payment.userId || reservation?.userId || '')
+}
+
+// One payer's payments on a reservation: a receipt only ever lists what that person paid.
+export function paymentsOfPayer(payments: ReceiptPayment[], payerId: string, reservation?: ReceiptReservation | null) {
+  return payerId ? payments.filter((payment) => payerIdOf(payment, reservation) === payerId) : payments
+}
+
 // `record`: a payment that is not verified yet (pending, sent back, cancelled). It is printed as a
 // payment record that says so, never as an official receipt, and lists the given payments as-is.
+// `payerId`: whose receipt this is. In a split payment it shows that payer's share and what they
+// paid, not the team's total and balance.
 export function buildReceiptHtml(
   reservation: ReceiptReservation,
   payments: ReceiptPayment[],
   payerName: string,
   receiptNo: string,
-  { record = false }: { record?: boolean } = {},
+  { record = false, payerId = '' }: { record?: boolean; payerId?: string } = {},
 ) {
   const listed = record ? payments : payments.filter(isVerifiedPayment)
   const paidPayments = listed.filter(isVerifiedPayment)
   const reservationId = String(reservation.id || reservation._id || '')
   const paid = paidPayments.reduce((sum, p) => sum + Number(p.amount || 0), 0)
   const total = Number(reservation.totalAmount || 0)
+  const split = Boolean(payerId) && String(reservation.paymentMode || '').toLowerCase() === 'split'
+  const recordedShare = split ? Number(reservation.splitShares?.[payerId]) : NaN
+  // The captain may also have paid online for teammates' spots (a teammate who left): each one is
+  // listed, so the amount received adds up.
+  const coveredSpots = split && payerId === String(reservation.userId || '')
+    ? (reservation.openSlots || []).filter((slot) => (['covering', 'paid'].includes(String(slot.status || '')) || slot.captainPaid) && Number(slot.amount) > 0)
+    : []
+  const owedTotal = (Number.isFinite(recordedShare) ? recordedShare : 0) + coveredSpots.reduce((sum, slot) => sum + Number(slot.amount || 0), 0)
+  const totals = split
+    ? `${Number.isFinite(recordedShare) ? `<tr><td>Your share</td><td class="r">${php(recordedShare)}</td></tr>` : ''}
+    ${coveredSpots.map((slot) => `<tr><td>Spot you paid for: ${esc(slot.name || 'teammate')}</td><td class="r">${php(slot.amount)}</td></tr>`).join('')}
+    ${coveredSpots.length && Number.isFinite(recordedShare) ? `<tr><td>Total you owe</td><td class="r">${php(owedTotal)}</td></tr>` : ''}
+    <tr><td>Amount received${record ? ' (verified)' : ''}</td><td class="r">${php(paid)}</td></tr>
+    ${Number.isFinite(recordedShare) ? `<tr><td>Still due</td><td class="r">${php(Math.max(0, owedTotal - paid))}</td></tr>` : ''}`
+    : `<tr><td>Reservation total</td><td class="r">${php(total)}</td></tr>
+    <tr><td>Total paid${record ? ' (verified)' : ''}</td><td class="r">${php(paid)}</td></tr>
+    <tr><td>Balance due</td><td class="r">${php(Math.max(0, total - paid))}</td></tr>`
   const lines = (reservation.pricingBreakdown || [])
     .map((item) => `<tr><td>${esc(item.label || 'Charge')}</td><td class="r">${php(item.amount)}</td></tr>`)
     .join('')
@@ -91,10 +126,9 @@ export function buildReceiptHtml(
   <div><b>Package:</b> ${esc(reservation.packageName || 'Custom selection')}</div>
   <table><thead><tr><th>Charges</th><th class="r">Amount</th></tr></thead><tbody>${lines || '<tr><td colspan="2">-</td></tr>'}</tbody></table>
   <table><thead><tr><th>Date</th><th>Method</th><th>Reference</th>${record ? '<th>Status</th>' : ''}<th class="r">${record ? 'Amount' : 'Paid'}</th></tr></thead><tbody>${paymentRows || `<tr><td colspan="${record ? 5 : 4}">-</td></tr>`}</tbody></table>
+  ${split ? `<div class="muted">Split payment: this receipt covers only what ${esc(payerName || 'this player')} paid toward the reservation total of ${php(total)}.</div>` : ''}
   <table class="totals">
-    <tr><td>Reservation total</td><td class="r">${php(total)}</td></tr>
-    <tr><td>Total paid${record ? ' (verified)' : ''}</td><td class="r">${php(paid)}</td></tr>
-    <tr><td>Balance due</td><td class="r">${php(Math.max(0, total - paid))}</td></tr>
+    ${totals}
   </table>
   <div class="muted">${record ? 'Only verified payments count toward the total paid.' : 'Only payments verified by Chill Shooters staff or the payment processor are listed.'}</div>
 </body></html>`
@@ -102,9 +136,10 @@ export function buildReceiptHtml(
 
 // The receipt number is issued and saved by the server, so reprinting the same payments
 // shows the same number and every number traces back to its payments.
-export async function fetchReceiptNo(reservation: ReceiptReservation) {
+// `payerId`: whose payments it covers (staff choose; a player always gets their own).
+export async function fetchReceiptNo(reservation: ReceiptReservation, payerId = '') {
   const reservationId = String(reservation.id || reservation._id || '')
-  const res = await apiPost<{ ok: boolean; data: { receiptNo: string } }>(`/api/reservations/${encodeURIComponent(reservationId)}/receipt`, {})
+  const res = await apiPost<{ ok: boolean; data: { receiptNo: string } }>(`/api/reservations/${encodeURIComponent(reservationId)}/receipt`, payerId ? { payerId } : {})
   return res.data.receiptNo
 }
 
@@ -135,6 +170,7 @@ export function downloadReceiptHtml(html: string, fileName: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
-export async function printReceipt(reservation: ReceiptReservation, payments: ReceiptPayment[], payerName: string) {
-  printReceiptHtml(buildReceiptHtml(reservation, payments, payerName, await fetchReceiptNo(reservation)))
+export async function printReceipt(reservation: ReceiptReservation, payments: ReceiptPayment[], payerName: string, payerId = '') {
+  const mine = paymentsOfPayer(payments, payerId, reservation)
+  printReceiptHtml(buildReceiptHtml(reservation, mine, payerName, await fetchReceiptNo(reservation, payerId), { payerId }))
 }

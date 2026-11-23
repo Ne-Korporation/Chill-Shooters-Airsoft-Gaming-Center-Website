@@ -43,6 +43,7 @@ import { cancelBookingDraftLeft, markBookingDraftLeft, peekBookingDraft, readBoo
 import type { PickerGroup } from '../../components/inventory/PiecePicker'
 import { ModelQuantityPicker } from '../../components/inventory/ModelQuantityPicker'
 import { FieldLayoutDesigner, type LayoutItem } from '../../components/reservations/FieldLayoutDesigner'
+import { DEFAULT_LAYOUT_FEES, countLayoutPieces, layoutFeeFor, limitsForFields, useFieldObstacles } from '../../utils/fieldObstacles'
 import { DEFAULT_SLOT_HOURS, formatSlotRange, manilaTodayISO, slotHasStarted, useSlotHours } from '../../utils/slotHours'
 import { causeDayMessage, useCauseDays } from '../../utils/causeDays'
 import { closedDayMessage, useClosedDays } from '../../utils/closedDays'
@@ -684,6 +685,8 @@ export function ReservationCalendarPage() {
   // Optional sketch of the custom field layout the marshals should set up.
   const [layoutBlueprintUrl, setLayoutBlueprintUrl] = useState<string>(() => draftState.layoutBlueprintUrl ?? '')
   const [uploadingBlueprint, setUploadingBlueprint] = useState(false)
+  // How many of each obstacle each field has: the layout designer only places what's there.
+  const { data: fieldObstacles } = useFieldObstacles()
   // Obstacles placed in the field mock (see FieldLayoutDesigner); saved as the blueprint image.
   const [fieldLayoutItems, setFieldLayoutItems] = useState<LayoutItem[]>(() => (Array.isArray(draftState.fieldLayoutItems) ? draftState.fieldLayoutItems : []))
   const [layoutDesignerOpen, setLayoutDesignerOpen] = useState(false)
@@ -728,10 +731,9 @@ export function ReservationCalendarPage() {
   const [ownWeapons, setOwnWeapons] = useState<string>(() => draftState.ownWeapons ?? '')
   const [ownEquipment, setOwnEquipment] = useState<string>(() => draftState.ownEquipment ?? '')
 
-  const [playerApprovedWeapons, setPlayerApprovedWeapons] = useState<any[]>([])
-  const [playerApprovedEquipment, setPlayerApprovedEquipment] = useState<any[]>([])
-  const [selectedOwnWeaponIds, setSelectedOwnWeaponIds] = useState<string[]>(() => draftState.selectedOwnWeaponIds ?? [])
-  const [selectedOwnEquipmentIds, setSelectedOwnEquipmentIds] = useState<string[]>(() => draftState.selectedOwnEquipmentIds ?? [])
+  // The booker says they bring their own gun (custom selection). Nothing is registered: it only
+  // sets the price, and the gun is checked on game day (chronograph).
+  const [captainOwnGun, setCaptainOwnGun] = useState<boolean>(() => draftState.captainOwnGun ?? ((draftState.selectedOwnWeaponIds?.length ?? 0) > 0))
   // How many players the group said will bring their own weapon, and which teammates were assigned.
   const [ownWeaponTarget, setOwnWeaponTarget] = useState<number>(() => draftState.ownWeaponTarget ?? Math.max(0, Math.round(packagePrefill?.ownWeapons ?? 0)))
   const [teammateOwnWeaponIds, setTeammateOwnWeaponIds] = useState<string[]>(() => draftState.teammateOwnWeaponIds ?? [])
@@ -741,7 +743,8 @@ export function ReservationCalendarPage() {
   const [ownGearRentals, setOwnGearRentals] = useState<Record<string, RentPiece[]>>(() => draftState.ownGearRentals ?? {})
   // Hybrid: rental guns each player picked (one sample piece id per gun; the server picks free pieces).
   const [playerGuns, setPlayerGuns] = useState<Record<string, string[]>>(() => draftState.playerGuns ?? {})
-  const [noWeaponWarning, setNoWeaponWarning] = useState<TeamMember | null>(null)
+  // Hybrid: players switched to "Rent some" who haven't picked a piece yet (so the row stays on it).
+  const [rentSomeIds, setRentSomeIds] = useState<string[]>([])
   const [slotHoldExpiresAt, setSlotHoldExpiresAt] = useState<string | null>(null)
   const [placingHold, setPlacingHold] = useState(false)
 
@@ -969,34 +972,6 @@ export function ReservationCalendarPage() {
     return () => { cancelled = true }
   }, [])
 
-  // The player's own weapons and gear (no approval needed; damaged ones can't be brought)
-  useEffect(() => {
-    if (!user?.id) return
-    let cancelled = false
-    ;(async () => {
-      try {
-        const [wepRes, eqRes] = await Promise.all([
-          apiGetAll<any>('weapons').then((data) => ({ ok: true, data })),
-          apiGetAll<any>('equipments').then((data) => ({ ok: true, data })),
-        ])
-        if (cancelled) return
-        const wepDocs = Array.isArray(wepRes?.data) ? wepRes.data : []
-        const eqDocs = Array.isArray(eqRes?.data) ? eqRes.data : []
-        const approvedWeapons = wepDocs.filter(
-          (d: any) => String(d.submittedBy) === String(user.id) && String(d.status || 'available') !== 'damaged'
-        )
-        const approvedEquipment = eqDocs.filter(
-          (d: any) => String(d.submittedBy) === String(user.id) && String(d.status || 'available') !== 'damaged'
-        )
-        setPlayerApprovedWeapons(approvedWeapons)
-        setPlayerApprovedEquipment(approvedEquipment)
-      } catch {
-        // silently fail
-      }
-    })()
-    return () => { cancelled = true }
-  }, [user?.id])
-
   // Only players with an approved weapon on file count; the rest are charged a rental weapon.
   // Own weapons work with a custom selection, and with a package that rents weapons: that player
   // gets the package without its weapon. A fixed group price (settled amount) can't be split.
@@ -1010,7 +985,6 @@ export function ReservationCalendarPage() {
   const packageIsGroupPrice = Boolean(pickedPackage) && Number(pickedPackage?.settledAmount) > 0 && Math.round(Number(pickedPackage?.players ?? 0)) > 1
   const packageAllowsOwnGear = Boolean(pickedPackage) && !packageIsGroupPrice
   const ownGearAllowed = rentMode === 'hybrid' && selectionMode === 'package' && packageAllowsOwnGear
-  const captainHasGun = playerApprovedWeapons.length > 0
   // The booker marks who brings their own; no registered gear is needed. Minors always get the package.
   const validOwnGearIds = useMemo(() => (ownGearAllowed
     ? ownGearIds.filter((id) => id === user?.id || selectedTeammates.some((member) => member.id === id))
@@ -1070,9 +1044,9 @@ export function ReservationCalendarPage() {
   // what the included items, the stock check and the gear count are based on.
   const rentalPlayers = Math.max(0, players - validOwnGearIds.length)
   // Only a solo player picking items marks an own gun this way (Hybrid is package or own gun + gear).
-  const captainBringsOwnWeapon = ownWeaponsAllowed && rentMode === 'custom' && !captainOwnGear && selectedOwnWeaponIds.length > 0
+  const captainBringsOwnWeapon = ownWeaponsAllowed && rentMode === 'custom' && !captainOwnGear && captainOwnGun
   const verifiedTeammateBringers = useMemo(
-    () => selectedTeammates.filter((member) => teammateOwnWeaponIds.includes(member.id) && member.hasApprovedWeapon && !validOwnGearIds.includes(member.id)),
+    () => selectedTeammates.filter((member) => teammateOwnWeaponIds.includes(member.id) && !validOwnGearIds.includes(member.id)),
     [selectedTeammates, teammateOwnWeaponIds, validOwnGearIds],
   )
   // What each player gets, for the table: 'package' | 'own_gun' | 'own_gear'.
@@ -1090,7 +1064,7 @@ export function ReservationCalendarPage() {
       // Each player either gets the full package or brings their own gun and gear (Hybrid), so an
       // "own gun, rent the gear" pick from before doesn't carry over.
       setTeammateOwnWeaponIds([])
-      setSelectedOwnWeaponIds([])
+      setCaptainOwnGun(false)
       if (mode === 'package_all') {
         setOwnGearIds([])
         setOwnGearRentals({})
@@ -1153,11 +1127,7 @@ export function ReservationCalendarPage() {
   const setLoadout = (id: string, loadout: Loadout) => {
     setOwnGearIds((current) => (loadout === 'own_gear' ? [...current.filter((x) => x !== id), id] : current.filter((x) => x !== id)))
     if (id === user?.id) {
-      // The booker's own gun is one of their approved weapons: pick the first if none is ticked.
-      if (loadout === 'own_gun' && selectedOwnWeaponIds.length === 0 && playerApprovedWeapons[0]) {
-        setSelectedOwnWeaponIds([String(playerApprovedWeapons[0].id || playerApprovedWeapons[0]._id)])
-      }
-      if (loadout === 'package') setSelectedOwnWeaponIds([])
+      setCaptainOwnGun(loadout === 'own_gun')
     } else {
       setTeammateOwnWeaponIds((current) => (loadout === 'own_gun' ? [...current.filter((x) => x !== id), id] : current.filter((x) => x !== id)))
     }
@@ -1352,6 +1322,20 @@ export function ReservationCalendarPage() {
       return rank(a) - rank(b) || (rank(a) < 2 ? a.price.total - b.price.total : a.index - b.index)
     })
   }, [packages, players, weapons, equipment, verifiedOwnWeaponCount, budget])
+
+  // Only packages this team can book: right for the group size, and (Hybrid, where players can be
+  // left out of the package) priced per player, not one price for a whole group.
+  const isGroupPricePackage = (pkg: { settledAmount?: number; players?: number }) => Number(pkg.settledAmount) > 0 && Math.round(Number(pkg.players ?? 0)) > 1
+  const shownPackages = useMemo(
+    () => rankedPackages.filter((row) => row.fitsGroup && (rentMode !== 'hybrid' || !isGroupPricePackage(row.pkg as any))),
+    [rankedPackages, rentMode],
+  )
+  const hiddenPackageCount = rankedPackages.length - shownPackages.length
+  // A package that no longer fits (group size or mode changed) isn't kept selected.
+  useEffect(() => {
+    if (!selectedPackageId || loadingPackages || !packages.length) return
+    if (!shownPackages.some((row) => row.pkg.id === selectedPackageId)) setSelectedPackageId(shownPackages[0]?.pkg.id || '')
+  }, [shownPackages, selectedPackageId, loadingPackages, packages.length])
 
   const recommendedCount = rankedPackages.filter((row) => row.recommended).length
   // Shown when nothing fits: the cheapest package for this group and how far it is over.
@@ -1639,11 +1623,20 @@ export function ReservationCalendarPage() {
   }, [selectedPackage, packageIsGroupPrice, packageWeapons, packageEquipment])
 
   const extraAmmoTotal = Math.round(extraAmmoReloads * ammoReloadPrice)
+  // A custom field layout (private games): a tier by how many pieces staff set up. An uploaded plan
+  // can't be counted, so it's the Standard tier. The server sets the actual price the same way.
+  const layoutTiers = fieldObstacles?.layoutFees || DEFAULT_LAYOUT_FEES
+  const layoutFee = sessionType !== 'private'
+    ? null
+    : fieldLayoutItems.length
+      ? layoutFeeFor(countLayoutPieces(fieldLayoutItems), layoutTiers)
+      : layoutBlueprintUrl ? { ...layoutTiers[1], pieces: 0, next: null, untilNext: null } : null
+  const layoutFeeTotal = layoutFee?.price || 0
   const dynamicPricing = useMemo(() => {
-    if (extraAmmoTotal <= 0) return basePricing
-    const total = basePricing.total + extraAmmoTotal
+    if (extraAmmoTotal <= 0 && layoutFeeTotal <= 0) return basePricing
+    const total = basePricing.total + extraAmmoTotal + layoutFeeTotal
     return { ...basePricing, total, perPlayer: Math.round(total / Math.max(1, players)) }
-  }, [basePricing, extraAmmoTotal, players])
+  }, [basePricing, extraAmmoTotal, layoutFeeTotal, players])
 
   // Each slot of a full day is priced like a one-slot booking; the player pays for all of them.
   const bookingTotal = dynamicPricing.total * bookedSlots.length
@@ -1715,6 +1708,9 @@ export function ReservationCalendarPage() {
       equipmentPrice += extraAmmoTotal
       itemizedBreakdown.push({ label: `Extra ammo reloads (${extraAmmoReloads} × ₱${ammoReloadPrice})`, amount: extraAmmoTotal })
     }
+    if (layoutFee && layoutFee.price > 0) {
+      itemizedBreakdown.push({ label: `Custom field layout (${layoutFee.label}, ${layoutFee.pieces > 0 ? `${layoutFee.pieces} piece${layoutFee.pieces === 1 ? '' : 's'}` : 'uploaded plan'})`, amount: layoutFee.price })
+    }
 
     return {
       fieldPrice,
@@ -1724,7 +1720,7 @@ export function ReservationCalendarPage() {
       total: dynamicPricing.total,
       itemizedBreakdown,
     }
-  }, [customItemsTotal, customSelectedEquipment, customSelectedWeapons, dynamicPricing, packageEquipment, players, selectedPackage, selectionMode, extraAmmoTotal, extraAmmoReloads, ammoReloadPrice, rentalPlayers, packageSingleItems, rentOnlyCounts, validPlayerGuns, gunRentersNotTakingPackage, weapons])
+  }, [customItemsTotal, customSelectedEquipment, customSelectedWeapons, dynamicPricing, packageEquipment, players, selectedPackage, selectionMode, extraAmmoTotal, extraAmmoReloads, ammoReloadPrice, rentalPlayers, packageSingleItems, rentOnlyCounts, validPlayerGuns, gunRentersNotTakingPackage, weapons, layoutFee])
 
   // Each player's part of the booking total (every slot), the same way the server splits a payment
   // (server/utils/splitShares.js): in proportion to what each one gets, and a minor's part is paid
@@ -1812,21 +1808,16 @@ export function ReservationCalendarPage() {
   // Only registered players can be booked: every spot besides the captain needs a teammate account.
   const teamSelectionComplete = maxTeammates === 0 || selectedTeammateIds.length === maxTeammates
   const missingTeammates = Math.max(0, maxTeammates - selectedTeammateIds.length)
-  const toggleTeammateOwnWeapon = (member: TeamMember) => {
-    if (teammateOwnWeaponIds.includes(member.id)) {
-      setTeammateOwnWeaponIds((current) => current.filter((id) => id !== member.id))
-      return
-    }
-    if (!member.hasApprovedWeapon) {
-      setNoWeaponWarning(member)
-      return
-    }
-    setTeammateOwnWeaponIds((current) => [...current, member.id])
-  }
   const canSplitPayment = players > 1 && selectedTeammateIds.length > 0 && !fullDay
   const splitPartySize = Math.max(1, selectedTeammateIds.length + 1)
+  // In a split, each player pays for what they get (playerParts, as the server splits it): the
+  // booker's part of the total, and that part as a fraction of it, which the payment page uses to
+  // estimate their share of the online amount before the server records the exact shares.
+  const myPart = playerParts.find((row) => row.isMe)?.part ?? 0
+  const partsTotal = playerParts.reduce((sum, row) => sum + (row.part || 0), 0)
+  const myShareFraction = partsTotal > 0 ? myPart / partsTotal : 1
   const payerShareAmount = paymentMode === 'split'
-    ? Number((dynamicPricing.total / splitPartySize).toFixed(2))
+    ? Number((dynamicPricing.total * myShareFraction).toFixed(2))
     : dynamicPricing.total
   // Public games allow one booking per player for each time slot and location (other slots that
   // day stay open). The server enforces it; this shows it on step 1 before the player continues.
@@ -2019,14 +2010,14 @@ export function ReservationCalendarPage() {
       state: {
         step, selectedLocation, selectedFieldIds, dateISO, slot, selectedSlots, pickedSlots, players, notes, teamName, gameModePreference,
         layoutRequest, layoutBlueprintUrl, selectedPackageId, selectionMode, customWeaponIds, customEquipmentIds,
-        ownWeapons, ownEquipment, selectedOwnWeaponIds, selectedOwnEquipmentIds, ownWeaponTarget, teammateOwnWeaponIds,
+        ownWeapons, ownEquipment, captainOwnGun, ownWeaponTarget, teammateOwnWeaponIds,
         ownGearIds, ownGearRentals, playerGuns, rentMode, selectedTeammates, paymentMode, paymentPlan, extraAmmoReloads, fieldLayoutItems, budgetInput,
       },
     })
   }, [
     user?.id, step, draftLabel, selectedLocation, selectedFieldIds, dateISO, slot, selectedSlots, pickedSlots, players, notes, teamName,
     gameModePreference, layoutRequest, layoutBlueprintUrl, selectedPackageId, selectionMode, customWeaponIds,
-    customEquipmentIds, ownWeapons, ownEquipment, selectedOwnWeaponIds, selectedOwnEquipmentIds, ownWeaponTarget,
+    customEquipmentIds, ownWeapons, ownEquipment, captainOwnGun, ownWeaponTarget,
     teammateOwnWeaponIds, ownGearIds, ownGearRentals, playerGuns, rentMode, selectedTeammates, paymentMode, paymentPlan, extraAmmoReloads, fieldLayoutItems, budgetInput,
   ])
 
@@ -2163,6 +2154,8 @@ export function ReservationCalendarPage() {
         gameModePreference: publicGame ? GAME_MODES[0] : gameModePreference,
         layoutRequest: publicGame ? '' : layoutRequest.trim(),
         ...(layoutBlueprintUrl && !publicGame ? { layoutBlueprintUrl } : {}),
+        // The pieces placed in the designer: the server checks them against the field and prices the layout.
+        ...(layoutBlueprintUrl && !publicGame && fieldLayoutItems.length ? { fieldLayoutItems } : {}),
         ...(extraAmmoReloads > 0 ? { extraAmmoReloads } : {}),
         reservationStatus: 'pending',
         packageName: pkgName,
@@ -2178,6 +2171,8 @@ export function ReservationCalendarPage() {
         paymentPlan,
         teamSize: paymentMode === 'split' ? splitPartySize : 1,
         payerShareAmount,
+        // The booker's part of a split, by what each player gets (the payment page's estimate).
+        myShareFraction,
         ownWeaponTarget: ownWeaponsAllowed ? ownWeaponTarget : 0,
         ownWeaponBringerIds: ownWeaponsAllowed
           ? [...(captainBringsOwnWeapon ? [user.id] : []), ...teammateOwnWeaponIds.filter((id) => !validOwnGearIds.includes(id))]
@@ -2200,8 +2195,6 @@ export function ReservationCalendarPage() {
         pendingReservation.customEquipmentIds = customEquipmentIds
         pendingReservation.ownWeapons = ownWeapons.trim()
         pendingReservation.ownEquipment = ownEquipment.trim()
-        pendingReservation.selectedOwnWeaponIds = selectedOwnWeaponIds
-        pendingReservation.selectedOwnEquipmentIds = selectedOwnEquipmentIds
         pendingReservation.selectedGameplayName = 'Custom Selection'
       }
 
@@ -2276,6 +2269,64 @@ export function ReservationCalendarPage() {
       </div>
     )
   }
+
+  // What the booking includes, line by line, with the total and per-player price. Shown on the
+  // gear step and again in the Briefing panel, so the price is in front of the player at both.
+  const renderWhatYouGet = () => (
+    <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+      <div className="text-sm font-bold">What you're getting</div>
+      {/* The same lines the receipt shows, so the player sees what they availed. */}
+      {paymentBreakdown.itemizedBreakdown.length > 0 ? (
+        <ul className="mt-2 space-y-1 text-xs">
+          {paymentBreakdown.itemizedBreakdown.map((item, index) => (
+            <li key={`${item.label}-${index}`} className="flex items-baseline justify-between gap-3">
+              <span className="min-w-0 text-muted">{item.label}</span>
+              <span className={`shrink-0 font-semibold ${item.amount < 0 ? 'text-success' : item.amount === 0 ? 'text-muted' : ''}`}>
+                {item.amount === 0 ? 'Free' : formatCurrency(item.amount)}
+              </span>
+            </li>
+          ))}
+          {fullDay ? (
+            <>
+              {/* The lines above are one slot for the whole group; a full day books three. */}
+              <li className="flex items-baseline justify-between gap-3 border-t border-white/10 pt-1">
+                <span className="text-muted">One slot, whole group</span>
+                <span className="shrink-0 font-semibold">{formatCurrency(dynamicPricing.total)}</span>
+              </li>
+              <li className="flex items-baseline justify-between gap-3">
+                <span className="text-muted">{allDay ? 'Full day: morning, afternoon & evening' : pickedSlotsLabel}</span>
+                <span className="shrink-0 font-semibold">× {bookedSlots.length} slots</span>
+              </li>
+            </>
+          ) : null}
+        </ul>
+      ) : (
+        <div className="mt-1 text-xs text-muted">Pick a package or items to see what's included.</div>
+      )}
+      <div className="mt-3 flex items-end justify-between border-t border-white/10 pt-3">
+        <div>
+          <div className="text-xs text-muted">Total{players > 1 ? `, all ${players} players` : ''}</div>
+          <div className="text-2xl font-bold text-gold">{formatCurrency(bookingTotal)}</div>
+        </div>
+        <div className="text-right">
+          <div className="text-xs text-muted">Per player</div>
+          <div className="text-sm font-bold">{formatCurrency(Math.round(bookingTotal / Math.max(1, players)))}</div>
+          {fullDay ? (
+            <div className="text-[11px] text-muted">
+              {formatCurrency(Math.round(dynamicPricing.total / Math.max(1, players)))} × {bookedSlots.length} slots
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      {selectionMode === 'package' && dynamicPricing.discountAmount > 0 && (
+        <div className="mt-2 text-xs text-muted">
+          Discount applied: {dynamicPricing.discountSummary}
+          {dynamicPricing.savings > 0 && ` (save ${formatCurrency(dynamicPricing.savings)})`}
+        </div>
+      )}
+    </div>
+  )
 
   return (
     <div className="space-y-4">
@@ -3100,11 +3151,27 @@ export function ReservationCalendarPage() {
                   <span className="text-xs text-muted">Players</span>
                   <span className="text-xl font-bold text-gold">{selectedTeammates.length + 1}/{players}</span>
                 </div>
-                <div className="mt-3 text-xs text-muted">
-                  {selectedTeammates.length > 0
-                    ? `Team: you, ${selectedTeammates.map((member) => member.name).join(', ')}`
-                    : maxTeammates > 0 ? 'No teammates added yet.' : 'Just you.'}
-                </div>
+                {/* Everyone on the team, one per line (a child under their parent's care is marked). */}
+                <ol className="mt-3 divide-y divide-white/5 text-sm">
+                  <li className="flex items-center gap-2 py-1.5">
+                    <span className="w-5 shrink-0 text-right text-xs text-muted">1</span>
+                    <span className="min-w-0 flex-1 truncate font-semibold">{user?.name || 'You'}</span>
+                    <span className="shrink-0 text-[11px] text-muted">you</span>
+                  </li>
+                  {selectedTeammates.map((member, index) => (
+                    <li key={member.id} className="flex items-center gap-2 py-1.5">
+                      <span className="w-5 shrink-0 text-right text-xs text-muted">{index + 2}</span>
+                      <span className="min-w-0 flex-1 truncate">{member.name}</span>
+                      {member.isMinor ? <span className="shrink-0 rounded-full bg-[rgba(var(--text),0.08)] px-2 py-0.5 text-[10px] text-muted">minor</span> : null}
+                    </li>
+                  ))}
+                  {Array.from({ length: Math.max(0, maxTeammates - selectedTeammates.length) }).map((_, index) => (
+                    <li key={`empty-${index}`} className="flex items-center gap-2 py-1.5 text-muted">
+                      <span className="w-5 shrink-0 text-right text-xs">{selectedTeammates.length + index + 2}</span>
+                      <span className="flex-1 text-xs italic">Empty spot: add a player</span>
+                    </li>
+                  ))}
+                </ol>
               </div>
 
               <div className="mt-4 flex flex-col gap-2">
@@ -3204,9 +3271,16 @@ export function ReservationCalendarPage() {
               <>
                 <Card className="p-4 md:p-6">
                   <div className="flex items-center gap-2 text-sm font-bold">
-                    <FiTag /> <span>Choose a package</span>
+                    <FiTag /> <span>{rentMode === 'hybrid' ? 'Package for the players who take it' : 'Choose a package'}</span>
                   </div>
-                  <p className="mt-1 text-xs text-muted">Select a rental package, or enter your budget and we will show the packages that match your group and fit it.</p>
+                  <p className="mt-1 text-xs text-muted">
+                    {rentMode === 'hybrid'
+                      ? 'Players set to "Package" below get this one. The others rent only some pieces or bring their own.'
+                      : 'Select a rental package, or enter your budget and we will show the packages that match your group and fit it.'}
+                    {hiddenPackageCount > 0 && !loadingPackages
+                      ? ` Showing only packages for a group of ${players}${rentMode === 'hybrid' ? ', priced per player' : ''} (${hiddenPackageCount} other${hiddenPackageCount === 1 ? '' : 's'} hidden).`
+                      : ''}
+                  </p>
 
                   {packages.length > 0 ? (
                     <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-3">
@@ -3230,7 +3304,16 @@ export function ReservationCalendarPage() {
                           </div>
                         </div>
                       </div>
-                      {budget !== null ? (
+                      {/* Hybrid: the budget is checked against the booking as it stands, with each
+                          player's choice (package, some pieces, or their own gear). */}
+                      {budget !== null && rentMode === 'hybrid' ? (
+                        <div className={`mt-3 text-xs ${bookingTotal <= budget ? 'text-success' : 'text-warning'}`}>
+                          {bookingTotal <= budget
+                            ? `Your booking is ${formatCurrency(bookingTotal)} with each player's choice: ${formatCurrency(budget - bookingTotal)} under your ${formatCurrency(budget)} budget.`
+                            : `Your booking is ${formatCurrency(bookingTotal)} with each player's choice: ${formatCurrency(bookingTotal - budget)} over your ${formatCurrency(budget)} budget. Pick a cheaper package, or set more players to "Rent some" or "Bring all" below.`}
+                        </div>
+                      ) : null}
+                      {budget !== null && rentMode !== 'hybrid' ? (
                         <div className={['mt-3 text-xs', recommendedCount > 0 ? 'text-success' : 'text-warning'].join(' ')}>
                           {recommendedCount > 0
                             ? `${recommendedCount} package${recommendedCount === 1 ? '' : 's'} fit${recommendedCount === 1 ? 's' : ''} ${formatCurrency(budget)} for ${players} player${players === 1 ? '' : 's'}, cheapest first.`
@@ -3249,7 +3332,12 @@ export function ReservationCalendarPage() {
                     <div className="mt-4 text-sm text-muted">No packages available yet. Ask admin to create rental packages.</div>
                   ) : (
                     <div className="mt-4 grid gap-3 lg:grid-cols-2">
-                      {rankedPackages.map(({ pkg, price, savingsPerPlayer, groupSize, recommended, overBudgetBy }) => {
+                      {shownPackages.length === 0 ? (
+                        <div className="text-sm text-muted lg:col-span-2">
+                          No package fits a group of {players}{rentMode === 'hybrid' ? ' priced per player' : ''}. Change your group size, or use {rentMode === 'hybrid' ? 'another rent mode' : 'Custom Selection'}.
+                        </div>
+                      ) : null}
+                      {shownPackages.map(({ pkg, price, savingsPerPlayer, groupSize, recommended, overBudgetBy }) => {
                         const active = pkg.id === selectedPackageId
                         return (
                           <button
@@ -3354,7 +3442,7 @@ export function ReservationCalendarPage() {
                     <FiUsers /> <span>Who gets the package</span>
                   </div>
                   <p className="mt-1 text-xs text-muted">
-                    Choose for each player: the full package, or only what they need (pick the guns they rent, the mask, the vest), or they bring everything and pay the entrance fee only. A player with the package can add another gun. Each player pays for what they get.
+                    For each player: the <b>package</b>, <b>rent some</b> pieces (+ entrance {formatCurrency(ENTRANCE_FEE_PER_PLAYER)}), or <b>bring all</b> their own (entrance only). Each player pays for what they get.
                   </p>
                   {selectedPackage && packageIsGroupPrice ? (
                     <div className="mt-2 rounded-xl border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs">
@@ -3366,134 +3454,129 @@ export function ReservationCalendarPage() {
                     const gunOptions = weaponGroups
                       .filter((group) => String(group.category || '').toLowerCase() !== 'grenades' && group.pieces.some((piece) => piece.free))
                       .map((group) => ({ id: group.pieces.find((piece) => piece.free)!.id, model: group.model, price: Number(group.price || 0) }))
-                    return (
-                  <div className="mt-3 overflow-x-auto rounded-xl border border-white/10">
-                    <table className="w-full min-w-[760px] text-sm">
-                      <thead>
-                        <tr className="border-b border-white/10 bg-white/5 text-left text-[11px] uppercase tracking-wider text-muted">
-                          <th rowSpan={2} className="px-3 py-2 align-bottom font-semibold">Player</th>
-                          <th rowSpan={2} className="px-3 py-2 text-center align-bottom font-semibold">
-                            Full package
-                            <div className="font-normal normal-case tracking-normal">
-                              {selectedPackage
-                                ? `${selectedPackage.name}${packageOnePlayerPrice !== null ? ` · ${formatCurrency(packageOnePlayerPrice)}` : ''}`
-                                : 'Pick one above'}
-                            </div>
-                          </th>
-                          <th colSpan={2} className="border-l border-white/10 px-3 pt-2 text-center font-semibold">
-                            Or rent only
-                            <div className="font-normal normal-case tracking-normal">+ entrance {formatCurrency(ENTRANCE_FEE_PER_PLAYER)}</div>
-                          </th>
-                          <th rowSpan={2} className="border-l border-white/10 px-3 py-2 text-left align-bottom font-semibold">
-                            Guns
-                            <div className="font-normal normal-case tracking-normal">Rent any gun · extra with the package</div>
-                          </th>
-                          <th rowSpan={2} className="border-l border-white/10 px-3 py-2 text-center align-bottom font-semibold">
-                            Brings everything
-                            <div className="font-normal normal-case tracking-normal">Entrance {formatCurrency(ENTRANCE_FEE_PER_PLAYER)} only</div>
-                          </th>
-                          <th rowSpan={2} className="px-3 py-2 text-right align-bottom font-semibold">Pays</th>
-                        </tr>
-                        <tr className="border-b border-white/10 bg-white/5 text-[11px] uppercase tracking-wider text-muted">
-                          {RENT_PIECES.map((piece, index) => (
-                            <th key={piece} className={`px-2 pb-2 text-center font-semibold ${index === 0 ? 'border-l border-white/10' : ''}`}>
-                              {RENT_PIECE_LABEL[piece]}
-                              <div className="font-normal normal-case tracking-normal">
-                                {packageSingleItems[piece] ? formatCurrency(packageSingleItems[piece]!.price) : 'Not in package'}
-                              </div>
-                            </th>
+                    const canBringOwn = !(selectedPackage && packageIsGroupPrice)
+                    const rows = [
+                      { id: String(user?.id || ''), name: user?.name || 'You', isMe: true, isMinor: false },
+                      ...selectedTeammates.map((member) => ({ id: member.id, name: member.name, isMe: false, isMinor: Boolean(member.isMinor) })),
+                    ].filter((row) => row.id)
+                    // Each player: the package, renting only some pieces, or bringing everything.
+                    type Choice = 'package' | 'some' | 'own'
+                    const choiceOf = (id: string): Choice => {
+                      if (!canBringOwn || !validOwnGearIds.includes(id)) return 'package'
+                      return rentSomeIds.includes(id) || (validOwnGearRentals[id] || []).length > 0 || (validPlayerGuns[id] || []).length > 0 ? 'some' : 'own'
+                    }
+                    const choose = (id: string, choice: Choice) => {
+                      setRentSomeIds((current) => (choice === 'some' ? [...current.filter((x) => x !== id), id] : current.filter((x) => x !== id)))
+                      if (choice === 'package') chooseFullPackage(id)
+                      else if (choice === 'own') chooseBringsAll(id)
+                      else if (!validOwnGearIds.includes(id)) chooseBringsAll(id)
+                    }
+                    const segment = (id: string, current: Choice, value: Choice, label: string, price: string, disabled = false) => (
+                      <button
+                        type="button"
+                        role="radio"
+                        aria-checked={current === value}
+                        disabled={disabled}
+                        onClick={() => choose(id, value)}
+                        className={[
+                          'flex-1 rounded-lg px-2 py-1.5 text-center text-xs font-semibold leading-tight transition disabled:cursor-not-allowed disabled:opacity-30',
+                          current === value ? 'bg-primary text-white shadow' : 'text-muted hover:bg-white/10 hover:text-text',
+                        ].join(' ')}
+                      >
+                        {label}
+                        <span className={`block text-[10px] font-normal ${current === value ? 'text-white/80' : 'text-muted'}`}>{price}</span>
+                      </button>
+                    )
+                    const gunPicker = (row: { id: string; name: string }, notTaking: boolean, guns: string[]) => (
+                      canBringOwn && guns.length < MAX_GUNS_PER_PLAYER && gunOptions.length > 0 ? (
+                        <select
+                          value=""
+                          onChange={(event) => addGun(row.id, event.target.value)}
+                          aria-label={`${row.name}: ${guns.length ? 'add another gun' : notTaking ? 'pick a gun to rent' : 'add an extra gun'}`}
+                          className="rounded-lg border border-white/10 bg-black/30 px-2 py-1 text-[11px] text-text [&>option]:bg-background"
+                        >
+                          <option value="">{guns.length ? '+ Another gun' : notTaking ? '+ Rent a gun' : '+ Extra gun'}</option>
+                          {gunOptions.map((option) => (
+                            <option key={option.id} value={option.id}>{option.model} · {formatCurrency(option.price)}</option>
                           ))}
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-white/5">
-                        {[
-                          { id: String(user?.id || ''), name: user?.name || 'You', isMe: true, isMinor: false },
-                          ...selectedTeammates.map((member) => ({ id: member.id, name: member.name, isMe: false, isMinor: Boolean(member.isMinor) })),
-                        ].filter((row) => row.id).map((row) => {
-                          const canBringOwn = !(selectedPackage && packageIsGroupPrice)
-                          const notTakingPackage = canBringOwn && validOwnGearIds.includes(row.id)
-                          const singles = validOwnGearRentals[row.id] || []
-                          const guns = validPlayerGuns[row.id] || []
-                          const bringsAll = notTakingPackage && singles.length === 0 && guns.length === 0
-                          const pays = notTakingPackage
-                            ? ENTRANCE_FEE_PER_PLAYER + singlesCostOf(row.id) + gunsCostOf(row.id)
-                            : packageOnePlayerPrice !== null ? packageOnePlayerPrice + gunsCostOf(row.id) : null
-                          const radio = (checked: boolean, onChange: () => void, label: string, disabled = false) => (
-                            <input
-                              type="radio"
-                              name={`loadout-${row.id}`}
-                              checked={checked}
-                              disabled={disabled}
-                              onChange={onChange}
-                              aria-label={`${row.name}: ${label}`}
-                              className="h-4 w-4 accent-[var(--color-accent)] disabled:opacity-30"
-                            />
-                          )
-                          return (
-                            <tr key={row.id} className={row.isMe ? 'bg-accent/5' : ''}>
-                              <td className="px-3 py-2">
-                                <div className="font-semibold">{row.name}{row.isMe ? <span className="ml-1.5 text-xs font-normal text-muted">(you)</span> : null}</div>
-                                {row.isMinor ? <div className="text-[11px] text-muted">Minor</div> : null}
-                              </td>
-                              <td className="px-3 py-2 text-center">
-                                {radio(!notTakingPackage, () => chooseFullPackage(row.id), 'gets the full package')}
-                              </td>
-                              {RENT_PIECES.map((piece, index) => (
-                                <td key={piece} className={`px-2 py-2 text-center ${index === 0 ? 'border-l border-white/10' : ''}`}>
-                                  <input
-                                    type="checkbox"
-                                    checked={notTakingPackage && singles.includes(piece)}
-                                    disabled={!canBringOwn || !packageSingleItems[piece]}
-                                    onChange={() => toggleSingle(row.id, piece)}
-                                    aria-label={`${row.name}: rent only the ${piece}`}
-                                    className="h-4 w-4 rounded accent-[var(--color-accent)] disabled:opacity-30"
-                                  />
-                                </td>
-                              ))}
-                              <td className="border-l border-white/10 px-3 py-2">
-                                <div className="flex flex-wrap items-center gap-1.5">
-                                  {guns.map((gunId, index) => (
-                                    <span key={`${gunId}-${index}`} className="inline-flex items-center gap-1 rounded-full border border-accent/30 bg-accent/10 px-2 py-0.5 text-[11px] font-semibold text-accent">
-                                      {notTakingPackage || index > 0 ? '' : '+ '}{gunModel(gunId)} · {formatCurrency(gunPrice(gunId))}
-                                      <button
-                                        type="button"
-                                        onClick={() => removeGun(row.id, index)}
-                                        aria-label={`Remove ${gunModel(gunId)} from ${row.name}`}
-                                        className="rounded-full px-0.5 text-muted hover:text-danger"
-                                      >
-                                        ×
-                                      </button>
-                                    </span>
-                                  ))}
-                                  {canBringOwn && guns.length < MAX_GUNS_PER_PLAYER && gunOptions.length > 0 ? (
-                                    <select
-                                      value=""
-                                      onChange={(event) => addGun(row.id, event.target.value)}
-                                      aria-label={`${row.name}: ${guns.length ? 'add another gun' : notTakingPackage ? 'pick a gun to rent' : 'add an extra gun'}`}
-                                      className="max-w-[10rem] rounded-lg border border-white/10 bg-black/30 px-2 py-1 text-[11px] text-text [&>option]:bg-background"
-                                    >
-                                      <option value="">
-                                        {guns.length ? '+ Another gun' : notTakingPackage ? 'Pick a gun…' : '+ Extra gun'}
-                                      </option>
-                                      {gunOptions.map((option) => (
-                                        <option key={option.id} value={option.id}>{option.model} · {formatCurrency(option.price)}</option>
-                                      ))}
-                                    </select>
-                                  ) : null}
+                        </select>
+                      ) : null
+                    )
+                    const packagePrice = packageOnePlayerPrice !== null ? formatCurrency(packageOnePlayerPrice) : '—'
+                    return (
+                      <>
+                        {/* Set everyone at once, then change the few who differ. */}
+                        {canBringOwn && rows.length > 2 ? (
+                          <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+                            <span className="text-muted">Set everyone:</span>
+                            <button type="button" onClick={() => rows.forEach((row) => choose(row.id, 'package'))} className="rounded-full border border-white/10 px-3 py-1 font-semibold hover:bg-white/10">Package</button>
+                            <button type="button" onClick={() => rows.forEach((row) => choose(row.id, 'own'))} className="rounded-full border border-white/10 px-3 py-1 font-semibold hover:bg-white/10">Bring all</button>
+                          </div>
+                        ) : null}
+                        <ul className="mt-3 divide-y divide-white/5 rounded-xl border border-white/10">
+                          {rows.map((row) => {
+                            const choice = choiceOf(row.id)
+                            const notTaking = choice !== 'package'
+                            const singles = validOwnGearRentals[row.id] || []
+                            const guns = validPlayerGuns[row.id] || []
+                            const pays = notTaking
+                              ? ENTRANCE_FEE_PER_PLAYER + singlesCostOf(row.id) + gunsCostOf(row.id)
+                              : packageOnePlayerPrice !== null ? packageOnePlayerPrice + gunsCostOf(row.id) : null
+                            return (
+                              <li key={row.id} className={`px-3 py-2 ${row.isMe ? 'bg-accent/5' : ''}`}>
+                                <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 sm:grid-cols-[minmax(0,1fr)_minmax(16rem,22rem)_4.5rem]">
+                                  <div className="min-w-0">
+                                    <div className="truncate text-sm font-semibold">
+                                      {row.name}{row.isMe ? <span className="ml-1 text-xs font-normal text-muted">(you)</span> : null}
+                                    </div>
+                                    {row.isMinor ? <div className="text-[11px] text-muted">Minor · paid by their parent</div> : null}
+                                  </div>
+                                  <div className="order-3 col-span-2 flex gap-1 rounded-xl border border-white/10 bg-black/20 p-1 sm:order-none sm:col-span-1" role="radiogroup" aria-label={`${row.name}: what they get`}>
+                                    {segment(row.id, choice, 'package', 'Package', packagePrice)}
+                                    {segment(row.id, choice, 'some', 'Rent some', '+ pieces', !canBringOwn)}
+                                    {segment(row.id, choice, 'own', 'Bring all', formatCurrency(ENTRANCE_FEE_PER_PLAYER), !canBringOwn)}
+                                  </div>
+                                  <div className="text-right text-sm font-bold tabular-nums">{pays !== null ? formatCurrency(pays) : '—'}</div>
                                 </div>
-                              </td>
-                              <td className="border-l border-white/10 px-3 py-2 text-center">
-                                {radio(bringsAll, () => chooseBringsAll(row.id), 'brings their own gun and gear', !canBringOwn)}
-                              </td>
-                              <td className="whitespace-nowrap px-3 py-2 text-right text-xs font-semibold">
-                                {pays !== null ? formatCurrency(pays) : '—'}
-                              </td>
-                            </tr>
-                          )
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
+                                {/* Only when there's something to pick: the pieces to rent, and guns. */}
+                                {choice === 'some' || guns.length > 0 || (choice === 'package' && canBringOwn) ? (
+                                  <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px]">
+                                    {choice === 'some' ? (
+                                      <>
+                                        <span className="text-muted">Rents:</span>
+                                        {RENT_PIECES.filter((piece) => packageSingleItems[piece]).map((piece) => {
+                                          const on = singles.includes(piece)
+                                          return (
+                                            <button
+                                              key={piece}
+                                              type="button"
+                                              aria-pressed={on}
+                                              onClick={() => toggleSingle(row.id, piece)}
+                                              className={[
+                                                'rounded-full border px-2 py-0.5 font-semibold transition',
+                                                on ? 'border-accent/40 bg-accent/15 text-accent' : 'border-white/10 text-muted hover:bg-white/10',
+                                              ].join(' ')}
+                                            >
+                                              {on ? '✓ ' : '+ '}{RENT_PIECE_LABEL[piece]} {formatCurrency(packageSingleItems[piece]!.price)}
+                                            </button>
+                                          )
+                                        })}
+                                      </>
+                                    ) : null}
+                                    {guns.map((gunId, index) => (
+                                      <span key={`${gunId}-${index}`} className="inline-flex items-center gap-1 rounded-full border border-accent/30 bg-accent/10 px-2 py-0.5 font-semibold text-accent">
+                                        {notTaking || index > 0 ? '' : '+ '}{gunModel(gunId)} · {formatCurrency(gunPrice(gunId))}
+                                        <button type="button" onClick={() => removeGun(row.id, index)} aria-label={`Remove ${gunModel(gunId)} from ${row.name}`} className="rounded-full px-0.5 text-muted hover:text-danger">×</button>
+                                      </span>
+                                    ))}
+                                    {choice !== 'own' ? gunPicker(row, notTaking, guns) : null}
+                                  </div>
+                                ) : null}
+                              </li>
+                            )
+                          })}
+                        </ul>
+                      </>
                     )
                   })()}
                   <div className="mt-2 text-xs text-muted">
@@ -3650,135 +3733,42 @@ export function ReservationCalendarPage() {
               </div>
               <p className="mt-1 text-xs text-muted">
                 {selectionMode === 'package'
-                  ? 'Anyone bringing their own weapon gets the package without its weapon, so it isn\'t charged. Only weapons added to a player\'s profile count.'
-                  : 'Bringing your own weapon? Mark it here and rent fewer weapons above. Only weapons added to a player\'s profile count.'}
+                  ? "Anyone bringing their own weapon gets the package without its weapon, so it isn't charged."
+                  : 'Bringing your own weapon? Mark who is and rent fewer weapons above.'}
+                {' '}Nothing to register: just bring it. Every gun is checked on the chronograph (FPS) before the game.
               </p>
 
-
-              {playerApprovedWeapons.length === 0 && playerApprovedEquipment.length === 0 ? (
-                <div className="mt-4 text-sm text-muted">
-                  No weapons or gear added yet. Go to{" "}
-                  <button
-                    type="button"
-                    className="text-gold underline"
-                    onClick={() => navigate('/app/players/' + user?.id + '/weapons-and-equipment')}
-                  >
-                    My Weapons & Gear
-                  </button>{" "}
-                  to add yours.
+              <div className="mt-4">
+                <div className="mb-2 text-xs font-bold uppercase tracking-[0.18em] text-muted">Who brings their own weapon</div>
+                <div className="flex flex-wrap gap-2">
+                  {[
+                    ...(captainOwnGear ? [] : [{ id: String(user?.id || ''), name: 'You', isCaptain: true }]),
+                    ...(ownGearAllowed ? [] : selectedTeammates.filter((member) => !member.isMinor).map((member) => ({ id: member.id, name: member.name, isCaptain: false }))),
+                  ].filter((player) => player.id).map((player) => {
+                    const bringsOwn = player.isCaptain ? captainOwnGun : teammateOwnWeaponIds.includes(player.id)
+                    const toggle = () => {
+                      if (player.isCaptain) setCaptainOwnGun((current) => !current)
+                      else setTeammateOwnWeaponIds((current) => (current.includes(player.id) ? current.filter((id) => id !== player.id) : [...current, player.id]))
+                    }
+                    return (
+                      <button
+                        key={player.id}
+                        type="button"
+                        role="checkbox"
+                        aria-checked={bringsOwn}
+                        onClick={toggle}
+                        className={[
+                          'inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-semibold transition',
+                          bringsOwn ? 'border-success/30 bg-success/10 text-success' : 'border-white/10 bg-white/5 text-muted hover:bg-white/10',
+                        ].join(' ')}
+                      >
+                        {bringsOwn ? <FiCheck className="h-3 w-3" /> : <FiCrosshair className="h-3 w-3" />}
+                        {player.name}
+                      </button>
+                    )
+                  })}
                 </div>
-              ) : (
-                <div className="mt-4 grid gap-4">
-                  {playerApprovedWeapons.length > 0 && (
-                    <div>
-                      <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted mb-2">
-                        Approved Weapons ({playerApprovedWeapons.length})
-                      </div>
-                      <div className="grid gap-2 md:grid-cols-2">
-                        {playerApprovedWeapons.map((w: any) => {
-                          const active = selectedOwnWeaponIds.includes(w.id || w._id)
-                          return (
-                            <label
-                              key={w.id || w._id}
-                              className={[
-                                'flex items-start gap-3 rounded-2xl border p-3 cursor-pointer transition',
-                                active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
-                              ].join(' ')}
-                            >
-                              <input
-                                type="checkbox"
-                                checked={active}
-                                onChange={() => {
-                                  const id = w.id || w._id
-                                  setSelectedOwnWeaponIds((prev) =>
-                                    prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]
-                                  )
-                                }}
-                                className="mt-1 h-4 w-4 accent-accent"
-                              />
-                              <div className="flex-1 min-w-0">
-                                <div className="text-sm font-bold truncate">{w.name}</div>
-                                <div className="text-xs text-muted">{w.category?.toUpperCase?.() || 'Weapon'}</div>
-                              </div>
-                              <div className="text-xs font-semibold text-success">FREE</div>
-                            </label>
-                          )
-                        })}
-                      </div>
-                    </div>
-                  )}
-
-                  {selectionMode === 'custom' && playerApprovedEquipment.length > 0 && (
-                    <div>
-                      <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted mb-2">
-                        Approved Equipment ({playerApprovedEquipment.length})
-                      </div>
-                      <div className="grid gap-2 md:grid-cols-2">
-                        {playerApprovedEquipment.map((e: any) => {
-                          const active = selectedOwnEquipmentIds.includes(e.id || e._id)
-                          return (
-                            <label
-                              key={e.id || e._id}
-                              className={[
-                                'flex items-start gap-3 rounded-2xl border p-3 cursor-pointer transition',
-                                active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
-                              ].join(' ')}
-                            >
-                              <input
-                                type="checkbox"
-                                checked={active}
-                                onChange={() => {
-                                  const id = e.id || e._id
-                                  setSelectedOwnEquipmentIds((prev) =>
-                                    prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]
-                                  )
-                                }}
-                                className="mt-1 h-4 w-4 accent-accent"
-                              />
-                              <div className="flex-1 min-w-0">
-                                <div className="text-sm font-bold truncate">{e.name}</div>
-                                <div className="text-xs text-muted">{e.category?.toUpperCase?.() || 'Gear'}</div>
-                              </div>
-                              <div className="text-xs font-semibold text-success">FREE</div>
-                            </label>
-                          )
-                        })}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {!ownGearAllowed && selectedTeammates.some((member) => !member.isMinor) ? (
-                <div className="mt-4">
-                  <div className="mb-2 text-xs font-bold uppercase tracking-[0.18em] text-muted">Teammates bringing their own weapon</div>
-                  <div className="flex flex-wrap gap-2">
-                    {selectedTeammates.filter((member) => !member.isMinor).map((member) => {
-                      const bringsOwn = teammateOwnWeaponIds.includes(member.id)
-                      return (
-                        <button
-                          key={member.id}
-                          type="button"
-                          role="checkbox"
-                          aria-checked={bringsOwn}
-                          onClick={() => toggleTeammateOwnWeapon(member)}
-                          className={[
-                            'inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-semibold transition',
-                            bringsOwn
-                              ? member.hasApprovedWeapon
-                                ? 'border-success/30 bg-success/10 text-success'
-                                : 'border-warning/30 bg-warning/10 text-warning'
-                              : 'border-white/10 bg-white/5 text-muted hover:bg-white/10',
-                          ].join(' ')}
-                        >
-                          {bringsOwn ? <FiCheck className="h-3 w-3" /> : <FiCrosshair className="h-3 w-3" />}
-                          {member.name}{bringsOwn && !member.hasApprovedWeapon ? ' · no registered weapon' : ''}
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
-              ) : null}
+              </div>
             </Card>
             )}
           </div>
@@ -3818,59 +3808,7 @@ export function ReservationCalendarPage() {
                   </div>
                 )}
 
-                <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                  <div className="text-sm font-bold">What you're getting</div>
-                  {/* The same lines the receipt shows, so the player sees what they availed. */}
-                  {paymentBreakdown.itemizedBreakdown.length > 0 ? (
-                    <ul className="mt-2 space-y-1 text-xs">
-                      {paymentBreakdown.itemizedBreakdown.map((item, index) => (
-                        <li key={`${item.label}-${index}`} className="flex items-baseline justify-between gap-3">
-                          <span className="min-w-0 text-muted">{item.label}</span>
-                          <span className={`shrink-0 font-semibold ${item.amount < 0 ? 'text-success' : item.amount === 0 ? 'text-muted' : ''}`}>
-                            {item.amount === 0 ? 'Free' : formatCurrency(item.amount)}
-                          </span>
-                        </li>
-                      ))}
-                      {fullDay ? (
-                        <>
-                          {/* The lines above are one slot for the whole group; a full day books three. */}
-                          <li className="flex items-baseline justify-between gap-3 border-t border-white/10 pt-1">
-                            <span className="text-muted">One slot, whole group</span>
-                            <span className="shrink-0 font-semibold">{formatCurrency(dynamicPricing.total)}</span>
-                          </li>
-                          <li className="flex items-baseline justify-between gap-3">
-                            <span className="text-muted">{allDay ? 'Full day: morning, afternoon & evening' : pickedSlotsLabel}</span>
-                            <span className="shrink-0 font-semibold">× {bookedSlots.length} slots</span>
-                          </li>
-                        </>
-                      ) : null}
-                    </ul>
-                  ) : (
-                    <div className="mt-1 text-xs text-muted">Pick a package or items to see what's included.</div>
-                  )}
-                  <div className="mt-3 flex items-end justify-between border-t border-white/10 pt-3">
-                    <div>
-                      <div className="text-xs text-muted">Total{players > 1 ? `, all ${players} players` : ''}</div>
-                      <div className="text-2xl font-bold text-gold">{formatCurrency(bookingTotal)}</div>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-xs text-muted">Per player</div>
-                      <div className="text-sm font-bold">{formatCurrency(Math.round(bookingTotal / Math.max(1, players)))}</div>
-                      {fullDay ? (
-                        <div className="text-[11px] text-muted">
-                          {formatCurrency(Math.round(dynamicPricing.total / Math.max(1, players)))} × {bookedSlots.length} slots
-                        </div>
-                      ) : null}
-                    </div>
-                  </div>
-
-                  {selectionMode === 'package' && dynamicPricing.discountAmount > 0 && (
-                    <div className="mt-2 text-xs text-muted">
-                      Discount applied: {dynamicPricing.discountSummary}
-                      {dynamicPricing.savings > 0 && ` (save ${formatCurrency(dynamicPricing.savings)})`}
-                    </div>
-                  )}
-                </div>
+                {renderWhatYouGet()}
 
               </div>
 
@@ -3977,6 +3915,19 @@ export function ReservationCalendarPage() {
                   {layoutBlueprintUrl ? (
                     <button type="button" className="text-xs text-muted hover:text-text" onClick={() => { setLayoutBlueprintUrl(''); setFieldLayoutItems([]) }}>Remove</button>
                   ) : null}
+                  {/* What the layout adds to the booking (the standard field is free). */}
+                  <div className="basis-full text-xs">
+                    {layoutFee ? (
+                      <span>
+                        <span className="font-semibold">{layoutFee.label} layout: +{formatCurrency(layoutFee.price)}</span>
+                        <span className="text-muted"> · {layoutFee.pieces > 0 ? `${layoutFee.pieces} piece${layoutFee.pieces === 1 ? '' : 's'} to set up` : 'an uploaded sketch is charged as Standard'}</span>
+                      </span>
+                    ) : (
+                      <span className="text-muted">
+                        The standard field is free. A custom layout is {layoutTiers.map((tier, index) => `${tier.label} ${formatCurrency(tier.price)} (${tier.maxPieces == null ? `${(layoutTiers[index - 1]?.maxPieces ?? 0) + 1}+ pieces` : `up to ${tier.maxPieces}`})`).join(', ')}.
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -4008,8 +3959,15 @@ export function ReservationCalendarPage() {
               {!layoutDesignerOpen ? <InlineError className="mt-4" message={blueprintError} /> : null}
               <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4 text-xs text-muted">
                 <div><span className="font-semibold text-text">Mode:</span> {gameModePreference}</div>
-                <div className="mt-1"><span className="font-semibold text-text">Layout:</span> {layoutBlueprintUrl ? (fieldLayoutItems.length > 0 ? `Designed (${fieldLayoutItems.length} pieces)` : 'Sketch uploaded') : 'Marshal decides'}</div>
+                <div className="mt-1">
+                  <span className="font-semibold text-text">Layout:</span>{' '}
+                  {layoutBlueprintUrl
+                    ? (fieldLayoutItems.length > 0 ? `Designed (${countLayoutPieces(fieldLayoutItems)} pieces)` : 'Sketch uploaded')
+                    : 'Marshal decides · free'}
+                </div>
               </div>
+              {/* The price with the layout fee included, line by line. */}
+              <div className="mt-4">{renderWhatYouGet()}</div>
               <div className="mt-4 flex flex-col gap-2">
                 <Button variant="ghost" onClick={() => setStep(3)}>Back</Button>
                 <Button variant="primary" disabled={uploadingBlueprint} onClick={() => setStep(5)}>
@@ -4023,6 +3981,8 @@ export function ReservationCalendarPage() {
             open={layoutDesignerOpen}
             fieldName={(availableFields.filter((f) => selectedFieldIds.includes(f.id)).map((f) => f.name).join(' + ') || 'Field')}
             initialItems={fieldLayoutItems}
+            limits={limitsForFields(fieldObstacles, selectedFieldIds)}
+            fees={layoutTiers}
             saving={uploadingBlueprint}
             error={blueprintError}
             onClose={() => { setLayoutDesignerOpen(false); setBlueprintError(null) }}
@@ -4402,35 +4362,6 @@ export function ReservationCalendarPage() {
         </Modal>
       ) : null}
 
-      {noWeaponWarning ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-3 sm:px-4" role="dialog" aria-modal="true" aria-labelledby="no-weapon-title">
-          <Card className="max-h-[90dvh] w-full max-w-md overflow-y-auto overscroll-contain p-5">
-            <div className="flex items-start gap-3">
-              <FiAlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-warning" />
-              <div>
-                <div id="no-weapon-title" className="text-base font-bold">No registered weapon on file</div>
-                <p className="mt-2 text-sm text-muted">
-                  {noWeaponWarning.name} hasn't added a weapon to their profile, so it can't be counted as an own weapon.
-                  If you keep them marked, they'll still be charged for a rental weapon.
-                </p>
-              </div>
-            </div>
-            <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
-              <Button variant="ghost" onClick={() => setNoWeaponWarning(null)}>Keep as rental</Button>
-              <Button
-                variant="primary"
-                onClick={() => {
-                  const member = noWeaponWarning
-                  setTeammateOwnWeaponIds((current) => current.includes(member.id) ? current : [...current, member.id])
-                  setNoWeaponWarning(null)
-                }}
-              >
-                Mark anyway
-              </Button>
-            </div>
-          </Card>
-        </div>
-      ) : null}
     </div>
   )
 }

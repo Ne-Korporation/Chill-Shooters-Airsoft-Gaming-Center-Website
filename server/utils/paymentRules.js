@@ -46,7 +46,8 @@ export function getPaymentProgress(reservation, payments) {
 // Spots a teammate left (see utils/teamInvites.js). An open one waits on the captain, so nobody pays
 // its share online yet; one the captain chose to pay for is added to what the captain pays now.
 export function openSlotHold(reservation) {
-  return (reservation?.openSlots || []).filter((slot) => slot?.status === 'open')
+  // A spot whose share already moved to the captain's field balance holds nothing online.
+  return (reservation?.openSlots || []).filter((slot) => slot?.status === 'open' && !slot.onsite)
     .reduce((sum, slot) => sum + (Number(slot.amount) || 0), 0)
 }
 export function captainCoverTotal(reservation) {

@@ -24,7 +24,6 @@ import {
   FiTool,
   FiZap,
   FiCreditCard,
-  FiTarget,
   FiBriefcase,
   FiMessageSquare,
   FiChevronDown,
@@ -271,7 +270,6 @@ export function AppSidebar({
     notificationsItem,
     { label: 'Book a game', to: '/app/reservations', icon: FiPlusCircle },
     { label: 'My Reservations', to: '/app/my-reservations', icon: FiList },
-    { label: 'My Weapons & Gear', to: `/app/players/${encodeURIComponent(user?.id || '1')}/weapons-and-equipment`, icon: FiTarget },
     { label: 'Online Waiver', to: '/app/waiver', icon: FiShield },
     { label: 'Game Evaluation', to: '/app/feedback', icon: FiMessageSquare },
     // Split payments are paid on My Reservations (badge shows shares owed).

@@ -3,18 +3,18 @@ import { confirmDialog } from '../../components/ui/ConfirmDialog'
 import { useLiveRefresh } from '../../utils/liveUpdates'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { FiAlertCircle, FiCalendar, FiEye, FiFileText, FiRefreshCw, FiXCircle } from 'react-icons/fi'
+import { FiAlertCircle, FiCalendar, FiCheck, FiCheckCircle, FiClock, FiCreditCard, FiEye, FiFileText, FiInfo, FiRefreshCw, FiUserPlus, FiUsers, FiXCircle } from 'react-icons/fi'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { apiDelete, apiGet, apiPost } from '../../utils/apiClient'
-import { SPLIT_PAYMENTS_CHANGED_EVENT, SplitPaymentsSection } from '../payments/SplitPaymentPage'
-import { InvitationsSection } from './InvitationsSection'
+import { SPLIT_PAYMENTS_CHANGED_EVENT, TeamPaymentTable, useSplitPayments, type SplitPaymentItem } from '../payments/SplitPaymentPage'
+import { FILL_SPOT_EVENT, InvitationsSection, OPEN_BOOKING_EVENT } from './InvitationsSection'
 import { useAuth } from '../../context/AuthContext'
-import { isVerifiedPayment, type ReceiptPayment } from '../../utils/receiptPrint'
+import { isVerifiedPayment, paymentsOfPayer, type ReceiptPayment } from '../../utils/receiptPrint'
 import { ReceiptModal } from '../../components/payments/ReceiptModal'
 import { clearBookingDraft, draftTimeLeft, markBookingDraftLeft, readBookingDraft, type BookingDraft } from '../../utils/bookingDraft'
 import { isXenditEnabled, startXenditCheckout } from '../../utils/xendit'
-import { useSlotHours } from '../../utils/slotHours'
+import { formatSlotRange, useSlotHours } from '../../utils/slotHours'
 import { reservationStatusLabel } from '../../utils/reservationStatus'
 import { RescheduleSlotPicker, isWeekdayISO } from '../../components/reservations/RescheduleSlotPicker'
 import { ReservationIdTag } from '../../components/reservations/ReservationIdTag'
@@ -57,6 +57,13 @@ type ReservationDoc = ReservationDetails & {
   paymentMode?: string
   paymentState?: 'awaiting' | 'partial' | 'finalized'
   paymentDueAtISO?: string
+  paymentSubmittedAmount?: number
+  teamSize?: number
+  splitShares?: Record<string, number> | null
+  // Teammates' shares the captain pays at the counter (a teammate who declined or was removed).
+  captainOnsiteAmount?: number
+  // Teammates' spots left open; the captain may pay for them ('covering', then 'paid').
+  openSlots?: Array<{ id?: string; name?: string; amount?: number; status?: string; captainPaid?: boolean }>
   cancellationReason?: string
   pricingBreakdown?: Array<{ label?: string; amount?: number }>
   sentBack?: { note: string; atISO: string }
@@ -132,14 +139,66 @@ const REJECTED_INVITE_LABEL: Record<string, string> = {
   expired: 'Void: not answered',
   expired_unpaid: 'Void: not paid',
   unavailable: 'Auto-declined: slot taken',
+  removed: 'Removed by the captain',
 }
 function rejectedLabel(invite: { status: string; reason?: string } | null) {
-  if (!invite || !['declined', 'expired', 'unavailable'].includes(invite.status)) return ''
+  if (!invite || !['declined', 'expired', 'unavailable', 'removed'].includes(invite.status)) return ''
   return REJECTED_INVITE_LABEL[invite.reason || invite.status] || REJECTED_INVITE_LABEL[invite.status] || 'Rejected'
 }
 
 function formatPHP(value?: number) {
-  return `₱${Number(value || 0).toLocaleString('en-PH', { maximumFractionDigits: 0 })}`
+  return `₱${Number(value || 0).toLocaleString('en-PH', { maximumFractionDigits: 2 })}`
+}
+
+const round2 = (value: number) => Math.round(value * 100) / 100
+
+// "20h 18m left" until a deadline.
+function timeLeftLabel(iso?: string) {
+  if (!iso) return ''
+  const ms = new Date(iso).getTime() - Date.now()
+  if (ms <= 0) return 'deadline passed'
+  const minutes = Math.floor(ms / 60_000)
+  const hours = Math.floor(minutes / 60)
+  return hours > 0 ? `${hours}h ${minutes % 60}m left` : `${Math.max(1, minutes)}m left`
+}
+
+function formatDeadline(iso?: string) {
+  return iso ? new Date(iso).toLocaleString('en-PH', { timeZone: 'Asia/Manila', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : ''
+}
+
+// Where a booking is, in plain words, and how many of the four steps are done.
+type Stage = { label: string; tone: string; done: number }
+const STEPS = ['Booked', 'Paid', 'Confirmed', 'Game day']
+
+function BookingSteps({ done, live }: { done: number; live?: boolean }) {
+  return (
+    <ol className="mt-3 grid grid-cols-4 gap-1.5" aria-label="Booking progress">
+      {STEPS.map((step, index) => {
+        const complete = index < done
+        const current = index === done || (Boolean(live) && index === STEPS.length - 1)
+        return (
+          <li key={step} className="min-w-0">
+            <div className={[
+              'h-1.5 rounded-full',
+              complete ? 'bg-success' : current ? (live ? 'animate-pulse bg-success' : 'bg-accent') : 'bg-[rgba(var(--text),0.1)]',
+            ].join(' ')} />
+            <div className={`mt-1 flex items-center gap-1 truncate text-[11px] ${complete ? 'text-success' : current ? 'font-semibold text-text' : 'text-muted'}`}>
+              {complete ? <FiCheck className="shrink-0" /> : null}{step}
+            </div>
+          </li>
+        )
+      })}
+    </ol>
+  )
+}
+
+function Stat({ label, value, tone = '' }: { label: string; value: React.ReactNode; tone?: string }) {
+  return (
+    <div className="min-w-0">
+      <div className="text-[11px] uppercase tracking-wider text-muted">{label}</div>
+      <div className={`mt-0.5 truncate text-base font-bold tabular-nums ${tone}`}>{value}</div>
+    </div>
+  )
 }
 
 export function MyReservationsPage() {
@@ -147,6 +206,7 @@ export function MyReservationsPage() {
   const navigate = useNavigate()
   const { user } = useAuth()
   const [payments, setPayments] = useState<PaymentDoc[]>([])
+  const [gameStatus, setGameStatus] = useState<Map<string, string>>(() => new Map())
   const today = manilaTodayISO()
   const [reservations, setReservations] = useState<ReservationDoc[]>([])
   const [loading, setLoading] = useState(true)
@@ -173,12 +233,17 @@ export function MyReservationsPage() {
   const load = useCallback(async (background = false) => {
     if (!background) setLoading(true)
     try {
-      const [res, paymentsRes] = await Promise.all([
+      const [res, paymentsRes, gamesRes] = await Promise.all([
         apiGet<{ ok: boolean; data: ReservationDoc[] }>('/api/reservations?limit=200'),
         apiGet<{ ok: boolean; data: PaymentDoc[] }>('/api/payments?limit=200').catch(() => ({ ok: false, data: [] as PaymentDoc[] })),
+        apiGet<{ ok: boolean; data: Array<{ reservationId?: string; Status?: string }> }>('/api/gameplay?limit=200').catch(() => ({ ok: false, data: [] })),
       ])
       setReservations(Array.isArray(res?.data) ? res.data : [])
       setPayments(Array.isArray(paymentsRes?.data) ? paymentsRes.data : [])
+      // Each booking's game status, set by staff: Scheduled, Ongoing (started), Completed.
+      setGameStatus(new Map((Array.isArray(gamesRes?.data) ? gamesRes.data : [])
+        .filter((game) => game.reservationId)
+        .map((game) => [String(game.reservationId), String(game.Status || '').toLowerCase()])))
     } catch (err: any) {
       if (!background) toast.error(err?.message || 'Unable to load your reservations')
     } finally {
@@ -186,7 +251,7 @@ export function MyReservationsPage() {
     }
   }, [])
 
-  useLiveRefresh(['reservations', 'payments'], () => load(true))
+  useLiveRefresh(['reservations', 'payments', 'games'], () => load(true))
   // Declining a team booking (in the split payments above) takes it off this list.
   useEffect(() => {
     const reload = () => { void load(true) }
@@ -225,6 +290,27 @@ export function MyReservationsPage() {
       await load(true)
     } catch (err: any) {
       toast.error(err?.message || 'Could not cancel the reservation')
+    } finally {
+      setCancellingId(null)
+    }
+  }
+
+  // A teammate drops out of a game that hasn't gone through yet (nothing paid by them).
+  const leaveGame = async (id: string, label: string, captainName: string) => {
+    if (!(await confirmDialog({
+      title: 'Leave this game?',
+      message: `You'll be taken off ${captainName}'s game on ${label}, and ${captainName} is told. This can't be undone; they'd have to invite you again.`,
+      confirmLabel: 'Leave game',
+      cancelLabel: 'Stay',
+      danger: true,
+    }))) return
+    setCancellingId(id)
+    try {
+      await apiPost(`/api/reservations/${encodeURIComponent(id)}/decline`, {})
+      toast.success('You left the game.')
+      await load(true)
+    } catch (err: any) {
+      toast.error(err?.message || 'Could not leave the game')
     } finally {
       setCancellingId(null)
     }
@@ -328,6 +414,33 @@ export function MyReservationsPage() {
     return () => window.clearInterval(timer)
   }, [draft, user?.id])
 
+  // Team (split) payments, shown on each booking's card and, with who pays what, in its View.
+  const { items: splitItems, reload: reloadSplit } = useSplitPayments()
+  const splitById = useMemo(() => new Map(splitItems.map((item) => [String(item.reservation.id), item])), [splitItems])
+  // The open booking's team payment when it isn't in the live list above (fully paid, confirmed,
+  // played, or a teammate who already paid): read once for the View, so every team booking shows
+  // who pays what the same way.
+  const [viewedTeam, setViewedTeam] = useState<SplitPaymentItem | null>(null)
+  const loadViewedTeam = useCallback(async (id: string | null) => {
+    setViewedTeam(null)
+    if (!id || splitById.has(id)) return
+    const booking = reservations.find((item) => reservationIdOf(item) === id)
+    if (!booking || String(booking.paymentMode || 'self').toLowerCase() !== 'split') return
+    const res = await apiGet<{ ok: boolean; data: SplitPaymentItem | null }>(`/api/reservations/${encodeURIComponent(String(booking.id || id))}/team-payment`).catch(() => null)
+    setViewedTeam(res?.data || null)
+  }, [splitById, reservations])
+  useEffect(() => { void loadViewedTeam(detailsId) }, [detailsId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // "View" on an open spot opens the same booking view as the card's.
+  useEffect(() => {
+    const open = (event: Event) => {
+      const id = String((event as CustomEvent).detail || '')
+      if (id) setDetailsId(id)
+    }
+    window.addEventListener(OPEN_BOOKING_EVENT, open)
+    return () => window.removeEventListener(OPEN_BOOKING_EVENT, open)
+  }, [])
+
   const me = String(user?.id || '')
   // Games the player turned down (or whose invite closed): only shown in the Archive.
   const rejectedOf = useCallback((reservation: ReservationDoc) => (
@@ -349,27 +462,59 @@ export function MyReservationsPage() {
     [reservations, rejectedOf],
   )
 
-  // Upcoming games first (soonest on top); played and rejected games in the Archive (most recent on top).
-  const [tab, setTab] = useState<'upcoming' | 'pending' | 'archive'>('upcoming')
+  // Ongoing: games staff have started and not finished yet. Then upcoming games (soonest on top);
+  // played and rejected games in the Archive (most recent on top).
+  const [tab, setTab] = useState<'ongoing' | 'upcoming' | 'pending' | 'archive'>('upcoming')
+  const gameStatusOf = (item: ReservationDoc) => gameStatus.get(reservationIdOf(item)) || ''
+  const isOngoing = (item: ReservationDoc) => gameStatusOf(item).startsWith('ongo')
+  const isPlayed = (item: ReservationDoc) => gameStatusOf(item).startsWith('complet')
+  const ongoing = useMemo(() => sorted.filter(isOngoing), [sorted, gameStatus])
+  // Open the Ongoing tab while a game is being played.
+  const sawOngoing = React.useRef(false)
+  useEffect(() => {
+    if (ongoing.length && !sawOngoing.current) {
+      sawOngoing.current = true
+      setTab('ongoing')
+    }
+  }, [ongoing.length])
   const [archiveFilter, setArchiveFilter] = useState<'all' | 'confirmed' | 'rejected'>('all')
   // Games still ahead, soonest first; split into confirmed (Upcoming) and not yet confirmed (Pending:
   // waiting for payment or for review).
   const ahead = useMemo(
-    () => sorted.filter((item) => !dateOf(item) || dateOf(item) >= today).sort((a, b) => (dateOf(a) || '9999').localeCompare(dateOf(b) || '9999')),
-    [sorted, today],
+    () => sorted
+      .filter((item) => (!dateOf(item) || dateOf(item) >= today) && !isOngoing(item) && !isPlayed(item))
+      .sort((a, b) => (dateOf(a) || '9999').localeCompare(dateOf(b) || '9999')),
+    [sorted, today, gameStatus],
   )
   const isPending = (item: ReservationDoc) => ['pending', 'needs review'].includes(String(item.reservationStatus || '').toLowerCase())
   const pending = useMemo(() => ahead.filter(isPending), [ahead])
   const upcoming = useMemo(() => ahead.filter((item) => !isPending(item)), [ahead])
-  const past = useMemo(() => sorted.filter((item) => dateOf(item) && dateOf(item) < today), [sorted, today])
+  // Played: the date has passed, or staff marked today's game done (a game still going stays in Ongoing).
+  const past = useMemo(
+    () => sorted.filter((item) => !isOngoing(item) && ((dateOf(item) && dateOf(item) < today) || isPlayed(item))),
+    [sorted, today, gameStatus],
+  )
   // Archive: games already played (confirmed) and games the player rejected, newest first.
   const archive = useMemo(
     () => [...past, ...rejected].sort((a, b) => dateOf(b).localeCompare(dateOf(a))),
     [past, rejected],
   )
   const archiveShown = archiveFilter === 'confirmed' ? past : archiveFilter === 'rejected' ? rejected : archive
-  const shown = tab === 'upcoming' ? upcoming : tab === 'pending' ? pending : archiveShown
+  const shown = tab === 'ongoing' ? ongoing : tab === 'upcoming' ? upcoming : tab === 'pending' ? pending : archiveShown
   const { page, setPage, pageCount, pageItems, total } = usePagination(shown, 10, `${tab}|${archiveFilter}`)
+
+  // Links to a team payment (notifications, the dashboard: #split-payments) open the booking that
+  // needs paying: its tab, scrolled into view.
+  const jumpedToShare = React.useRef(false)
+  useEffect(() => {
+    if (jumpedToShare.current || window.location.hash !== '#split-payments' || !splitItems.length || loading) return
+    const owed = splitItems.find((item) => !item.iHavePaid && item.myShareDue > 0) || splitItems[0]
+    const target = sorted.find((item) => String(item.id) === String(owed.reservation.id))
+    if (!target) return
+    jumpedToShare.current = true
+    setTab(isOngoing(target) ? 'ongoing' : isPending(target) ? 'pending' : 'upcoming')
+    window.setTimeout(() => document.getElementById(`booking-${reservationIdOf(target)}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 150)
+  }, [splitItems, sorted, loading])
 
   const startEditing = (reservation: ReservationDoc) => {
     setEditingId(reservationIdOf(reservation))
@@ -438,15 +583,16 @@ export function MyReservationsPage() {
         </Button>
       </div>
 
-      {/* Invites to answer and open spots to fill, then split payments (each shown only while there is one). */}
+      {/* Invites to answer and open spots to fill (shown only while there is one). Team payments
+          are on each booking's card below. */}
       <InvitationsSection />
-      <SplitPaymentsSection />
 
       <FilterTabs
         ariaLabel="Show reservations"
         value={tab}
         onChange={setTab}
         options={[
+          { value: 'ongoing', label: 'Ongoing', count: ongoing.length },
           { value: 'upcoming', label: 'Upcoming', count: upcoming.length },
           { value: 'pending', label: 'Pending', count: pending.length },
           { value: 'archive', label: 'Archive', count: archive.length },
@@ -503,7 +649,9 @@ export function MyReservationsPage() {
       {loading ? <Card className="p-4 text-sm text-muted">Loading your reservations…</Card> : null}
       {!loading && shown.length === 0 ? (
         <Card className="p-6 text-center text-sm text-muted">
-          {tab === 'upcoming'
+          {tab === 'ongoing'
+            ? 'No game in progress. Your game shows here once staff start it on game day.'
+            : tab === 'upcoming'
             ? (pending.length ? `No confirmed games yet. ${pending.length} booking${pending.length === 1 ? ' is' : 's are'} pending.` : 'No upcoming games.')
             : tab === 'pending' ? 'Nothing pending. Bookings waiting for payment or review show here.'
               : archiveFilter === 'rejected' ? 'No rejected games. Invites you decline, or that expire, show here.'
@@ -532,36 +680,129 @@ export function MyReservationsPage() {
         const cutoffDate = date ? addDaysISO(date, -RESCHEDULE_CUTOFF_DAYS) : ''
         const editing = editingId === id
         const reservationPayments = payments.filter((payment) => [reservation.id, reservation._id].map(String).includes(String(payment.reservationId)))
-        const hasVerifiedPayment = reservationPayments.some(isVerifiedPayment)
+        // A receipt is the player's own: shown once something they paid is verified.
+        const myPayments = paymentsOfPayer(reservationPayments as ReceiptPayment[], String(user?.id || ''), reservation)
+        const hasVerifiedPayment = myPayments.some(isVerifiedPayment)
         // Unpaid and still waiting for payment: the captain can cancel it.
         const canCancel = ['pending', 'needs review'].includes(status)
           && String(reservation.userId || '') === String(user?.id || '')
           && !reservationPayments.some((payment: any) => !['failed', 'rejected'].includes(String(payment.paymentStatus || payment.status || '').toLowerCase()))
+        // A teammate can leave a game that hasn't gone through yet, as long as they haven't paid.
+        const canLeave = !isCaptain && ['pending', 'needs review'].includes(status)
+          && !myPayments.some((payment: any) => !['failed', 'rejected', 'cancelled'].includes(String(payment.paymentStatus || payment.status || '').toLowerCase()))
         // Still owes this player's payment and can pay it online now.
         const payable = isCaptain && canPayOnline && status === 'pending' && reservation.paymentState !== 'finalized'
           && !reservationPayments.some((payment: any) => String(payment.userId) === String(user?.id) && !['failed', 'rejected'].includes(String(payment.paymentStatus || '').toLowerCase()))
-        const needsAction = sentBack || payable
+        // Money: this player's part, what they paid, and what's left; the team's progress.
+        const split = String(reservation.paymentMode || 'self').toLowerCase() === 'split'
+        const splitItem = splitById.get(String(reservation.id || ''))
+        const activePayment = (payment: any) => !['failed', 'rejected', 'cancelled'].includes(String(payment.paymentStatus || payment.status || '').toLowerCase())
+        const myPaid = round2(myPayments.filter(activePayment).reduce((sum, payment) => sum + Number(payment.amount || 0), 0))
+        const onlineTarget = Number(reservation.depositAmount) || 0
+        const recordedShare = Number(reservation.splitShares?.[me])
+        const myShare = split
+          ? (Number.isFinite(recordedShare) ? recordedShare : splitItem?.players?.find((p) => p.isMe)?.share ?? round2(onlineTarget / Math.max(1, Number(reservation.teamSize) || 1)))
+          : (isCaptain ? onlineTarget : 0)
+        // Teammates' spots the captain paid for online (a teammate who left): part of what they pay.
+        const coveredSpots = split && isCaptain
+          ? (reservation.openSlots || []).filter((slot) => (['covering', 'paid'].includes(String(slot.status || '')) || slot.captainPaid) && Number(slot.amount) > 0)
+          : []
+        const coveredTotal = round2(coveredSpots.reduce((sum, slot) => sum + Number(slot.amount || 0), 0))
+        const open = !rejectedAs && ['pending', 'needs review'].includes(status)
+        const myLeft = open
+          ? (splitItem ? (splitItem.iHavePaid ? 0 : splitItem.myShareDue) : Math.max(0, round2((myShare || 0) - myPaid)))
+          : 0
+        const teamIn = round2(splitItem?.progress.submitted ?? Number(reservation.paymentSubmittedAmount || 0))
+        const teamPercent = onlineTarget > 0 ? Math.min(100, Math.round((teamIn / onlineTarget) * 100)) : 0
+        const waitingOn = splitItem ? Math.max(0, (splitItem.progress.payerCount || 0) - (splitItem.progress.paidCount || 0)) : 0
+        const atField = Math.max(0, round2(Number(reservation.totalAmount || 0) - onlineTarget))
+        const deadline = reservation.paymentDueAtISO
+        const urgent = Boolean(deadline) && new Date(deadline as string).getTime() - Date.now() < 3 * 3600_000
+        const canPayNow = open && status === 'pending' && canPayOnline && myLeft > 0
+        const ongoingNow = isOngoing(reservation)
+        const played = isPlayed(reservation) || (Boolean(date) && date < today && status === 'confirmed')
+
+        // Where it is, in plain words.
+        const stage: Stage = rejectedAs
+          ? { label: rejectedAs, tone: 'bg-danger/15 text-danger', done: 0 }
+          : played ? { label: 'Played', tone: 'bg-success/15 text-success', done: 4 }
+            : ongoingNow ? { label: 'Game in progress', tone: 'bg-success/15 text-success', done: 3 }
+              : status === 'confirmed' ? { label: 'Confirmed', tone: 'bg-success/15 text-success', done: 3 }
+                : sentBack ? { label: 'Action needed', tone: 'bg-danger/15 text-danger', done: 1 }
+                  : status === 'needs review' ? { label: 'Being reviewed', tone: 'bg-accent/15 text-accent', done: 2 }
+                    : onlineTarget > 0 && teamIn >= onlineTarget - 0.01 ? { label: 'Paid · confirming', tone: 'bg-accent/15 text-accent', done: 2 }
+                      : teamIn > 0 ? { label: split ? 'Collecting payments' : 'Payment in review', tone: 'bg-accent/15 text-accent', done: 1 }
+                        : { label: 'Waiting for payment', tone: 'bg-accent/15 text-accent', done: 1 }
+        // Free spots the captain can put a player in (a teammate declined, lapsed or was removed),
+        // until the game starts.
+        const freeSpots = isCaptain && !rejectedAs && ['pending', 'needs review', 'confirmed'].includes(status) && !ongoingNow && !played
+          ? (reservation.openSlots || []).filter((slot) => ['open', 'covering', 'paid'].includes(String(slot.status || ''))).length
+          : 0
+        const needsAction = sentBack || canPayNow
+        const slotName = slotOf(reservation)
+        const slotRange = slotName ? formatSlotRange(slotHours, slotName) : ''
+        const label = `${reservation.reservationDate || ''} (${reservation.reservationTime || ''})`
 
         return (
-          <Card key={id} className={`p-4 md:p-5 ${needsAction ? 'border-accent/40' : ''}`}>
+          <div key={id} id={`booking-${id}`} className="scroll-mt-4"><Card className={`p-4 md:p-5 ${needsAction ? 'border-accent/50 ring-1 ring-accent/20' : ''}`}>
+            {/* When and where */}
             <div className="flex flex-wrap items-start justify-between gap-2">
               <div className="min-w-0">
-                <div className="text-lg font-semibold">
-                  {date ? formatCardDate(date) : 'No date'} · <span className="capitalize">{slotOf(reservation) || '-'}</span>
+                <div className="text-lg font-bold leading-tight">
+                  {date ? formatCardDate(date) : 'No date'} · <span className="capitalize">{slotName || '-'}</span>
+                  {slotRange ? <span className="ml-2 text-sm font-normal text-muted">{slotRange}</span> : null}
                 </div>
-                {!isCaptain ? (
-                  <div className="mt-1 inline-flex items-center gap-1.5 rounded-full bg-accent/10 px-2.5 py-0.5 text-xs font-semibold text-accent">
-                    Teammate · booked by {reservation.bookerName || 'your captain'}
-                  </div>
-                ) : null}
-                <div className="mt-0.5 text-sm text-muted">
-                  {reservation.locationName || reservation.locationId || 'Location'} · {reservation.numberOfPlayers || 0} player{Number(reservation.numberOfPlayers) === 1 ? '' : 's'} · {reservation.packageName || 'Custom selection'} · {formatPHP(reservation.totalAmount)}
+                <div className="mt-1 text-sm text-muted">
+                  {reservation.locationName || reservation.locationId || 'Location'} · <span className="capitalize">{reservation.sessionType || 'public'}</span> · {reservation.numberOfPlayers || 0} player{Number(reservation.numberOfPlayers) === 1 ? '' : 's'} · {reservation.packageName || 'Custom selection'}
+                </div>
+                <div className="mt-1.5 inline-flex items-center gap-1.5 rounded-full bg-[rgba(var(--text),0.06)] px-2.5 py-0.5 text-xs font-semibold">
+                  {isCaptain ? 'You booked this' : <>Teammate · booked by <span className="text-accent">{reservation.bookerName || 'your captain'}</span></>}
                 </div>
               </div>
-              <span className={`shrink-0 rounded-full px-3 py-1 text-xs font-semibold ${statusTone(status)}`}>{statusLabel}</span>
+              <span className={`shrink-0 rounded-full px-3 py-1 text-xs font-bold ${stage.tone}`}>{stage.label}</span>
             </div>
 
-            {/* What the player needs to do, if anything, with the button to do it. */}
+            {!rejectedAs ? <BookingSteps done={stage.done} live={ongoingNow} /> : null}
+
+            {/* Money: what this player pays, what's in, what's left */}
+            {!rejectedAs && (myShare > 0 || isCaptain) && (open || status === 'confirmed') ? (
+              <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-3">
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  <Stat label="Booking total" value={formatPHP(reservation.totalAmount)} />
+                  {split
+                    ? (coveredTotal > 0
+                      ? <Stat label={`Your share + ${coveredSpots.length} spot${coveredSpots.length === 1 ? '' : 's'}`} value={formatPHP(round2(myShare + coveredTotal))} />
+                      : <Stat label="Your share" value={formatPHP(myShare)} />)
+                    : <Stat label="Pay online" value={formatPHP(onlineTarget)} />}
+                  <Stat label="You paid" value={formatPHP(myPaid)} tone={myPaid > 0 ? 'text-success' : 'text-muted'} />
+                  {open
+                    ? <Stat label="Left to pay" value={myLeft > 0 ? formatPHP(myLeft) : <span className="inline-flex items-center gap-1 text-success"><FiCheckCircle /> Done</span>} tone={myLeft > 0 ? 'text-gold' : ''} />
+                    : <Stat label="At the field" value={atField > 0 ? formatPHP(atField) : 'Nothing'} tone={atField > 0 && isCaptain ? 'text-gold' : 'text-muted'} />}
+                </div>
+                {isCaptain && Number(reservation.captainOnsiteAmount) > 0 ? (
+                  <div className="mt-3 flex items-start gap-1.5 rounded-lg bg-[rgba(var(--text),0.05)] px-2.5 py-2 text-xs">
+                    <FiInfo className="mt-0.5 shrink-0 text-accent" />
+                    <span>
+                      <b>{formatPHP(reservation.captainOnsiteAmount)}</b> for teammates who left is paid <b>at the counter before the game</b>
+                      {(reservation.openSlots || []).some((slot) => slot.status === 'open') ? ' (less, if a substitute joins and pays online).' : '.'}
+                    </span>
+                  </div>
+                ) : null}
+                {split && open && onlineTarget > 0 ? (
+                  <div className="mt-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
+                      <span className="inline-flex items-center gap-1.5"><FiUsers /> Team: <b className="text-text">{formatPHP(teamIn)}</b> of {formatPHP(onlineTarget)} paid</span>
+                      {splitItem ? <span>{splitItem.progress.paidCount || 0} of {splitItem.progress.payerCount || 0} players fully paid</span> : null}
+                    </div>
+                    <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-[rgba(var(--text),0.1)]">
+                      <div className="h-full rounded-full bg-success transition-all" style={{ width: `${teamPercent}%` }} />
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {/* The one thing to do next */}
             {sentBack ? (
               <div className="mt-3 flex flex-col gap-3 rounded-xl border border-danger/30 bg-danger/10 p-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="text-sm">
@@ -572,25 +813,65 @@ export function MyReservationsPage() {
                   <Button variant="primary" onClick={() => startEditing(reservation)}><FiRefreshCw /> Choose a new date</Button>
                 ) : null}
               </div>
-            ) : payable ? (
+            ) : canPayNow ? (
               <div className="mt-3 flex flex-col gap-3 rounded-xl border border-accent/30 bg-accent/10 p-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="text-sm">
-                  <div className="flex items-center gap-1.5 font-semibold"><FiAlertCircle className="text-accent" /> Waiting for payment</div>
-                  {reservation.paymentDueAtISO ? (
-                    <div className="mt-0.5 text-muted">
-                      Pay by {new Date(reservation.paymentDueAtISO).toLocaleString('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short' })} or the slot is released.
+                  <div className="font-semibold">
+                    {myPaid > 0 ? `Pay the remaining ${formatPHP(myLeft)}` : split ? `Pay your share of ${formatPHP(myLeft)}` : `Pay ${formatPHP(myLeft)} to lock in your slot`}
+                  </div>
+                  {deadline ? (
+                    <div className={`mt-0.5 flex items-center gap-1 ${urgent ? 'font-semibold text-danger' : 'text-muted'}`}>
+                      <FiClock className="shrink-0" /> By {formatDeadline(deadline)} ({timeLeftLabel(deadline)}), or {split && !isCaptain ? 'your spot is released' : 'the slot is released'}.
                     </div>
                   ) : null}
+                  {myPaid > 0 && split ? <div className="mt-0.5 text-xs text-muted">Your share went up after you paid; this is the difference.</div> : null}
                 </div>
                 <Button variant="primary" disabled={payingId === id} onClick={() => payOnline(id)}>
-                  {payingId === id ? 'Opening payment…' : `Pay ${formatPHP(reservation.depositAmount)}`}
+                  <FiCreditCard /> {payingId === id ? 'Opening payment…' : `Pay ${formatPHP(myLeft)}`}
                 </Button>
+              </div>
+            ) : open && split && myLeft <= 0 && waitingOn > 0 ? (
+              <div className="mt-3 flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 p-3 text-sm">
+                <FiCheckCircle className="shrink-0 text-success" />
+                <span>
+                  Your share is in. Waiting on <b>{waitingOn}</b> teammate{waitingOn === 1 ? '' : 's'} to pay
+                  {deadline ? <> · <span className={urgent ? 'font-semibold text-danger' : 'text-muted'}>{timeLeftLabel(deadline)}</span></> : null}.
+                </span>
+              </div>
+            ) : open && !split && !isCaptain ? (
+              <div className="mt-3 flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 p-3 text-sm">
+                <FiInfo className="shrink-0 text-accent" />
+                <span>{reservation.bookerName || 'Your captain'} is paying for this game. Nothing for you to pay.</span>
+              </div>
+            ) : open && stage.done === 2 ? (
+              <div className="mt-3 flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 p-3 text-sm">
+                <FiClock className="shrink-0 text-accent" />
+                <span>Everything is paid. Staff are confirming your booking; you'll be notified.</span>
+              </div>
+            ) : status === 'confirmed' && !ongoingNow && !played ? (
+              <div className="mt-3 flex items-center gap-2 rounded-xl border border-success/25 bg-success/10 p-3 text-sm">
+                <FiCheckCircle className="shrink-0 text-success" />
+                <span>
+                  You're all set{daysLeft === 0 ? ' for today' : daysLeft === 1 ? ' for tomorrow' : ''}.
+                  {isCaptain && atField > 0 ? <> Pay the remaining <b>{formatPHP(atField)}</b> at the counter before the game.</> : null}
+                </span>
+              </div>
+            ) : ongoingNow ? (
+              <div className="mt-3 flex items-center gap-2 rounded-xl border border-success/25 bg-success/10 p-3 text-sm">
+                <FiCheckCircle className="shrink-0 text-success" /> <span>Your game is under way. Have fun and play safe!</span>
               </div>
             ) : null}
 
+            {/* Everything else you can do */}
             <div className="mt-3 flex flex-wrap items-center gap-2">
+              {freeSpots > 0 ? (
+                <Button size="sm" variant="primary" onClick={() => window.dispatchEvent(new CustomEvent(FILL_SPOT_EVENT, { detail: String(reservation.id || '') }))}>
+                  <FiUserPlus /> Add player{freeSpots > 1 ? ` (${freeSpots} free spots)` : ' (1 free spot)'}
+                </Button>
+              ) : null}
+              {/* One view of the booking: details, who pays what, charges and payments. */}
               <Button size="sm" variant="ghost" onClick={() => setDetailsId(id)}>
-                <FiEye /> Details
+                <FiEye /> View
               </Button>
               {canReschedule && !sentBack && !editing ? (
                 <Button size="sm" variant="ghost" onClick={() => startEditing(reservation)}>
@@ -598,26 +879,31 @@ export function MyReservationsPage() {
                 </Button>
               ) : null}
               {hasVerifiedPayment ? (
-                <Button size="sm" variant="ghost" onClick={() => setReceipt({ reservation, payments: reservationPayments as ReceiptPayment[] })}>
+                <Button size="sm" variant="ghost" onClick={() => setReceipt({ reservation, payments: myPayments })}>
                   <FiFileText /> Receipt
                 </Button>
               ) : null}
               {canCancel ? (
-                <Button
-                  size="sm"
-                  variant="danger-soft"
-                  disabled={cancellingId === id}
-                  onClick={() => cancelReservation(id, `${reservation.reservationDate || ''} (${reservation.reservationTime || ''})`)}
-                >
+                <Button size="sm" variant="danger-soft" disabled={cancellingId === id} onClick={() => cancelReservation(id, label)}>
                   <FiXCircle /> {cancellingId === id ? 'Cancelling…' : 'Cancel'}
+                </Button>
+              ) : null}
+              {canLeave ? (
+                <Button size="sm" variant="danger-soft" disabled={cancellingId === id} onClick={() => leaveGame(id, label, reservation.bookerName || 'the captain')}>
+                  <FiXCircle /> {cancellingId === id ? 'Leaving…' : 'Leave game'}
                 </Button>
               ) : null}
               <ReservationIdTag id={id} className="ml-auto text-[11px] text-muted" />
             </div>
+
+            {/* Why something isn't possible */}
+            {isCaptain && open && !canCancel ? (
+              <div className="mt-2 text-xs text-muted">Can't cancel: a payment was already made on this booking. Contact staff if you need to cancel.</div>
+            ) : null}
             {tab !== 'archive' && statusAllows && !sentBack && alreadyRescheduled && daysLeft >= 0 ? (
-              <div className="mt-2 text-xs text-muted">This booking was already rescheduled once, so it can't be moved again.</div>
+              <div className="mt-1 text-xs text-muted">This booking was already rescheduled once, so it can't be moved again.</div>
             ) : tab !== 'archive' && statusAllows && !sentBack && daysLeft >= 0 && daysLeft < RESCHEDULE_CUTOFF_DAYS ? (
-              <div className="mt-2 text-xs text-muted">Rescheduling closed on {formatShortDate(cutoffDate)} ({RESCHEDULE_CUTOFF_DAYS} days before the game).</div>
+              <div className="mt-1 text-xs text-muted">Rescheduling closed on {formatShortDate(cutoffDate)} ({RESCHEDULE_CUTOFF_DAYS} days before the game).</div>
             ) : null}
 
             {editing ? (
@@ -665,7 +951,7 @@ export function MyReservationsPage() {
               </div>
             ) : null}
 
-          </Card>
+          </Card></div>
         )
       })}
       <Pagination page={page} pageCount={pageCount} total={total} onPageChange={setPage} />
@@ -678,9 +964,27 @@ export function MyReservationsPage() {
           <ReservationDetailsDialog
             reservation={reservation}
             payments={reservationPayments as any}
-            captainName={user?.name || 'You'}
+            // A teammate sees this booking too; the captain is whoever booked it, not the viewer.
+            captainName={String(reservation.userId || '') === String(user?.id || '')
+              ? (user?.name || 'You')
+              : (reservation.bookerName || 'Your captain')}
             slotHours={slotHours}
             onClose={() => setDetailsId(null)}
+            ownPayments
+            // A team payment: who plays and pays what, right in the same view.
+            teamSection={(() => {
+              const team = splitById.get(String(reservation.id || '')) || (viewedTeam && String(viewedTeam.reservation.id) === String(reservation.id) ? viewedTeam : null)
+              return team ? (
+                <TeamPaymentTable
+                  item={team}
+                  onChanged={() => {
+                    void reloadSplit()
+                    void load(true)
+                    void loadViewedTeam(detailsId)
+                  }}
+                />
+              ) : undefined
+            })()}
           />
         )
       })() : null}

@@ -48,7 +48,7 @@ export async function ensureGameplayForReservation(db, reservation) {
   await notifyRole(db, {
     role: 'marshal',
     type: 'gameplay_created',
-    title: 'New game booked',
+    title: 'Game confirmed: on the games board',
     message: `${game.Package !== '—' ? game.Package : 'A game'} on ${game.Schedule || 'an upcoming date'}${game.Location ? ` at ${game.Location}` : ''}${players}.`,
     linkedResourceId: id,
   })
@@ -73,6 +73,25 @@ export async function ensureGameplayForReservation(db, reservation) {
     })
   }
   return { gameplay: await db.collection('gameplay').findOne({ _id: insert.insertedId }), created: true }
+}
+
+// A player (or the counter, for a walk-in) just booked a game: marshals are told right away, so
+// they see what's coming before it's paid and confirmed. Admins get a copy (notifyRole).
+export async function notifyGameBooked(db, reservation) {
+  if (!reservation) return
+  const who = reservation.walkIn ? `Walk-in ${reservation.walkInName || 'guest'}` : (reservation.bookerName || 'A player')
+  const what = reservation.packageName || reservation.selectedGameplayName || 'a game'
+  const where = reservation.locationName || reservation.locationId || 'the field'
+  const players = reservation.numberOfPlayers ? `, ${reservation.numberOfPlayers} player${reservation.numberOfPlayers === 1 ? '' : 's'}` : ''
+  const status = String(reservation.reservationStatus || 'pending').toLowerCase()
+  await notifyRole(db, {
+    role: 'marshal',
+    topic: 'game_booked',
+    type: 'game_booked',
+    title: `Game booked: ${reservation.reservationDate || ''} (${reservation.reservationTime || ''})`,
+    message: `${who} booked ${what} at ${where}${players}, ${reservation.sessionType || 'public'} game.${status === 'confirmed' ? '' : ' Waiting for payment; it goes on the games board once confirmed.'}`,
+    linkedResourceId: String(reservation.id || ''),
+  }).catch((err) => console.warn('Game booked notice failed', err?.message || err))
 }
 
 // Games created before locations were stored on them get the location from their reservation,

@@ -14,6 +14,9 @@ import { assignCustomPieces, getBookingInventoryRequirements, getHeldQuantities,
 import { canonicalEmail, normalizeEmail, sameEmailFilter } from '../utils/emails.js'
 import { submitGcashPayment } from '../utils/gcashPayments.js'
 import { newReservationId, nextShortId } from '../utils/shortIds.js'
+import { notifyGameBooked } from '../utils/reservationGameplay.js'
+import { assertLayoutFitsFields, normalizeLayoutItems } from '../utils/fieldObstacles.js'
+import { notifyBookingRescheduled, notifyGameStatus, notifyWaiverDecision } from '../utils/playerNotices.js'
 import { ageFromBirthDate } from '../utils/age.js'
 import { ACTIVE_WAIVER_STATUSES, expireOldWaivers, expireWaiversForNewText, validUntilFrom } from '../utils/waiverValidity.js'
 import { manilaDateISO } from '../utils/reminders.js'
@@ -439,7 +442,6 @@ router.get('/team-directory/lookup', requireAuth, requireRole('user'), async (re
       { status: { $regex: '^approved$', $options: 'i' }, archived: { $ne: true }, userId: { $in: ids } },
       { projection: { userId: 1 } },
     ).toArray()).map((waiver) => String(waiver.userId)))
-    const weaponOwnerIds = await getApprovedWeaponOwnerIds(db, ids)
 
     const matches = players.slice(0, 5).map((player) => {
       const playerId = String(player.id || player._id)
@@ -449,8 +451,6 @@ router.get('/team-directory/lookup', requireAuth, requireRole('user'), async (re
         // The full address only comes back when the captain already typed it.
         email: byEmail ? player.email : maskEmail(player.email),
         waiverApproved: approved.has(playerId),
-        // Only a yes/no flag: teammates don't see each other's registered gear.
-        hasApprovedWeapon: weaponOwnerIds.has(playerId),
       }
     })
     return res.json({ ok: true, data: matches[0], matches })
@@ -639,14 +639,6 @@ const SLOT_HOLD_MINUTES = Math.max(1, Number(process.env.SLOT_HOLD_MINUTES) || 1
 // A private slot picked on step 1 is held for a short time only: the page keeps renewing it
 // while the player is choosing, so a forgotten tab frees the field within a few minutes.
 const SLOT_BROWSING_HOLD_MINUTES = Math.max(1, Number(process.env.SLOT_BROWSING_HOLD_MINUTES) || 3)
-
-async function getApprovedWeaponOwnerIds(db, userIds) {
-  // Players' own weapons need no approval: any weapon on their profile counts.
-  const owners = await db.collection('weapons').distinct('submittedBy', {
-    ...(userIds ? { submittedBy: { $in: userIds.map(String) } } : {}),
-  })
-  return new Set(owners.map((id) => String(id || '')).filter(Boolean))
-}
 
 // Throws a statusCode error when the slot can't take this booking. Counts blocking reservations
 // plus other players' live slot holds, so two people can't book the same slot at once.
@@ -929,6 +921,7 @@ router.post('/walk-ins', requireAuth, requireRole('admin', 'registrar'), async (
       await syncPublicGrounds(db, { locationId, reservationDate, reservationTime }, session)
     })
 
+    void notifyGameBooked(db, doc)
     // Marshals see walk-ins on the games board like any confirmed booking.
     await db.collection('gameplay').insertOne({
       id: await nextShortId(db, 'gameplay', 'GP'),
@@ -1240,6 +1233,11 @@ router.post('/reservations/:id/reschedule', requireAuth, requireRole('user', 'ad
       }).catch((err) => console.error('Failed to write reschedule audit log', err))
 
       void emailReservationEvent(db, updated, 'rescheduled', nowISO)
+      // Everyone on the booking hears about the new date (the one who moved it already knows).
+      void notifyBookingRescheduled(db, { ...reservation, ...updated }, {
+        fromLabel: `${originalDate} (${originalTime})`,
+        except: req.user.role === 'user' ? String(req.user.id) : '',
+      }).catch(() => null)
       return res.json({ ok: true, data: updated })
     } catch (err) {
       if (err?.statusCode) return res.status(err.statusCode).json({ ok: false, error: err.message })
@@ -1434,7 +1432,7 @@ function canCreateCollection(role, collection) {
 }
 
 // The fields at each location. Private-game minimums depend on how many are booked (fieldCountMinimum).
-const LOCATION_FIELD_DEFS = {
+export const LOCATION_FIELD_DEFS = {
   salawag: [
     { id: 'salawag-field-1', name: 'Upper Ground' },
     { id: 'salawag-field-2', name: 'Lower Ground' },
@@ -1786,7 +1784,7 @@ async function resolveTeamAndOwnWeapons(db, doc, { requireFullTeam = false } = {
   }
 
   const memberIds = new Set([captainId, ...teamMembers.map((member) => member.id)])
-  // Players with an approved weapon can bring it with a custom selection, or with a package: they
+  // Players can say they bring their own weapon with a custom selection, or with a package: they
   // get the package without its weapon (no rental charge for it). A package with a fixed group
   // price (settledAmount) can't be split, so own weapons don't apply to it.
   let allowsOwnWeapons = true
@@ -1814,8 +1812,9 @@ async function resolveTeamAndOwnWeapons(db, doc, { requireFullTeam = false } = {
       // Own-gear players are counted on their own, not as "own gun, rent the rest".
       .filter((id) => memberIds.has(id) && !ownGearPlayerIds.includes(id)),
   )) : []
-  const owners = bringerIds.length ? await getApprovedWeaponOwnerIds(db, bringerIds) : new Set()
-  const ownWeaponBringers = bringerIds.map((userId) => ({ userId, verified: owners.has(userId) }))
+  // Players just say they bring their own gun: nothing is registered or kept in inventory. It sets
+  // their price, and the gun is checked on the chronograph on game day (see utils/fpsChecks.js).
+  const ownWeaponBringers = bringerIds.map((userId) => ({ userId, verified: true }))
 
   return {
     teamMembers,
@@ -2363,6 +2362,14 @@ router.post('/:collection', requireAuth, async (req, res) => {
           return res.status(err?.statusCode || 409).json({ ok: false, error: err.message || 'That gear is not available for this slot.' })
         }
       }
+      // A custom field layout (private games only): only what the booked fields have; priced below.
+      doc.fieldLayoutItems = String(doc.sessionType || '').toLowerCase() === 'private' ? normalizeLayoutItems(doc.fieldLayoutItems) : []
+      if (!doc.fieldLayoutItems.length) delete doc.fieldLayoutItems
+      try {
+        if (doc.fieldLayoutItems) await assertLayoutFitsFields(db, doc.fieldLayoutItems, doc.fieldIds || [])
+      } catch (err) {
+        return res.status(err?.statusCode || 400).json({ ok: false, error: err.message })
+      }
       try {
         Object.assign(doc, await calculateBookingPrice({
           db,
@@ -2451,6 +2458,8 @@ router.post('/:collection', requireAuth, async (req, res) => {
           await resolveNewBookingConflicts(db, doc)
           const fresh = await db.collection('reservations').findOne({ id: doc.id })
           await notifyAddedTeammates(db, fresh || doc, appUrl)
+          // Marshals (and admins) hear about every game the moment it's booked.
+          await notifyGameBooked(db, fresh || doc)
         })().catch((err) => console.error('Team invites failed', doc.id, err?.message || err))
         // The booking may have taken the last of the BBs: tell staff if ammo is now low.
         if ((doc.inventoryRequirements || []).some((r) => r.kind === 'ammo_grams')) void checkAmmoStock(db).catch(() => null)
@@ -2556,7 +2565,7 @@ const STAFF_REVIEW_NOTICES = {
 async function notifyStaffOfPlayerSubmission(db, collection, doc, player) {
   const notice = STAFF_REVIEW_NOTICES[collection]?.(doc, player)
   if (!notice) return
-  for (const role of ['admin', 'registrar']) {
+  { const role = 'registrar' // admins get a copy (notifyRole)
     await notifyRole(db, { role, ...notice, linkedResourceId: doc.id })
   }
 }
@@ -2889,6 +2898,18 @@ router.put('/:collection/:id', requireAuth, async (req, res) => {
           : 'Staff could not accept your ID. Submit a clear photo of a valid ID on your profile.',
       }).catch(() => null)
       void emailIdentityDecision(db, updatedDoc, verified, appUrlFrom(req))
+    }
+
+    // Staff approved or denied a waiver: tell the player (or the parent, for a child's).
+    if (collection === 'waivers' && req.user.role !== 'user'
+      && String(updatedDoc.status || '').toLowerCase() !== String(existing.status || '').toLowerCase()) {
+      await notifyWaiverDecision(db, updatedDoc, updatedDoc.status).catch(() => null)
+    }
+    // Staff started the game or marked it done: everyone on the booking is told.
+    if (collection === 'gameplay' && updatedDoc.reservationId
+      && String(updatedDoc.Status || '').toLowerCase() !== String(existing.Status || '').toLowerCase()) {
+      const booking = await db.collection('reservations').findOne({ id: String(updatedDoc.reservationId) })
+      if (booking) await notifyGameStatus(db, booking, updatedDoc.Status).catch(() => null)
     }
 
     // Same rules as reading an account: never send the password hash or OTP back.

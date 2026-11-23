@@ -8,11 +8,13 @@
 // is told the player is no longer available. Someone already playing in the slot can't be invited
 // (their invite is turned down straight away).
 //
-// When an invite is declined, void, or turned down:
-//   - Private game (or a booking already paid): the spot stays. The captain has 24 hours to pay for
-//     it online, invite another player, or invite the same player again. Otherwise the player's
-//     share goes onto the captain's balance at the field, due before the game starts, and the
-//     registrars are told to collect it.
+// When an invite is declined, void, turned down, or the captain removes a player who hasn't paid:
+//   - Private game (or a booking already paid): the spot stays, and the player's share (if still
+//     owed online) moves straight onto the captain's balance at the field, paid at the counter
+//     before the game. The rest of the team finishes paying online and the booking goes through.
+//     Until the game starts the captain can invite a substitute (or the same player again); one who
+//     joins while the booking is still being paid online takes the share back online, off the
+//     captain's field balance.
 //   - Public game still being paid: the player is dropped, the booking re-priced, and the other
 //     shares re-split.
 //
@@ -36,7 +38,7 @@ const REMINDERS = [
   { stage: '3h_left', beforeDeadlineMs: 3 * HOUR },
 ]
 export const ACTIVE_BOOKING_STATUSES = ['pending', 'needs review', 'confirmed', 'approved']
-export const CLOSED_INVITE_STATUSES = ['declined', 'expired', 'unavailable']
+export const CLOSED_INVITE_STATUSES = ['declined', 'expired', 'unavailable', 'removed']
 
 const round2 = (value) => Math.round(value * 100) / 100
 const fail = (message, statusCode = 400) => Object.assign(new Error(message), { statusCode })
@@ -126,7 +128,7 @@ function recordedShares(reservation) {
   if (reservation.splitShares) return { ...reservation.splitShares }
   const payers = getSplitPayerIds(reservation)
   const online = Math.max(0, Number(reservation.depositAmount) || 0)
-  const openHold = (reservation.openSlots || []).filter((slot) => ['open', 'covering'].includes(slot.status))
+  const openHold = (reservation.openSlots || []).filter((slot) => ['open', 'covering'].includes(slot.status) && !slot.onsite)
     .reduce((sum, slot) => sum + Number(slot.amount || 0), 0)
   const toShare = Math.max(0, online - openHold)
   const teamSize = Math.max(1, Number(reservation.teamSize) || payers.length)
@@ -228,6 +230,7 @@ const REASON_TEXT = {
   expired: (name) => `${name} didn't answer within ${INVITE_ANSWER_HOURS} hours, so the invite is void`,
   expired_unpaid: (name) => `${name} didn't pay their share within ${INVITE_ANSWER_HOURS} hours, so the invite is void`,
   unavailable: (name) => `${name} is no longer available for that slot (they're already playing another game then)`,
+  removed: (name) => `You removed ${name} from the team`,
 }
 
 // Closes one invite (declined / expired / unavailable) and frees or keeps the spot. The invite only
@@ -280,7 +283,9 @@ export async function closeInvite(db, reservation, playerId, status, { reason = 
     }
   }
 
-  // Keep the spot: the player's share (if any is still owed online) waits on the captain.
+  // Keep the spot. A share still owed online moves to the captain's balance at the field, so the
+  // rest of the team can finish paying and the booking goes through. The spot stays open for a
+  // substitute until the game starts.
   const shares = isSplit(fresh) ? recordedShares(fresh) : null
   const owesOnline = Boolean(shares) && paidByPlayer(payments, id) <= 0 && progress.state !== 'finalized'
   const amount = owesOnline ? round2(Number(shares[id]) || 0) : 0
@@ -288,13 +293,15 @@ export async function closeInvite(db, reservation, playerId, status, { reason = 
   const team = withoutPlayers(fresh, leaving)
   const payersLeft = team.splitPayerIds.length
   const hours = slotHours || (await getSlotHours(db)).hours
-  const slotDeadlineISO = deadlineFrom(fresh, Date.now(), CAPTAIN_ACTION_HOURS, hours)
+  const slotDeadlineISO = new Date(Math.min(gameStartMs(fresh, hours), Date.now() + 365 * 24 * HOUR)).toISOString()
   const openSlots = leaving.map((pid, index) => ({
     id: `S-${Date.now().toString(36)}-${index}`,
     playerId: pid,
     name: pid === id ? name : ((fresh.teamMembers || []).find((m) => String(m.id) === pid)?.name || 'Child'),
     amount: pid === id ? amount : 0,
     status: 'open',
+    // Its share is already on the captain's balance at the field.
+    ...(pid === id && amount > 0 ? { onsite: true } : {}),
     reason,
     openedAtISO: nowISO,
     deadlineISO: slotDeadlineISO,
@@ -308,18 +315,19 @@ export async function closeInvite(db, reservation, playerId, status, { reason = 
         updatedAtISO: nowISO,
       },
       $push: { openSlots: { $each: openSlots }, declinedPlayers: { id, name, reason, atISO: nowISO } },
-      // The booking stays open for payment until the captain has dealt with the spot.
-      ...(amount > 0 ? { $max: { paymentDueAtISO: slotDeadlineISO } } : {}),
+      ...(amount > 0 ? { $inc: { depositAmount: -amount, balanceAmount: amount, captainOnsiteAmount: amount } } : {}),
     },
   )
+  // The rest of the online amount may now be in: the booking can go through.
+  if (amount > 0) await syncReservationPaymentState(db, await db.collection('reservations').findOne({ _id: fresh._id }))
   const deadlineLabel = new Date(slotDeadlineISO).toLocaleString('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short' })
   const message = amount > 0
-    ? `${why} for ${label}. Pay for their spot (${peso(amount)}), invite another player, or invite ${name} again from My Reservations before ${deadlineLabel}. If you don't, ${peso(amount)} is added to what you pay at the field, due before the game starts.`
-    : `${why} for ${label}. Their spot is still yours: invite another player or invite ${name} again from My Reservations.`
+    ? `${why} for ${label}. Their share of ${peso(amount)} is added to what you pay at the field, at the counter before the game. Want a substitute? Invite another player from My Reservations before ${deadlineLabel}; if they join and pay online, it comes off your field balance.`
+    : `${why} for ${label}. Their spot is still yours: invite a substitute from My Reservations before ${deadlineLabel}.`
   await notifyUser(db, {
     userId: fresh.userId,
     type: 'team_spot_open',
-    title: status === 'declined' ? `${name} declined your invite` : status === 'unavailable' ? `${name} is no longer available` : `${name}'s invite is void`,
+    title: status === 'declined' ? `${name} declined your invite` : status === 'unavailable' ? `${name} is no longer available` : status === 'removed' ? `${name} is off your team` : `${name}'s invite is void`,
     message,
     linkedResourceId: fresh.id,
   })
@@ -397,10 +405,42 @@ export async function declineInvite(db, reservation, playerId) {
   if (!invite) throw fail('You are not on this booking.', 404)
   const payments = await getReservationPayments(db, reservation)
   if (paidByPlayer(payments, id) > 0) throw fail('You already paid your share, so you can no longer decline.', 409)
-  if (invite.status === 'accepted' && !needsToPay(reservation, id)) throw fail('You already accepted this game. Ask the captain to take you off.', 409)
+  // Until the booking goes through (paid and confirmed), a player who hasn't paid can still leave.
+  const goneThrough = !['pending', 'needs review'].includes(String(reservation.reservationStatus || 'pending').toLowerCase())
+  if (invite.status === 'accepted' && !needsToPay(reservation, id) && goneThrough) {
+    throw fail('This game is already confirmed. Ask the captain to take you off.', 409)
+  }
   if (!['pending', 'accepted'].includes(invite.status)) throw fail('This invite is already closed.', 409)
   const result = await closeInvite(db, reservation, id, 'declined')
   if (!result.handled) throw fail('This invite was already answered.', 409)
+  return result
+}
+
+// Captain: take a teammate who hasn't paid off the team, to put a substitute in their spot. Same as
+// if they had declined (see closeInvite); they're told.
+export async function removeTeammate(db, reservation, playerId, captainId) {
+  const id = String(playerId)
+  if (String(reservation.userId) !== String(captainId)) throw fail('Only the player who booked can change the team.', 403)
+  if (id === String(reservation.userId)) throw fail("You can't remove yourself. Cancel the booking instead.", 400)
+  const member = (reservation.teamMembers || []).find((m) => String(m.id) === id)
+  if (!member) throw fail('That player is not on this booking.', 404)
+  if (member.isMinor) throw fail("A child plays with their parent or guardian; remove the parent instead.", 409)
+  if (!ACTIVE_BOOKING_STATUSES.includes(String(reservation.reservationStatus || '').toLowerCase())) throw fail('This booking is no longer active.', 409)
+  if (Date.now() >= gameStartMs(reservation, (await getSlotHours(db)).hours)) throw fail('The game has started, so the team can no longer change.', 409)
+  const payments = await getReservationPayments(db, reservation)
+  if (paidByPlayer(payments, id) > 0) throw fail(`${member.name || 'That player'} already paid their share, so they can't be removed. Ask staff for help.`, 409)
+  const invite = latestInvite(reservation, id)
+  if (!invite || !['pending', 'accepted'].includes(invite.status)) throw fail(`${member.name || 'That player'} is already off the team.`, 409)
+  const result = await closeInvite(db, reservation, id, 'removed', { reason: 'removed' })
+  if (!result.handled) throw fail('The team was just changed. Refresh and try again.', 409)
+  const captainName = await nameOf(db, reservation.userId, 'The captain')
+  await notifyUser(db, {
+    userId: id,
+    type: 'reservation_status_update',
+    title: 'You were taken off a game',
+    message: `${captainName} took you off the game on ${labelOf(reservation)}. You don't need to pay anything for it.`,
+    linkedResourceId: reservation.id,
+  })
   return result
 }
 
@@ -408,7 +448,10 @@ export async function declineInvite(db, reservation, playerId) {
 export async function fillOpenSlot(db, reservation, slotId, playerId, captainId) {
   if (String(reservation.userId) !== String(captainId)) throw fail('Only the player who booked can fill this spot.', 403)
   const slot = (reservation.openSlots || []).find((s) => s.id === slotId)
-  if (!slot || !['open', 'covering'].includes(slot.status)) throw fail('This spot is no longer open.', 409)
+  // A spot the captain already paid for can take a substitute too (they play for free).
+  if (!slot || !['open', 'covering', 'paid'].includes(slot.status)) throw fail('This spot is no longer open.', 409)
+  if (Date.now() >= gameStartMs(reservation, (await getSlotHours(db)).hours)) throw fail('The game has started, so the team can no longer change.', 409)
+  const alreadyPaid = slot.status === 'paid'
   const id = String(playerId)
   if (id === String(reservation.userId)) throw fail('You are already on this booking.', 400)
   if ((reservation.teamMembers || []).some((m) => String(m.id) === id)) throw fail('That player is already on this booking.', 409)
@@ -423,7 +466,13 @@ export async function fillOpenSlot(db, reservation, slotId, playerId, captainId)
   const now = Date.now()
   const invite = { playerId: id, name: account.name || '', status: 'pending', invitedAtISO: new Date(now).toISOString(), deadlineISO: deadlineFrom(reservation, now, INVITE_ANSWER_HOURS, hours) }
   if (Date.parse(invite.deadlineISO) <= now) throw fail('The game is about to start, so there is no time left to invite someone.', 409)
-  const split = isSplit(reservation)
+  // A spot whose share moved to the captain's field balance: while the booking is still being paid
+  // online, the substitute takes the share back online (off the captain's field balance). Once it
+  // went through, the substitute just joins and the share stays at the field.
+  const progress = getPaymentProgress(reservation, await getReservationPayments(db, reservation))
+  const stillOnline = ['pending', 'needs review'].includes(String(reservation.reservationStatus || '').toLowerCase()) && progress.state !== 'finalized'
+  const backOnline = Boolean(slot.onsite) && stillOnline && Number(slot.amount) > 0
+  const split = isSplit(reservation) && !alreadyPaid && (!slot.onsite || backOnline)
   const shares = split ? { ...recordedShares(reservation), [id]: round2(Number(slot.amount) || 0) } : null
   const payers = split ? [...(reservation.splitPayerIds || []).map(String), id] : reservation.splitPayerIds || []
   const updated = await db.collection('reservations').updateOne(
@@ -432,6 +481,8 @@ export async function fillOpenSlot(db, reservation, slotId, playerId, captainId)
       $set: {
         'openSlots.$.status': 'filled',
         'openSlots.$.filledBy': id,
+        // The captain's payment for it still counts in what they paid (breakdown, receipt).
+        ...(alreadyPaid ? { 'openSlots.$.captainPaid': true } : {}),
         'openSlots.$.filledAtISO': invite.invitedAtISO,
         teamMembers: [...(reservation.teamMembers || []), { id, name: account.name || '', email: account.email || '' }],
         selectedTeammateIds: [...(reservation.selectedTeammateIds || []).map(String), id],
@@ -440,6 +491,7 @@ export async function fillOpenSlot(db, reservation, slotId, playerId, captainId)
       },
       // A new invite replaces this player's earlier one on the booking.
       $max: { paymentDueAtISO: invite.deadlineISO },
+      ...(backOnline ? { $inc: { depositAmount: round2(Number(slot.amount)), balanceAmount: -round2(Number(slot.amount)), captainOnsiteAmount: -round2(Number(slot.amount)) } } : {}),
     },
   )
   if (updated.modifiedCount !== 1) throw fail('This spot was just changed. Refresh and try again.', 409)
@@ -451,7 +503,7 @@ export async function fillOpenSlot(db, reservation, slotId, playerId, captainId)
     userId: id,
     type: 'team_invite',
     title: `${captainName} invited you to a game`,
-    message: `${captainName} invited you to play on ${labelOf(reservation)}${split && slot.amount > 0 ? ` (your share: ${peso(slot.amount)})` : ''}. Accept or decline in My Reservations before ${due}.`,
+    message: `${captainName} invited you to play on ${labelOf(reservation)}${alreadyPaid ? ` (your spot is already paid for by ${captainName})` : split && slot.amount > 0 ? ` (your share: ${peso(slot.amount)})` : slot.onsite && slot.amount > 0 ? ` (settle your ${peso(slot.amount)} share with ${captainName}; it's paid at the counter)` : ''}. Accept or decline in My Reservations before ${due}.`,
     linkedResourceId: reservation.id,
   })
   return db.collection('reservations').findOne({ _id: reservation._id })
@@ -474,8 +526,16 @@ export async function coverOpenSlot(db, reservation, slotId, captainId) {
 
 // The captain didn't act in time: the spot's share moves to what they pay at the field.
 async function moveSlotOnsite(db, reservation, slot) {
-  const amount = round2(Number(slot.amount) || 0)
   const nowISO = new Date().toISOString()
+  if (slot.onsite) {
+    // Its share moved to the field when the spot opened; nothing more to do.
+    await db.collection('reservations').updateOne(
+      { _id: reservation._id, openSlots: { $elemMatch: { id: slot.id, status: slot.status } } },
+      { $set: { 'openSlots.$.status': 'onsite', 'openSlots.$.closedAtISO': nowISO } },
+    )
+    return false
+  }
+  const amount = round2(Number(slot.amount) || 0)
   const status = amount > 0 ? 'onsite' : 'lapsed'
   const moved = await db.collection('reservations').updateOne(
     { _id: reservation._id, openSlots: { $elemMatch: { id: slot.id, status: slot.status } } },

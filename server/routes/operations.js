@@ -4,9 +4,11 @@ import { getDb, startDbSession } from '../db/mongo.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
 import { nextShortId } from '../utils/shortIds.js'
 import { emailDamageCharge } from '../services/notificationEmails.js'
+import { notifyDamageCharge } from '../utils/playerNotices.js'
 import { listDiscountInstitutions } from '../utils/bookingPricing.js'
 import { PENALTY_RULES_ID, computePenalty, getPenaltyRules, resolvePenaltyCharge } from '../utils/penaltyRules.js'
 import { computeNetRevenue, computePartnerIncome } from '../utils/reachNetRevenue.js'
+import { OWN_GUN_PREFIX } from '../utils/fpsChecks.js'
 
 // Field-operations records that don't fit the generic CRUD routes: chronograph
 // (FPS) safety logs, damage reports and penalty billing, the REACH outreach fund
@@ -72,9 +74,12 @@ router.get('/fps-logs', requireAuth, requireRole(...STAFF), async (req, res) => 
 
 router.post('/fps-logs', requireAuth, requireRole('admin', 'marshal'), async (req, res) => {
   const body = req.body || {}
-  let weaponClass = String(body.weaponClass || '').toLowerCase()
+  // A gun a player brought from home isn't in inventory: its reading is kept under the booking's
+  // own-gun key (see utils/fpsChecks.js) and tested as an AEG unless the marshal says sniper.
+  const ownGunId = String(body.weaponId || '').startsWith(OWN_GUN_PREFIX) ? String(body.weaponId).slice(0, 200) : ''
+  let weaponClass = String(body.weaponClass || (ownGunId ? 'aeg' : '')).toLowerCase()
   const fps = Number(body.fps)
-  if (!['aeg', 'sniper'].includes(weaponClass) && !body.weaponId) {
+  if (!['aeg', 'sniper'].includes(weaponClass) && (!body.weaponId || ownGunId)) {
     return res.status(400).json({ ok: false, error: 'weaponClass must be aeg or sniper' })
   }
   if (!Number.isFinite(fps) || fps <= 0 || fps > 1500) {
@@ -83,8 +88,8 @@ router.post('/fps-logs', requireAuth, requireRole('admin', 'marshal'), async (re
 
   try {
     const db = await getDb()
-    const weapon = body.weaponId ? await findById(db, 'weapons', body.weaponId) : null
-    if (body.weaponId && !weapon) return res.status(404).json({ ok: false, error: 'Weapon not found' })
+    const weapon = body.weaponId && !ownGunId ? await findById(db, 'weapons', body.weaponId) : null
+    if (body.weaponId && !ownGunId && !weapon) return res.status(404).json({ ok: false, error: 'Weapon not found' })
     const weaponName = String(weapon?.name || body.weaponName || '').trim().slice(0, 120)
     if (!weaponName) return res.status(400).json({ ok: false, error: 'Choose a weapon or enter its name.' })
 
@@ -94,7 +99,7 @@ router.post('/fps-logs', requireAuth, requireRole('admin', 'marshal'), async (re
     const nowISO = new Date().toISOString()
     const doc = {
       id: await nextShortId(db, 'fps_logs', 'FPS'),
-      weaponId: weapon ? String(weapon.id || weapon._id) : '',
+      weaponId: weapon ? String(weapon.id || weapon._id) : ownGunId,
       weaponName,
       weaponClass,
       fps,
@@ -385,6 +390,7 @@ router.put('/damage-reports/:id/review', requireAuth, requireRole('admin'), asyn
     if (updated?.status === 'billed') {
       const reservation = await findById(db, 'reservations', updated.reservationId)
       void emailDamageCharge(db, reservation, updated)
+      void notifyDamageCharge(db, reservation, updated).catch(() => null)
     }
     return res.json({ ok: true, data: updated })
   } catch (err) {
