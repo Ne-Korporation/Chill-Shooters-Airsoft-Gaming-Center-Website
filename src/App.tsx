@@ -248,6 +248,7 @@ export default function App() {
         {/* Availed Packages was removed (it showed made-up gear statuses); real gear status is on Weapons and each game's Rentals tab. */}
         <Route path="registrar/availed-packages" element={<Navigate to="/app/counter" replace />} />
         <Route path="registrar/waivers" element={<RegistrarSubmittedWaiversPageWrapper />} />
+        <Route path="registrar/players" element={<RequireRole roles={['registrar']}><PlayerManagementPage /></RequireRole>} />
         <Route path="registrar/submitted-payments" element={<RegistrarSubmittedPaymentsPageWrapper />} />
 
       </Route>

@@ -17,7 +17,17 @@ export function getPaymentProgress(reservation, payments) {
   const verified = Math.round(active
     .filter((payment) => ['paid', 'confirmed', 'verified', 'approved'].includes(String(payment.paymentStatus || payment.status || '').toLowerCase()))
     .reduce((sum, payment) => sum + Number(payment.amount || 0), 0) * 100) / 100
-  const paidUserIds = new Set(active.map((payment) => String(payment.userId || '')))
+  const paidByUser = new Map()
+  for (const payment of active) {
+    const id = String(payment.userId || '')
+    paidByUser.set(id, (paidByUser.get(id) || 0) + Number(payment.amount || 0))
+  }
+  // A payer has paid once they've covered their recorded share (it can go up, e.g. a parent who
+  // also pays for their child); without recorded shares, any payment counts.
+  const paidUserIds = new Set([...paidByUser.keys()].filter((id) => {
+    const share = Number(reservation?.splitShares?.[id])
+    return !Number.isFinite(share) || paidByUser.get(id) >= share - 0.01
+  }))
   const payerIds = String(reservation?.paymentMode || 'self').toLowerCase() === 'split'
     ? getSplitPayerIds(reservation)
     : [String(reservation?.userId || '')]
@@ -98,6 +108,8 @@ export function getGcashAmountDue(reservation, payments, payerId) {
     if (unpaid.filter((id) => id !== payer).length === 0) return remainingDeposit
     return Math.max(0, Math.min(Math.round((captainShare + cover - mine) * 100) / 100, remainingDeposit))
   }
+  // A recorded share: whatever of it this payer hasn't paid yet (a top-up when it went up).
+  if (Number.isFinite(recorded)) return Math.max(0, Math.min(Math.round((recorded - paidBy(payer)) * 100) / 100, remainingDeposit))
   if (paidBy(payer) > 0) return 0
   // The last teammate to pay covers rounding, but never a spot the captain is paying for.
   const captainStillOwes = cover > 0 ? Math.max(0, captainShare + cover - paidBy(captainId)) : 0

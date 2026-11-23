@@ -1,6 +1,7 @@
 import { isRentalPiece, modelFilter, modelOf } from './inventoryPieces.js'
 import { normalizeLocationId } from './bookingSlots.js'
 import { packageEquipmentQty } from './packageQuantities.js'
+import { gunRentersNotTakingPackage, packageRentOnlyItems, rentOnlyCounts, resolvePlayerGuns } from './ownGearRentals.js'
 
 export function stockQuantity(item, collection) {
   const candidates = collection === 'weapons'
@@ -71,8 +72,11 @@ export async function getBookingInventoryRequirements({
   const mode = String(payload.selectionMode || '').toLowerCase()
   const branch = normalizeLocationId(payload.locationId || payload.location || payload.locationName)
   const ownWeaponCount = Math.max(0, Math.round(Number(payload.verifiedOwnWeaponCount) || 0))
-  // Players bringing their own gun and gear get nothing from a package, so nothing is reserved for them.
-  players =Math.max(0, players - Math.min(players, Math.max(0, Math.round(Number(payload.verifiedOwnGearCount) || 0))))
+  // Players not taking the package get nothing from it, so nothing is reserved for them, except
+  // the single pieces they rent (just the gun, mask or vest; see utils/ownGearRentals.js).
+  const ownGearCount = Math.min(players, Math.max(0, Math.round(Number(payload.verifiedOwnGearCount) || 0)))
+  const singles = rentOnlyCounts({ ...payload, verifiedOwnGearCount: ownGearCount })
+  players = Math.max(0, players - ownGearCount)
   const freeUnits = (item, collection) =>
     Math.max(0, stockQuantity(item, collection) - Number(heldQuantities.get(holdKey(collection, String(item.id || item._id))) || 0))
   const requirement = (item, collection) => ({
@@ -132,6 +136,21 @@ export async function getBookingInventoryRequirements({
     return models
   }
 
+  // The package's own gun, mask and vest, for players renting just one of them.
+  const singleItems = singles.gun || singles.mask || singles.vest
+    ? await packageRentOnlyItems(db, pkg, findDocumentById)
+    : { gun: null, mask: null, vest: null }
+  const singleModel = (piece) => (singles[piece] && singleItems[piece] ? modelOf(singleItems[piece]) : null)
+  // Guns players picked themselves: one piece of each, per player.
+  const pickedGunNeeds = new Map()
+  for (const items of Object.values(await resolvePlayerGuns(db, payload, findDocumentById))) {
+    for (const item of items) pickedGunNeeds.set(modelOf(item), (pickedGunNeeds.get(modelOf(item)) || 0) + 1)
+  }
+  // Players not taking the package who rent a gun get the included BBs with it.
+  const bbPlayers = players + (Array.isArray(payload.ownGearPlayerIds)
+    ? gunRentersNotTakingPackage(payload)
+    : (singleItems.gun ? singles.gun : 0))
+
   // Pieces needed per equipment model: players × the package's per-player quantity.
   const equipmentNeeds = new Map()
   const requirements = []
@@ -139,7 +158,8 @@ export async function getBookingInventoryRequirements({
   for (const id of [...new Set((Array.isArray(pkg.equipmentIds) ? pkg.equipmentIds : []).map(String))]) {
     const item = await findDocumentById(db, 'equipments', id)
     if (isAmmo(item)) {
-      const grams = players * packageEquipmentQty(pkg, id) * gramsPerRefill
+      // The included BBs go with the package's gun: package players and players renting just the gun.
+      const grams = bbPlayers * packageEquipmentQty(pkg, id) * gramsPerRefill
       if (grams <= 0) continue
       const inStock = Math.max(0, Number(item.stockGrams) || 0)
       if (!isUsable(item) || inStock < grams) {
@@ -153,12 +173,21 @@ export async function getBookingInventoryRequirements({
     equipmentNeeds.set(model, Math.max(equipmentNeeds.get(model) || 0, packageEquipmentQty(pkg, id)))
   }
 
+  // A mask or vest rented on its own: one piece per player renting it.
+  const singleEquipment = new Map()
+  for (const piece of ['mask', 'vest']) {
+    const model = singleModel(piece)
+    if (model) singleEquipment.set(model, (singleEquipment.get(model) || 0) + singles[piece])
+  }
+  for (const model of singleEquipment.keys()) if (!equipmentNeeds.has(model)) equipmentNeeds.set(model, 0)
+
   for (const [model, perPlayer] of equipmentNeeds) {
-    const needed = players * perPlayer
+    const needed = players * perPlayer + (singleEquipment.get(model) || 0)
+    if (needed <= 0) continue
     const free = await freePiecesOf('equipments', model)
     if (free.length < needed) {
       // No counts in the message: players only learn that there isn't enough, never how much is booked.
-      throw new Error(`Not enough ${model} free for this slot for ${players} player${players === 1 ? '' : 's'}. Reduce the number of players or choose another package or slot.`)
+      throw new Error(`Not enough ${model} free for this slot for your group. Reduce the number of players or choose another package or slot.`)
     }
     for (const piece of free.slice(0, needed)) {
       taken.add(String(piece.id))
@@ -169,11 +198,19 @@ export async function getBookingInventoryRequirements({
   const weaponModels = await modelsOf('weapons', pkg.weaponIds)
   // Every player gets one of each listed weapon (e.g. a rifle and grenades): a piece of every
   // model per player. An approved own gun replaces the first (main) one.
-  for (const [index, model] of weaponModels.entries()) {
-    const needed = Math.max(0, players - (index === 0 ? Math.min(ownWeaponCount, players) : 0))
+  // Players renting just the gun get one of the main (first) weapon.
+  const singleGunModel = singleModel('gun')
+  const weaponNeeds = new Map(weaponModels.map((model, index) => [
+    model,
+    Math.max(0, players - (index === 0 ? Math.min(ownWeaponCount, players) : 0))
+      + (index === 0 && model === singleGunModel ? singles.gun : 0),
+  ]))
+  for (const [model, count] of pickedGunNeeds) weaponNeeds.set(model, (weaponNeeds.get(model) || 0) + count)
+  for (const [model, needed] of weaponNeeds) {
+    if (needed <= 0) continue
     const free = await freePiecesOf('weapons', model)
     if (free.length < needed) {
-      throw new Error(`Not enough ${model} free for this slot for ${players} player${players === 1 ? '' : 's'}. Reduce the number of players or choose another package or slot.`)
+      throw new Error(`Not enough ${model} free for this slot for your group. Reduce the number of players or choose another package or slot.`)
     }
     for (const piece of free.slice(0, needed)) {
       taken.add(String(piece.id))

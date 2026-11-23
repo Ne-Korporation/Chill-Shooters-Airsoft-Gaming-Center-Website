@@ -153,6 +153,8 @@ function withoutPlayers(reservation, ids) {
     ownWeaponBringerIds: (reservation.ownWeaponBringerIds || []).map(String).filter((id) => !leaving.has(id)),
     ownWeaponBringers: bringers,
     ownGearPlayerIds: (reservation.ownGearPlayerIds || []).map(String).filter((id) => !leaving.has(id)),
+    ownGearRentals: Object.fromEntries(Object.entries(reservation.ownGearRentals || {}).filter(([id]) => !leaving.has(String(id)))),
+    playerGuns: Object.fromEntries(Object.entries(reservation.playerGuns || {}).filter(([id]) => !leaving.has(String(id)))),
     selectedOwnWeaponIds: reservation.selectedOwnWeaponIds || [],
   }
 }

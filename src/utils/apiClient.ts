@@ -84,6 +84,8 @@ export class ApiError extends Error {
     super(message)
     this.status = status
     this.body = body
+    // The browser logs only "400 (Bad Request)"; this puts the server's reason next to it.
+    if (status >= 400) console.warn(`API ${status}: ${message}`)
   }
 }
 

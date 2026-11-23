@@ -25,7 +25,7 @@ const records = {
   weapons: [
     { id: 'rifle', name: 'Rifle', price: 500, status: 'available' },
     { id: 'M4-1', name: 'M4 Rifle #1', model: 'M4 Rifle', price: 500, status: 'available' },
-    { id: 'GRENADE-1', name: 'Grenades #1', model: 'Grenades', price: 200, status: 'available' },
+    { id: 'GRENADE-1', name: 'Grenades #1', model: 'Grenades', category: 'grenades', price: 200, status: 'available' },
   ],
   equipments: [
     { id: 'vest', name: 'Vest', price: 50, qty: 10, status: 'available' },
@@ -279,8 +279,74 @@ test('a package player and an own-gun-and-gear player: the second pays the entra
     userId: 'player',
   })
   assert.equal(result.totalAmount, 900)
-  assert.deepEqual(result.loadoutUnitCosts, { package: 750, own_gun: 250, own_gear: 150 })
-  assert.ok(result.pricingBreakdown.some((line) => /Own gun and gear \(1\)/.test(line.label)))
+  assert.deepEqual(result.loadoutUnitCosts, { package: 750, own_gun: 250, own_gear: 150, ammo: 50 })
+  assert.ok(result.pricingBreakdown.some((line) => /Not taking the package \(1\)/.test(line.label)))
+})
+
+test('players not taking the package can rent just the gun, mask or vest at its rental price', async () => {
+  // Full Package for 4: one takes the package (₱750); A rents just the gun (₱150 + ₱500);
+  // B rents the mask and vest (₱150 + ₱50 + ₱50); C brings everything (₱150).
+  const result = await calculateBookingPrice({
+    db: {},
+    payload: {
+      selectionMode: 'package',
+      selectedPackageId: 'full-package',
+      sessionType: 'public',
+      ownGearPlayerIds: ['A', 'B', 'C'],
+      verifiedOwnGearCount: 3,
+      ownGearRentals: { A: ['gun'], B: ['vest', 'mask', 'bogus'], X: ['gun'] },
+    },
+    players: 4,
+    findDocumentById,
+    userId: 'player',
+  })
+  assert.equal(result.totalAmount, 750 + 650 + 250 + 150)
+  assert.equal(result.loadoutUnitCosts.rent_gun, 500)
+  assert.equal(result.loadoutUnitCosts.rent_mask, 50)
+  assert.ok(result.pricingBreakdown.some((line) => /M4 Rifle rental only \(1\)/.test(line.label)))
+  // The package player and the gun renter get the included BBs.
+  assert.ok(result.pricingBreakdown.some((line) => /BB reloads included \(4\)/.test(line.label)))
+})
+
+test('players can pick their own rental guns, and a package player can add another gun', async () => {
+  // Full Package for 2: P1 takes the package and adds a second M4 (₱500); P2 doesn't take the
+  // package and rents a picked M4 (₱150 + ₱500). Grenades can't be picked: they aren't a gun.
+  const result = await calculateBookingPrice({
+    db: {},
+    payload: {
+      selectionMode: 'package',
+      selectedPackageId: 'full-package',
+      sessionType: 'public',
+      ownGearPlayerIds: ['P2'],
+      verifiedOwnGearCount: 1,
+      playerGuns: { P1: ['M4-1'], P2: ['M4-1'] },
+    },
+    players: 2,
+    findDocumentById,
+    userId: 'player',
+  })
+  assert.equal(result.totalAmount, 750 + 500 + 150 + 500)
+  assert.deepEqual(result.playerGunCosts, { P1: 500, P2: 500 })
+  assert.ok(result.pricingBreakdown.some((line) => /M4 Rifle rental, picked by players \(2\)/.test(line.label)))
+  // P2 rents a gun, so they get the included BBs too.
+  assert.ok(result.pricingBreakdown.some((line) => /BB reloads included \(4\)/.test(line.label)))
+  await assert.rejects(calculateBookingPrice({
+    db: {},
+    payload: { selectionMode: 'package', selectedPackageId: 'full-package', sessionType: 'public', playerGuns: { P1: ['GRENADE-1'] } },
+    players: 1,
+    findDocumentById,
+    userId: 'player',
+  }), /can't be rented/)
+})
+
+test('renting a piece the package does not include is refused', async () => {
+  await assert.rejects(calculateBookingPrice({
+    db: {},
+    payload: { selectionMode: 'package', selectedPackageId: 'gloves-pack', sessionType: 'public', ownGearPlayerIds: ['A'], verifiedOwnGearCount: 1, ownGearRentals: { A: ['gun'] } },
+    players: 2,
+    findDocumentById,
+    userId: 'player',
+  }), /no gun/)
 })
 
 test('a per-player set price leaves out a player bringing their own gear: they pay the entrance fee instead', async () => {

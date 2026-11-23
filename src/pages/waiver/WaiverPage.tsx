@@ -865,7 +865,8 @@ export function WaiverPage({
         }).catch(() => {})
       }
 
-      toast.success(String(response.data?.status || '').toLowerCase() === 'approved' ? 'Waiver signed and approved. You can book a game now.' : 'Waiver submitted')
+      // A child's waiver gets its own message from the minors list (onSubmitted).
+      if (!child) toast.success(String(response.data?.status || '').toLowerCase() === 'approved' ? 'Waiver signed and approved. You can book a game now.' : 'Waiver submitted')
       onSubmitted?.()
     } catch (err: any) {
       console.error('Waiver submit failed:', err)
@@ -1364,6 +1365,7 @@ export function WaiverPage({
                 disabled={submitted || submitting}
                 error={shownErrors.idImage}
                 helper={child ? "Valid IDs or school IDs are accepted. Staff check the child's ID before approving the waiver." : 'Photo of your valid government or school ID. Staff check it before approving your waiver.'}
+                {...(child ? { attachedText: "ID photo attached. Staff check it before approving the waiver." } : {})}
               />
               )}
             </div>

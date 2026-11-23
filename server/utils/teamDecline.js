@@ -38,6 +38,8 @@ export function teamWithout(reservation, playerId) {
       ownWeaponBringers,
       verifiedOwnWeaponCount: Math.min(numberOfPlayers, ownWeaponBringers.filter((b) => b?.verified).length),
       ownGearPlayerIds,
+      ownGearRentals: Object.fromEntries(Object.entries(reservation.ownGearRentals || {}).filter(([id]) => String(id) !== me)),
+      playerGuns: Object.fromEntries(Object.entries(reservation.playerGuns || {}).filter(([id]) => String(id) !== me)),
       verifiedOwnGearCount: Math.min(numberOfPlayers, ownGearPlayerIds.length),
     },
   }

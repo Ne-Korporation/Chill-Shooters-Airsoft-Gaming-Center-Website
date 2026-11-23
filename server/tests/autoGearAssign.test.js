@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { assignGearOnCheckIn, releaseAutoGear } from '../utils/autoGearAssign.js'
 
 // In-memory stand-in for the collections the auto-assignment reads and writes.
-function fakeDb({ reservation, holds, weapons, equipments }) {
+function fakeDb({ reservation, holds, weapons, equipments, packages = [] }) {
   const rentals = []
   const matches = (doc, filter) => Object.entries(filter).every(([key, rule]) => {
     if (rule && typeof rule === 'object') {
@@ -27,6 +27,7 @@ function fakeDb({ reservation, holds, weapons, equipments }) {
       if (name === 'inventory_holds') return list(holds)
       if (name === 'weapons') return list(weapons)
       if (name === 'equipments') return list(equipments)
+      if (name === 'packages') return list(packages)
       if (name === 'rentals') {
         return {
           ...list(rentals),
@@ -88,6 +89,33 @@ test('a player bringing their own gun gets gear but no rental gun', async () => 
   const db = setup({ reservation: { ownWeaponBringerIds: ['P1'] } })
   const gear = await assignGearOnCheckIn(db, { reservationId: 'R-1', player: juan, actor: {} })
   assert.deepEqual(gear.map((g) => g.itemName), ['Mask #4'])
+})
+
+test('package booking: each player gets what they booked, including the guns they picked', async () => {
+  // Juan takes the package (M4 + mask). Ana doesn't: she rents only the mask and picks a pistol.
+  const db = fakeDb({
+    reservation: {
+      id: 'R-1', reservationDate: '2026-11-21', ownWeaponBringerIds: [],
+      selectionMode: 'package', selectedPackageId: 'PKG-1',
+      ownGearPlayerIds: ['P2'], ownGearRentals: { P2: ['mask'] }, playerGuns: { P2: ['W-60'] },
+    },
+    packages: [{ id: 'PKG-1', weaponIds: ['W-51'], equipmentIds: ['E-4'] }],
+    holds: ['W-51', 'W-60'].map((itemId) => ({ reservationId: 'R-1', status: 'held', collection: 'weapons', itemId }))
+      .concat(['E-4', 'E-5'].map((itemId) => ({ reservationId: 'R-1', status: 'held', collection: 'equipments', itemId }))),
+    weapons: [
+      { id: 'W-51', name: 'M4 Rifle #51', model: 'M4 Rifle', unitNumber: 51, category: 'rifles' },
+      { id: 'W-60', name: 'Pistol #60', model: 'Pistol', unitNumber: 60, category: 'pistols' },
+    ],
+    equipments: [
+      { id: 'E-4', name: 'Mask #4', model: 'Mask', unitNumber: 4, category: 'masks' },
+      { id: 'E-5', name: 'Mask #5', model: 'Mask', unitNumber: 5, category: 'masks' },
+    ],
+  })
+  // Ana checks in first: she must not take the package's M4.
+  const anaGear = await assignGearOnCheckIn(db, { reservationId: 'R-1', player: ana, actor: {} })
+  assert.deepEqual(anaGear.map((g) => g.itemName).sort(), ['Mask #4', 'Pistol #60'])
+  const juanGear = await assignGearOnCheckIn(db, { reservationId: 'R-1', player: juan, actor: {} })
+  assert.deepEqual(juanGear.map((g) => g.itemName).sort(), ['M4 Rifle #51', 'Mask #5'])
 })
 
 test('checking a player out gives their automatic pieces back to the booking', async () => {

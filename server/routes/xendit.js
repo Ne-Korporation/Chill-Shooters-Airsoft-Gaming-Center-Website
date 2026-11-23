@@ -294,7 +294,15 @@ router.get('/demo-pay/:ref', requireAuth, requireRole('user'), async (req, res) 
     const checkout = await findDemoCheckout(db, req)
     if (!checkout) return res.status(404).json({ ok: false, error: 'Payment not found.' })
     const reservation = await db.collection('reservations').findOne({ id: checkout.reservationId })
-    const fullDay = checkoutReservationIds(checkout).length > 1
+    // Several slots paid together: name them all ("Morning + Evening", or "Full day" for all three).
+    const ids = checkoutReservationIds(checkout)
+    const slots = ids.length > 1
+      ? (await db.collection('reservations').find({ id: { $in: ids } }, { projection: { reservationTime: 1 } }).toArray())
+        .map((r) => String(r.reservationTime || '').toLowerCase()).filter(Boolean)
+      : []
+    const slotsLabel = slots.length === 3
+      ? 'Full day'
+      : ['morning', 'afternoon', 'evening'].filter((t) => slots.includes(t)).map((t) => t[0].toUpperCase() + t.slice(1)).join(' + ')
     return res.json({
       ok: true,
       data: {
@@ -303,7 +311,7 @@ router.get('/demo-pay/:ref', requireAuth, requireRole('user'), async (req, res) 
         channel: checkout.channel,
         status: checkout.status,
         reservationId: checkout.reservationId,
-        reservationLabel: [reservation?.reservationDate, fullDay ? 'Full day' : reservation?.reservationTime, reservation?.locationName].filter(Boolean).join(' • '),
+        reservationLabel: [reservation?.reservationDate, slotsLabel || reservation?.reservationTime, reservation?.locationName].filter(Boolean).join(' • '),
       },
     })
   } catch (err) {

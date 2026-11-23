@@ -9,12 +9,13 @@ import { ACCEPTED_ID_TYPES } from '../utils/idTypes.js'
 import { getActorName } from '../utils/actors.js'
 import { NICKNAME_MAX, cleanMiddleInitial, cleanNamePart, composeFullName } from '../utils/names.js'
 import { calculateBookingPrice, getAmmoReloadPrice, normalizeExtraAmmoReloads } from '../utils/bookingPricing.js'
+import { normalizeOwnGearRentals, normalizePlayerGuns } from '../utils/ownGearRentals.js'
 import { assignCustomPieces, getBookingInventoryRequirements, getHeldQuantities, holdBookingInventory, pieceAtBranch, stockQuantity } from '../utils/inventoryHolds.js'
 import { canonicalEmail, normalizeEmail, sameEmailFilter } from '../utils/emails.js'
 import { submitGcashPayment } from '../utils/gcashPayments.js'
 import { newReservationId, nextShortId } from '../utils/shortIds.js'
 import { ageFromBirthDate } from '../utils/age.js'
-import { ACTIVE_WAIVER_STATUSES, expireOldWaivers, validUntilFrom } from '../utils/waiverValidity.js'
+import { ACTIVE_WAIVER_STATUSES, expireOldWaivers, expireWaiversForNewText, validUntilFrom } from '../utils/waiverValidity.js'
 import { manilaDateISO } from '../utils/reminders.js'
 import { formatSlotTime, getSlotHours, slotHasEnded, slotHasStarted } from '../utils/slotHours.js'
 import { summarizeWeekendCapacity, weekendDatesOf } from '../utils/weekendCapacity.js'
@@ -305,24 +306,59 @@ router.get('/packages/booking-counts', requireAuth, requireRole('admin'), async 
   }
 })
 
+// New waiver text: every current waiver expires now and each player (a parent, for their children)
+// is told to answer the new one. Returns how many waivers expired.
+async function renewWaiversForNewText(db) {
+  const expired = await expireWaiversForNewText(db)
+  // One notice per account: a child's waiver goes to their parent.
+  const byAccount = new Map()
+  for (const waiver of expired) {
+    const accountId = String(waiver.forChild && waiver.guardianId ? waiver.guardianId : waiver.userId || '')
+    if (!accountId) continue
+    const entry = byAccount.get(accountId) || { own: false, children: [] }
+    if (waiver.forChild) entry.children.push(waiver.fullName || 'your child')
+    else entry.own = true
+    byAccount.set(accountId, entry)
+  }
+  for (const [accountId, { own, children }] of byAccount) {
+    const whose = [own ? 'your waiver' : '', children.length ? `the waiver${children.length > 1 ? 's' : ''} of ${children.join(', ')}` : '']
+      .filter(Boolean).join(' and ')
+    await notifyUser(db, {
+      userId: accountId,
+      type: 'waiver_renewal_required',
+      title: 'Please answer the updated waiver',
+      message: `Chill Shooters updated its waiver, so ${whose} must be answered again before your next game. Open the Waivers page to submit the new one.`,
+    })
+  }
+  return expired.length
+}
+
 // Admin: replace the waiver text, or { reset: true } to go back to the official text.
-// Waivers already signed keep the text they were signed with.
+// Signed waivers keep the text they were signed with, but none of them count any more: every
+// player must answer the new waiver (renewWaiversForNewText).
 router.put('/waiver-text', requireAuth, requireRole('admin'), async (req, res) => {
   try {
     const db = await getDb()
     if (req.body?.reset === true) {
+      const existing = await db.collection('site_settings').findOne({ key: WAIVER_TEXT_KEY })
       await db.collection('site_settings').deleteOne({ key: WAIVER_TEXT_KEY })
-      return res.json({ ok: true, data: null })
+      // Already on the official text: nothing changed, so nobody needs to answer again.
+      const waiversExpired = existing ? await renewWaiversForNewText(db) : 0
+      return res.json({ ok: true, data: null, waiversExpired })
     }
     const text = cleanWaiverText(req.body?.text)
     if (!text) return res.status(400).json({ ok: false, error: 'Fill in every section of the waiver, with at least one clause.' })
     const updatedAtISO = new Date().toISOString()
+    const existing = await db.collection('site_settings').findOne({ key: WAIVER_TEXT_KEY })
     await db.collection('site_settings').updateOne(
       { key: WAIVER_TEXT_KEY },
       { $set: { key: WAIVER_TEXT_KEY, text, updatedAtISO, updatedBy: String(req.user.id) } },
       { upsert: true },
     )
-    return res.json({ ok: true, data: text, updatedAtISO })
+    // Saving the same text again changes nothing, so nobody needs to answer again.
+    const changed = JSON.stringify(existing?.text ?? null) !== JSON.stringify(text)
+    const waiversExpired = changed ? await renewWaiversForNewText(db) : 0
+    return res.json({ ok: true, data: text, updatedAtISO, waiversExpired })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
   }
@@ -452,6 +488,15 @@ router.post('/inventory-check', requireAuth, async (req, res) => {
       verifiedOwnWeaponCount: Math.max(0, Math.round(Number(body.verifiedOwnWeaponCount) || 0)),
       // Players bringing their own gun and gear get nothing from a package (Hybrid).
       verifiedOwnGearCount: Math.min(players, Math.max(0, Math.round(Number(body.verifiedOwnGearCount) || 0))),
+      // How many of them rent just the gun, mask or vest: { gun, mask, vest }.
+      rentOnlyCounts: body.rentOnlyCounts && typeof body.rentOnlyCounts === 'object' ? body.rentOnlyCounts : {},
+      // Guns players picked themselves: { [playerKey]: [weaponId, ...] } (keys only group them).
+      playerGuns: normalizePlayerGuns(body.playerGuns),
+      // Players not taking the package who rent a gun (they get the included BBs with it).
+      ...(Array.isArray(body.ownGearPlayerIds) ? {
+        ownGearPlayerIds: body.ownGearPlayerIds.map(String).slice(0, players),
+        ownGearRentals: body.ownGearRentals && typeof body.ownGearRentals === 'object' ? body.ownGearRentals : {},
+      } : {}),
     }
     try {
       if (mode === 'custom') Object.assign(payload, await assignCustomPieces({ db, payload, findDocumentById, heldQuantities }))
@@ -1216,6 +1261,8 @@ function safeIdParam(id) {
 }
 
 const STAFF_ROLES = ['admin', 'registrar', 'marshal']
+// Staff who review the IDs players submit on their profile.
+const ID_REVIEW_ROLES = ['admin', 'registrar']
 const READ_ROLES = {
   dashboard_posts: ['admin', 'registrar', 'marshal', 'user'],
   equipment: STAFF_ROLES,
@@ -1580,7 +1627,8 @@ router.get('/:collection', requireAuth, async (req, res) => {
 
     if (collection === 'user_accounts') {
       const projection = secretAccountProjection()
-      if (req.user.role !== 'admin') {
+      // Admins and registrars verify players' IDs, so they see the submitted photos.
+      if (!ID_REVIEW_ROLES.includes(req.user.role)) {
         projection.identityDocumentUrl = 0
         projection.identityDocumentBackUrl = 0
       }
@@ -1634,8 +1682,8 @@ router.get('/:collection/:id', requireAuth, async (req, res) => {
     }
     if (collection === 'user_accounts') {
       stripAccountSecrets(doc)
-      // Only admins and the account's owner see the submitted ID photos.
-      if (req.user.role !== 'admin' && String(doc.id || doc._id) !== String(req.user.id)) {
+      // Only ID reviewers (admins, registrars) and the account's owner see the submitted ID photos.
+      if (!ID_REVIEW_ROLES.includes(req.user.role) && String(doc.id || doc._id) !== String(req.user.id)) {
         delete doc.identityDocumentUrl
         delete doc.identityDocumentBackUrl
       }
@@ -1685,15 +1733,32 @@ async function resolveTeamAndOwnWeapons(db, doc, { requireFullTeam = false } = {
     throw tooFew
   }
   const objectIds = requestedIds.map((id) => toObjectId(id)).filter(Boolean)
-  const accounts = requestedIds.length
+  const found = requestedIds.length
     ? await db.collection('user_accounts').find(
       { role: 'user', $or: [{ id: { $in: requestedIds } }, ...(objectIds.length ? [{ _id: { $in: objectIds } }] : [])] },
       { projection: { id: 1, name: 1, email: 1, isChildProfile: 1, guardianId: 1, removedByGuardianAtISO: 1 } },
     ).toArray()
     : []
-  // A minor the guardian removed from their account can't be booked.
-  if (accounts.length !== requestedIds.length || accounts.some((account) => account.isChildProfile && account.removedByGuardianAtISO)) {
-    const unknown = new Error('One or more selected teammates could not be found.')
+  // One account per player id. Two records sharing an id (bad data) would otherwise put that
+  // player on the team twice, and the split payment would no longer add up.
+  const byId = new Map()
+  for (const account of found) {
+    const key = String(account.id || account._id)
+    if (byId.has(key)) console.warn('Two accounts share the player id', key, '- fix the duplicate in user_accounts')
+    else byId.set(key, account)
+  }
+  const accounts = [...byId.values()]
+  // A minor the guardian removed from their account can't be booked. The error names who, so the
+  // booker knows which player to remove and add again.
+  const usable = new Set(accounts
+    .filter((account) => !(account.isChildProfile && account.removedByGuardianAtISO))
+    .flatMap((account) => [String(account.id || ''), String(account._id || '')]))
+  const missingIds = requestedIds.filter((id) => !usable.has(id))
+  if (missingIds.length) {
+    const sentNames = new Map((Array.isArray(doc.teamMembers) ? doc.teamMembers : []).map((member) => [String(member?.id), member?.name]))
+    const who = missingIds.map((id) => sentNames.get(id) || id).join(', ')
+    console.warn('Booking teammates not found', { userId: captainId, missingIds })
+    const unknown = new Error(`These teammates could not be found: ${who}. Remove them in step 2 and add them again.`)
     unknown.statusCode = 400
     throw unknown
   }
@@ -1735,24 +1800,15 @@ async function resolveTeamAndOwnWeapons(db, doc, { requireFullTeam = false } = {
   }
   // With a package, the booker marks which players bring their own gun and gear: they pay the
   // entrance fee only and get nothing from the package. No registered gear is needed (staff check
-  // it on game day, and every gun goes through the chronograph); minors always get the package.
-  const childMemberIds = new Set(teamMembers.filter((member) => member.isMinor).map((member) => member.id))
+  // it on game day, and every gun goes through the chronograph). Minors can bring their own too.
   const ownGearPlayerIds = allowsOwnGear
-    ? Array.from(new Set((Array.isArray(doc.ownGearPlayerIds) ? doc.ownGearPlayerIds : []).map(String).filter((id) => memberIds.has(id) && !childMemberIds.has(id))))
+    ? Array.from(new Set((Array.isArray(doc.ownGearPlayerIds) ? doc.ownGearPlayerIds : []).map(String).filter((id) => memberIds.has(id))))
     : []
-  // Nothing rented at all ("everyone brings their own"): every player pays the entrance fee only.
-  // Minors can't (they need rental gear).
-  const rentsNothing = String(doc.selectionMode || '').toLowerCase() === 'custom'
-    && !(Array.isArray(doc.customWeaponIds) && doc.customWeaponIds.length)
-    && !(Array.isArray(doc.customEquipmentIds) && doc.customEquipmentIds.length)
-  if (rentsNothing) {
-    const minor = teamMembers.find((member) => member.isMinor)
-    if (minor) {
-      const err = new Error(`${minor.name || 'A minor'} needs rental gear, so the team can't all bring their own. Choose Hybrid instead.`)
-      err.statusCode = 400
-      throw err
-    }
-  }
+  // Of those, who rents just the package's gun, mask or vest (pricing refuses a piece the package
+  // doesn't include).
+  const ownGearRentals = normalizeOwnGearRentals(doc.ownGearRentals, ownGearPlayerIds)
+  // Guns players picked themselves (Hybrid package bookings): pricing checks each is a rental gun.
+  const playerGuns = allowsOwnGear ? normalizePlayerGuns(doc.playerGuns, [...memberIds]) : {}
   const bringerIds = allowsOwnWeapons ? Array.from(new Set(
     (Array.isArray(doc.ownWeaponBringerIds) ? doc.ownWeaponBringerIds : []).map(String)
       // Own-gear players are counted on their own, not as "own gun, rent the rest".
@@ -1772,6 +1828,8 @@ async function resolveTeamAndOwnWeapons(db, doc, { requireFullTeam = false } = {
     ownWeaponTarget: allowsOwnWeapons ? Math.max(0, Math.round(Number(doc.ownWeaponTarget) || 0)) : 0,
     verifiedOwnWeaponCount: Math.min(doc.numberOfPlayers, ownWeaponBringers.filter((bringer) => bringer.verified).length),
     ownGearPlayerIds,
+    ownGearRentals,
+    playerGuns,
     verifiedOwnGearCount: Math.min(doc.numberOfPlayers, ownGearPlayerIds.length),
     ...extraAmmoPerPlayer(doc, memberIds),
   }
@@ -1843,7 +1901,8 @@ async function notifyAddedTeammates(db, reservation, appUrl) {
           message: `${captainName} invited you to a game on ${when}. Accept it and pay your share (₱${myShare.toLocaleString()}) in My Reservations before ${answerLabel}, or the invite is void.`,
           linkedResourceId: reservation.id,
         })
-        void emailSplitShareRequest(db, reservation, userId, share, captainName, dueLabel, `${appUrl}/app/my-reservations#split-payments`)
+        // The player's own share (uneven when players get different things), same as the notice above.
+        void emailSplitShareRequest(db, reservation, userId, myShare, captainName, dueLabel, `${appUrl}/app/my-reservations#split-payments`)
       } else {
         await notifyUser(db, {
           userId,
@@ -1972,7 +2031,7 @@ router.post('/:collection', requireAuth, async (req, res) => {
     // birthday and ID are copied onto it, so it is approved as soon as it is signed.
     let verifiedIdentity = null
     // A parent submits the minor waiver for a child profile on their account (routes/children.js),
-    // after confirming by email that they are the guardian and once their own waiver is approved.
+    // once their own waiver is approved.
     if (collection === 'waivers' && req.user.role === 'user') {
       const childId = String(payload.forChildId || '').trim()
       delete payload.forChildId
@@ -1983,9 +2042,6 @@ router.post('/:collection', requireAuth, async (req, res) => {
       if (childId) {
         const child = await findOwnChild(db, req.user.id, childId)
         if (!child) return res.status(404).json({ ok: false, error: 'Child not found on your account.' })
-        if (!child.guardianConfirmedAtISO) {
-          return res.status(409).json({ ok: false, error: "Confirm you are the child's guardian first: open the link we emailed you." })
-        }
         if (!(await hasApprovedWaiver(db, req.user.id))) {
           return res.status(409).json({ ok: false, error: 'Your own waiver must be approved first.' })
         }
@@ -2189,11 +2245,14 @@ router.post('/:collection', requireAuth, async (req, res) => {
         return res.status(400).json({ ok: false, error: 'Select at least one field.' })
       }
 
-      const gameModePreference = String(payload.gameModePreference || '').trim()
-      if (gameModePreference && !GAME_MODES.includes(gameModePreference)) {
-        return res.status(400).json({ ok: false, error: 'Choose a game mode from the list.' })
+      // One or more game modes, saved as "Team Deathmatch, VIP Escort" (no mode name has a comma).
+      // "Marshal's choice" stands alone: picked with others, the others win.
+      const pickedModes = [...new Set(String(payload.gameModePreference || '').split(',').map((mode) => mode.trim()).filter(Boolean))]
+      if (pickedModes.some((mode) => !GAME_MODES.includes(mode))) {
+        return res.status(400).json({ ok: false, error: 'Choose game modes from the list.' })
       }
-      payload.gameModePreference = gameModePreference || undefined
+      const specificModes = pickedModes.filter((mode) => mode !== GAME_MODES[0])
+      payload.gameModePreference = (specificModes.length ? specificModes : pickedModes).join(', ') || undefined
       payload.layoutRequest = String(payload.layoutRequest || '').trim().slice(0, 500) || undefined
       payload.extraAmmoReloads = normalizeExtraAmmoReloads(payload.extraAmmoReloads) || undefined
       payload.teamName = String(payload.teamName || '').trim().slice(0, 60) || undefined
@@ -2526,12 +2585,20 @@ router.put('/:collection/:id', requireAuth, async (req, res) => {
     partnerships: ['admin'],
     payments: [],
     reservations: [],
-    user_accounts: ['admin', 'user'],
+    user_accounts: ['admin', 'registrar', 'user'],
     waivers: ['admin', 'registrar'],
     weapons: ['admin', 'marshal'],
   }
   if (!allowedUpdateRoles[collection]?.includes(updateRole)) {
     return res.status(403).json({ ok: false, error: 'Forbidden: insufficient role permissions' })
+  }
+  // Registrars only verify, reject or reopen a player's ID; everything else on an account is admin work.
+  if (updateRole === 'registrar' && collection === 'user_accounts') {
+    const fields = Object.keys(payload)
+    if (fields.length !== 1 || fields[0] !== 'identityVerificationStatus'
+      || !['verified', 'rejected', 'pending_review'].includes(String(payload.identityVerificationStatus))) {
+      return res.status(403).json({ ok: false, error: "Registrars can only verify or reject a player's ID." })
+    }
   }
   // Passwords and one-time codes change only through the auth flows (reset, set-password), which
   // hash them and end old sessions; record ids never change.
@@ -2639,7 +2706,7 @@ router.put('/:collection/:id', requireAuth, async (req, res) => {
 
     if (collection === 'user_accounts') {
       const changes = payload.$set || payload
-      if (updateRole === 'admin' && changes.identityVerificationStatus === 'verified' && existing.identityVerificationStatus !== 'verified') {
+      if (ID_REVIEW_ROLES.includes(updateRole) && changes.identityVerificationStatus === 'verified' && existing.identityVerificationStatus !== 'verified') {
         Object.assign(changes, identityVerifiedFields())
         // The newer ID replaces the one that was still counting.
         const previousFields = ['identityPreviousValidUntilISO', 'identityPreviousIdType', 'identityPreviousDocumentUrl', 'identityPreviousDocumentBackUrl']
@@ -2827,7 +2894,7 @@ router.put('/:collection/:id', requireAuth, async (req, res) => {
     // Same rules as reading an account: never send the password hash or OTP back.
     if (collection === 'user_accounts') {
       stripAccountSecrets(updatedDoc)
-      if (req.user.role !== 'admin' && String(updatedDoc.id || updatedDoc._id) !== String(req.user.id)) {
+      if (!ID_REVIEW_ROLES.includes(req.user.role) && String(updatedDoc.id || updatedDoc._id) !== String(req.user.id)) {
         delete updatedDoc.identityDocumentUrl
         delete updatedDoc.identityDocumentBackUrl
       }

@@ -157,7 +157,8 @@ export async function emailReservationEvent(db, reservation, event, keySuffix = 
   })
 }
 
-// A full day's three bookings shown as one: the first booking's details, with the day's totals.
+// Several slots booked together (two, or the full day's three) shown as one: the first booking's
+// details, with the totals of all of them.
 function fullDayReservation(group) {
   const order = ['morning', 'afternoon', 'evening']
   const sorted = [...group].sort((a, b) => order.indexOf(a.reservationTime) - order.indexOf(b.reservationTime))
@@ -166,7 +167,9 @@ function fullDayReservation(group) {
   const slotName = (item) => String(item.reservationTime || '').replace(/^./, (c) => c.toUpperCase())
   return {
     ...sorted[0],
-    reservationTime: 'full day (morning, afternoon & evening)',
+    reservationTime: sorted.length === 3
+      ? 'full day (morning, afternoon & evening)'
+      : sorted.map((item) => String(item.reservationTime || '')).join(' & '),
     // Each slot's own bill lines, labelled with the slot.
     pricingBreakdown: sorted.flatMap((item) => (item.pricingBreakdown || []).map((line) => ({ ...line, label: `${slotName(item)}: ${line.label}` }))),
     totalAmount: sum('totalAmount'),
