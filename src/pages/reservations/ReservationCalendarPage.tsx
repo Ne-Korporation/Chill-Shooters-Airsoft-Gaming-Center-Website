@@ -913,7 +913,7 @@ export function ReservationCalendarPage() {
     return () => { cancelled = true }
   }, [])
 
-  // Fetch user's approved own weapons and equipment
+  // The player's own weapons and gear (no approval needed; damaged ones can't be brought)
   useEffect(() => {
     if (!user?.id) return
     let cancelled = false
@@ -927,10 +927,10 @@ export function ReservationCalendarPage() {
         const wepDocs = Array.isArray(wepRes?.data) ? wepRes.data : []
         const eqDocs = Array.isArray(eqRes?.data) ? eqRes.data : []
         const approvedWeapons = wepDocs.filter(
-          (d: any) => String(d.submittedBy) === String(user.id) && d.approvalStatus !== 'rejected' && String(d.status || 'available') !== 'damaged'
+          (d: any) => String(d.submittedBy) === String(user.id) && String(d.status || 'available') !== 'damaged'
         )
         const approvedEquipment = eqDocs.filter(
-          (d: any) => String(d.submittedBy) === String(user.id) && d.approvalStatus !== 'rejected' && String(d.status || 'available') !== 'damaged'
+          (d: any) => String(d.submittedBy) === String(user.id) && String(d.status || 'available') !== 'damaged'
         )
         setPlayerApprovedWeapons(approvedWeapons)
         setPlayerApprovedEquipment(approvedEquipment)

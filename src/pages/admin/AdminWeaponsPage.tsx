@@ -103,8 +103,6 @@ function WeaponInventory() {
   const [category, setCategory] = React.useState<WeaponCategory | 'all'>('all')
   const [status, setStatus] = React.useState<WeaponStatus | 'all'>('all')
   const [branchFilter, setBranchFilter] = React.useState<string>('all')
-  const [sourceFilter, setSourceFilter] = React.useState<'business' | 'player'>('business')
-  const [ownerNames, setOwnerNames] = React.useState<Record<string, string>>({})
   const [weapons, setWeapons] = React.useState<WeaponItem[]>([])
   const [loading, setLoading] = React.useState(true)
   const [saving, setSaving] = React.useState(false)
@@ -132,7 +130,9 @@ function WeaponInventory() {
   const refresh = React.useCallback(async () => {
     setLoading(true)
     try {
-      const docs = await apiGetAll<any>('weapons')
+      // Players' own weapons aren't center inventory: they're only noted on the player's profile
+      // and picked when booking, so they're left out here.
+      const docs = (await apiGetAll<any>('weapons')).filter((d: any) => !(d.source === 'player' || (!d.source && d.submittedBy)))
       const normalized = docs.map((d: any) => ({
         id: d.id ?? (d._id ? String(d._id) : undefined),
         _id: d._id,
@@ -147,10 +147,7 @@ function WeaponInventory() {
         unitNumber: Number(d.unitNumber) || 0,
         createdAtISO: d.createdAtISO || null,
         submittedBy: d.submittedBy,
-        source: (d.source || (d.submittedBy ? 'player' : 'business')) as 'business' | 'player',
-        // Player weapons need no admin approval: the marshal checks them on game day.
-        approvalStatus: (d.approvalStatus === 'rejected' ? 'rejected' : 'approved') as 'pending' | 'approved' | 'rejected',
-        rejectionReason: d.rejectionReason || '',
+        source: 'business' as const,
         partnerId: d.partnerId || '',
         locationId: d.locationId || '',
         fpsClass: d.fpsClass || '',
@@ -203,31 +200,22 @@ function WeaponInventory() {
     }
   }
 
-  React.useEffect(() => {
-    if (sourceFilter !== 'player' || Object.keys(ownerNames).length > 0) return
-    apiGet<{ ok: boolean; data: any[] }>('/api/user_accounts?limit=500')
-      .then((res) => setOwnerNames(Object.fromEntries((res.data || []).map((u: any) => [String(u.id || u._id), String(u.name || u.email || '')]))))
-      .catch(() => setOwnerNames({}))
-  }, [sourceFilter, ownerNames])
-
   const [search, setSearch] = React.useState('')
   // Filters run over every weapon first, then the result is paged 10 at a time.
   const filtered = React.useMemo(() => {
     const term = search.trim().toLowerCase()
     return weapons.filter((weapon) => {
-      if (weapon.source === 'player' && weapon.approvalStatus === 'rejected') return false
       const matchCategory = category === 'all' ? true : weapon.category === category
       const matchStatus = status === 'all' ? true : weapon.status === status
-      const matchSource = weapon.source === sourceFilter
-      const matchBranch = branchFilter === 'all' || weapon.source === 'player' || (weapon.locationId || 'none') === branchFilter
-      const matchSearch = !term || [weapon.id, weapon.name, weapon.model, weapon.description, ownerNames[String(weapon.submittedBy)]]
+      const matchBranch = branchFilter === 'all' || (weapon.locationId || 'none') === branchFilter
+      const matchSearch = !term || [weapon.id, weapon.name, weapon.model, weapon.description]
         .some((value) => String(value || '').toLowerCase().includes(term))
-      return matchCategory && matchStatus && matchSource && matchBranch && matchSearch
+      return matchCategory && matchStatus && matchBranch && matchSearch
     })
       // Ascending by ID; numbers inside IDs compare by value (W-2 before W-10).
       .sort((a, b) => String(a.id || '').localeCompare(String(b.id || ''), undefined, { numeric: true, sensitivity: 'base' }))
-  }, [weapons, category, status, sourceFilter, search, ownerNames])
-  const { page, setPage, pageCount, pageItems, total } = usePagination(filtered, undefined, `${category}|${status}|${sourceFilter}|${search}`)
+  }, [weapons, category, status, branchFilter, search])
+  const { page, setPage, pageCount, pageItems, total } = usePagination(filtered, undefined, `${category}|${status}|${branchFilter}|${search}`)
 
   const activeCategoryMeta = category === 'all' ? null : categoryOptions.find((item) => item.key === category)
   const maintenanceQueue = weapons.filter((weapon) => weapon.status === 'needs-check')
@@ -390,7 +378,7 @@ function WeaponInventory() {
   // Tick boxes appear only after "Select items"; "Update" opens the bulk changes pop-up.
   const [selecting, setSelecting] = React.useState(false)
   const [bulkOpen, setBulkOpen] = React.useState(false)
-  React.useEffect(() => setSelectedIds([]), [category, status, sourceFilter, search])
+  React.useEffect(() => setSelectedIds([]), [category, status, branchFilter, search])
   const stopSelecting = () => {
     setSelecting(false)
     setSelectedIds([])
@@ -454,7 +442,6 @@ function WeaponInventory() {
         <button
           type="button"
           onClick={() => {
-            setSourceFilter('business')
             setCategory('all')
             setSearch('')
             setStatus(status === 'needs-check' ? 'all' : 'needs-check')
@@ -497,16 +484,7 @@ function WeaponInventory() {
         </Card>
       ) : null}
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <FilterTabs
-          ariaLabel="Show rental weapons or players' weapons"
-          value={sourceFilter}
-          onChange={setSourceFilter}
-          options={[
-            { value: 'business', label: 'Rental weapons' },
-            { value: 'player', label: "Players' weapons" },
-          ]}
-        />
+      <div className="flex flex-wrap items-center justify-end gap-3">
         <Button size="sm" onClick={openAddForm}>
           <FiPlus /> Add weapon
         </Button>
@@ -520,7 +498,7 @@ function WeaponInventory() {
           </div>
         </div>
 
-        {sourceFilter === 'business' ? <ModelSummaryStrip models={models} unit="piece" /> : null}
+        <ModelSummaryStrip models={models} unit="piece" />
 
         {/* Filters and the select/update/add toolbar sit right above the list they act on, after the model summary. */}
         <div className="mt-4 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
@@ -530,7 +508,7 @@ function WeaponInventory() {
               <input
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
-                placeholder="ID, name, model, owner"
+                placeholder="ID, name, model"
                 className="w-full sm:min-w-[200px] rounded-full border border-white/10 bg-background px-4 py-2 text-sm text-text outline-none focus:ring-2 focus:ring-accent/40"
               />
             </div>
@@ -564,7 +542,6 @@ function WeaponInventory() {
               </select>
             </div>
 
-            {sourceFilter === 'business' ? (
             <div>
               <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-muted">Branch</div>
               <select
@@ -577,7 +554,6 @@ function WeaponInventory() {
                 <option value="none">Unassigned</option>
               </select>
             </div>
-            ) : null}
           </div>
           <InventoryToolbar
             selecting={selecting}
@@ -629,24 +605,13 @@ function WeaponInventory() {
                   <div data-label="Weapon" className="stack-wide col-span-3">
                     <div className="flex flex-wrap items-center gap-2">
                       <div className="text-sm font-semibold">{weapon.name}</div>
-                      {weapon.source === 'player' ? (
-                        <span className="rounded-full border border-accent/20 bg-accent/10 px-2 py-1 text-[10px] uppercase tracking-[0.15em] text-accent">
-                          Player owned
-                        </span>
-                      ) : (
-                        <span className={`rounded-full border px-2 py-1 text-[10px] uppercase tracking-[0.15em] ${weapon.locationId ? 'border-white/10 bg-white/5 text-muted' : 'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400'}`}>
-                          {branchLabel(weapon.locationId)}
-                        </span>
-                      )}
+                      <span className={`rounded-full border px-2 py-1 text-[10px] uppercase tracking-[0.15em] ${weapon.locationId ? 'border-white/10 bg-white/5 text-muted' : 'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400'}`}>
+                        {branchLabel(weapon.locationId)}
+                      </span>
                     </div>
                     <div className="mt-1 text-xs text-muted">{weapon.description || weapon.note}</div>
-                    {weapon.source === 'player' ? (
-                      <div className="mt-1 text-xs text-muted">
-                        Owner: {ownerNames[String(weapon.submittedBy)] || weapon.submittedBy || 'Unknown'}
-                      </div>
-                    ) : null}
                   </div>
-                  <div data-label="Piece" className="col-span-1 text-right text-sm font-semibold">{weapon.source === 'player' || !weapon.unitNumber ? '—' : `#${weapon.unitNumber}`}</div>
+                  <div data-label="Piece" className="col-span-1 text-right text-sm font-semibold">{!weapon.unitNumber ? '—' : `#${weapon.unitNumber}`}</div>
                   <div data-label="Price" className="col-span-1 text-right text-sm font-semibold text-muted">₱{weapon.price.toLocaleString()}</div>
                   <div data-label="Status" className="col-span-2 pl-4">
                     <StatusBadge status={weapon.status} />

@@ -32,10 +32,10 @@ import { cleanEquipmentQuantities } from '../utils/packageQuantities.js'
 import { appUrlFrom } from './guardianApprovals.js'
 import { findOwnChild, hasApprovedWaiver } from './children.js'
 import { createWalkInAccount } from './auth.js'
-import { evaluateFpsReading, weaponFpsClass } from './operations.js'
 import { fpsBlockReason, gameFpsStatus } from '../utils/fpsChecks.js'
 import { checkAmmoStock } from '../utils/ammoStock.js'
-import { emailGearReviewEvent, emailGuardianWaiverSubmitted, emailIdentityDecision, emailReservationEvent, emailSplitShareRequest, emailTeamAdded } from '../services/notificationEmails.js'
+import { buildInvites, latestInvite, playingFilter, resolveNewBookingConflicts } from '../utils/teamInvites.js'
+import { emailGuardianWaiverSubmitted, emailIdentityDecision, emailReservationEvent, emailSplitShareRequest, emailTeamAdded } from '../services/notificationEmails.js'
 import { unpaidStartReason } from '../utils/bookingBalance.js'
 import {
   paymentWindowMsFor,
@@ -596,8 +596,8 @@ const SLOT_HOLD_MINUTES = Math.max(1, Number(process.env.SLOT_HOLD_MINUTES) || 1
 const SLOT_BROWSING_HOLD_MINUTES = Math.max(1, Number(process.env.SLOT_BROWSING_HOLD_MINUTES) || 3)
 
 async function getApprovedWeaponOwnerIds(db, userIds) {
+  // Players' own weapons need no approval: any weapon on their profile counts.
   const owners = await db.collection('weapons').distinct('submittedBy', {
-    approvalStatus: { $ne: 'rejected' },
     ...(userIds ? { submittedBy: { $in: userIds.map(String) } } : {}),
   })
   return new Set(owners.map((id) => String(id || '')).filter(Boolean))
@@ -1540,7 +1540,7 @@ router.get('/:collection', requireAuth, async (req, res) => {
       // Players also see bookings a captain added them to (read-only: changes stay with the captain),
       // and the games of those bookings (so they can rate them in Game Evaluation).
       filter = mergeFilters(filter, collection === 'reservations'
-        ? { $or: [playerOwnershipFilter(req.user.id), { 'teamMembers.id': String(req.user.id) }] }
+        ? { $or: [playerOwnershipFilter(req.user.id), { 'teamMembers.id': String(req.user.id) }, { 'invites.playerId': String(req.user.id) }] }
         : collection === 'gameplay'
           ? { $or: [playerOwnershipFilter(req.user.id), { reservationId: { $in: await teammateReservationIds(db, req.user.id) } }] }
           : playerOwnershipFilter(req.user.id))
@@ -1619,7 +1619,8 @@ router.get('/:collection/:id', requireAuth, async (req, res) => {
       return res.status(404).json({ ok: false, error: 'not found' })
     }
     // An account is owned by its own id (checked above), not by a userId/playerId field.
-    const isTeammate = collection === 'reservations' && (doc.teamMembers || []).some((member) => String(member?.id) === String(req.user.id))
+    const isTeammate = collection === 'reservations' && ((doc.teamMembers || []).some((member) => String(member?.id) === String(req.user.id))
+      || (doc.invites || []).some((invite) => String(invite?.playerId) === String(req.user.id)))
     if (req.user.role === 'user' && collection !== 'user_accounts' && USER_OWNED_COLLECTIONS.has(collection) && !isOwnedByUser(doc, req.user.id) && !isTeammate) {
       return res.status(404).json({ ok: false, error: 'not found' })
     }
@@ -1790,10 +1791,14 @@ async function findPublicSlotClash(db, doc) {
     reservationDate: doc.reservationDate,
     reservationTime: doc.reservationTime,
     reservationStatus: { $nin: RELEASED_RESERVATION_STATUSES },
-    $or: [{ userId: { $in: playerIds } }, { selectedTeammateIds: { $in: playerIds } }, { 'teamMembers.id': { $in: playerIds } }],
-  }, { projection: { id: 1, userId: 1, selectedTeammateIds: 1, teamMembers: 1 } })
+    // Only players who hold a place there: who booked it, or a teammate who accepted (an invite
+    // still waiting for an answer is turned down once this booking is made).
+    $or: playerIds.map((id) => playingFilter(id)),
+  }, { projection: { id: 1, userId: 1, selectedTeammateIds: 1, teamMembers: 1, invites: 1 } })
   if (!existing) return null
-  const onIt = new Set([String(existing.userId || ''), ...(existing.selectedTeammateIds || []).map(String), ...(existing.teamMembers || []).map((member) => String(member.id))])
+  const holdsPlace = (id) => String(existing.userId || '') === id
+    || (latestInvite(existing, id) ? latestInvite(existing, id).status === 'accepted' : (existing.teamMembers || []).some((member) => String(member.id) === id))
+  const onIt = new Set(playerIds.filter(holdsPlace))
   const captainClash = onIt.has(String(doc.userId))
   const teammate = (doc.teamMembers || []).find((member) => onIt.has(String(member.id)))
   return {
@@ -1809,7 +1814,9 @@ async function findPublicSlotClash(db, doc) {
 // split payments on My Reservations; otherwise the captain is paying, so there is nothing for them to pay online.
 // Minors play under their guardian's account and have no email, so they aren't notified.
 async function notifyAddedTeammates(db, reservation, appUrl) {
-  const members = (reservation.teamMembers || []).filter((member) => !member.isMinor && String(member.id) !== String(reservation.userId))
+  // Only players whose invite is still open (one already playing in that slot was turned down).
+  const members = (reservation.teamMembers || []).filter((member) => !member.isMinor && String(member.id) !== String(reservation.userId)
+    && (!latestInvite(reservation, member.id) || latestInvite(reservation, member.id).status === 'pending'))
   if (members.length === 0) return
   const captain = await findDocumentById(db, 'user_accounts', reservation.userId)
   // A private game is one team with a captain; a public game is open play, so it is just a booking.
@@ -1824,13 +1831,16 @@ async function notifyAddedTeammates(db, reservation, appUrl) {
   const dueLabel = new Date(reservation.paymentDueAtISO).toLocaleString('en-PH', { timeZone: 'Asia/Manila' })
   for (const member of members) {
     const userId = String(member.id)
+    const answerBy = latestInvite(reservation, userId)?.deadlineISO
+    const answerLabel = answerBy ? new Date(answerBy).toLocaleString('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short' }) : dueLabel
     try {
       if (split && splitPayers.has(userId)) {
+        const myShare = Number.isFinite(Number(reservation.splitShares?.[userId])) ? Number(reservation.splitShares[userId]) : share
         await notifyUser(db, {
           userId,
           type: 'split_payment_requested',
-          title: `You were added to ${whose}: pay your share`,
-          message: `${captainName} added you to a reservation on ${when}. Your share is ₱${share.toLocaleString()}; pay it from Split Payment before ${dueLabel}.`,
+          title: `You were invited to ${whose}`,
+          message: `${captainName} invited you to a game on ${when}. Accept it and pay your share (₱${myShare.toLocaleString()}) in My Reservations before ${answerLabel}, or the invite is void.`,
           linkedResourceId: reservation.id,
         })
         void emailSplitShareRequest(db, reservation, userId, share, captainName, dueLabel, `${appUrl}/app/my-reservations#split-payments`)
@@ -1839,8 +1849,8 @@ async function notifyAddedTeammates(db, reservation, appUrl) {
           userId,
           // Not a reservation_ type: the booking is the captain's, so it isn't in the teammate's My Reservations.
           type: 'team_added',
-          title: `You were added to ${whose}`,
-          message: `${captainName} added you to a reservation on ${when}. ${captainName} is paying for ${payingFor}, so you have nothing to pay online.`,
+          title: `You were invited to ${whose}`,
+          message: `${captainName} invited you to a game on ${when} and is paying for ${payingFor}. Accept or decline in My Reservations before ${answerLabel}, or the invite is void.`,
           linkedResourceId: reservation.id,
         })
         void emailTeamAdded(db, reservation, userId, captainName)
@@ -2278,6 +2288,8 @@ router.post('/:collection', requireAuth, async (req, res) => {
       if (causeDay) doc.causeDay = { title: causeDay.title, donationPercent: causeDay.donationPercent }
       // 30 minutes when the captain pays alone, 24 hours when the team splits the payment.
       doc.paymentDueAtISO = new Date(Date.now() + paymentWindowMsFor(doc)).toISOString()
+      // Every adult teammate is invited and has 24 hours to accept (see utils/teamInvites.js).
+      doc.invites = buildInvites(doc, Date.now(), (await getSlotHours(db)).hours)
       // Custom rentals: the server picks the actual free pieces of each model for this slot and
       // branch (the page only says which models and how many).
       if (String(doc.selectionMode || '').toLowerCase() === 'custom') {
@@ -2373,7 +2385,14 @@ router.post('/:collection', requireAuth, async (req, res) => {
         })
         // No email yet: a booking paid straight away gets only the confirmation email; one left
         // unpaid gets a "waiting for payment" email a few minutes later (sendUnpaidReservationEmails).
-        void notifyAddedTeammates(db, doc, appUrlFrom(req))
+        // Invitees already playing in this slot are turned down first (their captain is told), and
+        // the booker's own invites elsewhere in this slot are turned down; then the rest are invited.
+        const appUrl = appUrlFrom(req)
+        void (async () => {
+          await resolveNewBookingConflicts(db, doc)
+          const fresh = await db.collection('reservations').findOne({ id: doc.id })
+          await notifyAddedTeammates(db, fresh || doc, appUrl)
+        })().catch((err) => console.error('Team invites failed', doc.id, err?.message || err))
         // The booking may have taken the last of the BBs: tell staff if ammo is now low.
         if ((doc.inventoryRequirements || []).some((r) => r.kind === 'ammo_grams')) void checkAmmoStock(db).catch(() => null)
         return res.status(201).json({ ok: true, insertedId, data: doc })
@@ -2481,32 +2500,6 @@ async function notifyStaffOfPlayerSubmission(db, collection, doc, player) {
   for (const role of ['admin', 'registrar']) {
     await notifyRole(db, { role, ...notice, linkedResourceId: doc.id })
   }
-}
-
-// When staff approve or reject a player's submitted gear, tell the owner in-app and by email.
-async function notifyGearReview(db, collection, before, after) {
-  const status = String(after.approvalStatus || '').toLowerCase()
-  if (!after.submittedBy || status === String(before.approvalStatus || '').toLowerCase()) return
-  if (!['approved', 'rejected'].includes(status)) return
-  const kind = collection === 'weapons' ? 'weapon' : 'equipment'
-  const name = after.name || after.id || 'your item'
-  try {
-    await db.collection('notifications').insertOne({
-      id: await nextShortId(db, 'notifications', 'N'),
-      userId: String(after.submittedBy),
-      type: `${kind}_${status}`,
-      title: status === 'approved' ? `Your ${kind} was approved` : `Your ${kind} was not approved`,
-      message: status === 'approved'
-        ? `"${name}" passed admin review. You can now bring it to your games.`
-        : `"${name}" was not approved.${after.rejectionReason ? ` Reason: ${after.rejectionReason}` : ''}`,
-      linkedResourceId: String(after.id || after._id),
-      read: false,
-      createdAtISO: new Date().toISOString(),
-    })
-  } catch (err) {
-    console.error('Gear review notification failed', err?.message || err)
-  }
-  void emailGearReviewEvent(db, after, kind, status)
 }
 
 // UPDATE - fixed: uses updateOne + separate findOne to avoid MongoDB driver v6 bug
@@ -2705,29 +2698,6 @@ router.put('/:collection/:id', requireAuth, async (req, res) => {
       }
     }
 
-    // Re-approving a rejected player weapon needs a passing chronograph reading.
-    if (collection === 'weapons' && existing.source === 'player') {
-      const changes = payload.$set || payload
-      if (String(changes.approvalStatus || '') === 'approved' && existing.approvalStatus !== 'approved') {
-        const fps = Number(changes.chronoFps)
-        if (!Number.isFinite(fps) || fps <= 0 || fps >= 1000) {
-          return res.status(400).json({ ok: false, error: 'Enter the chronograph FPS reading to approve this weapon.' })
-        }
-        const fpsClass = ['aeg', 'sniper'].includes(String(changes.fpsClass)) ? String(changes.fpsClass) : weaponFpsClass(existing)
-        const { limit, result } = evaluateFpsReading(fpsClass, fps)
-        if (result === 'fail') {
-          return res.status(400).json({ ok: false, error: `${fps} FPS is over the ${limit} FPS limit for ${fpsClass === 'sniper' ? 'sniper rifles' : 'AEGs'}. Reject it or have the owner adjust it.` })
-        }
-        Object.assign(changes, {
-          chronoFps: fps,
-          fpsClass,
-          fpsLimit: limit,
-          chronoCheckedAtISO: new Date().toISOString(),
-          chronoCheckedBy: req.user.email || String(req.user.id),
-        })
-      }
-    }
-
     if (collection === 'waivers') {
       const changes = payload.$set || payload
       if (changes.archived === false && existing.archived && existing.userId) {
@@ -2837,10 +2807,6 @@ router.put('/:collection/:id', requireAuth, async (req, res) => {
 
     const updatedDoc = await findDocumentById(db, collection, existing.id || id)
     if (!updatedDoc) return res.status(404).json({ ok: false, error: 'not found' })
-
-    if (['equipment', 'equipments', 'weapons'].includes(collection)) {
-      await notifyGearReview(db, collection, existing, updatedDoc)
-    }
 
     // Staff checked a player's ID: tell them, so a verified player knows their waiver is open.
     if (collection === 'user_accounts' && ['verified', 'rejected'].includes(updatedDoc.identityVerificationStatus)

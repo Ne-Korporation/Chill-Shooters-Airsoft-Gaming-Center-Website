@@ -33,6 +33,17 @@ export function getPaymentProgress(reservation, payments) {
   }
 }
 
+// Spots a teammate left (see utils/teamInvites.js). An open one waits on the captain, so nobody pays
+// its share online yet; one the captain chose to pay for is added to what the captain pays now.
+export function openSlotHold(reservation) {
+  return (reservation?.openSlots || []).filter((slot) => slot?.status === 'open')
+    .reduce((sum, slot) => sum + (Number(slot.amount) || 0), 0)
+}
+export function captainCoverTotal(reservation) {
+  return (reservation?.openSlots || []).filter((slot) => slot?.status === 'covering')
+    .reduce((sum, slot) => sum + (Number(slot.amount) || 0), 0)
+}
+
 export function getGcashAmountDue(reservation, payments, payerId) {
   const depositAmount = Number(reservation?.depositAmount)
   if (!Number.isFinite(depositAmount) || depositAmount <= 0) {
@@ -50,13 +61,14 @@ export function getGcashAmountDue(reservation, payments, payerId) {
     throw invalidPayments
   }
 
-  const remainingDeposit = Math.max(0, depositAmount - submittedAmount)
+  const remainingDeposit = Math.max(0, Math.round((depositAmount - submittedAmount - openSlotHold(reservation)) * 100) / 100)
   if (String(reservation.paymentMode || 'self').toLowerCase() !== 'split') {
     return remainingDeposit
   }
 
+  // A team can be down to the captain alone when every teammate's spot was left open.
   const teamSize = Number(reservation.teamSize)
-  if (!Number.isInteger(teamSize) || teamSize < 2 || teamSize > Number(reservation.numberOfPlayers || 0)) {
+  if (!Number.isInteger(teamSize) || teamSize < 1 || teamSize > Number(reservation.numberOfPlayers || 0)) {
     const invalidSplit = new Error('Reservation split-payment settings are invalid.')
     invalidSplit.statusCode = 400
     throw invalidSplit
@@ -75,9 +87,21 @@ export function getGcashAmountDue(reservation, payments, payerId) {
     throw notPayer
   }
   const active = payments.filter(isActivePayment)
-  if (active.some((payment) => String(payment.userId || '') === payer)) return 0
-  const unpaid = getSplitPayerIds(reservation).filter((id) => !active.some((payment) => String(payment.userId || '') === id))
-  return unpaid.length <= 1 ? remainingDeposit : Math.min(share, remainingDeposit)
+  const paidBy = (id) => active.filter((payment) => String(payment.userId || '') === id).reduce((sum, payment) => sum + Number(payment.amount || 0), 0)
+  const unpaid = getSplitPayerIds(reservation).filter((id) => paidBy(id) <= 0)
+  const captainId = String(reservation.userId || '')
+  const cover = captainCoverTotal(reservation)
+  const captainShare = Number.isFinite(Number(reservation.splitShares?.[captainId])) ? Number(reservation.splitShares[captainId]) : share
+  if (payer === captainId && cover > 0) {
+    // The captain also pays for the spots they chose to cover, on top of (or after) their own share.
+    const mine = paidBy(payer)
+    if (unpaid.filter((id) => id !== payer).length === 0) return remainingDeposit
+    return Math.max(0, Math.min(Math.round((captainShare + cover - mine) * 100) / 100, remainingDeposit))
+  }
+  if (paidBy(payer) > 0) return 0
+  // The last teammate to pay covers rounding, but never a spot the captain is paying for.
+  const captainStillOwes = cover > 0 ? Math.max(0, captainShare + cover - paidBy(captainId)) : 0
+  return unpaid.length <= 1 ? Math.max(0, Math.round((remainingDeposit - captainStillOwes) * 100) / 100) : Math.min(share, remainingDeposit)
 }
 
 export function normalizeGcashReference(value) {

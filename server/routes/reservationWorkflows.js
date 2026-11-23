@@ -6,7 +6,7 @@ import { updateReservationStatusAtomically } from '../utils/reservationStatus.js
 import { ensureGameplayForReservation } from '../utils/reservationGameplay.js'
 import { emailReservationEvent } from '../services/notificationEmails.js'
 import { assertGuardianApprovalsComplete } from './guardianApprovals.js'
-import { notifyRole, notifyUser, syncReservationPaymentState } from '../utils/paymentProgress.js'
+import { notifyRegistrarsOfOnsiteBalance, notifyRole, notifyUser, syncReservationPaymentState } from '../utils/paymentProgress.js'
 import { buildPaymentStatusUpdate, getPaymentProgress, getSplitPayerIds } from '../utils/paymentRules.js'
 import { getReservationPayments } from '../utils/paymentProgress.js'
 import { expireInvoice } from '../utils/xendit.js'
@@ -154,6 +154,7 @@ async function updateReservationStatus(req, res) {
       const result = await ensureGameplayForReservation(db, updatedReservation)
       gameplay = result.gameplay
       gameplayCreated = result.created
+      await notifyRegistrarsOfOnsiteBalance(db, updatedReservation)
     }
 
     void emailReservationEvent(db, updatedReservation, nextStatus, String(updatedReservation?.statusHistory?.length || ''))

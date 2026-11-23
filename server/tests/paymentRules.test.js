@@ -26,7 +26,7 @@ test('GCash due ignores failed payments and caps split shares at the remaining d
     { amount: 300, paymentStatus: 'pending' },
   ]), 75)
   assert.throws(
-    () => getGcashAmountDue({ ...reservation, teamSize: 1 }, []),
+    () => getGcashAmountDue({ ...reservation, teamSize: 0 }, []),
     { statusCode: 400 },
   )
 })

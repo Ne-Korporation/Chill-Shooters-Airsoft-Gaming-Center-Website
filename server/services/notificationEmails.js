@@ -330,25 +330,6 @@ export function emailDamageCharge(db, reservation, report) {
   })
 }
 
-// status: approved | rejected — tells the owner how staff reviewed their submitted gear
-export function emailGearReviewEvent(db, item, kind, status) {
-  if (!item?.submittedBy || !['approved', 'rejected'].includes(status)) return Promise.resolve({ skipped: 'not notified' })
-  const id = String(item.id || item._id)
-  const label = kind === 'weapon' ? 'weapon' : 'gear'
-  const approved = status === 'approved'
-  return sendLogged(db, {
-    key: `gear:${id}:${status}:${item.updatedAtISO || ''}`,
-    userId: item.submittedBy,
-    subject: approved ? `Your ${label} was approved` : `Your ${label} was not approved`,
-    title: approved ? `${label[0].toUpperCase()}${label.slice(1)} approved` : `${label[0].toUpperCase()}${label.slice(1)} not approved`,
-    lines: [
-      approved
-        ? `Staff reviewed and approved your ${label} "${escapeHtml(item.name || id)}". You can now bring it to your games.`
-        : `Staff reviewed your ${label} "${escapeHtml(item.name || id)}" and did not approve it.${item.rejectionReason ? ` Reason: ${escapeHtml(item.rejectionReason)}` : ''}`,
-    ],
-  })
-}
-
 // payLink opens My Reservations at the split payments (after login if needed), where the teammate pays their share.
 export function emailSplitShareRequest(db, reservation, userId, share, captainName, dueLabel, payLink = '') {
   if (!reservation || !userId) return Promise.resolve({ skipped: 'missing data' })
@@ -430,25 +411,6 @@ export function emailTeamAdded(db, reservation, userId, captainName, viewLink = 
       viewLink ? button(viewLink, 'View the reservation') : '',
       `Reservation ID: ${escapeHtml(id)}`,
     ].filter(Boolean),
-  })
-}
-
-// Warns a teammate who hasn't paid their share that the split payment deadline is close.
-// stage ('12h' | '2h') keeps each warning to one email.
-export function emailSplitShareWarning(db, reservation, userId, { share, dueLabel, timeLeftLabel, stage, payLink = '' }) {
-  if (!reservation || !userId) return Promise.resolve({ skipped: 'missing data' })
-  const id = String(reservation.id || reservation._id)
-  return sendLogged(db, {
-    key: `split-warning:${id}:${userId}:${stage}`,
-    userId,
-    subject: `Reminder: pay your share within ${timeLeftLabel}`,
-    title: 'Your split payment share is still unpaid',
-    lines: [
-      `Your team's reservation for ${reservationLabel(reservation)} is waiting on your share${share > 0 ? ` of <b>${formatPHP(share)}</b>` : ''}.`,
-      `Pay before <b>${escapeHtml(dueLabel)}</b> (about ${escapeHtml(timeLeftLabel)} left). If the team doesn't finish paying by then, the reservation is released for anyone to book.`,
-      payLink ? button(payLink, 'Pay my share') : 'Log in and open <b>Split Payment</b> in the menu to pay.',
-      `Reservation ID: ${escapeHtml(id)}`,
-    ],
   })
 }
 

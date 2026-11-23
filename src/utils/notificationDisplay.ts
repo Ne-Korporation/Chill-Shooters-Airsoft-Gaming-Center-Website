@@ -1,5 +1,5 @@
 import type { IconType } from 'react-icons'
-import { FiBell, FiCalendar, FiCloudRain, FiCreditCard, FiFlag, FiInbox, FiShield, FiTarget, FiVolume2 } from 'react-icons/fi'
+import { FiBell, FiCalendar, FiCloudRain, FiCreditCard, FiFlag, FiInbox, FiShield, FiTarget, FiUsers, FiVolume2 } from 'react-icons/fi'
 import type { NotificationItem } from '../context/NotificationContext'
 
 // Shared by the notification bell and the notifications page so both read the same way.
@@ -12,7 +12,9 @@ export function kindOf(item: NotificationItem): { icon: IconType; label: string 
   if (type === 'announcement' || (item.userId === 'broadcast' && ['user', 'all'].includes(String(item.targetRole || 'all')))) {
     return { icon: FiVolume2, label: 'Announcement' }
   }
-  if (type.startsWith('split_payment_') || type.startsWith('payment_') || type === 'reservation_payment_finalized') return { icon: FiCreditCard, label: 'Payment' }
+  if (type.startsWith('split_payment_') || type.startsWith('payment_') || type === 'reservation_payment_finalized' || type === 'onsite_payment_due' || type === 'team_spot_onsite') return { icon: FiCreditCard, label: 'Payment' }
+  if (type.startsWith('team_')) return { icon: FiUsers, label: 'Team' }
+  if (type === 'own_weapons_incoming') return { icon: FiTarget, label: 'Weapons & gear' }
   if (type.startsWith('reservation_')) return { icon: FiCalendar, label: 'Booking' }
   if (type.startsWith('waiver_')) return { icon: FiShield, label: 'Waiver' }
   if (type.startsWith('weapon_') || type.startsWith('equipment_')) return { icon: FiTarget, label: 'Weapons & gear' }
