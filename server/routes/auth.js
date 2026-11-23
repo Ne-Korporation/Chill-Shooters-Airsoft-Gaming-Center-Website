@@ -29,7 +29,12 @@ const attempts = createAttemptStore(async () => (await getDb()).collection(ATTEM
 
 // Answers that read the same whether or not an email has an account, so the forms can't be used
 // to find out who is registered.
-const LOGIN_FAILED_MESSAGE = 'Wrong email or password. Signed up with Google? Use "Continue with Google". Account made at the counter? Use the link in your welcome email.'
+// Why a login failed, said plainly: wrong details (unknown email or wrong password, kept as one so
+// it doesn't reveal which emails have accounts), an account made with Google, or one made at the
+// counter that has no password yet.
+const LOGIN_FAILED_MESSAGE = 'Invalid email or password.'
+const LOGIN_GOOGLE_ACCOUNT_MESSAGE = 'This account was created with Google. Use "Continue with Google" to log in.'
+const LOGIN_NO_PASSWORD_YET_MESSAGE = 'This account was made at the counter and has no password yet. Use the link in your welcome email to set one, or use "Forgot password?".'
 const LOGIN_LIMIT_MESSAGE = 'Too many sign-in attempts. Wait 15 minutes, or use "Forgot password?". If this is your account, check your email: we may have sent you a sign-in link.'
 const CODE_LIMIT_MESSAGE = 'Too many wrong codes. Wait 15 minutes, then request a new code.'
 
@@ -1104,7 +1109,12 @@ router.post('/login', async (req, res) => {
       // Old accounts whose password was stored before hashing was switched on.
       passwordOk = typeof stored === 'string' && stored.length > 0 && stored === password
     }
-    if (!passwordOk) return res.status(401).json({ ok: false, error: LOGIN_FAILED_MESSAGE })
+    if (!passwordOk) {
+      // A counter-made account has no password yet either, so it's checked before the Google one.
+      if (user && user.passwordSetupRequired) return res.status(401).json({ ok: false, error: LOGIN_NO_PASSWORD_YET_MESSAGE, code: 'password_not_set' })
+      if (user && isGoogleOnlyAccount(user)) return res.status(401).json({ ok: false, error: LOGIN_GOOGLE_ACCOUNT_MESSAGE, code: 'google_account' })
+      return res.status(401).json({ ok: false, error: LOGIN_FAILED_MESSAGE, code: 'invalid_credentials' })
+    }
 
     // The right password: this attempt doesn't count, and the owner's earlier failures are cleared.
     await attempts.forgive(attemptIds)

@@ -1,16 +1,13 @@
 import express from 'express'
 import { hasValidIdentity } from '../utils/identityValidity.js'
-import { randomBytes } from 'crypto'
 import { getDb } from '../db/mongo.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
 import { nextShortId } from '../utils/shortIds.js'
 import { ageFromBirthDate } from '../utils/age.js'
-import { emailGuardianConfirmation } from '../services/notificationEmails.js'
-import { appUrlFrom } from './guardianApprovals.js'
 
 // Minors can't have their own accounts. A parent adds each child as a profile under their account:
-// a player record with no login, linked by guardianId. The parent confirms by email that they are
-// the child's guardian, then submits the child's waiver (the minor waiver). The child then plays
+// a player record with no login, linked by guardianId. The signed-in parent who adds the child is
+// their guardian (no email confirmation), then submits the child's waiver (the minor waiver). The child then plays
 // under their own profile, so their games, stats and progress are their own.
 const router = express.Router()
 const ACCOUNTS = 'user_accounts'
@@ -58,7 +55,9 @@ function childView(child, waiver) {
     birthDate: child.birthDate || '',
     age: ageFromBirthDate(child.birthDate),
     guardianId: String(child.guardianId),
-    guardianConfirmed: Boolean(child.guardianConfirmedAtISO),
+    // Adding the child from the parent's own signed-in account is the guardian confirmation,
+    // including children added back when an email link was still required.
+    guardianConfirmed: true,
     waiverStatus: status || 'none',
     waiverApproved: status === 'approved',
   }
@@ -77,17 +76,6 @@ export async function findOwnChild(db, parentId, childId) {
   return db.collection(ACCOUNTS).findOne({ id: String(childId), guardianId: String(parentId), isChildProfile: true, ...ON_ACCOUNT })
 }
 
-async function sendConfirmation(db, req, parent, child) {
-  const link = `${appUrlFrom(req)}/guardian-confirm/${child.guardianConfirmToken}`
-  await emailGuardianConfirmation(db, {
-    parentId: parent.id,
-    childId: child.id,
-    childName: child.name,
-    link,
-    sentOn: new Date().toISOString(),
-  })
-}
-
 // GET /api/children — the signed-in parent's children, with guardian confirmation and waiver status.
 router.get('/children', requireAuth, requireRole('user'), async (req, res) => {
   try {
@@ -101,7 +89,7 @@ router.get('/children', requireAuth, requireRole('user'), async (req, res) => {
 })
 
 // POST /api/children { firstName, middleInitial, lastName, birthDate } — adds a child profile once
-// the parent's ID is verified, and emails the parent to confirm they are the guardian. The child's
+// the parent's ID is verified; the parent is the guardian right away, no email. The child's
 // waiver is then answered on the Waivers page (it needs the parent's own approved waiver).
 router.post('/children', requireAuth, requireRole('user'), async (req, res) => {
   try {
@@ -138,29 +126,12 @@ router.post('/children', requireAuth, requireRole('user'), async (req, res) => {
       isChildProfile: true,
       guardianId: String(parent.id),
       guardianName: parent.name || '',
-      guardianConfirmToken: randomBytes(24).toString('hex'),
-      guardianConfirmedAtISO: null,
+      guardianConfirmedAtISO: nowISO,
       status: 'Active',
       createdAtISO: nowISO,
     }
     await db.collection(ACCOUNTS).insertOne(child)
-    await sendConfirmation(db, req, parent, child)
-    return res.status(201).json({ ok: true, data: childView(child, null), emailedTo: parent.email || '' })
-  } catch (err) {
-    return sendError(res, err)
-  }
-})
-
-// POST /api/children/:id/confirmation-email — sends the guardian confirmation email again.
-router.post('/children/:id/confirmation-email', requireAuth, requireRole('user'), async (req, res) => {
-  try {
-    const db = await getDb()
-    const child = await findOwnChild(db, req.user.id, req.params.id)
-    if (!child) throw fail(404, 'Child not found.')
-    if (child.guardianConfirmedAtISO) return res.json({ ok: true, data: { alreadyConfirmed: true } })
-    const parent = await db.collection(ACCOUNTS).findOne({ id: String(req.user.id) })
-    await sendConfirmation(db, req, parent, child)
-    return res.json({ ok: true, data: { emailedTo: parent?.email || '' } })
+    return res.status(201).json({ ok: true, data: childView(child, null) })
   } catch (err) {
     return sendError(res, err)
   }
@@ -223,7 +194,7 @@ router.get('/children/of-team', requireAuth, requireRole('user'), async (req, re
           age: view.age,
           guardianId: view.guardianId,
           guardianName: parentName.get(view.guardianId) || '',
-          canPlay: view.guardianConfirmed && view.waiverApproved,
+          canPlay: view.waiverApproved,
         }
       }),
     })

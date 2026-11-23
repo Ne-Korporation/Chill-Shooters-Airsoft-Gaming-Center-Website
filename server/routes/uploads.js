@@ -10,6 +10,7 @@ import { requireAuth, requireRole } from '../middleware/auth.js'
 import { findIdentityIdType } from '../utils/idTypes.js'
 import { hasValidIdentity } from '../utils/identityValidity.js'
 import { signFileLink, verifyFileLink } from '../utils/fileLinks.js'
+import { notifyRole } from '../utils/paymentProgress.js'
 
 const router = express.Router()
 
@@ -281,6 +282,22 @@ router.post('/scan-id', requireAuth, (req, res, next) => {
       { returnDocument: 'after', projection: { password: 0, otpCode: 0, otpExpiresAt: 0, pendingEmailOtp: 0 } },
     )
     const updatedUser = updateResult?.value ?? updateResult ?? null
+
+    // Tell the staff who verify IDs (admins and registrars) that one is waiting.
+    if (req.user.role === 'user') {
+      const db = await getDb()
+      const who = account.name || account.id
+      for (const role of ['admin', 'registrar']) {
+        await notifyRole(db, {
+          role,
+          topic: 'identity',
+          type: 'player_id_submitted',
+          title: 'ID to Verify',
+          message: `${who} submitted their ${idType.name} for verification.${replacingVerified ? ' It replaces their current verified ID.' : ''}`,
+          linkedResourceId: String(account.id),
+        }).catch((err) => console.warn('ID submission notice failed', err))
+      }
+    }
 
     return res.json({ ok: true, url: frontUrl, backUrl, scan: scanResult, user: updatedUser })
   } catch (err) {

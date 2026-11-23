@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { FiAlertCircle, FiCheckCircle, FiChevronRight, FiEye, FiMail, FiPlus, FiRefreshCw, FiTrash2, FiUserPlus } from 'react-icons/fi'
+import { FiAlertCircle, FiCheckCircle, FiChevronRight, FiEye, FiPlus, FiTrash2, FiUserPlus } from 'react-icons/fi'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
@@ -35,7 +35,6 @@ function maxChildBirthDate() {
 }
 
 const statusChip = (child: ChildSummary) => {
-  if (!child.guardianConfirmed) return { label: 'Confirm by email', className: 'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400' }
   if (child.waiverApproved) return { label: 'Ready to play', className: 'border-success/30 bg-success/10 text-success' }
   if (child.waiverStatus === 'pending') return { label: 'Waiver in review', className: 'border-accent/30 bg-accent/10 text-accent' }
   if (child.waiverStatus === 'denied') return { label: 'Waiver denied', className: 'border-danger/30 bg-danger/10 text-danger' }
@@ -57,30 +56,8 @@ function useChildren() {
   }, [])
   useEffect(() => {
     void load()
-    // Coming back from the confirmation email in another tab.
-    const onFocus = () => { void load() }
-    window.addEventListener('focus', onFocus)
-    return () => window.removeEventListener('focus', onFocus)
   }, [load])
   return { children, loading, load }
-}
-
-function GuardianEmailActions({ child, onConfirmed }: { child: ChildSummary; onConfirmed: () => void }) {
-  const resend = async () => {
-    try {
-      const res = await apiPost<{ ok: boolean; data: { emailedTo?: string; alreadyConfirmed?: boolean } }>(`/api/children/${encodeURIComponent(child.id)}/confirmation-email`, {})
-      if (res.data.alreadyConfirmed) onConfirmed()
-      else toast.success(`Sent again to ${res.data.emailedTo || 'your email'}.`)
-    } catch (e: any) {
-      toast.error(e?.message || 'Could not send the email')
-    }
-  }
-  return (
-    <>
-      <Button size="xs" variant="ghost" onClick={resend}><FiMail /> Resend email</Button>
-      <Button size="xs" variant="ghost" onClick={onConfirmed}><FiRefreshCw /> I've confirmed</Button>
-    </>
-  )
 }
 
 const WAIVER_STATUS_TEXT: Record<string, string> = {
@@ -97,7 +74,7 @@ function MinorDetailsModal({ child, startConfirming = false, onClose, onDeleted 
   const [deleting, setDeleting] = useState(false)
   const [confirming, setConfirming] = useState(startConfirming)
   const chip = statusChip(child)
-  const waiverToAnswer = child.guardianConfirmed && !child.waiverApproved && child.waiverStatus !== 'pending'
+  const waiverToAnswer = !child.waiverApproved && child.waiverStatus !== 'pending'
 
   const remove = async () => {
     setDeleting(true)
@@ -123,11 +100,7 @@ function MinorDetailsModal({ child, startConfirming = false, onClose, onDeleted 
             <div className="text-xs text-muted">Age</div>
             <div className="font-semibold">{child.age ?? '—'}</div>
           </div>
-          <div>
-            <div className="text-xs text-muted">Guardian email</div>
-            <div className="font-semibold">{child.guardianConfirmed ? 'Confirmed' : 'Not confirmed yet'}</div>
-          </div>
-          <div>
+          <div className="col-span-2">
             <div className="text-xs text-muted">Waiver</div>
             <div className="font-semibold">{WAIVER_STATUS_TEXT[child.waiverStatus] || child.waiverStatus}</div>
           </div>
@@ -165,14 +138,12 @@ function MinorDetailsModal({ child, startConfirming = false, onClose, onDeleted 
 }
 
 // Profile: a parent adds each child here (minors can't have their own account). Each child gets a
-// waiver to answer on the Waivers page once the parent confirms by email that they're the guardian.
+// waiver to answer on the Waivers page right away; the signed-in parent is the guardian.
 export function MinorsOnProfile({ canAdd, blockedReason, onChanged }: { canAdd: boolean; blockedReason?: string; onChanged?: () => void }) {
-  const { user } = useAuth()
   const { children, loading, load } = useChildren()
   const [adding, setAdding] = useState(false)
   const [form, setForm] = useState({ firstName: '', middleInitial: '', lastName: '', birthDate: '' })
   const [saving, setSaving] = useState(false)
-  const [emailedTo, setEmailedTo] = useState('')
   const [detailsId, setDetailsId] = useState<string | null>(null)
   const [removeFirst, setRemoveFirst] = useState(false)
   const detailsChild = children.find((child) => child.id === detailsId) || null
@@ -181,12 +152,11 @@ export function MinorsOnProfile({ canAdd, blockedReason, onChanged }: { canAdd: 
     event.preventDefault()
     setSaving(true)
     try {
-      const res = await apiPost<{ ok: boolean; data: ChildSummary; emailedTo: string }>('/api/children', form)
+      await apiPost<{ ok: boolean; data: ChildSummary }>('/api/children', form)
       const name = composeFullName(form)
-      setEmailedTo(res.emailedTo || user?.email || '')
       setForm({ firstName: '', middleInitial: '', lastName: '', birthDate: '' })
       setAdding(false)
-      toast.success(`${name} was added. Confirm the email we sent, then answer their waiver on the Waivers page.`)
+      toast.success(`${name} was added. Answer their waiver on the Waivers page.`)
       await load()
       onChanged?.()
     } catch (e: any) {
@@ -197,7 +167,6 @@ export function MinorsOnProfile({ canAdd, blockedReason, onChanged }: { canAdd: 
   }
 
   const childAge = ageFromBirthDate(form.birthDate)
-  const waitingForEmail = children.some((child) => !child.guardianConfirmed)
 
   return (
     <Card className="p-4">
@@ -205,7 +174,7 @@ export function MinorsOnProfile({ canAdd, blockedReason, onChanged }: { canAdd: 
         <div>
           <div className="text-xs uppercase tracking-widest text-muted">Minors on your account</div>
           <p className="mt-1 max-w-xl text-sm text-muted">
-            Players 7 to 17 years old play under your account. Add each child, confirm by email that you're their guardian, then answer their waiver on the Waivers page.
+            Players 7 to 17 years old play under your account. Add each child, then answer their waiver on the Waivers page.
           </p>
         </div>
         {!adding ? (
@@ -215,15 +184,6 @@ export function MinorsOnProfile({ canAdd, blockedReason, onChanged }: { canAdd: 
 
       {!canAdd && blockedReason ? (
         <div className="mt-3 rounded-xl border border-white/10 bg-white/5 p-3 text-xs text-muted">{blockedReason}</div>
-      ) : null}
-
-      {waitingForEmail ? (
-        <div className="mt-3 flex items-start gap-2 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-3 text-sm">
-          <FiMail className="mt-0.5 shrink-0 text-amber-600 dark:text-amber-400" />
-          <div>
-            We sent an email{emailedTo ? ` to ${emailedTo}` : ''} to confirm you're the guardian. Open the link in it; the child's waiver opens on the Waivers page after that.
-          </div>
-        </div>
       ) : null}
 
       {adding ? (
@@ -249,7 +209,7 @@ export function MinorsOnProfile({ canAdd, blockedReason, onChanged }: { canAdd: 
           </div>
           <div className="flex flex-wrap gap-2">
             <Button type="submit" disabled={saving || !form.firstName.trim() || !form.lastName.trim() || childAge === null || childAge >= 18 || childAge < MIN_MINOR_AGE}>
-              <FiPlus /> {saving ? 'Adding…' : 'Add and send confirmation email'}
+              <FiPlus /> {saving ? 'Adding…' : 'Add minor'}
             </Button>
             <Button type="button" variant="ghost" onClick={() => setAdding(false)}>Cancel</Button>
           </div>
@@ -261,7 +221,7 @@ export function MinorsOnProfile({ canAdd, blockedReason, onChanged }: { canAdd: 
         {!loading && children.length === 0 && !adding ? <div className="text-sm text-muted">No minors added yet.</div> : null}
         {children.map((child) => {
           const chip = statusChip(child)
-          const waiverToAnswer = child.guardianConfirmed && !child.waiverApproved && child.waiverStatus !== 'pending'
+          const waiverToAnswer = !child.waiverApproved && child.waiverStatus !== 'pending'
           return (
             <div key={child.id} className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-white/10 bg-white/5 p-3">
               <div>
@@ -270,9 +230,7 @@ export function MinorsOnProfile({ canAdd, blockedReason, onChanged }: { canAdd: 
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <span className={`rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${chip.className}`}>{chip.label}</span>
-                {!child.guardianConfirmed ? (
-                  <GuardianEmailActions child={child} onConfirmed={() => { void load() }} />
-                ) : waiverToAnswer ? (
+                {waiverToAnswer ? (
                   <Link to="/app/waiver#minors-waivers" className="inline-flex items-center gap-1 text-xs font-semibold text-accent hover:text-text">
                     Answer waiver <FiChevronRight />
                   </Link>
@@ -319,7 +277,7 @@ export function MinorsWaivers({ ownWaiverApproved }: { ownWaiverApproved: boolea
         <div className="text-xs uppercase tracking-widest text-muted">Minors' waivers</div>
         <div className="mt-1 text-lg font-semibold">Waivers for the children on your account</div>
         <p className="mt-1 max-w-2xl text-sm text-muted">
-          Each child you add on your profile gets a waiver here. Confirm the guardian email first, then fill it in and sign as their guardian.
+          Each child you add on your profile gets a waiver here. Fill it in and sign as their guardian.
         </p>
 
         {!ownWaiverApproved && children.length > 0 ? (
@@ -340,8 +298,8 @@ export function MinorsWaivers({ ownWaiverApproved }: { ownWaiverApproved: boolea
           ) : null}
           {children.map((child) => {
             const chip = statusChip(child)
-            const canFillWaiver = ownWaiverApproved && child.guardianConfirmed && !child.waiverApproved && child.waiverStatus !== 'pending'
-            const canView = child.guardianConfirmed && (child.waiverStatus === 'pending' || child.waiverApproved)
+            const canFillWaiver = ownWaiverApproved && !child.waiverApproved && child.waiverStatus !== 'pending'
+            const canView = child.waiverStatus === 'pending' || child.waiverApproved
             return (
               <div key={child.id} className="rounded-2xl border border-white/10 bg-white/5 p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
@@ -351,25 +309,20 @@ export function MinorsWaivers({ ownWaiverApproved }: { ownWaiverApproved: boolea
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <span className={`rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${chip.className}`}>{chip.label}</span>
-                    {!child.guardianConfirmed ? (
-                      <GuardianEmailActions child={child} onConfirmed={() => { void load() }} />
-                    ) : canFillWaiver || canView ? (
+                    {canFillWaiver || canView ? (
                       <Button size="xs" variant={canFillWaiver ? 'accent-soft' : 'ghost'} onClick={() => setOpenWaiverId(openWaiverId === child.id ? null : child.id)}>
                         {canFillWaiver ? <FiAlertCircle /> : <FiCheckCircle />} {openWaiverId === child.id ? 'Hide waiver' : canFillWaiver ? 'Fill in waiver' : 'View waiver'}
                       </Button>
                     ) : null}
                   </div>
                 </div>
-                {!child.guardianConfirmed ? (
-                  <div className="mt-2 text-xs text-muted">Open the confirmation link we emailed you to unlock this waiver.</div>
-                ) : null}
                 {openWaiverId === child.id ? (
                   <div className="mt-4">
                     <WaiverPage
                       variant="embedded"
                       child={child}
                       onSubmitted={() => {
-                        toast.success(`${child.name}'s waiver was sent for review.`)
+                        toast.success(`${child.name}'s waiver was sent for staff approval.`)
                         void load()
                       }}
                     />

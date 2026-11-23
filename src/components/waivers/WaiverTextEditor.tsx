@@ -39,10 +39,11 @@ export function WaiverTextEditor() {
   const save = async (body: { text?: WaiverText; reset?: true }) => {
     setSaving(true)
     try {
-      await apiPut('/api/waiver-text', body)
+      const res = await apiPut<{ ok: boolean; waiversExpired?: number }>('/api/waiver-text', body)
       await reload()
       setDraft(null)
-      toast.success(body.reset ? 'Waiver text reset to the official version.' : 'Waiver text saved. New waivers will use it.')
+      const expired = Number(res?.waiversExpired) || 0
+      toast.success(`${body.reset ? 'Waiver text reset to the official version.' : 'Waiver text saved.'}${expired ? ` ${expired} current waiver${expired === 1 ? '' : 's'} expired; those players were told to answer the new one.` : ''}`)
     } catch (e: any) {
       toast.error(String(e?.message || 'Could not save the waiver text.'))
     } finally {
@@ -57,7 +58,7 @@ export function WaiverTextEditor() {
           <div className="text-xs uppercase tracking-widest text-muted">Waiver text</div>
           <div className="mt-1 text-sm text-muted">
             {updatedAtISO ? `Edited ${new Date(updatedAtISO).toLocaleString()}.` : 'Using the official Chill Shooters text.'}{' '}
-            Changes apply to new waivers; signed waivers keep the text they were signed with.
+            Changing it expires every current waiver right away: all players are notified to answer the new one before their next game.
           </div>
         </div>
         {draft ? null : (
@@ -81,14 +82,21 @@ export function WaiverTextEditor() {
               variant="ghost"
               disabled={saving || !updatedAtISO}
               onClick={async () => {
-                if (await confirmDialog({ title: 'Reset to the official waiver text?', message: 'New waivers will use the official Chill Shooters text. Waivers already signed keep their text.', confirmLabel: 'Reset' })) void save({ reset: true })
+                if (await confirmDialog({ title: 'Reset to the official waiver text?', message: 'Every current waiver expires now, and all players are notified to answer the official waiver again before their next game.', confirmLabel: 'Reset and renew waivers', danger: true })) void save({ reset: true })
               }}
             >
               Reset to official text
             </Button>
             <div className="flex gap-2">
               <Button variant="ghost" disabled={saving} onClick={() => setDraft(null)}>Cancel</Button>
-              <Button disabled={saving} onClick={() => void save({ text: fromDraft(draft) })}>{saving ? 'Saving…' : 'Save waiver text'}</Button>
+              <Button
+                disabled={saving}
+                onClick={async () => {
+                  if (await confirmDialog({ title: 'Save the new waiver text?', message: 'Every current waiver expires now, and all players are notified to answer the new waiver before their next game.', confirmLabel: 'Save and renew waivers', danger: true })) void save({ text: fromDraft(draft) })
+                }}
+              >
+                {saving ? 'Saving…' : 'Save waiver text'}
+              </Button>
             </div>
           </div>
         </div>

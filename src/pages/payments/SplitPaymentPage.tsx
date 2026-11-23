@@ -20,6 +20,17 @@ const LOADOUT_LABEL: Record<Loadout, string> = {
   own_gun: 'Own gun, rents the gear',
   own_gear: 'Own gun + gear (entrance only)',
 }
+// "M4 Rifle, mask and vest".
+const listOf = (items: string[]) => (items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`)
+// A player not taking the package who rents some pieces ("Rents only the M4 Rifle and mask"), or a
+// package player with extra guns ("Package + M4 Rifle").
+function loadoutLabel(player: { loadout?: Loadout | null; rentOnly?: string[]; pickedGuns?: string[] } | undefined) {
+  if (!player?.loadout) return '—'
+  const guns = player.pickedGuns || []
+  if (player.loadout !== 'own_gear') return guns.length ? `${LOADOUT_LABEL[player.loadout]} + ${listOf(guns)}` : LOADOUT_LABEL[player.loadout]
+  const pieces = [...guns, ...(player.rentOnly || [])]
+  return pieces.length ? `Rents only the ${listOf(pieces)}` : LOADOUT_LABEL.own_gear
+}
 
 type SplitMember = {
   id: string
@@ -50,7 +61,7 @@ export type SplitPaymentItem = {
   isCaptain: boolean
   captainName: string
   // Everyone on the booking (names only), so invited players see who booked and who's playing.
-  players?: Array<{ id: string; name: string; isCaptain: boolean; isMe: boolean; loadout?: Loadout | null }>
+  players?: Array<{ id: string; name: string; isCaptain: boolean; isMe: boolean; loadout?: Loadout | null; rentOnly?: string[]; pickedGuns?: string[]; share?: number | null; paidBy?: string | null }>
   myShareDue: number
   iHavePaid: boolean
   progress: { target: number; submitted: number; remaining: number; state: string; paidCount?: number; payerCount?: number }
@@ -160,8 +171,13 @@ function CaptainTracker({ item }: { item: SplitPaymentItem }) {
           <div className="text-[11px] uppercase tracking-widest text-muted">Pending ({pending.length})</div>
           <ul className="mt-2 space-y-1 text-sm">
             {pending.length === 0 ? <li className="text-xs text-muted">Everyone has paid</li> : pending.map((member) => (
-              <li key={member.id} className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400">
-                <FiClock />{member.name}{member.isCaptain ? ' (you)' : ''}
+              <li key={member.id} className="flex items-center justify-between gap-2 text-amber-600 dark:text-amber-400">
+                <span className="flex items-center gap-1.5"><FiClock />{member.name}{member.isCaptain ? ' (you)' : ''}</span>
+                {/* What they still owe: their share. */}
+                {(() => {
+                  const share = item.players?.find((player) => player.id === member.id)?.share
+                  return share != null ? <span className="text-xs tabular-nums">{formatPHP(share)}</span> : null
+                })()}
               </li>
             ))}
           </ul>
@@ -295,7 +311,8 @@ export function SplitPaymentsSection() {
         <Modal
           eyebrow="Split payment"
           title={<>{viewing.reservation.reservationDate} · <span className="capitalize">{viewing.reservation.reservationTime}</span></>}
-          size="md"
+          // Wide enough for the "Who pays what" table without wrapping every name.
+          size="xl"
           confirmDiscard={false}
           onClose={() => setViewId(null)}
         >
@@ -324,7 +341,8 @@ function FeeDetails({ item }: { item: SplitPaymentItem }) {
   const atField = Math.max(0, Math.round((Number(r.totalAmount) - online) * 100) / 100)
   const payers = r.teamSize || item.progress.payerCount || 1
   const evenShare = Math.round((online / payers) * 100) / 100
-  const myLoadout = item.players?.find((p) => p.isMe)?.loadout || null
+  const me = item.players?.find((p) => p.isMe)
+  const myLoadout = me?.loadout ? loadoutLabel(me) : null
   // The package line is the one the person who booked picked for the whole group; say so.
   const packageLine = (label: string) => Boolean(r.packageName) && label === r.packageName
   const chooser = item.isCaptain ? 'you' : item.captainName
@@ -364,7 +382,7 @@ function FeeDetails({ item }: { item: SplitPaymentItem }) {
       <div className="mt-2 space-y-1 border-t border-white/10 pt-2">
         {r.unevenShares ? (
           <div className="text-xs text-muted">
-            Shares follow what each player gets{myLoadout ? <>. You: <span className="font-semibold text-text">{LOADOUT_LABEL[myLoadout]}</span></> : null}.
+            Shares follow what each player gets{myLoadout ? <>. You: <span className="font-semibold text-text">{myLoadout}</span></> : null}.
           </div>
         ) : row(`Online amount split ${payers} way${payers === 1 ? '' : 's'}`, evenShare, 'text-muted')}
         {item.iHavePaid
@@ -426,40 +444,64 @@ function SplitPaymentDetails({ item, onDeclined }: { item: SplitPaymentItem; onD
             </span>
           </div>
 
-          {/* Who's playing: everyone on the booking. (Who has paid is shown to the captain below.) */}
-          {item.players?.length && !item.isCaptain ? (
+          {/* Who's playing and what each one pays online. Everyone sees the amounts; who has paid is
+              only shown to the captain. */}
+          {item.players?.length ? (
             <div className="mt-4">
-              <div className="flex items-center gap-1.5 text-xs font-semibold text-muted"><FiUsers /> Who's playing ({item.players.length})</div>
-              <div className="mt-2 overflow-hidden rounded-xl border border-white/10">
-                <table className="w-full text-sm">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-muted"><FiUsers /> Who pays what ({item.players.length} players)</div>
+              <div className="mt-2 overflow-x-auto rounded-xl border border-white/10">
+                <table className="w-full min-w-[420px] text-sm">
                   <thead>
                     <tr className="border-b border-white/10 bg-white/5 text-left text-[11px] uppercase tracking-wider text-muted">
                       <th className="w-10 px-3 py-2 font-semibold">#</th>
                       <th className="px-3 py-2 font-semibold">Player</th>
-                      <th className="px-3 py-2 font-semibold">Role</th>
                       {item.players.some((p) => p.loadout) ? <th className="px-3 py-2 font-semibold">Gets</th> : null}
+                      <th className="px-3 py-2 text-right font-semibold">Pays online</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-white/5">
-                    {item.players.map((player, index) => (
-                      <tr key={player.id} className={player.isMe ? 'bg-accent/10' : ''}>
-                        <td className="px-3 py-2 text-muted">{index + 1}</td>
-                        <td className={`px-3 py-2 font-semibold ${player.isMe ? 'text-accent' : ''}`}>
-                          {player.name}{player.isMe ? <span className="ml-1.5 text-xs font-normal text-muted">(you)</span> : null}
-                        </td>
-                        <td className="px-3 py-2 text-xs text-muted">
-                          {player.isCaptain ? (isPrivateSession(item.reservation.sessionType) ? 'Captain · booked it' : 'Booked it') : 'Teammate'}
-                        </td>
-                        {item.players?.some((p) => p.loadout) ? (
-                          <td className={`px-3 py-2 text-xs ${player.loadout === 'package' ? 'text-muted' : 'font-semibold text-accent'}`}>
-                            {player.loadout ? LOADOUT_LABEL[player.loadout] : '—'}
+                    {item.players.map((player, index) => {
+                      const status = item.members?.find((member) => member.id === player.id)
+                      return (
+                        <tr key={player.id} className={player.isMe ? 'bg-accent/10' : ''}>
+                          <td className="px-3 py-2 text-muted">{index + 1}</td>
+                          <td className="px-3 py-2">
+                            <div className={`font-semibold ${player.isMe ? 'text-accent' : ''}`}>
+                              {player.name}{player.isMe ? <span className="ml-1.5 text-xs font-normal text-muted">(you)</span> : null}
+                            </div>
+                            <div className="text-[11px] text-muted">
+                              {player.isCaptain ? (isPrivateSession(item.reservation.sessionType) ? 'Captain · booked it' : 'Booked it') : 'Teammate'}
+                            </div>
                           </td>
-                        ) : null}
-                      </tr>
-                    ))}
+                          {item.players?.some((p) => p.loadout) ? (
+                            <td className={`px-3 py-2 text-xs ${player.loadout === 'package' ? 'text-muted' : 'font-semibold text-accent'}`}>
+                              {loadoutLabel(player)}
+                            </td>
+                          ) : null}
+                          <td className="whitespace-nowrap px-3 py-2 text-right">
+                            {player.share === undefined ? (
+                              // Amount not sent (an older server): don't claim they pay nothing.
+                              <span className="text-xs text-muted">—</span>
+                            ) : player.share === null ? (
+                              <span className="text-xs text-muted">{player.paidBy ? `Paid by ${player.paidBy}` : "Covered by the team"}</span>
+                            ) : (
+                              <>
+                                <div className="font-semibold tabular-nums">{formatPHP(player.share)}</div>
+                                {status ? (
+                                  <div className={`text-[11px] ${status.paid ? 'text-success' : 'text-amber-600 dark:text-amber-400'}`}>{status.paid ? 'Paid' : 'Not paid yet'}</div>
+                                ) : null}
+                              </>
+                            )}
+                          </td>
+                        </tr>
+                      )
+                    })}
                   </tbody>
                 </table>
               </div>
+              {item.players.some((p) => p.share === null) ? (
+                <div className="mt-1 text-[11px] text-muted">Minors don't pay themselves: their parent or guardian on the team pays for them, as part of their share.</div>
+              ) : null}
             </div>
           ) : null}
 

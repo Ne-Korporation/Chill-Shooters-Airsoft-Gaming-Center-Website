@@ -5,14 +5,14 @@ import toast from 'react-hot-toast'
 import { useAuth } from '../../context/AuthContext'
 
 import { motion } from 'framer-motion'
-import { FiAlertTriangle, FiCheck, FiChevronRight, FiFileText, FiInfo, FiLock } from 'react-icons/fi'
+import { FiAlertTriangle, FiCheck, FiChevronLeft, FiChevronRight, FiFileText, FiInfo, FiLock } from 'react-icons/fi'
 
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { clearPackagePrefill } from '../../utils/packagePrefill'
 import { StripeCardPayment } from '../../components/payments/StripeCardPayment'
 import { openPaymentTab, sendToPaymentTab } from '../../utils/xendit'
-import { cancelBookingDraftLeft, clearBookingDraft, hasBookingDraft, markBookingDraftLeft, readBookingDraft, saveBookingDraft, scheduleBookingDraftLeft } from '../../utils/bookingDraft'
+import { cancelBookingDraftLeft, clearBookingDraft, hasBookingDraft, markBookingDraftLeft, peekBookingDraft, readBookingDraft, saveBookingDraft, scheduleBookingDraftLeft } from '../../utils/bookingDraft'
 
 // Players pay online with GCash or QR Ph (a demo payment page for the capstone, /app/payment/demo) or by
 // card (Stripe). Both providers verify the payment themselves, so no staff check is needed and the
@@ -174,9 +174,11 @@ function PaymentPageContent() {
             { label: `Player entrance fee (${Number(pendingReservation?.numberOfPlayers || 1)} × ₱150)`, amount: entranceFee },
             { label: 'Service fee', amount: service },
           ]
-      // A full day costs the same as booking each slot: the charges above are for one slot.
-      const slotCount = pendingReservation?.fullDay && Array.isArray(pendingReservation?.fullDaySlots) ? pendingReservation.fullDaySlots.length : 1
-      const fullDayItems = slotCount > 1 ? [...itemized, { label: `Afternoon & evening (same as above, × ${slotCount - 1})`, amount: total * (slotCount - 1) }] : itemized
+      // Several slots cost the same as booking each one: the charges above are for the first slot.
+      const pickedSlots: string[] = pendingReservation?.fullDay && Array.isArray(pendingReservation?.fullDaySlots) ? pendingReservation.fullDaySlots.map(String) : []
+      const slotCount = Math.max(1, pickedSlots.length)
+      const otherSlots = pickedSlots.slice(1).map((s) => s.charAt(0).toUpperCase() + s.slice(1)).join(' & ')
+      const fullDayItems = slotCount > 1 ? [...itemized, { label: `${otherSlots} (same as above, × ${slotCount - 1})`, amount: total * (slotCount - 1) }] : itemized
       setBreakdown({ field, equipment, entranceFee, service, total: total * slotCount, itemized: fullDayItems })
       // Splitting needs at least one registered teammate, and isn't offered for a full day.
       setPaymentMode(nextTeamMembers.length > 0 && slotCount === 1 ? nextPaymentMode : 'self')
@@ -194,7 +196,8 @@ function PaymentPageContent() {
     if (!user?.id || !hasBookingDraft(user.id)) return false
     const draft = readBookingDraft(user.id)
     if (!draft) return true
-    saveBookingDraft(user.id, { path: '/app/payment', label: draft.label, state: {} })
+    // Keep the booking's choices, for "Back to booking".
+    saveBookingDraft(user.id, { path: '/app/payment', label: draft.label, state: draft.state || {} })
     return false
   })
   useEffect(() => {
@@ -284,7 +287,7 @@ function PaymentPageContent() {
       if (isXendit && xenditEnabled !== true) throw new Error('Online payment is not available right now. Please try again later.')
 
       if (fullDay) {
-        if (!isXendit) throw new Error('A full day is paid with GCash or QR Ph.')
+        if (!isXendit) throw new Error('Several slots are paid with GCash or QR Ph.')
         let ids: string[] = []
         try {
           ids = JSON.parse(localStorage.getItem('pending_reservation_ids') || '[]')
@@ -312,7 +315,7 @@ function PaymentPageContent() {
             } catch (err: any) {
               await Promise.all(ids.map((id) => apiPost(`/api/reservations/${encodeURIComponent(id)}/cancel`, {}).catch(() => null)))
               const label = slotName.charAt(0).toUpperCase() + slotName.slice(1)
-              throw new Error(`${label} couldn't be booked (${err?.message || err}). Nothing was booked for the full day.`)
+              throw new Error(`${label} couldn't be booked (${err?.message || err}). Nothing was booked for these slots.`)
             }
           }
           localStorage.setItem('pending_reservation_ids', JSON.stringify(ids))
@@ -404,8 +407,26 @@ function PaymentPageContent() {
     }
   }
 
+  // Back to the booking's review step with every choice still filled in (the draft keeps them).
+  // Only before the reservation is created: after that, changing it would make a second booking.
+  const backToBooking = () => {
+    // Read without the one-minute limit: the player is still here, however long they've been paying.
+    const draft = peekBookingDraft(user?.id)
+    if (draft) saveBookingDraft(user?.id, { path: '/app/reservations', label: draft.label, state: { ...(draft.state || {}), step: 5 } })
+    navigate('/app/reservations')
+  }
+
   return (
     <div id="payment-section" className="space-y-4">
+      {!choicesLocked && !success ? (
+        <button
+          type="button"
+          onClick={backToBooking}
+          className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm font-semibold text-muted transition hover:bg-white/10 hover:text-text"
+        >
+          <FiChevronLeft /> Back to booking
+        </button>
+      ) : null}
       <div className="space-y-2">
         <div className="text-sm font-medium text-accent">Payment</div>
         <h1 className="text-3xl font-bold">Reservation Payment</h1>
@@ -524,7 +545,7 @@ function PaymentPageContent() {
                 key: 'stripe',
                 title: 'Card',
                 hint: 'Visa or Mastercard via Stripe',
-                unavailable: !stripeConfig.enabled ? 'Not available right now' : paymentMode === 'split' ? 'Not for split payments' : fullDay ? 'Not for full-day bookings' : '',
+                unavailable: !stripeConfig.enabled ? 'Not available right now' : paymentMode === 'split' ? 'Not for split payments' : fullDay ? 'Not for several slots' : '',
               },
             ] as Array<{ key: PaymentMethod; title: string; hint: string; unavailable: string }>).map((option) => (
               <button

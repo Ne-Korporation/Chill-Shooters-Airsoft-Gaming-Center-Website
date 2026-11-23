@@ -33,6 +33,12 @@ export function draftTimeLeft(draft: BookingDraft, now = Date.now()) {
   return Number.isFinite(since) ? Math.max(0, since + DRAFT_GRACE_MS - now) : 0
 }
 
+// The stored draft as it is, without the time check. For a page the player is still on (the
+// payment page's "Back"): they never left, so the draft hasn't really expired however long they stayed.
+export function peekBookingDraft(userId?: string | null) {
+  return userId ? read(userId) : null
+}
+
 // True when a draft is stored, even an expired one (used to tell "expired" from "never left").
 export function hasBookingDraft(userId?: string | null) {
   return Boolean(userId && read(userId))

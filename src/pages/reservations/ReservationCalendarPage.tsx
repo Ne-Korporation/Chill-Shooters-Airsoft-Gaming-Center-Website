@@ -39,7 +39,7 @@ import { calculatePackagePricing, packageEquipmentQty, packageNotForGroup, packa
 import { formatDiscountTargetLabel, resolvePackageDiscountConfig } from '../../utils/packagePricing'
 import { loadPackagePrefill } from '../../utils/packagePrefill'
 import { isAmmo, modelOf } from '../../utils/inventoryModels'
-import { cancelBookingDraftLeft, markBookingDraftLeft, readBookingDraft, saveBookingDraft, scheduleBookingDraftLeft } from '../../utils/bookingDraft'
+import { cancelBookingDraftLeft, markBookingDraftLeft, peekBookingDraft, readBookingDraft, saveBookingDraft, scheduleBookingDraftLeft } from '../../utils/bookingDraft'
 import type { PickerGroup } from '../../components/inventory/PiecePicker'
 import { ModelQuantityPicker } from '../../components/inventory/ModelQuantityPicker'
 import { FieldLayoutDesigner, type LayoutItem } from '../../components/reservations/FieldLayoutDesigner'
@@ -106,6 +106,20 @@ type WeaponItem = {
   // Branch that rents out this piece; blank = not assigned yet (any branch).
   locationId?: string
 }
+
+// Hybrid: a player not taking the package can rent just the package's mask or vest, and any player
+// can pick rental guns (instead of the package's gun, or on top of it). Mirrors server/utils/ownGearRentals.js.
+type RentPiece = 'mask' | 'vest'
+const RENT_PIECES: RentPiece[] = ['mask', 'vest']
+const RENT_PIECE_LABEL: Record<RentPiece, string> = { mask: 'Mask', vest: 'Vest' }
+const MAX_GUNS_PER_PLAYER = 3
+
+// The step bar (Field & slot … Review & pay): on wide screens it stays under the fixed top bar (72px)
+// while the step scrolls. On phones it wraps to several rows, so it scrolls away there.
+const STEP_BAR_CLASS = 'grid grid-cols-2 gap-3 sm:grid-cols-3 lg:sticky lg:top-[72px] lg:z-30 lg:-mx-2 lg:bg-background/95 lg:px-2 lg:py-3 lg:backdrop-blur'
+// Each step's right-hand column (checks, totals, Back / Continue): on wide screens it stays in view
+// below the sticky step bar. Taller than the screen, it scrolls on its own.
+const SIDE_PANEL_CLASS = 'space-y-4 lg:sticky lg:top-[180px] lg:self-start lg:max-h-[calc(100vh-196px)] lg:overflow-y-auto lg:overscroll-contain no-scrollbar'
 
 type EquipmentItemDetails = {
   id: string
@@ -342,6 +356,12 @@ export function ReservationCalendarPage() {
 
   // A booking the player left less than a minute ago (see utils/bookingDraft); its choices are restored below.
   const [restoredDraft] = useState(() => {
+    // Straight back from the payment page (its Back button, or the browser's): the player never left
+    // the site, so the booking isn't expired however long they spent paying. Not once the reservation
+    // was created there, since changing it then would make a second booking.
+    const raw = peekBookingDraft(user?.id)
+    const reservationCreated = Boolean(localStorage.getItem('pending_reservation_id') || localStorage.getItem('pending_reservation_ids'))
+    if (raw?.path === '/app/payment' && !raw.leftAtISO && !reservationCreated && Object.keys(raw.state || {}).length > 0) return raw
     const draft = readBookingDraft(user?.id)
     return draft?.path === '/app/reservations' ? draft : null
   })
@@ -510,22 +530,55 @@ export function ReservationCalendarPage() {
     return draftState.slot && saved.includes(draftState.slot) ? [draftState.slot] : saved.slice(-1)
   })
   const [slotTouched, setSlotTouched] = useState(Boolean(restoredDraft))
-  // Full day: morning, afternoon and evening booked together (three linked bookings, paid at one
-  // checkout). `slot` stays 'morning' then; the checks below look at all three slots.
-  const [fullDay, setFullDay] = useState<boolean>(() => Boolean(draftState.fullDay))
-  const bookedSlots: TimeSlot[] = fullDay ? timeSlots : [slot]
-  // Picking today (or still sitting on it as slots start) drops any choice that has already started
-  // and moves to the first slot still open.
+  // Several slots booked together (e.g. morning and evening, or the full day): one linked booking
+  // per slot, paid at one checkout. Empty when a single slot is picked. `slot` is the first of them;
+  // the checks below look at every picked slot (bookedSlots).
+  const [pickedSlots, setPickedSlots] = useState<TimeSlot[]>(() => {
+    const saved: string[] = Array.isArray(draftState.pickedSlots) ? draftState.pickedSlots : draftState.fullDay ? [...timeSlots] : []
+    const ordered = timeSlots.filter((s) => saved.includes(s))
+    return ordered.length > 1 ? ordered : []
+  })
+  // "fullDay" now means several slots (two or three); allDay is all three.
+  const fullDay = pickedSlots.length > 1
+  const allDay = pickedSlots.length === timeSlots.length
+  const bookedSlots: TimeSlot[] = fullDay ? pickedSlots : [slot]
+  // Sets the picked slots (any order, any number): none clears the choice, one is a normal
+  // booking, two or three are booked together.
+  const applyPickedSlots = (slots: TimeSlot[]) => {
+    const ordered = timeSlots.filter((s) => slots.includes(s))
+    if (ordered.length === 0) {
+      setPickedSlots([])
+      setSelectedSlots([])
+      setSlotTouched(false)
+      return
+    }
+    setSlot(ordered[0])
+    setSelectedSlots([ordered[0]])
+    setSlotTouched(true)
+    setPickedSlots(ordered.length > 1 ? ordered : [])
+  }
+  // "Morning + Evening", or "Full day" for all three.
+  const pickedSlotsLabel = allDay ? 'Full day' : bookedSlots.map((s) => slotLabels[s]).join(' + ')
+  // Picking today (or still sitting on it as slots start) drops any picked slot that has already
+  // started, keeping the rest (or moving to the first slot still open).
   useEffect(() => {
     if (dateISO !== todayDateISO) return
-    const picked: TimeSlot[] = fullDay ? timeSlots : [slot]
-    if (!picked.some((s) => slotHasStarted(slotHours, s, dateISO))) return
+    if (!bookedSlots.some((s) => slotHasStarted(slotHours, s, dateISO))) return
+    const stillOpen = bookedSlots.filter((s) => !slotHasStarted(slotHours, s, dateISO))
+    if (stillOpen.length) {
+      setSlot(stillOpen[0])
+      setSelectedSlots([stillOpen[0]])
+      setPickedSlots(stillOpen.length > 1 ? stillOpen : [])
+      return
+    }
     const firstOpen = timeSlots.find((s) => !slotHasStarted(slotHours, s, dateISO))
-    setFullDay(false)
+    setPickedSlots([])
     setSlotTouched(false)
     setSelectedSlots([])
     if (firstOpen) setSlot(firstOpen)
-  }, [dateISO, todayDateISO, fullDay, slot, slotHours])
+    // bookedSlots follows slot and pickedSlots.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dateISO, todayDateISO, pickedSlots, slot, slotHours])
   const [sessionType, setSessionType] = useState<SessionType>(() => (isWeekend(dateISO) ? 'public' : 'private'))
 
   // Fetch only the minimal future slot data used for availability indicators.
@@ -596,14 +649,13 @@ export function ReservationCalendarPage() {
     }
   }, [fetchReservations])
 
-  // Enforce session type when date changes. A restored draft already has a valid slot and
-  // session for its date, so the first run must not reset them.
-  const skipDateResetRef = useRef(Boolean(restoredDraft))
+  // Enforce session type when the date changes. Only a real change resets the slot: a restored
+  // draft (e.g. coming back from the payment page) keeps the slot it had. Comparing with the last
+  // date, rather than skipping the first run, also survives React running effects twice in dev.
+  const lastDateRef = useRef(dateISO)
   useEffect(() => {
-    if (skipDateResetRef.current) {
-      skipDateResetRef.current = false
-      return
-    }
+    if (lastDateRef.current === dateISO) return
+    lastDateRef.current = dateISO
     const isWd = isWeekday(dateISO)
     if (isWd) {
       setSessionType('private')
@@ -685,6 +737,10 @@ export function ReservationCalendarPage() {
   const [teammateOwnWeaponIds, setTeammateOwnWeaponIds] = useState<string[]>(() => draftState.teammateOwnWeaponIds ?? [])
   // Players (the booker included) bringing their own gun AND gear: entrance fee only (packages).
   const [ownGearIds, setOwnGearIds] = useState<string[]>(() => draftState.ownGearIds ?? [])
+  // Hybrid: of the players not taking the package, the single pieces each one rents (gun, mask, vest).
+  const [ownGearRentals, setOwnGearRentals] = useState<Record<string, RentPiece[]>>(() => draftState.ownGearRentals ?? {})
+  // Hybrid: rental guns each player picked (one sample piece id per gun; the server picks free pieces).
+  const [playerGuns, setPlayerGuns] = useState<Record<string, string[]>>(() => draftState.playerGuns ?? {})
   const [noWeaponWarning, setNoWeaponWarning] = useState<TeamMember | null>(null)
   const [slotHoldExpiresAt, setSlotHoldExpiresAt] = useState<string | null>(null)
   const [placingHold, setPlacingHold] = useState(false)
@@ -957,9 +1013,59 @@ export function ReservationCalendarPage() {
   const captainHasGun = playerApprovedWeapons.length > 0
   // The booker marks who brings their own; no registered gear is needed. Minors always get the package.
   const validOwnGearIds = useMemo(() => (ownGearAllowed
-    ? ownGearIds.filter((id) => id === user?.id || selectedTeammates.some((member) => member.id === id && !member.isMinor))
+    ? ownGearIds.filter((id) => id === user?.id || selectedTeammates.some((member) => member.id === id))
     : []), [ownGearAllowed, ownGearIds, user?.id, selectedTeammates])
   const captainOwnGear = Boolean(user?.id) && validOwnGearIds.includes(String(user?.id))
+  // The picked package's mask and vest, for players renting just one of them.
+  const packageSingleItems = useMemo(() => {
+    const result: Record<RentPiece, { model: string; price: number } | null> = { mask: null, vest: null }
+    if (!pickedPackage) return result
+    for (const id of pickedPackage.equipmentIds || []) {
+      const item = equipment.find((piece) => piece.id === id)
+      if (!item) continue
+      const text = `${item.category || ''} ${item.model || item.name}`.toLowerCase()
+      const kind: RentPiece | null = text.includes('mask') ? 'mask' : text.includes('vest') ? 'vest' : null
+      if (kind && !result[kind]) result[kind] = { model: item.model || item.name, price: Number(item.price || 0) }
+    }
+    return result
+  }, [pickedPackage, equipment])
+  // Single pieces of the players not taking the package (only pieces the package has).
+  const validOwnGearRentals = useMemo(() => {
+    const result: Record<string, RentPiece[]> = {}
+    for (const id of validOwnGearIds) {
+      const picked = RENT_PIECES.filter((piece) => (ownGearRentals[id] || []).includes(piece) && packageSingleItems[piece])
+      if (picked.length) result[id] = picked
+    }
+    return result
+  }, [validOwnGearIds, ownGearRentals, packageSingleItems])
+  const rentOnlyCounts = useMemo(() => {
+    const counts: Record<RentPiece, number> = { mask: 0, vest: 0 }
+    for (const pieces of Object.values(validOwnGearRentals)) for (const piece of pieces) counts[piece] += 1
+    return counts
+  }, [validOwnGearRentals])
+  // What the single pieces cost in all (entrance fees are counted with the package pricing).
+  const singlesTotal = RENT_PIECES.reduce((sum, piece) => sum + rentOnlyCounts[piece] * (packageSingleItems[piece]?.price || 0), 0)
+  const singlesCostOf = (id: string) => (validOwnGearRentals[id] || []).reduce((sum, piece) => sum + (packageSingleItems[piece]?.price || 0), 0)
+  // Rental guns each player picked (Hybrid only), up to MAX_GUNS_PER_PLAYER, and what they cost.
+  const validPlayerGuns = useMemo(() => {
+    const result: Record<string, string[]> = {}
+    if (!ownGearAllowed) return result
+    const onTeam = new Set([String(user?.id || ''), ...selectedTeammates.map((member) => member.id)])
+    for (const [id, guns] of Object.entries(playerGuns)) {
+      const list = guns.filter((gunId) => weapons.some((w) => w.id === gunId)).slice(0, MAX_GUNS_PER_PLAYER)
+      if (onTeam.has(id) && list.length) result[id] = list
+    }
+    return result
+  }, [ownGearAllowed, playerGuns, weapons, user?.id, selectedTeammates])
+  const gunPrice = (gunId: string) => Number(weapons.find((w) => w.id === gunId)?.price || 0)
+  const gunModel = (gunId: string) => {
+    const gun = weapons.find((w) => w.id === gunId)
+    return gun?.model || gun?.name || 'Gun'
+  }
+  const gunsCostOf = (id: string) => (validPlayerGuns[id] || []).reduce((sum, gunId) => sum + gunPrice(gunId), 0)
+  const gunsTotal = Object.keys(validPlayerGuns).reduce((sum, id) => sum + gunsCostOf(id), 0)
+  // Players not taking the package who rent a gun get the included BBs with it (as on the server).
+  const gunRentersNotTakingPackage = validOwnGearIds.filter((id) => validPlayerGuns[id]).length
   // Players who actually get the package (Hybrid players bringing their own get nothing from it):
   // what the included items, the stock check and the gear count are based on.
   const rentalPlayers = Math.max(0, players - validOwnGearIds.length)
@@ -985,7 +1091,11 @@ export function ReservationCalendarPage() {
       // "own gun, rent the gear" pick from before doesn't carry over.
       setTeammateOwnWeaponIds([])
       setSelectedOwnWeaponIds([])
-      if (mode === 'package_all') setOwnGearIds([])
+      if (mode === 'package_all') {
+        setOwnGearIds([])
+        setOwnGearRentals({})
+        setPlayerGuns({})
+      }
     } else {
       setSelectionMode('custom')
       setSelectedPackageId('')
@@ -996,11 +1106,50 @@ export function ReservationCalendarPage() {
       }
     }
   }
-  // Everyone bringing their own: every player needs an approved gun on file (minors can't).
-  // Everyone bringing their own: minors can't (they need rental gear).
-  const ownAllMissing = rentMode === 'own_all'
-    ? selectedTeammates.filter((member) => member.isMinor).map((member) => member.name)
-    : []
+  // Everyone bringing their own: anyone can, minors included.
+  const ownAllMissing: string[] = []
+  // Hybrid table: the full package (plus any extra guns), only some pieces (picked guns, mask, vest),
+  // or everything their own.
+  const withoutKey = <T,>(id: string) => (current: Record<string, T>) => {
+    if (!(id in current)) return current
+    const next = { ...current }
+    delete next[id]
+    return next
+  }
+  const clearSingles = (id: string) => setOwnGearRentals(withoutKey<RentPiece[]>(id))
+  // Switching between the package and renting only some: picked guns meant one or the other, so they're cleared.
+  const chooseFullPackage = (id: string) => {
+    if (validOwnGearIds.includes(id)) setPlayerGuns(withoutKey<string[]>(id))
+    setLoadout(id, 'package')
+    clearSingles(id)
+  }
+  const chooseBringsAll = (id: string) => {
+    setLoadout(id, 'own_gear')
+    clearSingles(id)
+    setPlayerGuns(withoutKey<string[]>(id))
+  }
+  const addGun = (id: string, gunId: string) => {
+    if (!gunId) return
+    setPlayerGuns((current) => {
+      const mine = (current[id] || []).filter((x) => weapons.some((w) => w.id === x))
+      return mine.length >= MAX_GUNS_PER_PLAYER ? current : { ...current, [id]: [...mine, gunId] }
+    })
+  }
+  const removeGun = (id: string, index: number) => setPlayerGuns((current) => {
+    const mine = (current[id] || []).filter((_, i) => i !== index)
+    const next = { ...current }
+    if (mine.length) next[id] = mine
+    else delete next[id]
+    return next
+  })
+  const toggleSingle = (id: string, piece: RentPiece) => {
+    if (!validOwnGearIds.includes(id)) setLoadout(id, 'own_gear')
+    // Coming from the package, the other pieces start unticked.
+    setOwnGearRentals((current) => {
+      const mine = validOwnGearIds.includes(id) ? current[id] || [] : []
+      return { ...current, [id]: mine.includes(piece) ? mine.filter((x) => x !== piece) : [...mine, piece] }
+    })
+  }
   const setLoadout = (id: string, loadout: Loadout) => {
     setOwnGearIds((current) => (loadout === 'own_gear' ? [...current.filter((x) => x !== id), id] : current.filter((x) => x !== id)))
     if (id === user?.id) {
@@ -1049,6 +1198,10 @@ export function ReservationCalendarPage() {
         verifiedOwnWeaponCount,
         // Hybrid players bringing their own get nothing from the package, so nothing is needed for them.
         verifiedOwnGearCount: validOwnGearIds.length,
+        // Who isn't taking the package, the mask / vest they rent, and the guns players picked.
+        ownGearPlayerIds: validOwnGearIds,
+        ownGearRentals: validOwnGearRentals,
+        playerGuns: validPlayerGuns,
       })
         .then((res) => { if (!cancelled) setStockCheck({ enough: res.enough !== false, message: res.message || '', shortModels: res.shortModels || [] }) })
         .catch(() => { if (!cancelled) setStockCheck(null) })
@@ -1058,7 +1211,7 @@ export function ReservationCalendarPage() {
       cancelled = true
       window.clearTimeout(timer)
     }
-  }, [dateISO, slot, step, selectedLocation, players, selectionMode, selectedPackageId, customWeaponIds, customEquipmentIds, verifiedOwnWeaponCount, validOwnGearIds.length])
+  }, [dateISO, slot, step, selectedLocation, players, selectionMode, selectedPackageId, customWeaponIds, customEquipmentIds, verifiedOwnWeaponCount, validOwnGearIds, validOwnGearRentals, validPlayerGuns])
   const stockShort = Boolean(stockCheck && !stockCheck.enough)
   // A model is flagged short when the server named it (or named nothing in particular).
   const modelShort = useCallback((model: string) => Boolean(stockCheck && !stockCheck.enough
@@ -1451,9 +1604,11 @@ export function ReservationCalendarPage() {
       ownGear: validOwnGearIds.length,
     })
 
+    // Single pieces rented by players not taking the package, at their rental price (no discount).
+    const total = packagePricing.total + singlesTotal + gunsTotal
     return {
-      total: packagePricing.total,
-      perPlayer: packagePricing.perPlayer,
+      total,
+      perPlayer: Math.round(total / Math.max(1, players)),
       discountPct: packagePricing.isLegacyPct ? selectedPackage.discountPct : (packagePricing.discountMode === 'percent' && packagePricing.discountTargets.includes('package_total') ? packagePricing.discountValue : 0),
       discountLabel: packagePricing.discountLabel,
       discountSummary: packagePricing.discountSummary,
@@ -1464,10 +1619,10 @@ export function ReservationCalendarPage() {
       originalTotal: packagePricing.preDiscountTotal,
       mode: 'package' as const,
       entranceFeeTotal: packagePricing.entranceFeeTotal,
-      totalBeforeOverall: packagePricing.total,
+      totalBeforeOverall: total,
       details: packagePricing,
     }
-  }, [players, selectedPackage, packageWeapons, packageEquipment, equipmentTotalPerPlayer, selectionMode, customTotal, customPerPlayerTotal, verifiedOwnWeaponCount, validOwnGearIds.length])
+  }, [players, selectedPackage, packageWeapons, packageEquipment, equipmentTotalPerPlayer, selectionMode, customTotal, customPerPlayerTotal, verifiedOwnWeaponCount, validOwnGearIds.length, singlesTotal, gunsTotal])
 
   // What the picked package costs for one player (the Hybrid table's "Package for 1 player").
   // Not shown for a price set for a whole group.
@@ -1506,8 +1661,11 @@ export function ReservationCalendarPage() {
         const groupSize = Math.round(Number(selectedPackage.players || 0))
         const label = groupSize > 1
           ? `${selectedPackage.name} (set price for ${groupSize} players)`
-          : `${selectedPackage.name} (₱${Math.round(details.basePriceTotal / Math.max(1, players)).toLocaleString('en-PH')} × ${players} player${players === 1 ? '' : 's'})`
-        itemizedBreakdown.push({ label, amount: details.basePriceTotal })
+          : `${selectedPackage.name} (₱${Math.round(details.basePriceTotal / Math.max(1, rentalPlayers)).toLocaleString('en-PH')} × ${rentalPlayers} player${rentalPlayers === 1 ? '' : 's'})`
+        if (details.basePriceTotal > 0) itemizedBreakdown.push({ label, amount: details.basePriceTotal })
+        if (details.ownGearPlayers > 0) {
+          itemizedBreakdown.push({ label: `Entrance fee, not taking the package (${details.ownGearPlayers} × ₱${ENTRANCE_FEE_PER_PLAYER})`, amount: details.entranceFeeTotal })
+        }
         fieldPrice = details.basePriceTotal
       } else {
         fieldPrice = details.basePriceTotal
@@ -1516,12 +1674,31 @@ export function ReservationCalendarPage() {
         if (details.weaponsTotal > 0) itemizedBreakdown.push({ label: `Rental weapons (${details.rentedWeaponCount})`, amount: details.weaponsTotal })
         if (details.ownWeaponsUsed > 0) itemizedBreakdown.push({ label: `Own weapons (${details.ownWeaponsUsed}) — no rental charge`, amount: 0 })
         packageEquipment.forEach((item) => {
-          itemizedBreakdown.push({ label: `${item.name} (1 per player)`, amount: Number(item.price || 0) * players })
+          if (rentalPlayers > 0) itemizedBreakdown.push({ label: `${item.name} (1 per player)`, amount: Number(item.price || 0) * rentalPlayers })
         })
         itemizedBreakdown.push({ label: `Player entrance fee (${players} × ₱${ENTRANCE_FEE_PER_PLAYER})`, amount: entranceFee })
       }
-      itemizedBreakdown.push({ label: `BB reloads included (${INCLUDED_RELOADS_PER_PLAYER * players}) — free`, amount: 0 })
       if (details.discountAmount > 0) itemizedBreakdown.push({ label: `Package discount (${details.discountSummary})`, amount: -details.discountAmount })
+      // Single pieces rented by players not taking the package.
+      for (const piece of RENT_PIECES) {
+        const item = packageSingleItems[piece]
+        if (!item || !rentOnlyCounts[piece]) continue
+        equipmentPrice += item.price * rentOnlyCounts[piece]
+        itemizedBreakdown.push({ label: `${item.model} rental only (${rentOnlyCounts[piece]} × ₱${item.price.toLocaleString('en-PH')})`, amount: item.price * rentOnlyCounts[piece] })
+      }
+      // Guns players picked, grouped by model.
+      const gunGroups = new Map<string, { count: number; amount: number }>()
+      for (const gunId of Object.values(validPlayerGuns).flat()) {
+        const group = gunGroups.get(gunModel(gunId)) || { count: 0, amount: 0 }
+        gunGroups.set(gunModel(gunId), { count: group.count + 1, amount: group.amount + gunPrice(gunId) })
+      }
+      for (const [model, group] of gunGroups) {
+        equipmentPrice += group.amount
+        itemizedBreakdown.push({ label: `${model} rental, picked by players (${group.count})`, amount: group.amount })
+      }
+      // The included BBs go with a rented gun: package players and players renting a picked gun.
+      const withBbs = rentalPlayers + gunRentersNotTakingPackage
+      if (withBbs > 0) itemizedBreakdown.push({ label: `BB reloads included (${INCLUDED_RELOADS_PER_PLAYER * withBbs}) — free`, amount: 0 })
     } else if (selectionMode === 'custom') {
       equipmentPrice = customItemsTotal
       const groups = new Map<string, { count: number; amount: number }>()
@@ -1547,7 +1724,55 @@ export function ReservationCalendarPage() {
       total: dynamicPricing.total,
       itemizedBreakdown,
     }
-  }, [customItemsTotal, customSelectedEquipment, customSelectedWeapons, dynamicPricing, packageEquipment, players, selectedPackage, selectionMode, extraAmmoTotal, extraAmmoReloads, ammoReloadPrice])
+  }, [customItemsTotal, customSelectedEquipment, customSelectedWeapons, dynamicPricing, packageEquipment, players, selectedPackage, selectionMode, extraAmmoTotal, extraAmmoReloads, ammoReloadPrice, rentalPlayers, packageSingleItems, rentOnlyCounts, validPlayerGuns, gunRentersNotTakingPackage, weapons])
+
+  // Each player's part of the booking total (every slot), the same way the server splits a payment
+  // (server/utils/splitShares.js): in proportion to what each one gets, and a minor's part is paid
+  // by their parent or guardian on the team. The parts add up to the total exactly.
+  const playerParts = useMemo(() => {
+    const roster = [
+      { id: String(user?.id || ''), name: user?.name || 'You', isMinor: false, guardianId: undefined as string | undefined, isMe: true },
+      ...selectedTeammates.map((member) => ({ id: member.id, name: member.name, isMinor: Boolean(member.isMinor), guardianId: member.guardianId, isMe: false })),
+    ].filter((row) => row.id)
+    const notTaking = (id: string) => validOwnGearIds.includes(id)
+    // What a player gets, for one slot. Without per-player prices (custom picks, a group price) everyone counts the same.
+    const costOf = (id: string) => {
+      if (selectionMode !== 'package' || packageOnePlayerPrice === null) return 1
+      return notTaking(id) ? ENTRANCE_FEE_PER_PLAYER + singlesCostOf(id) + gunsCostOf(id) : packageOnePlayerPrice + gunsCostOf(id)
+    }
+    const getsOf = (id: string) => {
+      if (selectionMode !== 'package') return rentMode === 'own_all' ? 'Brings everything' : 'Picked items'
+      const guns = (validPlayerGuns[id] || []).map(gunModel)
+      if (!notTaking(id)) return guns.length ? `Package + ${guns.join(', ')}` : 'Package'
+      const pieces = [...guns, ...(validOwnGearRentals[id] || []).map((piece) => RENT_PIECE_LABEL[piece].toLowerCase())]
+      return pieces.length ? `Rents only: ${pieces.join(', ')}` : 'Brings everything'
+    }
+    const payerIds = new Set(roster.filter((row) => !row.isMinor).map((row) => row.id))
+    const weight = new Map(roster.filter((row) => !row.isMinor).map((row) => [row.id, costOf(row.id)]))
+    // A minor's part goes on their parent or guardian on the team (else it's spread over everyone).
+    for (const row of roster) {
+      if (row.isMinor && row.guardianId && payerIds.has(row.guardianId)) weight.set(row.guardianId, (weight.get(row.guardianId) || 0) + costOf(row.id))
+    }
+    const sum = [...weight.values()].reduce((a, b) => a + b, 0)
+    const parts = new Map<string, number>()
+    let given = 0
+    const payers = [...weight.keys()]
+    payers.forEach((id, index) => {
+      const amount = index === payers.length - 1
+        ? Math.round((bookingTotal - given) * 100) / 100
+        : Math.round(((bookingTotal * (weight.get(id) || 0)) / Math.max(1, sum)) * 100) / 100
+      parts.set(id, amount)
+      given = Math.round((given + amount) * 100) / 100
+    })
+    return roster.map((row) => ({
+      ...row,
+      gets: getsOf(row.id),
+      part: row.isMinor ? null : parts.get(row.id) ?? 0,
+      paidBy: row.isMinor ? roster.find((other) => other.id === row.guardianId)?.name || null : null,
+    }))
+    // gunModel / singlesCostOf / gunsCostOf follow the state listed here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, user?.name, selectedTeammates, validOwnGearIds, validOwnGearRentals, validPlayerGuns, selectionMode, packageOnePlayerPrice, bookingTotal, rentMode, weapons, packageSingleItems])
 
   const reservationSummary = useMemo(() => {
     const selectedFields = availableFields.filter((f) => selectedFieldIds.includes(f.id))
@@ -1558,7 +1783,7 @@ export function ReservationCalendarPage() {
       locationLabel: locationOptions.find((loc) => loc.id === selectedLocation)?.name ?? 'Location',
       fields: selectedFields,
       dateISO,
-      slotLabel: fullDay ? 'Full day (Morning, Afternoon & Evening)' : slotLabels[slot],
+      slotLabel: allDay ? 'Full day (Morning, Afternoon & Evening)' : pickedSlotsLabel,
       sessionTypeLabel: sessionType === 'private' ? 'Private Session' : 'Public Session',
       players,
       packageName: pkgName,
@@ -1569,7 +1794,7 @@ export function ReservationCalendarPage() {
       ownWeapons,
       ownEquipment,
     }
-  }, [dateISO, selectedFieldIds, selectedLocation, selectionMode, selectedPackage?.name, sessionType, slot, players, notes, customSelectedWeapons, customSelectedEquipment, ownWeapons, ownEquipment, availableFields])
+  }, [dateISO, selectedFieldIds, selectedLocation, selectionMode, selectedPackage?.name, sessionType, slot, allDay, pickedSlotsLabel, players, notes, customSelectedWeapons, customSelectedEquipment, ownWeapons, ownEquipment, availableFields])
 
   const maxTeammates = Math.max(0, players - 1)
   // Booking for yourself only: there is no team to add, so the team step is skipped.
@@ -1622,6 +1847,50 @@ export function ReservationCalendarPage() {
       && !['cancelled', 'rejected', 'declined', 'expired'].includes(String(booking.reservationStatus || '').toLowerCase())) || null
     : null
   const canSubmitReservation = canProceed && hasCurrentUserWaiver && !publicSlotClash  // true only once we KNOW the user has no waiver (avoids flashing the warning while loading)
+  // Step 3 (weapons & gear): what still has to be answered before Continue.
+  const step3Block: string | null = players < effectiveMinPlayers
+    ? `This needs at least ${effectiveMinPlayers} players.`
+    : selectionMode === 'package' && !selectedPackage
+      ? 'Pick a package.'
+      : rentMode === 'custom' && customWeaponIds.length + customEquipmentIds.length === 0
+        ? 'Pick at least one weapon or piece of gear, or choose "Everyone brings their own".'
+        : ownAllMissing.length > 0
+          ? `${ownAllMissing.join(', ')} can't bring their own.`
+          : null
+
+  // The first step with a required answer missing. A later step can't be open before it's done
+  // (e.g. a restored booking whose slot was lost): the page goes back to it. Only answers already
+  // on the page count, so nothing is sent back while the packages are still loading.
+  const firstIncompleteStep: BookingStep | null = !hasRequiredSlotSelection
+    ? 1
+    : !teamSelectionComplete
+      ? 2
+      : !loadingPackages && step3Block
+        ? 3
+        : null
+  useEffect(() => {
+    if (firstIncompleteStep && step > firstIncompleteStep) {
+      setStep(firstIncompleteStep)
+      toast.error(firstIncompleteStep === 1 ? 'Pick a time slot first.' : firstIncompleteStep === 2 ? 'Add every teammate first.' : step3Block || 'Finish the weapons & gear step first.')
+    }
+    // Only when the incomplete step or the open step changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [firstIncompleteStep, step])
+
+  // Why "Proceed to Payment" is off, shown under the button with the step that fixes it.
+  const paymentBlock: { message: string; step: BookingStep } | null = !hasCurrentUserWaiver
+    ? { message: 'Your waiver must be approved before you can book.', step: 1 }
+    : !hasRequiredSlotSelection
+      ? { message: 'Pick a time slot.', step: 1 }
+      : pickedSlotStarted
+        ? { message: 'This time slot has already started. Pick another slot or date.', step: 1 }
+        : pickedSlotFull
+          ? { message: 'This time slot is full. Pick another slot or date.', step: 1 }
+          : !meetsFieldRequirements
+            ? { message: `The chosen fields don't fit ${players} players. Change the fields.`, step: 1 }
+            : publicSlotClash
+              ? { message: `You already have a booking (${publicSlotClash.id}) in this public game. Cancel it on My Reservations, or pick another slot.`, step: 1 }
+              : null
   const waiverBlocked = !!user?.id && !loadingWaiverEligibility && !hasCurrentUserWaiver
 
   // If the user has no waiver, they can't be past step 1
@@ -1741,24 +2010,24 @@ export function ReservationCalendarPage() {
 
   // Once the slot is held, every choice is saved as a draft so a player who leaves can come back
   // to it within a minute (see utils/bookingDraft).
-  const draftLabel = `${dateISO} • ${fullDay ? 'full day' : slot} • ${locationOptions.find((l) => l.id === selectedLocation)?.name || selectedLocation}`
+  const draftLabel = `${dateISO} • ${pickedSlotsLabel} • ${locationOptions.find((l) => l.id === selectedLocation)?.name || selectedLocation}`
   useEffect(() => {
     if (!user?.id || step === 1) return
     saveBookingDraft(user.id, {
       path: '/app/reservations',
       label: draftLabel,
       state: {
-        step, selectedLocation, selectedFieldIds, dateISO, slot, selectedSlots, fullDay, players, notes, teamName, gameModePreference,
+        step, selectedLocation, selectedFieldIds, dateISO, slot, selectedSlots, pickedSlots, players, notes, teamName, gameModePreference,
         layoutRequest, layoutBlueprintUrl, selectedPackageId, selectionMode, customWeaponIds, customEquipmentIds,
         ownWeapons, ownEquipment, selectedOwnWeaponIds, selectedOwnEquipmentIds, ownWeaponTarget, teammateOwnWeaponIds,
-        ownGearIds, rentMode, selectedTeammates, paymentMode, paymentPlan, extraAmmoReloads, fieldLayoutItems, budgetInput,
+        ownGearIds, ownGearRentals, playerGuns, rentMode, selectedTeammates, paymentMode, paymentPlan, extraAmmoReloads, fieldLayoutItems, budgetInput,
       },
     })
   }, [
-    user?.id, step, draftLabel, selectedLocation, selectedFieldIds, dateISO, slot, selectedSlots, fullDay, players, notes, teamName,
+    user?.id, step, draftLabel, selectedLocation, selectedFieldIds, dateISO, slot, selectedSlots, pickedSlots, players, notes, teamName,
     gameModePreference, layoutRequest, layoutBlueprintUrl, selectedPackageId, selectionMode, customWeaponIds,
     customEquipmentIds, ownWeapons, ownEquipment, selectedOwnWeaponIds, selectedOwnEquipmentIds, ownWeaponTarget,
-    teammateOwnWeaponIds, ownGearIds, rentMode, selectedTeammates, paymentMode, paymentPlan, extraAmmoReloads, fieldLayoutItems, budgetInput,
+    teammateOwnWeaponIds, ownGearIds, ownGearRentals, playerGuns, rentMode, selectedTeammates, paymentMode, paymentPlan, extraAmmoReloads, fieldLayoutItems, budgetInput,
   ])
 
   // Coming back to a draft: hold the slot again (it may have been taken in the meantime).
@@ -1880,7 +2149,7 @@ export function ReservationCalendarPage() {
         locationName: selectedLocationName,
         reservationDate: dateISO,
         reservationTime: slot,
-        ...(fullDay ? { fullDay: true, fullDaySlots: timeSlots } : {}),
+        ...(fullDay ? { fullDay: true, fullDaySlots: pickedSlots } : {}),
         sessionType,
         numberOfPlayers: players,
         totalAmount: dynamicPricing.total,
@@ -1915,6 +2184,10 @@ export function ReservationCalendarPage() {
           : [],
         // Players bringing their own gun and gear: entrance fee only (checked again by the server).
         ownGearPlayerIds: validOwnGearIds,
+        // Of them, the single pieces each one rents (gun, mask, vest).
+        ownGearRentals: validOwnGearRentals,
+        // Rental guns players picked (instead of the package's gun, or on top of it).
+        playerGuns: validPlayerGuns,
         // 'own_all': everyone brings their own gun and gear (the server checks each has an approved gun).
         rentMode,
       }
@@ -1942,8 +2215,9 @@ export function ReservationCalendarPage() {
       localStorage.setItem('refresh_reservations', 'true')
 
       proceedingToPaymentRef.current = true
-      // From here the unfinished booking continues on the payment page.
-      saveBookingDraft(user?.id, { path: '/app/payment', label: draftLabel, state: {} })
+      // From here the unfinished booking continues on the payment page. Its choices are kept, so
+      // "Back" on the payment page returns to this review step with everything filled in.
+      saveBookingDraft(user?.id, { path: '/app/payment', label: draftLabel, state: { ...(readBookingDraft(user?.id)?.state || {}), step: 5 } })
       toast.success('Proceed to payment to complete your reservation.')
       navigate('/app/payment')
     } catch (e: any) {
@@ -2027,12 +2301,12 @@ export function ReservationCalendarPage() {
         <div className="flex items-center gap-2 rounded-2xl border border-success/25 bg-success/10 px-4 py-2 text-xs text-success">
           <FiClock className="h-4 w-4 flex-shrink-0" />
           <span>
-            {fullDay ? 'Your full day' : slotLabels[slot]} on {dateISO} is locked for you while you finish booking. It's released if you leave without paying.
+            {fullDay ? `Your ${pickedSlotsLabel.toLowerCase()}` : slotLabels[slot]} on {dateISO} is locked for you while you finish booking. It's released if you leave without paying.
           </span>
         </div>
       ) : null}
 
-      <div className={['grid grid-cols-2 gap-3 sm:grid-cols-3', ({ 3: 'lg:grid-cols-3', 4: 'lg:grid-cols-4', 5: 'lg:grid-cols-5' } as Record<number, string>)[visibleSteps.length]].join(' ')}>
+      <div className={[STEP_BAR_CLASS, ({ 3: 'lg:grid-cols-3', 4: 'lg:grid-cols-4', 5: 'lg:grid-cols-5' } as Record<number, string>)[visibleSteps.length]].join(' ')}>
         {visibleSteps.map((s) => {
           const active = s === step
           const done = s < step
@@ -2180,7 +2454,8 @@ export function ReservationCalendarPage() {
 
                 <div>
                   <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Time Window</div>
-                  <div className="mt-2 grid grid-cols-1 gap-2" role="radiogroup" aria-label="Time window">
+                  <div className="mt-1 text-xs text-muted">Pick one or more; each slot is its own game, paid together.</div>
+                  <div className="mt-2 grid grid-cols-1 gap-2" role="group" aria-label="Time window">
                     {loadingReservations ? (
                       <div className="py-4 text-center text-sm text-muted">Loading slots...</div>
                     ) : (
@@ -2191,9 +2466,16 @@ export function ReservationCalendarPage() {
                         const unavailableFields = isWd
                           ? getFieldsForLocation(selectedLocation).filter((f) => !slotFields.some((open) => open.id === f.id))
                           : []
-                        const active = !fullDay && (isWd ? slotTouched && s === slot : selectedSlots.includes(s))
+                        const singlePicked = isWd ? slotTouched : selectedSlots.length > 0
+                        const active = fullDay ? pickedSlots.includes(s) : singlePicked && s === slot
 
                         const handleSlotClick = () => {
+                          // Unticking a picked slot never needs a check.
+                          if (active) {
+                            setSlotError(null)
+                            applyPickedSlots(bookedSlots.filter((x) => x !== s))
+                            return
+                          }
                           if (started) {
                             setSlotError(`Today's ${slotLabels[s]} slot has already started. Pick a later slot or another day.`)
                             return
@@ -2205,23 +2487,15 @@ export function ReservationCalendarPage() {
                               : `All fields are booked for ${slotLabels[s]}. Pick another slot or day.`)
                             return
                           }
-                          setFullDay(false)
-                          if (isWd) {
-                            setSlot(s)
-                            setSlotTouched(true)
-                          } else {
-                            // One time slot per booking: picking a slot replaces the previous one.
-                            setSelectedSlots([s])
-                            setSlot(s)
-                            setSlotTouched(true)
-                          }
+                          // Ticking adds it to the slots already picked.
+                          applyPickedSlots([...(singlePicked || fullDay ? bookedSlots : []), s])
                         }
 
                         return (
                           <button
                             key={s}
                             type="button"
-                            role="radio"
+                            role="checkbox"
                             aria-checked={active}
                             onClick={handleSlotClick}
                             disabled={isSlotFull || started}
@@ -2234,9 +2508,9 @@ export function ReservationCalendarPage() {
                             <div className="flex items-center justify-between gap-3">
                               <span
                                 aria-hidden
-                                className={`grid h-5 w-5 shrink-0 place-items-center rounded-full border-2 ${active ? 'border-accent' : 'border-[rgba(var(--text),0.3)]'}`}
+                                className={`grid h-5 w-5 shrink-0 place-items-center rounded-md border-2 ${active ? 'border-accent bg-accent text-background' : 'border-[rgba(var(--text),0.3)]'}`}
                               >
-                                {active ? <span className="h-2.5 w-2.5 rounded-full bg-accent" /> : null}
+                                {active ? <FiCheck className="h-3.5 w-3.5" /> : null}
                               </span>
                               <div className="min-w-0 flex-1">
                                 <div className="text-sm font-bold">{slotLabels[s]} <span className="text-xs font-semibold text-muted">{formatSlotRange(slotHours, s)}</span></div>
@@ -2269,10 +2543,15 @@ export function ReservationCalendarPage() {
                       return (
                         <button
                           type="button"
-                          role="radio"
-                          aria-checked={fullDay}
+                          role="checkbox"
+                          aria-checked={allDay}
                           disabled={Boolean(fullSlot) || fullDayStarted}
                           onClick={() => {
+                            // A shortcut: ticks all three slots, or unticks them all.
+                            if (allDay) {
+                              applyPickedSlots([])
+                              return
+                            }
                             if (fullDayStarted) {
                               setSlotError("Today's morning slot has already started, so a full day isn't available.")
                               return
@@ -2281,20 +2560,17 @@ export function ReservationCalendarPage() {
                               setSlotError(`${slotLabels[fullSlot]} is fully booked, so a full day isn't available.`)
                               return
                             }
-                            setFullDay(true)
-                            setSlot('morning')
-                            setSelectedSlots([...timeSlots])
-                            setSlotTouched(true)
+                            applyPickedSlots([...timeSlots])
                           }}
                           className={[
                             'rounded-2xl border p-3 text-left transition',
-                            fullDay ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
+                            allDay ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
                             fullSlot || fullDayStarted ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer',
                           ].join(' ')}
                         >
                           <div className="flex items-center justify-between gap-3">
-                            <span aria-hidden className={`grid h-5 w-5 shrink-0 place-items-center rounded-full border-2 ${fullDay ? 'border-accent' : 'border-[rgba(var(--text),0.3)]'}`}>
-                              {fullDay ? <span className="h-2.5 w-2.5 rounded-full bg-accent" /> : null}
+                            <span aria-hidden className={`grid h-5 w-5 shrink-0 place-items-center rounded-md border-2 ${allDay ? 'border-accent bg-accent text-background' : 'border-[rgba(var(--text),0.3)]'}`}>
+                              {allDay ? <FiCheck className="h-3.5 w-3.5" /> : null}
                             </span>
                             <div className="min-w-0 flex-1">
                               <div className="text-sm font-bold">Full day <span className="text-xs font-semibold text-muted">{dayStart} – {dayEnd}</span></div>
@@ -2462,7 +2738,7 @@ export function ReservationCalendarPage() {
             )}
           </div>
 
-          <div className="space-y-4">
+          <div className={SIDE_PANEL_CLASS}>
             <Card className="p-4 md:p-6">
               <div className="flex items-center gap-2 text-sm font-bold">
                 <FiUsers /> <span>Players & Session</span>
@@ -2812,7 +3088,7 @@ export function ReservationCalendarPage() {
             </Card>
           </div>
 
-          <div className="space-y-4">
+          <div className={SIDE_PANEL_CLASS}>
             <Card className="p-4 md:p-6">
               <div className="flex items-center gap-2 text-sm font-bold">
                 <FiUsers /> <span>Team</span>
@@ -3078,30 +3354,55 @@ export function ReservationCalendarPage() {
                     <FiUsers /> <span>Who gets the package</span>
                   </div>
                   <p className="mt-1 text-xs text-muted">
-                    Choose for each player: the package for 1 player, or they bring their own gun and gear and pay the entrance fee only. Each player pays for what they get.
+                    Choose for each player: the full package, or only what they need (pick the guns they rent, the mask, the vest), or they bring everything and pay the entrance fee only. A player with the package can add another gun. Each player pays for what they get.
                   </p>
                   {selectedPackage && packageIsGroupPrice ? (
                     <div className="mt-2 rounded-xl border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs">
                       <span className="font-semibold">{selectedPackage.name}</span> is one price for a group of {Math.round(Number(selectedPackage.players ?? 0))}, so nobody can be left out of it. Pick a package priced per player above to let players bring their own.
                     </div>
                   ) : null}
+                  {(() => {
+                    // Rental guns free at this branch (one sample piece per model; the server picks the actual pieces).
+                    const gunOptions = weaponGroups
+                      .filter((group) => String(group.category || '').toLowerCase() !== 'grenades' && group.pieces.some((piece) => piece.free))
+                      .map((group) => ({ id: group.pieces.find((piece) => piece.free)!.id, model: group.model, price: Number(group.price || 0) }))
+                    return (
                   <div className="mt-3 overflow-x-auto rounded-xl border border-white/10">
-                    <table className="w-full min-w-[460px] text-sm">
+                    <table className="w-full min-w-[760px] text-sm">
                       <thead>
                         <tr className="border-b border-white/10 bg-white/5 text-left text-[11px] uppercase tracking-wider text-muted">
-                          <th className="px-3 py-2 font-semibold">Player</th>
-                          <th className="px-3 py-2 text-center font-semibold">
-                            Package for 1 player
+                          <th rowSpan={2} className="px-3 py-2 align-bottom font-semibold">Player</th>
+                          <th rowSpan={2} className="px-3 py-2 text-center align-bottom font-semibold">
+                            Full package
                             <div className="font-normal normal-case tracking-normal">
                               {selectedPackage
                                 ? `${selectedPackage.name}${packageOnePlayerPrice !== null ? ` · ${formatCurrency(packageOnePlayerPrice)}` : ''}`
                                 : 'Pick one above'}
                             </div>
                           </th>
-                          <th className="px-3 py-2 text-center font-semibold">
-                            Brings their own
-                            <div className="font-normal normal-case tracking-normal">Own gun + gear · entrance {formatCurrency(ENTRANCE_FEE_PER_PLAYER)} only</div>
+                          <th colSpan={2} className="border-l border-white/10 px-3 pt-2 text-center font-semibold">
+                            Or rent only
+                            <div className="font-normal normal-case tracking-normal">+ entrance {formatCurrency(ENTRANCE_FEE_PER_PLAYER)}</div>
                           </th>
+                          <th rowSpan={2} className="border-l border-white/10 px-3 py-2 text-left align-bottom font-semibold">
+                            Guns
+                            <div className="font-normal normal-case tracking-normal">Rent any gun · extra with the package</div>
+                          </th>
+                          <th rowSpan={2} className="border-l border-white/10 px-3 py-2 text-center align-bottom font-semibold">
+                            Brings everything
+                            <div className="font-normal normal-case tracking-normal">Entrance {formatCurrency(ENTRANCE_FEE_PER_PLAYER)} only</div>
+                          </th>
+                          <th rowSpan={2} className="px-3 py-2 text-right align-bottom font-semibold">Pays</th>
+                        </tr>
+                        <tr className="border-b border-white/10 bg-white/5 text-[11px] uppercase tracking-wider text-muted">
+                          {RENT_PIECES.map((piece, index) => (
+                            <th key={piece} className={`px-2 pb-2 text-center font-semibold ${index === 0 ? 'border-l border-white/10' : ''}`}>
+                              {RENT_PIECE_LABEL[piece]}
+                              <div className="font-normal normal-case tracking-normal">
+                                {packageSingleItems[piece] ? formatCurrency(packageSingleItems[piece]!.price) : 'Not in package'}
+                              </div>
+                            </th>
+                          ))}
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-white/5">
@@ -3109,41 +3410,104 @@ export function ReservationCalendarPage() {
                           { id: String(user?.id || ''), name: user?.name || 'You', isMe: true, isMinor: false },
                           ...selectedTeammates.map((member) => ({ id: member.id, name: member.name, isMe: false, isMinor: Boolean(member.isMinor) })),
                         ].filter((row) => row.id).map((row) => {
-                          const canBringOwn = !row.isMinor && !(selectedPackage && packageIsGroupPrice)
-                          const bringsOwn = canBringOwn && ownGearIds.includes(row.id)
-                          const cell = (own: boolean) => (
-                            <td className="px-3 py-2 text-center">
-                              <input
-                                type="radio"
-                                name={`loadout-${row.id}`}
-                                checked={own ? bringsOwn : !bringsOwn}
-                                disabled={own && !canBringOwn}
-                                onChange={() => setLoadout(row.id, own ? 'own_gear' : 'package')}
-                                aria-label={`${row.name}: ${own ? 'brings their own gun and gear' : 'gets the package'}`}
-                                className="h-4 w-4 accent-[var(--color-accent)] disabled:opacity-30"
-                              />
-                            </td>
+                          const canBringOwn = !(selectedPackage && packageIsGroupPrice)
+                          const notTakingPackage = canBringOwn && validOwnGearIds.includes(row.id)
+                          const singles = validOwnGearRentals[row.id] || []
+                          const guns = validPlayerGuns[row.id] || []
+                          const bringsAll = notTakingPackage && singles.length === 0 && guns.length === 0
+                          const pays = notTakingPackage
+                            ? ENTRANCE_FEE_PER_PLAYER + singlesCostOf(row.id) + gunsCostOf(row.id)
+                            : packageOnePlayerPrice !== null ? packageOnePlayerPrice + gunsCostOf(row.id) : null
+                          const radio = (checked: boolean, onChange: () => void, label: string, disabled = false) => (
+                            <input
+                              type="radio"
+                              name={`loadout-${row.id}`}
+                              checked={checked}
+                              disabled={disabled}
+                              onChange={onChange}
+                              aria-label={`${row.name}: ${label}`}
+                              className="h-4 w-4 accent-[var(--color-accent)] disabled:opacity-30"
+                            />
                           )
                           return (
                             <tr key={row.id} className={row.isMe ? 'bg-accent/5' : ''}>
                               <td className="px-3 py-2">
                                 <div className="font-semibold">{row.name}{row.isMe ? <span className="ml-1.5 text-xs font-normal text-muted">(you)</span> : null}</div>
-                                {row.isMinor ? <div className="text-[11px] text-muted">Minor: gets the package</div> : null}
+                                {row.isMinor ? <div className="text-[11px] text-muted">Minor</div> : null}
                               </td>
-                              {cell(false)}
-                              {cell(true)}
+                              <td className="px-3 py-2 text-center">
+                                {radio(!notTakingPackage, () => chooseFullPackage(row.id), 'gets the full package')}
+                              </td>
+                              {RENT_PIECES.map((piece, index) => (
+                                <td key={piece} className={`px-2 py-2 text-center ${index === 0 ? 'border-l border-white/10' : ''}`}>
+                                  <input
+                                    type="checkbox"
+                                    checked={notTakingPackage && singles.includes(piece)}
+                                    disabled={!canBringOwn || !packageSingleItems[piece]}
+                                    onChange={() => toggleSingle(row.id, piece)}
+                                    aria-label={`${row.name}: rent only the ${piece}`}
+                                    className="h-4 w-4 rounded accent-[var(--color-accent)] disabled:opacity-30"
+                                  />
+                                </td>
+                              ))}
+                              <td className="border-l border-white/10 px-3 py-2">
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  {guns.map((gunId, index) => (
+                                    <span key={`${gunId}-${index}`} className="inline-flex items-center gap-1 rounded-full border border-accent/30 bg-accent/10 px-2 py-0.5 text-[11px] font-semibold text-accent">
+                                      {notTakingPackage || index > 0 ? '' : '+ '}{gunModel(gunId)} · {formatCurrency(gunPrice(gunId))}
+                                      <button
+                                        type="button"
+                                        onClick={() => removeGun(row.id, index)}
+                                        aria-label={`Remove ${gunModel(gunId)} from ${row.name}`}
+                                        className="rounded-full px-0.5 text-muted hover:text-danger"
+                                      >
+                                        ×
+                                      </button>
+                                    </span>
+                                  ))}
+                                  {canBringOwn && guns.length < MAX_GUNS_PER_PLAYER && gunOptions.length > 0 ? (
+                                    <select
+                                      value=""
+                                      onChange={(event) => addGun(row.id, event.target.value)}
+                                      aria-label={`${row.name}: ${guns.length ? 'add another gun' : notTakingPackage ? 'pick a gun to rent' : 'add an extra gun'}`}
+                                      className="max-w-[10rem] rounded-lg border border-white/10 bg-black/30 px-2 py-1 text-[11px] text-text [&>option]:bg-background"
+                                    >
+                                      <option value="">
+                                        {guns.length ? '+ Another gun' : notTakingPackage ? 'Pick a gun…' : '+ Extra gun'}
+                                      </option>
+                                      {gunOptions.map((option) => (
+                                        <option key={option.id} value={option.id}>{option.model} · {formatCurrency(option.price)}</option>
+                                      ))}
+                                    </select>
+                                  ) : null}
+                                </div>
+                              </td>
+                              <td className="border-l border-white/10 px-3 py-2 text-center">
+                                {radio(bringsAll, () => chooseBringsAll(row.id), 'brings their own gun and gear', !canBringOwn)}
+                              </td>
+                              <td className="whitespace-nowrap px-3 py-2 text-right text-xs font-semibold">
+                                {pays !== null ? formatCurrency(pays) : '—'}
+                              </td>
                             </tr>
                           )
                         })}
                       </tbody>
                     </table>
                   </div>
+                    )
+                  })()}
                   <div className="mt-2 text-xs text-muted">
                     {(() => {
                       const own = validOwnGearIds.length
+                      const renting = validOwnGearIds.filter((id) => validOwnGearRentals[id] || validPlayerGuns[id]).length
                       const total = selectedTeammates.length + 1
-                      return `${total - own} with the package · ${own} bringing their own`
+                      return [
+                        `${total - own} with the full package`,
+                        renting ? `${renting} renting only some` : '',
+                        `${own - renting} bringing everything`,
+                      ].filter(Boolean).join(' · ')
                     })()}
+                    {gunRentersNotTakingPackage > 0 ? ' · A rented gun comes with the included BBs.' : ''}
                   </div>
                 </Card>
                 ) : null}
@@ -3207,9 +3571,7 @@ export function ReservationCalendarPage() {
                   ].map((row) => (
                     <li key={row.id} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
                       <span className="font-semibold">{row.name}</span>
-                      {row.isMinor
-                        ? <span className="flex items-center gap-1 text-xs text-danger"><FiAlertTriangle /> Minors need the package</span>
-                        : <span className="text-xs text-muted">Entrance {formatCurrency(ENTRANCE_FEE_PER_PLAYER)}</span>}
+                      <span className="text-xs text-muted">{row.isMinor ? 'Minor · ' : ''}Entrance {formatCurrency(ENTRANCE_FEE_PER_PLAYER)}</span>
                     </li>
                   ))}
                 </ul>
@@ -3421,7 +3783,7 @@ export function ReservationCalendarPage() {
             )}
           </div>
 
-          <div className="space-y-4">
+          <div className={SIDE_PANEL_CLASS}>
             <Card className="p-4 md:p-6">
               <div className="flex items-center gap-2 text-sm font-bold">
                 <FiAlertTriangle /> <span>Quick Validation</span>
@@ -3470,10 +3832,17 @@ export function ReservationCalendarPage() {
                         </li>
                       ))}
                       {fullDay ? (
-                        <li className="flex items-baseline justify-between gap-3 border-t border-white/10 pt-1">
-                          <span className="text-muted">Full day: morning, afternoon &amp; evening</span>
-                          <span className="shrink-0 font-semibold">× 3</span>
-                        </li>
+                        <>
+                          {/* The lines above are one slot for the whole group; a full day books three. */}
+                          <li className="flex items-baseline justify-between gap-3 border-t border-white/10 pt-1">
+                            <span className="text-muted">One slot, whole group</span>
+                            <span className="shrink-0 font-semibold">{formatCurrency(dynamicPricing.total)}</span>
+                          </li>
+                          <li className="flex items-baseline justify-between gap-3">
+                            <span className="text-muted">{allDay ? 'Full day: morning, afternoon & evening' : pickedSlotsLabel}</span>
+                            <span className="shrink-0 font-semibold">× {bookedSlots.length} slots</span>
+                          </li>
+                        </>
                       ) : null}
                     </ul>
                   ) : (
@@ -3481,12 +3850,17 @@ export function ReservationCalendarPage() {
                   )}
                   <div className="mt-3 flex items-end justify-between border-t border-white/10 pt-3">
                     <div>
-                      <div className="text-xs text-muted">Total</div>
+                      <div className="text-xs text-muted">Total{players > 1 ? `, all ${players} players` : ''}</div>
                       <div className="text-2xl font-bold text-gold">{formatCurrency(bookingTotal)}</div>
                     </div>
                     <div className="text-right">
                       <div className="text-xs text-muted">Per player</div>
                       <div className="text-sm font-bold">{formatCurrency(Math.round(bookingTotal / Math.max(1, players)))}</div>
+                      {fullDay ? (
+                        <div className="text-[11px] text-muted">
+                          {formatCurrency(Math.round(dynamicPricing.total / Math.max(1, players)))} × {bookedSlots.length} slots
+                        </div>
+                      ) : null}
                     </div>
                   </div>
 
@@ -3508,21 +3882,18 @@ export function ReservationCalendarPage() {
                 <Button variant="ghost" onClick={() => setStep(soloBooking ? 1 : 2)}>Back</Button>
                 <Button
                   variant="primary"
-                  disabled={
-                    players < effectiveMinPlayers ||
-                    !canProceed ||
-                    (selectionMode === 'package' && !selectedPackage) ||
-                    ownAllMissing.length > 0 ||
-                    hasInsufficientEquipmentStock
-                  }
+                  disabled={Boolean(step3Block) || !canProceed || hasInsufficientEquipmentStock}
                   onClick={() => {
-                    if (hasInsufficientEquipmentStock) return
+                    if (hasInsufficientEquipmentStock || step3Block) return
                     setStep(publicGame ? 5 : 4)
                   }}
                 >
                   Continue <FiChevronRight />
                 </Button>
               </div>
+              {step3Block ? (
+                <div className="mt-2 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">{step3Block}</div>
+              ) : null}
             </Card>
           </div>
         </div>
@@ -3536,17 +3907,26 @@ export function ReservationCalendarPage() {
               <div className="flex items-center gap-2 text-sm font-bold" id="game-mode-label">
                 <FiFlag /> <span>Preferred Game Mode</span>
               </div>
-              <p className="mt-1 text-xs text-muted">The marshals plan the game around this. Not sure? Leave it to the marshal.</p>
-              <div className="mt-4 grid gap-2 sm:grid-cols-2" role="radiogroup" aria-labelledby="game-mode-label">
+              <p className="mt-1 text-xs text-muted">Pick one or more; the marshals plan the game around them. Not sure? Leave it to the marshal.</p>
+              <div className="mt-4 grid gap-2 sm:grid-cols-2" role="group" aria-labelledby="game-mode-label">
                 {GAME_MODES.map((mode) => {
-                  const active = gameModePreference === mode
+                  const picked = gameModePreference.split(',').map((m) => m.trim()).filter((m) => GAME_MODES.includes(m))
+                  const active = picked.includes(mode)
+                  // Several modes can be picked; "Marshal's choice" stands alone, and unticking the
+                  // last mode goes back to it. Saved as "Team Deathmatch, VIP Escort".
+                  const toggle = () => {
+                    if (mode === GAME_MODES[0]) return setGameModePreference(GAME_MODES[0])
+                    const specific = picked.filter((m) => m !== GAME_MODES[0])
+                    const next = active ? specific.filter((m) => m !== mode) : [...specific, mode]
+                    setGameModePreference(next.length ? GAME_MODES.filter((m) => next.includes(m)).join(', ') : GAME_MODES[0])
+                  }
                   return (
                     <button
                       key={mode}
                       type="button"
-                      role="radio"
+                      role="checkbox"
                       aria-checked={active}
-                      onClick={() => setGameModePreference(mode)}
+                      onClick={toggle}
                       className={[
                         'flex items-center justify-between gap-2 rounded-2xl border p-3 text-left text-sm font-semibold transition focus:outline-none focus:ring-2 focus:ring-accent/40',
                         active ? 'border-accent/40 bg-accent/10 ring-2 ring-accent/25' : 'border-white/10 bg-white/5 hover:bg-white/8',
@@ -3612,7 +3992,7 @@ export function ReservationCalendarPage() {
             </Card>
           </div>
 
-          <div className="space-y-4">
+          <div className={SIDE_PANEL_CLASS}>
             <Card className="p-4 md:p-6">
               <div className="flex items-center gap-2 text-sm font-bold">
                 <FiTool /> <span>Briefing</span>
@@ -3762,9 +4142,50 @@ export function ReservationCalendarPage() {
               )}
 
               <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
-                <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Team{teamName.trim() ? ` · ${teamName.trim()}` : ''}</div>
-                <div className="mt-2 text-sm text-text">
-                  {[user?.name || 'You', ...selectedTeammates.map((member) => member.name)].join(', ')}
+                <div className="flex items-baseline justify-between gap-2">
+                  <div className="text-xs font-bold uppercase tracking-[0.18em] text-muted">Team{teamName.trim() ? ` · ${teamName.trim()}` : ''}</div>
+                  <div className="text-xs text-muted">{selectedTeammates.length + 1} player{selectedTeammates.length === 0 ? '' : 's'}</div>
+                </div>
+                {/* Every player, what they get, and their part of the total. */}
+                <div className="mt-3 overflow-x-auto rounded-xl border border-white/10">
+                  <table className="w-full min-w-[420px] text-sm">
+                    <thead>
+                      <tr className="border-b border-white/10 bg-white/5 text-left text-[11px] uppercase tracking-wider text-muted">
+                        <th className="w-8 px-3 py-2 font-semibold">#</th>
+                        <th className="px-3 py-2 font-semibold">Player</th>
+                        <th className="px-3 py-2 font-semibold">Gets</th>
+                        <th className="px-3 py-2 text-right font-semibold">Their part</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-white/5">
+                      {playerParts.map((row, index) => (
+                        <tr key={row.id} className={row.isMe ? 'bg-accent/5' : ''}>
+                          <td className="px-3 py-2 text-muted">{index + 1}</td>
+                          <td className="px-3 py-2">
+                            <div className="font-semibold">{row.name}{row.isMe ? <span className="ml-1.5 text-xs font-normal text-muted">(you)</span> : null}</div>
+                            {row.isMinor ? <div className="text-[11px] text-muted">Minor</div> : null}
+                          </td>
+                          <td className="px-3 py-2 text-xs text-muted">{row.gets}</td>
+                          <td className="whitespace-nowrap px-3 py-2 text-right">
+                            {row.part === null
+                              ? <span className="text-xs text-muted">{row.paidBy ? `Paid by ${row.paidBy}` : 'Covered by the team'}</span>
+                              : <span className="font-semibold tabular-nums">{formatCurrency(row.part)}</span>}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr className="border-t border-white/10">
+                        <td colSpan={3} className="px-3 py-2 text-xs text-muted">Total{fullDay ? ` (${bookedSlots.length} slots)` : ''}</td>
+                        <td className="px-3 py-2 text-right font-bold tabular-nums text-gold">{formatCurrency(bookingTotal)}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+                <div className="mt-2 text-[11px] text-muted">
+                  On the payment page you choose who pays: you for everyone, or split, where each player pays their part above
+                  {paymentPlan === 'cash_balance' ? ' (half online now, the rest at the field)' : ''}.
+                  {playerParts.some((row) => row.paidBy) ? " A minor's part is paid by their parent or guardian." : ''}
                 </div>
                 {extraAmmoReloads > 0 ? (
                   <div className="mt-1 text-xs text-muted">Extra ammo: {extraAmmoReloads} reload{extraAmmoReloads === 1 ? '' : 's'}</div>
@@ -3870,7 +4291,7 @@ export function ReservationCalendarPage() {
             </Card>
           </div>
 
-          <div className="space-y-4">
+          <div className={SIDE_PANEL_CLASS}>
             <Card className="p-4 md:p-6">
               <div className="flex items-center gap-2 text-sm font-bold">
                 <FiCheck /> <span>Confirm Reservation</span>
@@ -3903,6 +4324,14 @@ export function ReservationCalendarPage() {
                 >
                   {isConfirming ? 'Processing...' : 'Proceed to Payment'} <FiChevronRight />
                 </Button>
+                {paymentBlock ? (
+                  <div className="rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+                    {paymentBlock.message}{' '}
+                    <button type="button" className="font-semibold underline" onClick={() => setStep(paymentBlock.step)}>
+                      Go to step {stepNumber(paymentBlock.step)}
+                    </button>
+                  </div>
+                ) : null}
                 {!teamSelectionComplete ? (
                   <button type="button" className="text-xs text-warning underline" onClick={() => setStep(2)}>
                     Add {missingTeammates} more teammate{missingTeammates === 1 ? '' : 's'} first
@@ -3947,7 +4376,16 @@ export function ReservationCalendarPage() {
               { label: 'Session', value: reservationSummary.sessionTypeLabel },
               ...(publicGame ? [] : [{ label: 'Field', value: reservationSummary.fields.map((field) => field.name).join(', ') || '—' }]),
               { label: 'Players', value: String(reservationSummary.players) },
-              { label: 'Team', value: [user?.name || 'You', ...selectedTeammates.map((member) => member.name)].join(', ') },
+              {
+                label: 'Team',
+                value: (
+                  <ol className="space-y-0.5">
+                    {[user?.name || 'You', ...selectedTeammates.map((member) => member.name)].map((name, index) => (
+                      <li key={`${name}-${index}`}>{name}</li>
+                    ))}
+                  </ol>
+                ),
+              },
               { label: 'Package', value: reservationSummary.packageName },
               ...(extraAmmoReloads > 0 ? [{ label: 'Extra ammo', value: `${extraAmmoReloads} reload${extraAmmoReloads === 1 ? '' : 's'}` }] : []),
             ].map((row) => (

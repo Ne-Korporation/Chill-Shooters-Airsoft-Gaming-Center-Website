@@ -1,5 +1,6 @@
-import React, { useRef, useState } from 'react'
-import { FiAlertTriangle, FiCheck, FiFileText, FiTrash2, FiUpload } from 'react-icons/fi'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { FiAlertTriangle, FiCamera, FiCheck, FiFileText, FiTrash2, FiUpload } from 'react-icons/fi'
 import { SELECTABLE_ID_TYPES } from '../../utils/idTypes'
 
 const ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/webp']
@@ -19,7 +20,7 @@ function dataUrlBytes(dataUrl: string) {
 }
 
 /**
- * Upload a photo of a valid ID by dragging it onto the drop zone or browsing for it.
+ * Upload a photo of a valid ID by dragging it onto the drop zone, browsing for it, or taking it with the camera.
  * The image is downscaled to a JPEG data URL so it stays light enough to save inside the waiver record.
  */
 export function IdUpload({
@@ -32,6 +33,7 @@ export function IdUpload({
   idType,
   onIdTypeChange,
   idTypeError,
+  attachedText = 'ID photo attached.',
 }: {
   label: string
   value: string
@@ -43,6 +45,8 @@ export function IdUpload({
   idType?: string
   onIdTypeChange?: (idType: string) => void
   idTypeError?: string
+  // Shown once a photo is attached, e.g. that staff still approve it.
+  attachedText?: string
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null)
   const [localError, setLocalError] = useState<string | null>(null)
@@ -50,6 +54,74 @@ export function IdUpload({
   const [fileName, setFileName] = useState('')
   const [progress, setProgress] = useState(0)
   const [processing, setProcessing] = useState(false)
+  const [cameraOpen, setCameraOpen] = useState(false)
+  const [cameraError, setCameraError] = useState<string | null>(null)
+  const videoRef = useRef<HTMLVideoElement | null>(null)
+  const streamRef = useRef<MediaStream | null>(null)
+
+  const stopCamera = useCallback(() => {
+    streamRef.current?.getTracks().forEach((track) => track.stop())
+    streamRef.current = null
+    setCameraOpen(false)
+    setCameraError(null)
+  }, [])
+
+  useEffect(() => stopCamera, [stopCamera])
+
+  // Lock page scroll behind the camera pop-up, and feed the stream to the video once it mounts.
+  useEffect(() => {
+    if (!cameraOpen) return
+    const video = videoRef.current
+    if (video && streamRef.current) {
+      video.srcObject = streamRef.current
+      video.play().catch(() => {})
+    }
+    const previous = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = previous }
+  }, [cameraOpen])
+
+  const openCamera = async () => {
+    if (disabled) return
+    setLocalError(null)
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setLocalError('Camera access is not supported in this browser. Browse for a photo instead.')
+      return
+    }
+    try {
+      stopCamera()
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false })
+      streamRef.current = stream
+      setCameraOpen(true)
+    } catch (e: any) {
+      setLocalError(e?.name === 'NotAllowedError' ? 'Camera access was blocked. Allow it in your browser, or browse for a photo instead.' : 'Could not open the camera. Browse for a photo instead.')
+    }
+  }
+
+  const capturePhoto = () => {
+    const video = videoRef.current
+    if (!video || !video.videoWidth) {
+      setCameraError('The camera is not ready yet. Try again in a moment.')
+      return
+    }
+    const canvas = document.createElement('canvas')
+    canvas.width = video.videoWidth
+    canvas.height = video.videoHeight
+    const ctx = canvas.getContext('2d')
+    if (!ctx) {
+      setCameraError('Could not capture the photo in this browser.')
+      return
+    }
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        setCameraError('Capture failed. Try again.')
+        return
+      }
+      stopCamera()
+      processFile(new File([blob], `${label.toLowerCase().replace(/\s+/g, '-')}-photo.jpg`, { type: 'image/jpeg' }))
+    }, 'image/jpeg', 0.92)
+  }
 
   const processFile = (file: File | undefined | null) => {
     if (!file || disabled) return
@@ -206,11 +278,55 @@ export function IdUpload({
           <FiUpload className={['h-10 w-10', dragging ? 'text-accent' : 'text-muted'].join(' ')} />
           <div className="mt-4 text-sm font-bold">{dragging ? 'Drop the file to upload' : 'Drag and drop file here'}</div>
           <div className="my-3 text-xs font-semibold text-muted">or</div>
-          <span className="inline-flex items-center rounded-full bg-accent px-5 py-2 text-xs font-semibold text-background transition hover:bg-accent/90">
-            Browse for file
-          </span>
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-accent px-5 py-2 text-xs font-semibold text-background transition hover:bg-accent/90">
+              <FiUpload /> Browse for file
+            </span>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation()
+                void openCamera()
+              }}
+              onKeyDown={(e) => e.stopPropagation()}
+              className="inline-flex items-center gap-1.5 rounded-full border border-accent/40 bg-accent/10 px-5 py-2 text-xs font-semibold text-accent transition hover:bg-accent/20"
+            >
+              <FiCamera /> Take photo
+            </button>
+          </div>
         </div>
       ) : null}
+
+      {cameraOpen
+        ? createPortal(
+            <div className="fixed inset-0 z-[100002] flex items-center justify-center bg-black/90 p-4 backdrop-blur-sm">
+              <div className="max-h-[90dvh] w-full max-w-3xl overflow-y-auto overscroll-contain rounded-3xl border border-white/10 bg-background p-4 shadow-[0_0_0_1px_rgba(255,255,255,0.05),0_30px_80px_rgba(0,0,0,0.65)]">
+                <div className="mb-3 flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold">Take a photo: {label}</div>
+                    <div className="text-sm text-muted">Hold the ID flat and clear in view, with all four corners showing.</div>
+                  </div>
+                  <button type="button" onClick={stopCamera} className="rounded-lg px-3 py-1.5 text-sm font-semibold text-muted transition hover:bg-white/10 hover:text-text">
+                    Close
+                  </button>
+                </div>
+                <video ref={videoRef} autoPlay playsInline muted className="h-[45dvh] w-full rounded-2xl bg-black object-cover sm:h-[55dvh]" />
+                {cameraError ? (
+                  <div className="mt-3 rounded-2xl border border-danger/20 bg-danger/10 p-3 text-sm text-danger">{cameraError}</div>
+                ) : null}
+                <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                  <button type="button" onClick={capturePhoto} className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-background transition hover:bg-accent/90">
+                    <FiCamera /> Capture
+                  </button>
+                  <button type="button" onClick={stopCamera} className="flex-1 rounded-xl border border-white/10 px-4 py-3 text-sm font-semibold text-muted transition hover:bg-white/5 hover:text-text">
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
 
       {!hasFile && disabled ? (
         <div className="mt-3 rounded-xl border border-dashed border-white/15 bg-black/20 py-8 text-center text-xs text-muted">
@@ -262,7 +378,7 @@ export function IdUpload({
       ) : (
         <div className="mt-2 flex items-center gap-2 text-xs text-muted">
           {value ? <FiCheck className="text-success" /> : null}
-          <span>{value ? 'ID photo attached.' : helper}</span>
+          <span>{value ? attachedText : helper}</span>
         </div>
       )}
     </div>

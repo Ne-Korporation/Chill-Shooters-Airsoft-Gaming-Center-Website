@@ -5,6 +5,7 @@ import { requireAuth, requireRole } from '../middleware/auth.js'
 import { getGcashAmountDue, getPaymentProgress, getSplitPayerIds } from '../utils/paymentRules.js'
 import { expireOverdueReservations, getReservationPayments } from '../utils/paymentProgress.js'
 import { loadoutOf } from '../utils/splitShares.js'
+import { playerGunsOf, rentOnlyOf } from '../utils/ownGearRentals.js'
 import {
   ACTIVE_BOOKING_STATUSES,
   acceptInvite,
@@ -84,6 +85,21 @@ router.get('/split-payments/mine', requireAuth, requireRole('user'), async (req,
       const memberIds = (reservation.teamMembers || []).map((m) => String(m?.id || '')).filter(Boolean)
       const accounts = await namesById(db, [...new Set([...payerIds, String(reservation.userId), ...memberIds])])
       // Everyone on the booking, so an invited teammate can see who booked and who they're playing with.
+      // Models of the guns players picked themselves, for "Gets".
+      const gunIds = Object.values(reservation.playerGuns || {}).flat().map(String)
+      const gunModels = new Map(gunIds.length
+        ? (await db.collection('weapons').find({ id: { $in: gunIds } }, { projection: { id: 1, name: 1, model: 1 } }).toArray())
+          .map((w) => [String(w.id), w.model || String(w.name || '').replace(/\s+#\d+$/, '')])
+        : [])
+      // What each payer's share of the online amount is: their own (uneven) share when players get
+      // different things, else an even split. Minors don't pay (null).
+      const online = Math.max(0, Number(reservation.depositAmount) || 0)
+      const evenShare = payerIds.length ? Math.round((online / payerIds.length) * 100) / 100 : 0
+      const shareOf = (id) => {
+        if (!payerIds.includes(id)) return null
+        const recorded = Number(reservation.splitShares?.[id])
+        return Number.isFinite(recorded) ? recorded : evenShare
+      }
       const players = [String(reservation.userId), ...memberIds]
         .filter((id, index, all) => id && all.indexOf(id) === index)
         .map((id) => ({
@@ -93,6 +109,18 @@ router.get('/split-payments/mine', requireAuth, requireRole('user'), async (req,
           isMe: id === me,
           // What the person who booked chose for them: the package, own gun, or own gun and gear.
           loadout: String(reservation.selectionMode || '').toLowerCase() === 'package' ? loadoutOf(reservation, id) : null,
+          // Not taking the package: the single pieces they rent (gun, mask, vest), if any.
+          rentOnly: rentOnlyOf(reservation, id),
+          pickedGuns: playerGunsOf(reservation, id).map((gunId) => gunModels.get(gunId) || 'Gun'),
+          // Everyone on the team sees what each player pays online (who has paid stays captain-only).
+          share: shareOf(id),
+          // A minor doesn't pay; their parent or guardian on the team does.
+          paidBy: (() => {
+            const member = (reservation.teamMembers || []).find((m) => String(m?.id) === id)
+            if (!member?.isMinor) return null
+            const guardianId = String(member.guardianId || '')
+            return payerIds.includes(guardianId) ? (accounts.get(guardianId)?.name || 'Their guardian') : null
+          })(),
         }))
       const paidByUser = new Map()
       for (const payment of payments) {
@@ -123,7 +151,8 @@ router.get('/split-payments/mine', requireAuth, requireRole('user'), async (req,
             id,
             name: accounts.get(id)?.name || id,
             isCaptain: id === String(reservation.userId),
-            paid: paidByUser.has(id),
+            // Paid in full: their whole share (a top-up still due means not yet).
+            paid: progress.paidPayerIds.includes(id),
             amount: paidByUser.get(id)?.amount || 0,
             paymentStatus: paidByUser.get(id)?.status || null,
           }))

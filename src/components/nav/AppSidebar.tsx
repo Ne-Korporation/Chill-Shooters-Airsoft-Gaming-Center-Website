@@ -150,6 +150,8 @@ const registrarItems: Item[] = [
   { label: 'Reservations', to: '/app/registrar/reservations', icon: FiCalendar },
   { label: 'Payments', to: '/app/registrar/submitted-payments', icon: FiCreditCard },
   { label: 'Waivers', to: '/app/registrar/waivers', icon: FiShield },
+  // Players' accounts, and the IDs they submit for verification.
+  { label: 'Players', to: '/app/registrar/players', icon: FiUsers },
   { label: 'Walk-ins', to: '/app/walk-ins', icon: FiUserPlus },
   { label: 'Games', to: '/app/counter', icon: FiZap },
   { label: 'Game queue', to: '/app/registrar/games', icon: FiList },

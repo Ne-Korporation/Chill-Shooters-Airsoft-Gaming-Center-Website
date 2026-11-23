@@ -70,6 +70,13 @@ export function resolveNotificationRoute(notification: NotificationItem, role?: 
     return '/app/players'
   }
 
+  // A player submitted an ID: open the ID verification list on the players page.
+  if (notificationType === 'player_id_submitted') {
+    if (currentRole === 'admin') return '/app/admin/player-management#id-verifications'
+    if (currentRole === 'registrar') return '/app/registrar/players#id-verifications'
+    return null
+  }
+
   if (notificationType.startsWith('player_')) {
     if (userId) return `/app/players/${encodeURIComponent(userId)}`
     return '/app/admin/player-management'

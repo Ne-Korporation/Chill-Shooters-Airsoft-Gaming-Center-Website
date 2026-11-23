@@ -10,9 +10,10 @@ test('marshals only get new-game notifications (and admin announcements)', () =>
   }
 })
 
-test('registrars only get payment and waiver notifications (and admin announcements)', () => {
+test('registrars only get payment, waiver and ID notifications (and admin announcements)', () => {
   assert.equal(roleReceivesNotification('registrar', { type: 'reservation_payment_finalized' }), true)
   assert.equal(roleReceivesNotification('registrar', { type: 'waiver_submitted' }), true)
+  assert.equal(roleReceivesNotification('registrar', { type: 'player_id_submitted' }), true)
   assert.equal(roleReceivesNotification('registrar', { type: 'reservation_status_update', topic: 'waiver' }), true)
   assert.equal(roleReceivesNotification('registrar', { type: 'announcement' }), true)
   assert.equal(roleReceivesNotification('registrar', { type: 'reservation_status_update' }), false)

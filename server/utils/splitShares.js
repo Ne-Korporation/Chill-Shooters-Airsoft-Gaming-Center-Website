@@ -6,9 +6,12 @@
 // ₱550 for a package player and ₱200 for one who only pays the entrance fee, instead of the same
 // amount for everyone.
 //
-// Children don't pay; what they cost is spread over the payers in the same proportion.
+// Children don't pay: their parent or guardian on the team pays for them. A child whose guardian
+// isn't paying is spread over the payers in the same proportion.
 // Returns { [payerId]: amount } (amounts add up to the online amount), or null when an even split
 // is right: no per-player costs, or everyone gets the same.
+
+import { rentOnlyOf } from './ownGearRentals.js'
 
 const round2 = (value) => Math.round(value * 100) / 100
 
@@ -28,7 +31,20 @@ export function computeSplitShares(reservation) {
 
   // What each payer gets, plus the extra ammo reloads they bought for themselves.
   const ammoOf = (id) => Math.max(0, Math.round(Number(reservation.extraAmmoByPlayer?.[id]) || 0)) * Math.max(0, Number(costs.ammo) || 0)
-  const weights = payers.map((id) => Math.max(0, Number(costs[loadoutOf(reservation, id)]) || 0) + ammoOf(id))
+  // A player not taking the package also pays for the single pieces they rent (gun, mask, vest).
+  const singlesOf = (id) => rentOnlyOf(reservation, id).reduce((sum, piece) => sum + Math.max(0, Number(costs[`rent_${piece}`]) || 0), 0)
+  // And for the guns they picked themselves.
+  const gunsOf = (id) => Math.max(0, Number(reservation.playerGunCosts?.[id]) || 0)
+  const costOf = (id) => Math.max(0, Number(costs[loadoutOf(reservation, id)]) || 0) + singlesOf(id) + gunsOf(id) + ammoOf(id)
+  // A minor doesn't pay: their parent or guardian on the team pays for them, on top of their own
+  // share. A minor whose guardian isn't paying is spread over the payers, as before.
+  const guardianExtra = new Map()
+  for (const member of reservation.teamMembers || []) {
+    if (!member?.isMinor) continue
+    const guardian = String(member.guardianId || '')
+    if (payers.includes(guardian)) guardianExtra.set(guardian, (guardianExtra.get(guardian) || 0) + costOf(String(member.id)))
+  }
+  const weights = payers.map((id) => costOf(id) + (guardianExtra.get(id) || 0))
   const sum = weights.reduce((a, b) => a + b, 0)
   if (sum <= 0 || weights.every((w) => Math.abs(w - weights[0]) < 0.005)) return null
 

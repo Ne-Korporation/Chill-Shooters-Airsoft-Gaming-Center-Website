@@ -37,3 +37,22 @@ export async function expireOldWaivers(db, { force = false } = {}) {
     { $set: { status: 'expired', expiredAtISO: nowISO } },
   )
 }
+
+// The admin changed the waiver text: every current waiver (approved or waiting for review) was
+// signed under the old text, so it expires now and its player answers the new one. The records
+// are kept as "expired" with the reason. Returns the waivers that expired.
+export async function expireWaiversForNewText(db, nowISO = new Date().toISOString()) {
+  const waivers = db.collection('waivers')
+  const current = {
+    archived: { $ne: true },
+    status: { $regex: `^(${ACTIVE_WAIVER_STATUSES.join('|')})$`, $options: 'i' },
+  }
+  const affected = await waivers.find(current, { projection: { id: 1, userId: 1, fullName: 1, forChild: 1, guardianId: 1 } }).toArray()
+  if (affected.length) {
+    await waivers.updateMany(
+      { _id: { $in: affected.map((waiver) => waiver._id) } },
+      { $set: { status: 'expired', expiredAtISO: nowISO, expiredReason: 'waiver_text_changed' } },
+    )
+  }
+  return affected
+}

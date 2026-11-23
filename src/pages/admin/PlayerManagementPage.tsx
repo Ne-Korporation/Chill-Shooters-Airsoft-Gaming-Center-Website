@@ -11,6 +11,8 @@ import { apiGet, apiGetAll, apiPost, apiPut } from '../../utils/apiClient'
 import { Paged } from '../../components/ui/Pagination'
 import { PlayerStatsCard } from '../../components/players/PlayerStatsCard'
 import { CloseAccountDialog } from './CloseAccountDialog'
+import { useAuth } from '../../context/AuthContext'
+import { useLocation } from 'react-router-dom'
 
 async function copyAccountId(id: string) {
   try {
@@ -32,7 +34,12 @@ async function copyAccountId(id: string) {
   }
 }
 
+// Admins manage players and staff. Registrars see the players and verify their IDs (and
+// partnership discounts); staff accounts, suspending/closing accounts and level changes stay with admins.
 export function PlayerManagementPage() {
+  const { user } = useAuth()
+  const isAdmin = user?.role === 'admin'
+  const location = useLocation()
   const [activeView, setActiveView] = React.useState<'players' | 'staff'>('players')
   const [players, setPlayers] = React.useState<any[]>([])
   const [staffUsers, setStaffUsers] = React.useState<any[]>([])
@@ -61,6 +68,11 @@ export function PlayerManagementPage() {
   const [selectedPlayer, setSelectedPlayer] = React.useState<any | null>(null)
   const [partnershipRequestsOpen, setPartnershipRequestsOpen] = React.useState(false)
   const [idRequestsOpen, setIdRequestsOpen] = React.useState(false)
+
+  // Opened from an "ID to Verify" notification: show the waiting IDs straight away.
+  React.useEffect(() => {
+    if (location.hash === '#id-verifications') setIdRequestsOpen(true)
+  }, [location.hash, location.key])
 
   const fetchUsers = React.useCallback(async (silent = false) => {
     if (!silent) setLoading(true)
@@ -242,7 +254,7 @@ export function PlayerManagementPage() {
   // Suspend / reinstate, plus closing the account (accounts on bookings are closed, never deleted)
   // and erasing a closed account's personal data on request. An erased account has no actions left.
   const accountButton = (pl: any, size: 'xs' | 'sm' = 'xs') => {
-    if (pl.erased || pl.role !== 'user') return null
+    if (!isAdmin || pl.erased || pl.role !== 'user') return null
     return (
       <>
         {pl.accountStatus === 'active' ? (
@@ -398,10 +410,15 @@ export function PlayerManagementPage() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-3xl font-bold">Users</h1>
-        <p className="mt-1 text-sm text-muted">Manage players and staff accounts, including marshal, admin, and registrar access.</p>
+        <h1 className="text-3xl font-bold">{isAdmin ? 'Users' : 'Players'}</h1>
+        <p className="mt-1 text-sm text-muted">
+          {isAdmin
+            ? 'Manage players and staff accounts, including marshal, admin, and registrar access.'
+            : "Look up players, and verify the IDs and partnership discounts they submit."}
+        </p>
       </div>
 
+      {isAdmin ? (
       <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
         <Card className="rounded-xl px-3 py-2 md:px-3 md:py-2">
           <div className="truncate text-[10px] uppercase tracking-wider text-muted">Players</div>
@@ -416,16 +433,19 @@ export function PlayerManagementPage() {
           <div className="mt-0.5 text-base font-bold text-success">{staffUsers.length + players.filter((p) => p.status === 'Active').length}</div>
         </Card>
       </div>
+      ) : null}
 
-      <FilterTabs
-        ariaLabel="Show players or staff"
-        value={activeView}
-        onChange={setActiveView}
-        options={[{ value: 'players', label: 'Players' }, { value: 'staff', label: 'Staff' }]}
-      />
+      {isAdmin ? (
+        <FilterTabs
+          ariaLabel="Show players or staff"
+          value={activeView}
+          onChange={setActiveView}
+          options={[{ value: 'players', label: 'Players' }, { value: 'staff', label: 'Staff' }]}
+        />
+      ) : null}
 
       <Card className="p-4">
-        {activeView === 'players' ? (
+        {activeView === 'players' || !isAdmin ? (
           <>
             <div className="flex items-center justify-between gap-3">
               <div>
@@ -725,7 +745,7 @@ export function PlayerManagementPage() {
             </div>
             {selectedPlayer.id ? (
               <div className="mt-4">
-                <PlayerStatsCard playerId={String(selectedPlayer.id)} canAdjust />
+                <PlayerStatsCard playerId={String(selectedPlayer.id)} canAdjust={isAdmin} />
               </div>
             ) : null}
             <div className="mt-4 rounded-3xl border border-white/10 bg-white/5 p-4 text-center">
