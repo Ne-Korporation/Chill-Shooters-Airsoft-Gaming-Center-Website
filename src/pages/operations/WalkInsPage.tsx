@@ -26,7 +26,7 @@ function isPublicGameDay(dateISO: string) {
 
 function WalkInForm({ disabled, onCreated }: { disabled: boolean; onCreated: (reservationId: string) => void }) {
   const [form, setForm] = useState({
-    name: '', contact: '', email: '', adultConfirmed: false, locationId: LOCATIONS[0].id as string, reservationTime: 'morning', players: '1',
+    name: '', contact: '', email: '', adultConfirmed: false, locationId: LOCATIONS[0].id as string, reservationTime: 'morning',
     paymentMethod: 'cash', reference: '', notes: '',
   })
   // Walk-ins must bring their own complete gear: players who need rentals reserve online.
@@ -47,17 +47,16 @@ function WalkInForm({ disabled, onCreated }: { disabled: boolean; onCreated: (re
         email,
         adultConfirmed: Boolean(email) && form.adultConfirmed,
         contact: toStoredPhPhone(form.contact),
-        players: Number(form.players),
         mode: 'own_gear',
         paymentMethod: form.paymentMethod === 'later' ? '' : form.paymentMethod,
       })
-      toast.success(`Walk-in registered: ${formatPHP(res.data.totalAmount)}${form.paymentMethod === 'later' ? ' due' : ' paid'}.`)
+      toast.success(`${form.name.trim()} registered: ${formatPHP(res.data.totalAmount)}${form.paymentMethod === 'later' ? ' due' : ' paid'}.`)
       const account = res.account
       if (account?.status === 'created') toast.success(`Account made for ${account.account?.email}. Welcome email sent.`, { duration: 5000 })
       if (account?.status === 'resent') toast.success(`${account.account?.email} already had an account waiting for a password. A new link was emailed.`, { duration: 6000 })
       if (account?.status === 'exists') toast(`${account.account?.email} already has an account, so no new one was made.`, { duration: 6000 })
       if (account?.status === 'failed') toast.error(account.error || 'The player account could not be created.', { duration: 6000 })
-      setForm((f) => ({ ...f, name: '', contact: '', email: '', adultConfirmed: false, players: '1', reference: '', notes: '' }))
+      setForm((f) => ({ ...f, name: '', contact: '', email: '', adultConfirmed: false, reference: '', notes: '' }))
       setOwnGearConfirmed(false)
       onCreated(res.data.id)
     } catch (e: any) {
@@ -69,8 +68,8 @@ function WalkInForm({ disabled, onCreated }: { disabled: boolean; onCreated: (re
 
   return (
     <Card className="p-4 md:p-5">
-      <div className="flex items-center gap-2 text-sm font-bold"><FiUserPlus /> Register a walk-in</div>
-      <p className="mt-1 text-xs text-muted">For today's public game, for players who bring their own complete airsoft gear and protective equipment. They pay the entrance fee only. Players who need rental gear must reserve online.</p>
+      <div className="flex items-center gap-2 text-sm font-bold"><FiUserPlus /> Register a walk-in player</div>
+      <p className="mt-1 text-xs text-muted">One player at a time, for today's public game. Friends who walk in together are each registered on their own, so each has their own bill and check-in. Walk-ins bring their own complete airsoft gear and protective equipment and pay the entrance fee only. Players who need rental gear must reserve online.</p>
       <form className="mt-4 space-y-3" onSubmit={submit}>
         <fieldset disabled={disabled} className={`space-y-3 ${disabled ? 'opacity-50' : ''}`}>
         <div className="grid gap-3 sm:grid-cols-2">
@@ -102,7 +101,7 @@ function WalkInForm({ disabled, onCreated }: { disabled: boolean; onCreated: (re
             </label>
           ) : null}
         </div>
-        <div className="grid gap-3 sm:grid-cols-3">
+        <div className="grid gap-3 sm:grid-cols-2">
           <label className="block">
             <div className="mb-2 text-sm font-semibold">Location</div>
             <select value={form.locationId} onChange={(e) => setForm((f) => ({ ...f, locationId: e.target.value }))} className={selectClass}>
@@ -115,7 +114,6 @@ function WalkInForm({ disabled, onCreated }: { disabled: boolean; onCreated: (re
               {SLOTS.map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
           </label>
-          <Input label="Players" type="number" min={1} value={form.players} onChange={(e) => setForm((f) => ({ ...f, players: e.target.value }))} />
         </div>
         <label className="flex items-start gap-2 rounded-xl border border-white/10 bg-white/5 p-3 text-sm">
           <input
@@ -125,8 +123,8 @@ function WalkInForm({ disabled, onCreated }: { disabled: boolean; onCreated: (re
             className="mt-0.5 h-4 w-4 accent-[var(--color-accent)]"
           />
           <span>
-            Every player in this group has their own complete gear: a replica, face protection and vest.
-            <span className="block text-xs text-muted">No rentals for walk-ins. Players who need gear must reserve online.</span>
+            This player has their own complete gear: a replica, face protection and vest.
+            <span className="block text-xs text-muted">No rentals for walk-ins. A player who needs gear must reserve online.</span>
           </span>
         </label>
         <div className="grid gap-3 sm:grid-cols-2">

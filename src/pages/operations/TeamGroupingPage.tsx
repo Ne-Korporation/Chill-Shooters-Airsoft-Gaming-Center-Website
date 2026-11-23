@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
-import { FiRefreshCw, FiSave, FiShuffle, FiUsers } from 'react-icons/fi'
+import { FiMenu, FiRefreshCw, FiSave, FiShuffle, FiUsers } from 'react-icons/fi'
 
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
@@ -20,7 +20,21 @@ type RosterPlayer = {
   guest: boolean
 }
 
-type Team = { name: string; playerKeys: string[] }
+type Team = { name: string; color?: TeamColor; playerKeys: string[] }
+
+// Team colors (armbands), in the order new teams get them; same list as the server's TEAM_COLORS.
+type TeamColor = 'red' | 'blue' | 'yellow' | 'green' | 'orange' | 'purple'
+const TEAM_COLORS: Array<{ id: TeamColor; label: string; hex: string }> = [
+  { id: 'red', label: 'Red', hex: '#ef4444' },
+  { id: 'blue', label: 'Blue', hex: '#3b82f6' },
+  { id: 'yellow', label: 'Yellow', hex: '#eab308' },
+  { id: 'green', label: 'Green', hex: '#22c55e' },
+  { id: 'orange', label: 'Orange', hex: '#f97316' },
+  { id: 'purple', label: 'Purple', hex: '#a855f7' },
+]
+// Teams saved before colors existed get the color for their position.
+const colorOf = (team: Team, index: number) =>
+  TEAM_COLORS.find((c) => c.id === team.color) || TEAM_COLORS[index % TEAM_COLORS.length]
 
 type GroupingResponse = {
   roster: RosterPlayer[]
@@ -110,6 +124,52 @@ export function SessionTeams({ session, active }: { session: CheckInSession; act
     setDirty(true)
   }
 
+  // Picking a color another team has swaps the two, so every team keeps its own color.
+  const setTeamColor = (teamIndex: number, color: TeamColor) => {
+    setTeams((current) => {
+      const mine = colorOf(current[teamIndex], teamIndex).id
+      return current.map((team, index) => {
+        if (index === teamIndex) return { ...team, color }
+        return colorOf(team, index).id === color ? { ...team, color: mine } : { ...team, color: colorOf(team, index).id }
+      })
+    })
+    setSavedAt(null)
+    setDirty(true)
+  }
+
+  // Drag a player onto a team to move them (mouse). The Team dropdown on each player does the
+  // same for touch screens and keyboards, which can't drag.
+  const [dragKey, setDragKey] = useState<string | null>(null)
+  const [overTeam, setOverTeam] = useState<number | null>(null)
+  const dragProps = (key: string) => ({
+    draggable: true,
+    onDragStart: (event: React.DragEvent) => {
+      event.dataTransfer.setData('text/plain', key)
+      event.dataTransfer.effectAllowed = 'move'
+      setDragKey(key)
+    },
+    onDragEnd: () => { setDragKey(null); setOverTeam(null) },
+  })
+  const dropProps = (teamIndex: number) => ({
+    onDragOver: (event: React.DragEvent) => {
+      if (!dragKey) return
+      event.preventDefault()
+      event.dataTransfer.dropEffect = 'move'
+      if (overTeam !== teamIndex) setOverTeam(teamIndex)
+    },
+    onDragLeave: (event: React.DragEvent) => {
+      // Only when leaving the team card itself, not when moving over a player inside it.
+      if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOverTeam((current) => (current === teamIndex ? null : current))
+    },
+    onDrop: (event: React.DragEvent) => {
+      event.preventDefault()
+      const key = event.dataTransfer.getData('text/plain') || dragKey
+      if (key && !teams[teamIndex]?.playerKeys.includes(key)) movePlayer(key, teamIndex)
+      setDragKey(null)
+      setOverTeam(null)
+    },
+  })
+
   const save = async () => {
     setSaving(true)
     try {
@@ -184,9 +244,23 @@ export function SessionTeams({ session, active }: { session: CheckInSession; act
           <div className="grid gap-4 md:grid-cols-2">
             {teams.map((team, teamIndex) => {
               const stats = teamStats(team)
+              const isTarget = overTeam === teamIndex && dragKey !== null && !team.playerKeys.includes(dragKey)
+              const color = colorOf(team, teamIndex)
               return (
-                <Card key={teamIndex} className="p-4">
+                <div
+                  key={teamIndex}
+                  {...dropProps(teamIndex)}
+                  // The team's color runs down its left edge, and fills the outline while a player is dragged over it.
+                  className="rounded-2xl border-l-4 transition"
+                  style={{
+                    borderLeftColor: color.hex,
+                    boxShadow: isTarget ? `0 0 0 2px ${color.hex}` : undefined,
+                    backgroundColor: isTarget ? `${color.hex}1a` : undefined,
+                  }}
+                >
+                <Card className="h-full rounded-l-none p-4">
                   <div className="flex items-center justify-between gap-2">
+                    <span className="h-3 w-3 flex-none rounded-full" style={{ backgroundColor: color.hex }} aria-hidden />
                     <input
                       value={team.name}
                       onChange={(e) => {
@@ -196,7 +270,23 @@ export function SessionTeams({ session, active }: { session: CheckInSession; act
                       className="w-full bg-transparent text-base font-bold focus:outline-none"
                       aria-label="Team name"
                     />
-                    <FiUsers className="flex-none text-gold" />
+                    <FiUsers className="flex-none" style={{ color: color.hex }} />
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5" role="radiogroup" aria-label={`${team.name} color`}>
+                    {TEAM_COLORS.map((option) => (
+                      <button
+                        key={option.id}
+                        type="button"
+                        role="radio"
+                        aria-checked={option.id === color.id}
+                        aria-label={option.label}
+                        title={option.label}
+                        onClick={() => setTeamColor(teamIndex, option.id)}
+                        className={`h-5 w-5 rounded-full transition ${option.id === color.id ? 'ring-2 ring-white/80 ring-offset-2 ring-offset-background' : 'opacity-50 hover:opacity-100'}`}
+                        style={{ backgroundColor: option.hex }}
+                      />
+                    ))}
+                    <span className="ml-1 text-xs font-semibold" style={{ color: color.hex }}>{color.label}</span>
                   </div>
                   <div className="mt-1 text-xs text-muted">
                     {stats.players.length} players · {stats.experience} total games played
@@ -204,10 +294,24 @@ export function SessionTeams({ session, active }: { session: CheckInSession; act
                     {stats.minors ? ` · ${stats.minors} under 18` : ''}
                   </div>
                   {stats.levels ? <div className="mt-0.5 text-xs text-muted">{stats.levels}</div> : null}
-                  <ul className="mt-3 space-y-2">
+                  <ul className="mt-3 min-h-[3rem] space-y-2">
+                    {stats.players.length === 0 ? (
+                      <li
+                        className="rounded-xl border border-dashed border-white/10 px-3 py-3 text-center text-xs text-muted"
+                        style={isTarget ? { borderColor: color.hex, color: color.hex } : undefined}
+                      >
+                        Drag players here
+                      </li>
+                    ) : null}
                     {stats.players.map((player) => (
-                      <li key={player.key} className="flex items-center justify-between gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2">
-                        <div className="min-w-0">
+                      <li
+                        key={player.key}
+                        {...dragProps(player.key)}
+                        title="Drag to another team"
+                        className={`flex cursor-grab items-center justify-between gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 active:cursor-grabbing ${dragKey === player.key ? 'opacity-40' : ''}`}
+                      >
+                        <FiMenu className="h-4 w-4 flex-none text-muted" aria-hidden />
+                        <div className="min-w-0 flex-1">
                           <div className="truncate text-sm font-semibold">{player.name}</div>
                           <div className="text-[11px] text-muted">
                             {player.guest ? 'Guest (no account)' : `${player.gamesPlayed} ${player.gamesPlayed === 1 ? 'game' : 'games'} played`}
@@ -224,13 +328,14 @@ export function SessionTeams({ session, active }: { session: CheckInSession; act
                             className={smallSelect}
                             aria-label={`Move ${player.name}`}
                           >
-                            {teams.map((t, i) => <option key={i} value={i}>{t.name}</option>)}
+                            {teams.map((t, i) => <option key={i} value={i}>{t.name} ({colorOf(t, i).label})</option>)}
                           </select>
                         </div>
                       </li>
                     ))}
                   </ul>
                 </Card>
+                </div>
               )
             })}
           </div>
@@ -238,10 +343,16 @@ export function SessionTeams({ session, active }: { session: CheckInSession; act
           {unassigned.length > 0 ? (
             <Card className="p-4">
               <div className="text-sm font-bold">Not on a team ({unassigned.length})</div>
-              <div className="mt-1 text-xs text-muted">Players who checked in after these teams were saved.</div>
+              <div className="mt-1 text-xs text-muted">Players who checked in after these teams were saved. Drag them onto a team.</div>
               <ul className="mt-3 flex flex-wrap gap-2">
                 {unassigned.map((player) => (
-                  <li key={player.key} className="flex items-center gap-2 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-sm">
+                  <li
+                    key={player.key}
+                    {...dragProps(player.key)}
+                    title="Drag onto a team"
+                    className={`flex cursor-grab items-center gap-2 rounded-xl border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-sm active:cursor-grabbing ${dragKey === player.key ? 'opacity-40' : ''}`}
+                  >
+                    <FiMenu className="h-4 w-4 flex-none text-muted" aria-hidden />
                     {player.name}
                     <select
                       value=""
@@ -250,7 +361,7 @@ export function SessionTeams({ session, active }: { session: CheckInSession; act
                       aria-label={`Assign ${player.name}`}
                     >
                       <option value="" disabled>Assign…</option>
-                      {teams.map((t, i) => <option key={i} value={i}>{t.name}</option>)}
+                      {teams.map((t, i) => <option key={i} value={i}>{t.name} ({colorOf(t, i).label})</option>)}
                     </select>
                   </li>
                 ))}

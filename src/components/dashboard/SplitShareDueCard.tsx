@@ -9,7 +9,7 @@ function formatPHP(value: number) {
 }
 
 // Dashboard card for a player added to a team with a split payment: how much they need to pay,
-// for which game, and by when, with a link to pay it on the Split Payment page.
+// for which game, and by when, with a link to pay it on My Reservations.
 export function SplitShareDueCard() {
   const [items, setItems] = useState<SplitPaymentItem[]>([])
   useEffect(() => {
@@ -50,7 +50,7 @@ export function SplitShareDueCard() {
         ))}
       </ul>
       <Link
-        to="/app/split-payments"
+        to="/app/my-reservations#split-payments"
         className="mt-3 inline-flex h-9 w-full items-center justify-center gap-1 rounded-xl bg-primary px-4 text-sm font-semibold text-white transition hover:brightness-110"
       >
         Pay my share <FiChevronRight />

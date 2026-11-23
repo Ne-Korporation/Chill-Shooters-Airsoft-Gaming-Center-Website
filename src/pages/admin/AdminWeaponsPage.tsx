@@ -925,27 +925,35 @@ export function AdminWeaponsPage() {
         onChange={changeView}
         options={[
           { value: 'inventory', label: 'Inventory' },
-          { value: 'fps', label: <><FiCrosshair /> FPS history</> },
           { value: 'repairs', label: <><FiTool /> Damage &amp; repairs</> },
+          { value: 'fps', label: <><FiCrosshair /> FPS history</> },
         ]}
       />
       {view === 'inventory' ? (
         <WeaponInventory />
       ) : view === 'repairs' ? (
         <div className="space-y-8">
-          <p className="text-sm text-muted">
-            File a damage report when an item comes back broken: its repair opens below automatically. When the gunsmith is done,
-            mark it repaired and the cost is billed to the player's booking. Lost items get a loss report only.
-          </p>
-          <section className="space-y-3">
-            <h2 className="flex items-center gap-2 text-lg font-bold"><FiAlertTriangle /> Damage &amp; loss reports</h2>
-            <SafetyLogPage embedded tab="damage" onRepairOpened={() => setRepairsVersion((v) => v + 1)} />
-          </section>
-          <section className="space-y-3 border-t border-white/10 pt-6">
-            <h2 className="flex items-center gap-2 text-lg font-bold"><FiTool /> Repairs</h2>
+          {/* How a broken or lost item moves through this tab. */}
+          <ol className="grid gap-2 sm:grid-cols-3">
+            {[
+              { icon: FiAlertTriangle, title: 'File a report', text: 'Damaged items open a repair automatically. Lost items get a loss report only.' },
+              { icon: FiTool, title: 'Gunsmith repairs it', text: 'Mark the repair done with the parts and labor cost.' },
+              { icon: FiCheck, title: 'Bill or waive', text: "The charge goes on the player's booking, or is waived." },
+            ].map((step, index) => (
+              <li key={step.title} className="flex gap-3 rounded-xl border border-white/10 bg-white/5 p-3">
+                <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-accent/15 text-xs font-bold text-accent">{index + 1}</span>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5 text-sm font-semibold"><step.icon className="h-3.5 w-3.5 text-muted" /> {step.title}</div>
+                  <div className="mt-0.5 text-xs text-muted">{step.text}</div>
+                </div>
+              </li>
+            ))}
+          </ol>
+          <SafetyLogPage embedded tab="damage" onRepairOpened={() => setRepairsVersion((v) => v + 1)} />
+          <div className="border-t border-white/10 pt-6">
             {/* Remounted when a damage report opens a repair, so the new one shows up. */}
             <RepairsPage key={repairsVersion} embedded />
-          </section>
+          </div>
         </div>
       ) : (
         <SafetyLogPage embedded tab="fps" />

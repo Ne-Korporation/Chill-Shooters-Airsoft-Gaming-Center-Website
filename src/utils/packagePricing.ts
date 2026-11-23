@@ -203,6 +203,7 @@ export function calculatePackagePricing({
   pkg,
   players,
   ownWeapons = 0,
+  ownGear = 0,
   sessionMultiplier,
   weapons,
   equipment,
@@ -211,11 +212,15 @@ export function calculatePackagePricing({
   pkg: PackageLike
   players: number
   ownWeapons?: number
+  // Players bringing their own gun and gear: entrance fee only, nothing from the package.
+  // Mirrors server/utils/bookingPricing.js.
+  ownGear?: number
   sessionMultiplier: number
   weapons: PricedItem[]
   equipment: PricedItem[]
   entranceFeePerPlayer: number
 }) {
+  const rentalPlayers = Math.max(0, players - Math.min(players, Math.max(0, Math.round(ownGear))))
   const discountRule = resolvePackageDiscountConfig(pkg)
 
   // ---------------------------------------------------------------------
@@ -224,9 +229,13 @@ export function calculatePackagePricing({
   // session multiplier is not applied so the price stays fixed.
   // ---------------------------------------------------------------------
   if (settledAmountApplies(pkg, players)) {
+    // A price set per player is charged for each package player; a player bringing their own gun
+    // and gear pays the entrance fee instead. (A group price can't leave anyone out.)
+    const groupPrice = Math.round(Number(pkg.players ?? 0)) > 1
+    const ownGearEntrance = groupPrice ? 0 : Math.round(entranceFeePerPlayer * (players - rentalPlayers))
     const settled = (discountRule.mode === 'settled'
       ? Math.max(0, Math.round(discountRule.value))
-      : Math.max(0, Math.round(Number(pkg.settledAmount || 0)))) * settledMultiplier(pkg, players)
+      : Math.max(0, Math.round(Number(pkg.settledAmount || 0)))) * (groupPrice ? settledMultiplier(pkg, players) : rentalPlayers)
     const isSettledPrice = discountRule.mode === 'settled'
     const rawDiscount = discountRule.mode === 'amount'
       ? Math.round(discountRule.value)
@@ -239,11 +248,11 @@ export function calculatePackagePricing({
       basePriceTotal: settled,
       weaponsTotal: 0,
       equipmentTotal: 0,
-      entranceFeeTotal: 0,
-      preDiscountTotal: settled,
+      entranceFeeTotal: ownGearEntrance,
+      preDiscountTotal: settled + ownGearEntrance,
       discountAmount: settledDiscount,
-      total: settledTotal,
-      perPlayer: Math.round(settledTotal / Math.max(1, players)),
+      total: settledTotal + ownGearEntrance,
+      perPlayer: Math.round((settledTotal + ownGearEntrance) / Math.max(1, players)),
       discountMode: discountRule.mode,
       discountValue: discountRule.value,
       discountTargets: ['package_total'] as PackageDiscountTarget[],
@@ -254,13 +263,14 @@ export function calculatePackagePricing({
       settledAmount: settled,
       rentedWeaponCount: 0,
       ownWeaponsUsed: 0,
+      ownGearPlayers: groupPrice ? 0 : players - rentalPlayers,
     }
   }
 
   // ---------------------------------------------------------------------
   // Computed pricing (per-player base + gear + entrance)
   // ---------------------------------------------------------------------
-  const weaponRental = packageWeaponRental(pkg, weapons, players, ownWeapons)
+  const weaponRental = packageWeaponRental(pkg, weapons, rentalPlayers, ownWeapons)
   const packageWeaponCount = weaponRental.perPlayerCount
   const rentedWeaponCount = weaponRental.rented
 
@@ -269,9 +279,9 @@ export function calculatePackagePricing({
     .filter(({ item }) => Boolean(item))
     .reduce((sum, { item, qty }) => sum + Number(item?.price || 0) * qty, 0)
 
-  const basePriceTotal = Number(pkg.basePrice || 0) * players * sessionMultiplier
+  const basePriceTotal = Number(pkg.basePrice || 0) * rentalPlayers * sessionMultiplier
   const weaponsTotal = weaponRental.total * sessionMultiplier
-  const equipmentTotal = equipmentUnitTotal * players * sessionMultiplier
+  const equipmentTotal = equipmentUnitTotal * rentalPlayers * sessionMultiplier
   const entranceFeeTotal = entranceFeePerPlayer * players * sessionMultiplier
   const preDiscountTotal = Math.round(basePriceTotal + weaponsTotal + equipmentTotal + entranceFeeTotal)
 
@@ -314,6 +324,7 @@ export function calculatePackagePricing({
     isSettled: false,
     settledAmount: 0,
     rentedWeaponCount,
-    ownWeaponsUsed: packageWeaponCount * players - rentedWeaponCount,
+    ownWeaponsUsed: packageWeaponCount * rentalPlayers - rentedWeaponCount,
+    ownGearPlayers: players - rentalPlayers,
   }
 }

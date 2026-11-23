@@ -214,25 +214,45 @@ router.post('/damage-reports', requireAuth, requireRole('admin', 'marshal'), asy
 
   try {
     const db = await getDb()
-    const collection = itemType === 'weapon' ? 'weapons' : 'equipments'
+    // Picked from the game's rentals: the piece and the player it was handed to come from that
+    // rental record, so the report is billed to the person who actually had it.
+    let rental = null
+    if (body.rentalId) {
+      rental = await db.collection('rentals').findOne({ id: String(body.rentalId) })
+      if (!rental) return res.status(404).json({ ok: false, error: 'Rental not found' })
+      if (String(rental.reservationId) !== String(body.reservationId || '').trim()) {
+        return res.status(400).json({ ok: false, error: 'That item was not handed out in this game.' })
+      }
+      if (rental.damageReportId) {
+        return res.status(409).json({ ok: false, error: `This item was already reported (${rental.damageReportId}).` })
+      }
+      body.itemId = rental.itemId
+      body.itemName = rental.itemName
+      body.playerName = rental.playerName
+    }
+    const collection = rental ? rental.itemCollection : itemType === 'weapon' ? 'weapons' : 'equipments'
     const item = body.itemId ? await findById(db, collection, body.itemId) : null
     if (body.itemId && !item) return res.status(404).json({ ok: false, error: 'Item not found' })
     const itemName = String(item?.name || body.itemName || '').trim().slice(0, 120)
     if (!itemName) return res.status(400).json({ ok: false, error: 'Choose the damaged item or enter its name.' })
 
-    const reservation = body.reservationId ? await findById(db, 'reservations', body.reservationId) : null
-    if (body.reservationId && !reservation) return res.status(404).json({ ok: false, error: 'Reservation not found' })
+    // Every report names the game and the player responsible, so a charge can be billed to them.
+    if (!String(body.reservationId || '').trim()) return res.status(400).json({ ok: false, error: 'Choose the game (reservation) the item was used in.' })
+    if (!String(body.playerName || '').trim()) return res.status(400).json({ ok: false, error: 'Choose the player responsible.' })
+    const reservation = await findById(db, 'reservations', String(body.reservationId).trim())
+    if (!reservation) return res.status(404).json({ ok: false, error: 'Reservation not found' })
 
     const nowISO = new Date().toISOString()
     const doc = {
       id: await nextShortId(db, 'damage_reports', 'DMG'),
-      itemType,
+      itemType: rental ? (rental.itemCollection === 'weapons' ? 'weapon' : 'equipment') : itemType,
       kind,
       itemId: item ? String(item.id || item._id) : '',
       itemName,
       reservationId: reservation ? String(reservation.id || reservation._id) : '',
-      playerId: reservation ? String(reservation.userId || '') : '',
+      playerId: String(rental?.playerId || body.playerId || reservation?.userId || ''),
       playerName: String(body.playerName || '').trim().slice(0, 120),
+      ...(rental ? { rentalId: rental.id } : {}),
       description,
       evidenceUrl: String(body.evidenceUrl || '').trim().slice(0, 500),
       status: 'reported',
@@ -265,6 +285,14 @@ router.post('/damage-reports', requireAuth, requireRole('admin', 'marshal'), asy
       await db.collection('repairs').insertOne(repair)
       await db.collection('damage_reports').updateOne({ _id: doc._id }, { $set: { repairId: repair.id } })
       doc.repairId = repair.id
+    }
+
+    // The rental is checked in with this report, so returning it at Rentals later can't file a second one.
+    if (rental) {
+      const checkIn = rental.status === 'out'
+        ? { status: kind === 'loss' ? 'missing' : 'returned', condition: kind === 'loss' ? 'missing' : 'damaged', returnNote: description.slice(0, 300), returnedAtISO: nowISO, returnedBy: actorOf(req) }
+        : {}
+      await db.collection('rentals').updateOne({ _id: rental._id }, { $set: { ...checkIn, damageReportId: doc.id } })
     }
 
     if (item && body.sendToMaintenance !== false) {

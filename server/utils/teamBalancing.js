@@ -18,6 +18,9 @@ export function getAgeGroup(age) {
 
 const AGE_GROUP_ORDER = ['Under 18', '18–24', '25–34', '35+', 'Unknown']
 
+// Team colors (armbands), in the order new teams get them: two teams play Red vs Blue.
+export const TEAM_COLORS = ['red', 'blue', 'yellow', 'green', 'orange', 'purple']
+
 // Splits players into teams with the same mix of experience levels, similar total experience,
 // and a similar spread of age groups. Players are taken strongest first; each goes to the
 // smallest team with the fewest players of their experience level (ties: least experience so
@@ -26,6 +29,7 @@ export function suggestBalancedTeams(players, teamCount = 2) {
   const count = Math.min(Math.max(Math.round(Number(teamCount) || 2), 2), 6)
   const teams = Array.from({ length: count }, (_, index) => ({
     name: `Team ${index + 1}`,
+    color: TEAM_COLORS[index],
     playerKeys: [],
     totalExperience: 0,
     levels: {},
@@ -58,6 +62,7 @@ export function suggestBalancedTeams(players, teamCount = 2) {
 
   return teams.map((team) => ({
     name: team.name,
+    color: team.color,
     playerKeys: team.playerKeys,
     totalExperience: team.totalExperience,
     levels: team.levels,

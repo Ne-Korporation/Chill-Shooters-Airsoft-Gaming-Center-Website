@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { confirmDialog } from '../../components/ui/ConfirmDialog'
-import { FiArchive, FiArrowLeft, FiCheck, FiRotateCcw, FiSend, FiUser, FiUsers } from 'react-icons/fi'
+import { FiArchive, FiArrowLeft, FiCheck, FiRotateCcw, FiSearch, FiSend, FiUser, FiUsers, FiX } from 'react-icons/fi'
 import { useNavigate } from 'react-router-dom'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
@@ -11,7 +11,7 @@ import { resolveNotificationRoute } from '../../utils/notificationRoutes'
 import { kindOf, timeLabel } from '../../utils/notificationDisplay'
 import toast from 'react-hot-toast'
 import { Paged } from '../../components/ui/Pagination'
-import { apiGet } from '../../utils/apiClient'
+import { apiGet, apiGetAll } from '../../utils/apiClient'
 import { useLiveRefresh } from '../../utils/liveUpdates'
 
 type Role = 'user' | 'registrar' | 'marshal' | 'admin'
@@ -25,6 +25,10 @@ const ROLES: Array<{ value: Role; label: string }> = [
   { value: 'admin', label: 'Admins' },
 ]
 const ROLE_LABEL: Record<string, string> = { user: 'Players', registrar: 'Registrars', marshal: 'Marshals', admin: 'Admins', all: 'Everyone' }
+
+const ROLE_SINGULAR: Record<string, string> = { user: 'Player', registrar: 'Registrar', marshal: 'Marshal', admin: 'Admin' }
+
+type Account = { id: string; name: string; email: string; role: string }
 
 const fieldClass = 'w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-text placeholder:text-muted'
 
@@ -89,6 +93,41 @@ export function AdminNotificationsPage() {
     [allSent, feedFilter],
   )
   const unread = allSent.filter((item) => isMine(item) && !item.read).length
+
+  // Accounts for the "One person" picker, loaded the first time it's opened.
+  const [personQuery, setPersonQuery] = useState('')
+  const [accounts, setAccounts] = useState<Account[] | null>(null)
+  const [accountsLoading, setAccountsLoading] = useState(false)
+  useEffect(() => {
+    if (sendTo !== 'person' || accounts !== null) return
+    setAccountsLoading(true)
+    apiGetAll<any>('user_accounts')
+      .then((docs) => setAccounts(docs
+        .map((doc: any) => ({
+          id: String(doc.id ?? doc._id ?? ''),
+          name: String(doc.name || doc.fullName || 'Unnamed account'),
+          email: String(doc.email || ''),
+          role: String(doc.role || 'user').toLowerCase(),
+        }))
+        .filter((acc: Account) => acc.id)))
+      .catch((error: any) => {
+        toast.error(error?.message || 'Unable to load accounts')
+        setAccounts([])
+      })
+      .finally(() => setAccountsLoading(false))
+  }, [sendTo, accounts])
+
+  const selectedAccount = useMemo(
+    () => (targetUserId ? accounts?.find((acc) => acc.id === targetUserId) || { id: targetUserId, name: 'Selected account', email: '', role: '' } : null),
+    [accounts, targetUserId],
+  )
+  const matches = useMemo(() => {
+    const term = personQuery.trim().toLowerCase()
+    if (!term || !accounts) return []
+    return accounts
+      .filter((acc) => [acc.name, acc.email, acc.id].some((value) => value.toLowerCase().includes(term)))
+      .slice(0, 8)
+  }, [accounts, personQuery])
 
   const toggleRole = (role: Role) =>
     setRoles((current) => (current.includes(role) ? current.filter((item) => item !== role) : [...current, role]))
@@ -218,8 +257,54 @@ export function AdminNotificationsPage() {
               ) : null}
               {sendTo === 'person' ? (
                 <div className="mt-3">
-                  <input value={targetUserId} onChange={(e) => setTargetUserId(e.target.value)} className={fieldClass} placeholder="Account ID" />
-                  <p className="mt-1 text-xs text-muted">The account ID shown on Players &amp; staff.</p>
+                  {selectedAccount ? (
+                    <div className="flex items-center justify-between gap-2 rounded-xl border border-accent/30 bg-accent/10 px-4 py-3">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-semibold">{selectedAccount.name}</div>
+                        <div className="truncate text-xs text-muted">{selectedAccount.email} · {ROLE_SINGULAR[selectedAccount.role] || selectedAccount.role} · {selectedAccount.id}</div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => { setTargetUserId(''); setPersonQuery('') }}
+                        aria-label="Choose someone else"
+                        title="Choose someone else"
+                        className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-muted transition hover:bg-white/10 hover:text-text"
+                      >
+                        <FiX className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="relative">
+                      <FiSearch className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
+                      <input
+                        value={personQuery}
+                        onChange={(e) => setPersonQuery(e.target.value)}
+                        className={`${fieldClass} pl-10`}
+                        placeholder="Search by name, email or account ID"
+                        aria-label="Search for a person"
+                      />
+                      {personQuery.trim() ? (
+                        <div className="absolute z-20 mt-1 max-h-64 w-full overflow-y-auto rounded-xl border border-white/10 bg-background p-1 shadow-xl">
+                          {accountsLoading ? (
+                            <div className="px-3 py-2 text-xs text-muted">Loading accounts…</div>
+                          ) : matches.length === 0 ? (
+                            <div className="px-3 py-2 text-xs text-muted">No one matches “{personQuery.trim()}”.</div>
+                          ) : matches.map((acc) => (
+                            <button
+                              key={acc.id}
+                              type="button"
+                              onClick={() => { setTargetUserId(acc.id); setPersonQuery('') }}
+                              className="block w-full rounded-lg px-3 py-2 text-left transition hover:bg-white/10"
+                            >
+                              <div className="truncate text-sm font-semibold">{acc.name}</div>
+                              <div className="truncate text-xs text-muted">{acc.email} · {ROLE_SINGULAR[acc.role] || acc.role}</div>
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  )}
+                  <p className="mt-1 text-xs text-muted">Search players and staff by name, email or account ID.</p>
                 </div>
               ) : null}
             </div>

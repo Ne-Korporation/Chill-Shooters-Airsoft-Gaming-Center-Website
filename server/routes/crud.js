@@ -16,11 +16,13 @@ import { newReservationId, nextShortId } from '../utils/shortIds.js'
 import { ageFromBirthDate } from '../utils/age.js'
 import { ACTIVE_WAIVER_STATUSES, expireOldWaivers, validUntilFrom } from '../utils/waiverValidity.js'
 import { manilaDateISO } from '../utils/reminders.js'
-import { getSlotHours, slotHasStarted } from '../utils/slotHours.js'
+import { formatSlotTime, getSlotHours, slotHasEnded, slotHasStarted } from '../utils/slotHours.js'
 import { summarizeWeekendCapacity, weekendDatesOf } from '../utils/weekendCapacity.js'
 import { listActiveCauseDays, weekendDatesInMonth } from '../utils/causeDays.js'
 import { closedDayError, findClosedDay, listClosedDays } from '../utils/closedDays.js'
 import { countAccountBookings } from '../utils/accountClosure.js'
+import { roleNotificationFilter } from '../utils/roleNotifications.js'
+import { withSplitShares } from '../utils/splitShares.js'
 import { hasValidIdentity, identityVerifiedFields, validIdentityFilter, verifiedIdDocument } from '../utils/identityValidity.js'
 
 // ID type recorded on a child's waiver: the parent attaches any valid ID or school ID.
@@ -34,9 +36,11 @@ import { evaluateFpsReading, weaponFpsClass } from './operations.js'
 import { fpsBlockReason, gameFpsStatus } from '../utils/fpsChecks.js'
 import { checkAmmoStock } from '../utils/ammoStock.js'
 import { emailGearReviewEvent, emailGuardianWaiverSubmitted, emailIdentityDecision, emailReservationEvent, emailSplitShareRequest, emailTeamAdded } from '../services/notificationEmails.js'
+import { unpaidStartReason } from '../utils/bookingBalance.js'
 import {
   paymentWindowMsFor,
   expireOverdueReservations,
+  getReservationPayments,
   notifyRole,
   notifyUser,
   syncReservationPaymentState,
@@ -446,6 +450,8 @@ router.post('/inventory-check', requireAuth, async (req, res) => {
       customWeaponIds: Array.isArray(body.customWeaponIds) ? body.customWeaponIds.map(String) : [],
       customEquipmentIds: Array.isArray(body.customEquipmentIds) ? body.customEquipmentIds.map(String) : [],
       verifiedOwnWeaponCount: Math.max(0, Math.round(Number(body.verifiedOwnWeaponCount) || 0)),
+      // Players bringing their own gun and gear get nothing from a package (Hybrid).
+      verifiedOwnGearCount: Math.min(players, Math.max(0, Math.round(Number(body.verifiedOwnGearCount) || 0))),
     }
     try {
       if (mode === 'custom') Object.assign(payload, await assignCustomPieces({ db, payload, findDocumentById, heldQuantities }))
@@ -782,16 +788,17 @@ const WALK_IN_LOCATION_NAMES = {
 }
 const ONSITE_PAYMENT_METHODS = { cash: 'Cash', gcash: 'GCash', bank_transfer: 'Bank transfer' }
 
-// POST /api/walk-ins — the counter registers a walk-in group for today's public game. Walk-ins are
-// only for players who bring their own complete gear (they pay the entrance fee); anyone who needs
-// rental gear must reserve online. Uses the same capacity and pricing checks as online bookings,
-// and records the onsite payment.
+// POST /api/walk-ins — the counter registers one walk-in player for today's public game. Each
+// walk-in is an individual (their own name, contact, bill and check-in); a group that walks in
+// together is registered one person at a time. Walk-ins are only for players who bring their own
+// complete gear (they pay the entrance fee); anyone who needs rental gear must reserve online.
+// Uses the same capacity and pricing checks as online bookings, and records the onsite payment.
 router.post('/walk-ins', requireAuth, requireRole('admin', 'registrar'), async (req, res) => {
   const body = req.body || {}
   const walkInName = String(body.name || '').trim().slice(0, 120)
   const locationId = normalizeLocationId(body.locationId)
   const reservationTime = String(body.reservationTime || '').trim().toLowerCase()
-  const playersCount = Number(body.players)
+  const playersCount = 1
   const paymentMethod = String(body.paymentMethod || '').toLowerCase()
   const reference = String(body.reference || '').trim().slice(0, 120)
   const reservationDate = manilaTodayISO()
@@ -808,8 +815,8 @@ router.post('/walk-ins', requireAuth, requireRole('admin', 'registrar'), async (
   }
   if (!LOCATION_FIELD_DEFS[locationId]) return res.status(400).json({ ok: false, error: 'Choose a location.' })
   if (!SLOT_NAMES.includes(reservationTime)) return res.status(400).json({ ok: false, error: 'Choose a time slot.' })
-  if (!Number.isInteger(playersCount) || playersCount < 1 || playersCount > 100) {
-    return res.status(400).json({ ok: false, error: 'Players must be a whole number from 1 to 100.' })
+  if (body.players !== undefined && Number(body.players) !== 1) {
+    return res.status(400).json({ ok: false, error: 'Register each walk-in player separately.' })
   }
   if (String(body.mode || 'own_gear') !== 'own_gear') {
     return res.status(400).json({ ok: false, error: 'Walk-ins must bring their own complete gear. Players who need rental gear must reserve online.' })
@@ -1559,7 +1566,7 @@ router.get('/:collection', requireAuth, async (req, res) => {
         $or: [
           { userId: String(req.user.id) },
           { userId: 'broadcast', targetRole: 'all' },
-          { userId: 'broadcast', targetRole: req.user.role },
+          { userId: 'broadcast', targetRole: req.user.role, ...roleNotificationFilter(req.user.role) },
         ],
       })
     }
@@ -1642,6 +1649,20 @@ router.get('/:collection/:id', requireAuth, async (req, res) => {
   }
 })
 
+// Extra ammo reloads bought per player (Hybrid): only players on the booking, whole numbers. The
+// booking's extraAmmoReloads becomes their total, so the price and each player's share agree.
+function extraAmmoPerPlayer(doc, memberIds) {
+  const raw = doc.extraAmmoByPlayer
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  const byPlayer = {}
+  for (const [id, value] of Object.entries(raw)) {
+    const count = Math.max(0, Math.round(Number(value) || 0))
+    if (count && memberIds.has(String(id))) byPlayer[String(id)] = count
+  }
+  const total = Object.values(byPlayer).reduce((sum, n) => sum + n, 0)
+  return { extraAmmoByPlayer: byPlayer, extraAmmoReloads: normalizeExtraAmmoReloads(total) }
+}
+
 // Rebuilds the team from verified accounts (never trusting client names or sizes), works out
 // who shares a split payment, and counts own weapons only for players with an approved one on file.
 async function resolveTeamAndOwnWeapons(db, doc, { requireFullTeam = false } = {}) {
@@ -1703,12 +1724,38 @@ async function resolveTeamAndOwnWeapons(db, doc, { requireFullTeam = false } = {
   // get the package without its weapon (no rental charge for it). A package with a fixed group
   // price (settledAmount) can't be split, so own weapons don't apply to it.
   let allowsOwnWeapons = true
+  // Bringing their own gun AND gear (entrance only) works with any package priced per player; only a
+  // single price for a whole group can't leave anyone out.
+  let allowsOwnGear = false
   if (String(doc.selectionMode || '').toLowerCase() === 'package') {
     const pkg = doc.selectedPackageId ? await findDocumentById(db, 'packages', String(doc.selectedPackageId)) : null
     allowsOwnWeapons = Boolean(pkg) && !(Number(pkg.settledAmount) > 0) && Array.isArray(pkg.weaponIds) && pkg.weaponIds.length > 0
+    allowsOwnGear = Boolean(pkg) && !(Number(pkg.settledAmount) > 0 && Math.round(Number(pkg.players || 0)) > 1)
+  }
+  // With a package, the booker marks which players bring their own gun and gear: they pay the
+  // entrance fee only and get nothing from the package. No registered gear is needed (staff check
+  // it on game day, and every gun goes through the chronograph); minors always get the package.
+  const childMemberIds = new Set(teamMembers.filter((member) => member.isMinor).map((member) => member.id))
+  const ownGearPlayerIds = allowsOwnGear
+    ? Array.from(new Set((Array.isArray(doc.ownGearPlayerIds) ? doc.ownGearPlayerIds : []).map(String).filter((id) => memberIds.has(id) && !childMemberIds.has(id))))
+    : []
+  // Nothing rented at all ("everyone brings their own"): every player pays the entrance fee only.
+  // Minors can't (they need rental gear).
+  const rentsNothing = String(doc.selectionMode || '').toLowerCase() === 'custom'
+    && !(Array.isArray(doc.customWeaponIds) && doc.customWeaponIds.length)
+    && !(Array.isArray(doc.customEquipmentIds) && doc.customEquipmentIds.length)
+  if (rentsNothing) {
+    const minor = teamMembers.find((member) => member.isMinor)
+    if (minor) {
+      const err = new Error(`${minor.name || 'A minor'} needs rental gear, so the team can't all bring their own. Choose Hybrid instead.`)
+      err.statusCode = 400
+      throw err
+    }
   }
   const bringerIds = allowsOwnWeapons ? Array.from(new Set(
-    (Array.isArray(doc.ownWeaponBringerIds) ? doc.ownWeaponBringerIds : []).map(String).filter((id) => memberIds.has(id)),
+    (Array.isArray(doc.ownWeaponBringerIds) ? doc.ownWeaponBringerIds : []).map(String)
+      // Own-gear players are counted on their own, not as "own gun, rent the rest".
+      .filter((id) => memberIds.has(id) && !ownGearPlayerIds.includes(id)),
   )) : []
   const owners = bringerIds.length ? await getApprovedWeaponOwnerIds(db, bringerIds) : new Set()
   const ownWeaponBringers = bringerIds.map((userId) => ({ userId, verified: owners.has(userId) }))
@@ -1723,6 +1770,9 @@ async function resolveTeamAndOwnWeapons(db, doc, { requireFullTeam = false } = {
     ownWeaponBringers,
     ownWeaponTarget: allowsOwnWeapons ? Math.max(0, Math.round(Number(doc.ownWeaponTarget) || 0)) : 0,
     verifiedOwnWeaponCount: Math.min(doc.numberOfPlayers, ownWeaponBringers.filter((bringer) => bringer.verified).length),
+    ownGearPlayerIds,
+    verifiedOwnGearCount: Math.min(doc.numberOfPlayers, ownGearPlayerIds.length),
+    ...extraAmmoPerPlayer(doc, memberIds),
   }
 }
 
@@ -1756,7 +1806,7 @@ async function findPublicSlotClash(db, doc) {
 
 // Tells every teammate the captain added to a booking, in the app and by email. In a split
 // payment each paying teammate also gets their share, the deadline and a link to pay it on the
-// Split Payment page; otherwise the captain is paying, so there is nothing for them to pay online.
+// split payments on My Reservations; otherwise the captain is paying, so there is nothing for them to pay online.
 // Minors play under their guardian's account and have no email, so they aren't notified.
 async function notifyAddedTeammates(db, reservation, appUrl) {
   const members = (reservation.teamMembers || []).filter((member) => !member.isMinor && String(member.id) !== String(reservation.userId))
@@ -1783,7 +1833,7 @@ async function notifyAddedTeammates(db, reservation, appUrl) {
           message: `${captainName} added you to a reservation on ${when}. Your share is ₱${share.toLocaleString()}; pay it from Split Payment before ${dueLabel}.`,
           linkedResourceId: reservation.id,
         })
-        void emailSplitShareRequest(db, reservation, userId, share, captainName, dueLabel, `${appUrl}/app/split-payments`)
+        void emailSplitShareRequest(db, reservation, userId, share, captainName, dueLabel, `${appUrl}/app/my-reservations#split-payments`)
       } else {
         await notifyUser(db, {
           userId,
@@ -2261,6 +2311,8 @@ router.post('/:collection', requireAuth, async (req, res) => {
         doc.depositAmount = doc.totalAmount
         doc.balanceAmount = 0
       }
+      // Players who get different things (package / own gun / own gear) pay different shares.
+      Object.assign(doc, withSplitShares(doc))
       try {
         doc.inventoryRequirements = await getBookingInventoryRequirements({
           db,
@@ -2526,8 +2578,8 @@ router.put('/:collection/:id', requireAuth, async (req, res) => {
   }
   if (collection === 'notifications' && updateRole !== 'admin') {
     const changes = payload.$set || payload
-    if (Object.keys(changes).some((field) => field !== 'read') || changes.read !== true) {
-      return res.status(403).json({ ok: false, error: 'Users may only mark notifications as read' })
+    if (Object.keys(changes).some((field) => field !== 'read') || typeof changes.read !== 'boolean') {
+      return res.status(403).json({ ok: false, error: 'Users may only mark notifications as read or unread' })
     }
   }
 
@@ -2555,18 +2607,41 @@ router.put('/:collection/:id', requireAuth, async (req, res) => {
       if (['ongoing', 'completed'].includes(nextStatus) && /^\d{4}-\d{2}-\d{2}$/.test(gameDay) && gameDay > manilaDateISO()) {
         return res.status(409).json({ ok: false, error: `This game is scheduled for ${gameDay}. It can be started on game day.` })
       }
-      // Starting a game: every gun in it must have passed the chronograph today.
+      // Completing a game: it must have been started, and its slot must be over (an afternoon
+      // game can't be marked done at 3 PM when the slot runs until 5 PM).
+      const currentStatus = String(existing.Status || '').toLowerCase()
+      if (nextStatus === 'completed' && !currentStatus.startsWith('complet')) {
+        if (!currentStatus.startsWith('ongo')) {
+          return res.status(409).json({ ok: false, error: 'This game hasn\'t started yet. Start it before marking it done.' })
+        }
+        const slot = String(existing.Schedule || '').split('•')[1]?.trim().toLowerCase() || ''
+        if (/^\d{4}-\d{2}-\d{2}$/.test(gameDay) && slot) {
+          const { hours } = await getSlotHours(db)
+          if (!slotHasEnded(hours, slot, gameDay, manilaDateISO())) {
+            return res.status(409).json({ ok: false, error: `The ${slot} slot runs until ${formatSlotTime(hours[slot]?.end)}. The game can be marked done after that.` })
+          }
+        }
+        if (!changes.completedAtISO) changes.completedAtISO = new Date().toISOString()
+      }
+      // Starting a game: the booking balance must be paid, and every gun in it must have passed
+      // the chronograph today.
       if (nextStatus === 'ongoing' && !String(existing.Status || '').toLowerCase().startsWith('ongo') && existing.reservationId) {
         const reservation = await db.collection('reservations').findOne({ id: String(existing.reservationId) })
         if (reservation) {
+          const unpaid = unpaidStartReason(reservation, await getReservationPayments(db, reservation))
+          if (unpaid) return res.status(409).json({ ok: false, error: unpaid })
           const reason = fpsBlockReason(await gameFpsStatus(db, reservation))
           if (reason) return res.status(409).json({ ok: false, error: reason })
         }
       }
     }
     if (collection === 'notifications' && isSharedNotification(existing, req.user)) {
-      await db.collection(collection).updateOne({ _id: existing._id }, { $addToSet: { readBy: String(req.user.id) } })
-      return res.json({ ok: true, data: { ...personalizeNotification(existing, req.user), read: true } })
+      // Shared notifications keep read state per account: add or remove this account from readBy.
+      const changes = payload.$set || payload
+      const markRead = changes.read !== false
+      const op = markRead ? { $addToSet: { readBy: String(req.user.id) } } : { $pull: { readBy: String(req.user.id) } }
+      await db.collection(collection).updateOne({ _id: existing._id }, op)
+      return res.json({ ok: true, data: { ...personalizeNotification(existing, req.user), read: markRead } })
     }
 
     if (collection === 'user_accounts') {

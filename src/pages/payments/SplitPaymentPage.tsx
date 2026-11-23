@@ -1,15 +1,25 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useLiveRefresh } from '../../utils/liveUpdates'
 import toast from 'react-hot-toast'
-import { FiCheck, FiClock, FiUsers } from 'react-icons/fi'
+import { FiCheck, FiClock, FiEye, FiUsers, FiX } from 'react-icons/fi'
+import { confirmDialog } from '../../components/ui/ConfirmDialog'
 
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
-import { apiGet } from '../../utils/apiClient'
+import { Modal } from '../../components/ui/Modal'
+import { apiGet, apiPost } from '../../utils/apiClient'
 import { isXenditEnabled, startXenditCheckout } from '../../utils/xendit'
 import { isPrivateSession } from '../../utils/bookingRoles'
 
 export const SPLIT_PAYMENTS_CHANGED_EVENT = 'split-payments-changed'
+
+// What the person who booked chose for a player in a package booking.
+type Loadout = 'package' | 'own_gun' | 'own_gear'
+const LOADOUT_LABEL: Record<Loadout, string> = {
+  package: 'Package (gun + gear rented)',
+  own_gun: 'Own gun, rents the gear',
+  own_gear: 'Own gun + gear (entrance only)',
+}
 
 type SplitMember = {
   id: string
@@ -30,11 +40,17 @@ export type SplitPaymentItem = {
     packageName: string
     totalAmount: number
     depositAmount: number
+    pricingBreakdown?: Array<{ label: string; amount: number }>
+    paymentPlan?: 'full' | 'cash_balance'
+    teamSize?: number
+    unevenShares?: boolean
     paymentDueAtISO?: string
     sessionType?: string
   }
   isCaptain: boolean
   captainName: string
+  // Everyone on the booking (names only), so invited players see who booked and who's playing.
+  players?: Array<{ id: string; name: string; isCaptain: boolean; isMe: boolean; loadout?: Loadout | null }>
   myShareDue: number
   iHavePaid: boolean
   progress: { target: number; submitted: number; remaining: number; state: string; paidCount?: number; payerCount?: number }
@@ -158,7 +174,9 @@ function CaptainTracker({ item }: { item: SplitPaymentItem }) {
   )
 }
 
-export function SplitPaymentPage() {
+// Split payments the player has to act on: a share to pay, or (as captain) a team still paying.
+// Shown at the top of My Reservations, only while there is one; links to it use #split-payments.
+export function SplitPaymentsSection() {
   const [items, setItems] = useState<SplitPaymentItem[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -186,7 +204,9 @@ export function SplitPaymentPage() {
             toast.success(`A teammate paid their share (${after.progress.paidCount} of ${after.progress.payerCount}).`)
           }
         }
-        if (previous.length !== next.length) window.dispatchEvent(new Event(SPLIT_PAYMENTS_CHANGED_EVENT))
+        // Keep the "shares to pay" badge on My Reservations in step.
+        const owedCount = (list: SplitPaymentItem[]) => list.filter((item) => !item.iHavePaid && item.myShareDue > 0).length
+        if (previous.length !== next.length || owedCount(previous) !== owedCount(next)) window.dispatchEvent(new Event(SPLIT_PAYMENTS_CHANGED_EVENT))
       }
       previousRef.current = next
       setItems(next)
@@ -214,37 +234,234 @@ export function SplitPaymentPage() {
     }
   }, [load])
 
+  // Jump here from a notification or the dashboard (/app/my-reservations#split-payments) once loaded.
+  const sectionRef = useRef<HTMLElement | null>(null)
+  useEffect(() => {
+    if (!loading && items.length && window.location.hash === '#split-payments') {
+      sectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+  }, [loading, items.length])
+
+  // The split payment open in the pop-up; read from the list so it stays live while open.
+  const [viewId, setViewId] = useState<string | null>(null)
+  const viewing = items.find((item) => item.reservation.id === viewId) || null
+
+  // Nothing to pay or wait on: the section isn't shown at all.
+  if (loading || items.length === 0) return null
+  const owed = items.filter((item) => !item.iHavePaid && item.myShareDue > 0).length
+
   return (
-    <div className="space-y-4">
-      <div>
-        <div className="text-sm font-medium text-accent">Payment</div>
-        <h1 className="mt-1 text-3xl font-bold">Split Payment</h1>
-        <p className="mt-1 text-sm text-muted">Pay your share of a team reservation. The team has 24 hours to pay; this page updates on its own as teammates pay and disappears from the menu once your share is paid.</p>
+    <section ref={sectionRef} id="split-payments" className="scroll-mt-4 space-y-2">
+      <h2 className="flex items-center gap-2 text-base font-bold">
+        {owed ? 'Your share is due' : 'Team payments in progress'}
+        {owed ? <span className="grid h-5 min-w-[1.25rem] place-items-center rounded-full bg-danger px-1 text-[11px] font-bold leading-none text-white">{owed}</span> : null}
+        <span className="text-xs font-normal text-muted">· Teams have 24 hours to pay, or the slot is released.</span>
+      </h2>
+
+      {/* One compact card per split payment; View opens everything (players, paying, progress). */}
+      <div className="grid gap-2 md:grid-cols-2">
+        {items.map((item) => {
+          const due = !item.iHavePaid && item.myShareDue > 0
+          const deadline = item.reservation.paymentDueAtISO
+          const urgent = Boolean(deadline) && new Date(deadline as string).getTime() - Date.now() < 2 * 3600_000
+          return (
+            <Card key={item.reservation.id} className={`flex items-center gap-3 p-3 ${due ? 'border-accent/30' : ''}`}>
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-semibold">
+                  {item.reservation.reservationDate} · <span className="capitalize">{item.reservation.reservationTime}</span>
+                </div>
+                <div className="truncate text-xs text-muted">
+                  {item.isCaptain ? 'You booked this' : <>Booked by <span className="text-text">{item.captainName}</span></>} · {item.reservation.locationName}
+                </div>
+                <div className="mt-0.5 flex flex-wrap gap-x-2 text-[11px] text-muted">
+                  <span>{item.progress.paidCount || 0} of {item.progress.payerCount || 0} shares in</span>
+                  {deadline ? <span className={urgent ? 'font-semibold text-danger' : ''}>· {timeLeft(deadline)}</span> : null}
+                </div>
+              </div>
+              <div className="flex shrink-0 flex-col items-end gap-1.5">
+                {due
+                  ? <span className="text-base font-bold text-gold">{formatPHP(item.myShareDue)}</span>
+                  : <span className="text-[11px] font-semibold text-muted">{item.iHavePaid ? 'Your share is in' : 'Waiting on team'}</span>}
+                <Button size="xs" variant={due ? 'primary' : 'ghost'} onClick={() => setViewId(item.reservation.id)}>
+                  <FiEye /> View
+                </Button>
+              </div>
+            </Card>
+          )
+        })}
       </div>
 
-      {loading ? <Card className="p-4 text-sm text-muted">Loading…</Card> : null}
-      {!loading && items.length === 0 ? (
-        <Card className="p-4 text-sm text-muted">You have no split payments due. You're all set.</Card>
+      {viewing ? (
+        <Modal
+          eyebrow="Split payment"
+          title={<>{viewing.reservation.reservationDate} · <span className="capitalize">{viewing.reservation.reservationTime}</span></>}
+          size="md"
+          confirmDiscard={false}
+          onClose={() => setViewId(null)}
+        >
+          <SplitPaymentDetails
+            item={viewing}
+            onDeclined={() => {
+              setViewId(null)
+              void load()
+              // The badge on My Reservations, and the booking list, change too.
+              window.dispatchEvent(new Event(SPLIT_PAYMENTS_CHANGED_EVENT))
+            }}
+          />
+        </Modal>
       ) : null}
+    </section>
+  )
+}
 
-      {items.map((item) => (
-        <Card key={item.reservation.id} className="p-4 md:p-6">
+// How the booking's price is made up, and how it becomes this player's share: the itemized total,
+// what is paid online now (the downpayment, or everything) and at the field, and the online amount
+// split over the payers.
+function FeeDetails({ item }: { item: SplitPaymentItem }) {
+  const r = item.reservation
+  const lines = r.pricingBreakdown || []
+  const online = Number(r.depositAmount) || item.progress.target
+  const atField = Math.max(0, Math.round((Number(r.totalAmount) - online) * 100) / 100)
+  const payers = r.teamSize || item.progress.payerCount || 1
+  const evenShare = Math.round((online / payers) * 100) / 100
+  const myLoadout = item.players?.find((p) => p.isMe)?.loadout || null
+  // The package line is the one the person who booked picked for the whole group; say so.
+  const packageLine = (label: string) => Boolean(r.packageName) && label === r.packageName
+  const chooser = item.isCaptain ? 'you' : item.captainName
+  const packageLabel = (name: string) => (
+    <span className="block">
+      <span className="flex flex-wrap items-center gap-1.5">
+        <span className="rounded border border-accent/30 bg-accent/10 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-accent">Package</span>
+        <span className="font-semibold">{name}</span>
+      </span>
+      <span className="mt-0.5 block text-[11px] text-muted">Chosen by {chooser} for all {r.numberOfPlayers} players</span>
+    </span>
+  )
+  const row = (label: React.ReactNode, amount: number, className = '') => (
+    <div className={`flex items-baseline justify-between gap-3 ${className}`}>
+      <span className="min-w-0">{label}</span>
+      <span className="shrink-0 tabular-nums">{amount < 0 ? `−${formatPHP(-amount)}` : formatPHP(amount)}</span>
+    </div>
+  )
+
+  return (
+    <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4 text-sm">
+      <div className="text-xs font-semibold uppercase tracking-widest text-muted">Fee details</div>
+      <div className="mt-2 space-y-1 text-muted">
+        {lines.length
+          ? lines.map((line, index) => (
+            <React.Fragment key={`${line.label}-${index}`}>
+              {row(packageLine(line.label) ? packageLabel(line.label) : line.label, line.amount, line.amount < 0 ? 'text-success' : packageLine(line.label) ? 'text-text' : '')}
+            </React.Fragment>
+          ))
+          : row(packageLabel(r.packageName || 'Booking'), Number(r.totalAmount) || 0, 'text-text')}
+      </div>
+      <div className="mt-2 space-y-1 border-t border-white/10 pt-2">
+        {row(<span className="font-semibold">Reservation total</span>, Number(r.totalAmount) || 0, 'font-semibold')}
+        {row(r.paymentPlan === 'full' ? 'Paid online (full amount)' : 'Paid online now (downpayment)', online, 'text-muted')}
+        {atField > 0 ? row('Balance at the field on game day', atField, 'text-muted') : null}
+      </div>
+      <div className="mt-2 space-y-1 border-t border-white/10 pt-2">
+        {r.unevenShares ? (
+          <div className="text-xs text-muted">
+            Shares follow what each player gets{myLoadout ? <>. You: <span className="font-semibold text-text">{LOADOUT_LABEL[myLoadout]}</span></> : null}.
+          </div>
+        ) : row(`Online amount split ${payers} way${payers === 1 ? '' : 's'}`, evenShare, 'text-muted')}
+        {item.iHavePaid
+          ? <div className="font-semibold text-success">Your share is paid</div>
+          : row(<span className="font-semibold">Your share now</span>, item.myShareDue, 'font-semibold text-gold')}
+        {!item.iHavePaid && !r.unevenShares && Math.abs(item.myShareDue - evenShare) > 0.01 ? (
+          <div className="text-[11px] text-muted">Your share differs from the even split because it covers what's left of the online amount (rounding, or a teammate who left).</div>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+// Everything about one split payment, shown in the View pop-up: the booking, who booked it and
+// who's playing, the player's share and Pay button, and the team's progress.
+function SplitPaymentDetails({ item, onDeclined }: { item: SplitPaymentItem; onDeclined: () => void }) {
+  const [declining, setDeclining] = useState(false)
+  // An invited player who can't make it says no before paying: they leave the booking, which
+  // drops to one fewer player and is re-priced; the others' shares re-split.
+  const decline = async () => {
+    const ok = await confirmDialog({
+      title: 'Decline this game?',
+      message: `You'll be taken off ${item.captainName}'s booking for ${item.reservation.reservationDate} (${item.reservation.reservationTime}). The booking drops to ${Math.max(1, item.reservation.numberOfPlayers - 1)} players and is re-priced, and the other shares are re-split. ${item.captainName} will be notified. This can't be undone; they would have to add you again.`,
+      confirmLabel: 'Decline',
+      danger: true,
+    })
+    if (!ok) return
+    setDeclining(true)
+    try {
+      await apiPost(`/api/reservations/${encodeURIComponent(item.reservation.id)}/decline`, {})
+      toast.success(`You declined. ${item.captainName} has been notified.`)
+      onDeclined()
+    } catch (e: any) {
+      toast.error(e?.message || 'Could not decline this booking')
+    } finally {
+      setDeclining(false)
+    }
+  }
+  const canDecline = !item.isCaptain && !item.iHavePaid
+
+  return (
+        <div>
           <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
             <div>
-              <div className="text-lg font-semibold">
-                {item.reservation.reservationDate} · <span className="capitalize">{item.reservation.reservationTime}</span>
-              </div>
-              <div className="mt-1 text-sm text-muted">
+              <div className="text-sm text-muted">
                 {item.reservation.locationName} · {item.reservation.numberOfPlayers} players · {item.reservation.packageName}
               </div>
-              <div className="mt-1 text-xs text-muted">
-                {isPrivateSession(item.reservation.sessionType) ? (item.isCaptain ? 'You are the team captain' : `Captain: ${item.captainName}`) : (item.isCaptain ? 'You booked this game' : `Booked by ${item.captainName}`)} · Reservation total {formatPHP(item.reservation.totalAmount)} · Due online {formatPHP(item.progress.target)}
+              {/* Who invited you: the first thing an invited player needs to know. */}
+              <div className="mt-2 text-sm">
+                {item.isCaptain
+                  ? <span className="font-semibold">{isPrivateSession(item.reservation.sessionType) ? 'You are the team captain' : 'You booked this game'}</span>
+                  : <>{isPrivateSession(item.reservation.sessionType) ? 'Captain' : 'Booked by'} <span className="font-semibold text-accent">{item.captainName}</span>, who added you to this game</>}
               </div>
             </div>
             <span className="self-start rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold uppercase tracking-widest">
               {item.progress.state === 'partial' ? 'Partially paid' : 'Awaiting payment'}
             </span>
           </div>
+
+          {/* Who's playing: everyone on the booking. (Who has paid is shown to the captain below.) */}
+          {item.players?.length && !item.isCaptain ? (
+            <div className="mt-4">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-muted"><FiUsers /> Who's playing ({item.players.length})</div>
+              <div className="mt-2 overflow-hidden rounded-xl border border-white/10">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-white/10 bg-white/5 text-left text-[11px] uppercase tracking-wider text-muted">
+                      <th className="w-10 px-3 py-2 font-semibold">#</th>
+                      <th className="px-3 py-2 font-semibold">Player</th>
+                      <th className="px-3 py-2 font-semibold">Role</th>
+                      {item.players.some((p) => p.loadout) ? <th className="px-3 py-2 font-semibold">Gets</th> : null}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/5">
+                    {item.players.map((player, index) => (
+                      <tr key={player.id} className={player.isMe ? 'bg-accent/10' : ''}>
+                        <td className="px-3 py-2 text-muted">{index + 1}</td>
+                        <td className={`px-3 py-2 font-semibold ${player.isMe ? 'text-accent' : ''}`}>
+                          {player.name}{player.isMe ? <span className="ml-1.5 text-xs font-normal text-muted">(you)</span> : null}
+                        </td>
+                        <td className="px-3 py-2 text-xs text-muted">
+                          {player.isCaptain ? (isPrivateSession(item.reservation.sessionType) ? 'Captain · booked it' : 'Booked it') : 'Teammate'}
+                        </td>
+                        {item.players?.some((p) => p.loadout) ? (
+                          <td className={`px-3 py-2 text-xs ${player.loadout === 'package' ? 'text-muted' : 'font-semibold text-accent'}`}>
+                            {player.loadout ? LOADOUT_LABEL[player.loadout] : '—'}
+                          </td>
+                        ) : null}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : null}
+
+          <FeeDetails item={item} />
 
           {!item.iHavePaid && item.myShareDue > 0 ? (
             <ShareForm item={item} />
@@ -269,8 +486,18 @@ export function SplitPaymentPage() {
               <div className="mt-2 text-[11px] text-muted">Updates on its own as teammates pay.</div>
             </div>
           ) : null}
-        </Card>
-      ))}
-    </div>
+
+          {canDecline ? (
+            <div className="mt-4 flex flex-col gap-2 rounded-2xl border border-danger/20 bg-danger/5 p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <div className="text-sm font-semibold">Can't make it?</div>
+                <div className="text-xs text-muted">Decline before you pay and you're taken off the booking. The others' shares are re-split.</div>
+              </div>
+              <Button size="sm" variant="danger-soft" disabled={declining} onClick={decline}>
+                <FiX /> {declining ? 'Declining…' : 'Decline'}
+              </Button>
+            </div>
+          ) : null}
+        </div>
   )
 }

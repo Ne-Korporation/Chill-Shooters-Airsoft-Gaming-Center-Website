@@ -27,7 +27,6 @@ import {
   FiTarget,
   FiBriefcase,
   FiMessageSquare,
-  FiDollarSign,
   FiChevronDown,
   FiPlusCircle,
   FiUserPlus,
@@ -170,19 +169,24 @@ function useInboxUnread(enabled: boolean) {
   return enabled ? unread : 0
 }
 
-// Players see the Split Payment module only while they owe a share or, as captain, are waiting on the team.
-function useHasOpenSplitPayment(enabled: boolean) {
-  const [open, setOpen] = useState(false)
+// How many split-payment shares the player still owes: shown as a badge on My Reservations, where
+// the shares are paid (a captain only waiting on teammates has nothing to do, so no badge).
+function useSharesOwed(enabled: boolean) {
+  const [owed, setOwed] = useState(0)
   useEffect(() => {
     if (!enabled) {
-      setOpen(false)
+      setOwed(0)
       return
     }
     let active = true
     const check = () => {
-      apiGet<{ ok: boolean; data: unknown[] }>('/api/split-payments/mine')
-        .then((res) => { if (active) setOpen(Array.isArray(res?.data) && res.data.length > 0) })
-        .catch(() => { if (active) setOpen(false) })
+      apiGet<{ ok: boolean; data: Array<{ iHavePaid?: boolean; myShareDue?: number }> }>('/api/split-payments/mine')
+        .then((res) => {
+          if (!active) return
+          const items = Array.isArray(res?.data) ? res.data : []
+          setOwed(items.filter((item) => !item.iHavePaid && Number(item.myShareDue) > 0).length)
+        })
+        .catch(() => { if (active) setOwed(0) })
     }
     check()
     const timer = window.setInterval(check, 60_000)
@@ -195,7 +199,7 @@ function useHasOpenSplitPayment(enabled: boolean) {
       window.removeEventListener('focus', check)
     }
   }, [enabled])
-  return open
+  return owed
 }
 
 
@@ -240,7 +244,7 @@ export function AppSidebar({
   const { user } = useAuth()
   const { pathname } = useLocation()
   const profilePath = user?.id ? `/app/players/${encodeURIComponent(user.id)}` : '/app/players/1'
-  const hasOpenSplitPayment = useHasOpenSplitPayment(role === 'user' && !!user?.id)
+  const sharesOwed = useSharesOwed(role === 'user' && !!user?.id)
   // Players' games calendar starts on the location of their last booking.
   const lastLocation = useLastBookedLocation(role === 'user' ? user?.id : null)
   const profile: Item = { label: 'Profile', to: profilePath, icon: FiUser }
@@ -256,6 +260,7 @@ export function AppSidebar({
   const withBadges = (item: Item): Item =>
     item.to === '/app/notifications' ? { ...item, badge: unreadNotifications, badgeTitle: `${unreadNotifications} unread notification${unreadNotifications === 1 ? '' : 's'}` }
     : item.to === '/app/admin/inbox' ? { ...item, badge: inboxUnread, badgeTitle: `${inboxUnread} unread message${inboxUnread === 1 ? '' : 's'}` }
+    : item.to === '/app/my-reservations' ? { ...item, badge: sharesOwed, badgeTitle: `${sharesOwed} split-payment share${sharesOwed === 1 ? '' : 's'} to pay` }
     : item
 
   const playerItems: Item[] = [
@@ -267,7 +272,7 @@ export function AppSidebar({
     { label: 'My Weapons & Gear', to: `/app/players/${encodeURIComponent(user?.id || '1')}/weapons-and-equipment`, icon: FiTarget },
     { label: 'Online Waiver', to: '/app/waiver', icon: FiShield },
     { label: 'Game Evaluation', to: '/app/feedback', icon: FiMessageSquare },
-    ...(hasOpenSplitPayment ? [{ label: 'Split Payment', to: '/app/split-payments', icon: FiDollarSign }] : []),
+    // Split payments are paid on My Reservations (badge shows shares owed).
   ]
 
   // Marshals see what needs them on the Weapons and Gear items themselves.

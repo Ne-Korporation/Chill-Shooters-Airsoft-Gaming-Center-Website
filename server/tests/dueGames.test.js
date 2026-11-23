@@ -77,8 +77,9 @@ test('games whose slot began start on their own when every gun passed; others ar
     ? { allPassed: false, failed: 0, pending: 2 }
     : { allPassed: true, failed: 0, pending: 0 })
   const db = fakeDb({ games, reservations })
+  const paymentsOf = async () => []
 
-  const first = await startDueGames(db, { now, todayISO, hours, fpsStatusOf })
+  const first = await startDueGames(db, { now, todayISO, hours, fpsStatusOf, paymentsOf })
   assert.deepEqual(first, { started: ['GP-1'], blocked: ['GP-2'] })
   const byId = (id) => games.find((g) => g.id === id)
   assert.equal(byId('GP-1').Status, 'Ongoing')
@@ -89,13 +90,32 @@ test('games whose slot began start on their own when every gun passed; others ar
   for (const id of ['GP-3', 'GP-4', 'GP-5']) assert.equal(byId(id).Status, 'Scheduled')
   assert.equal(byId('GP-6').Status, 'Completed')
   assert.equal(db.notifications.length, 1)
-  assert.equal(db.notifications[0].targetRole, 'marshal')
+  assert.equal(db.notifications[0].targetRole, 'admin')
 
-  // The next sweep doesn't notify the marshals again; once the guns pass, the game starts.
-  await startDueGames(db, { now, todayISO, hours, fpsStatusOf })
+  // The next sweep doesn't notify again; once the guns pass, the game starts.
+  await startDueGames(db, { now, todayISO, hours, fpsStatusOf, paymentsOf })
   assert.equal(db.notifications.length, 1)
-  const passed = await startDueGames(db, { now, todayISO, hours, fpsStatusOf: async () => ({ allPassed: true }) })
+  const passed = await startDueGames(db, { now, todayISO, hours, paymentsOf, fpsStatusOf: async () => ({ allPassed: true }) })
   assert.deepEqual(passed.started, ['GP-2'])
   assert.equal(byId('GP-2').Status, 'Ongoing')
   assert.equal(byId('GP-2').autoStartBlockedReason, undefined)
+})
+
+test('a game whose booking balance is unpaid is not started at slot time, even with every gun passed', async () => {
+  const games = [{ _id: 1, id: 'GP-1', Schedule: '2026-11-14 • morning', Status: 'Scheduled', reservationId: 'R-half' }]
+  // ₱2,000 booking with a ₱1,000 downpayment: ₱1,000 is still due at the counter.
+  const reservations = [{ id: 'R-half', reservationStatus: 'confirmed', totalAmount: 2000 }]
+  const db = fakeDb({ games, reservations })
+  const fpsStatusOf = async () => ({ allPassed: true })
+  const downpayment = [{ amount: 1000, paymentStatus: 'paid' }]
+
+  const held = await startDueGames(db, { now, todayISO, hours, fpsStatusOf, paymentsOf: async () => downpayment })
+  assert.deepEqual(held, { started: [], blocked: ['GP-1'] })
+  assert.equal(games[0].Status, 'Scheduled')
+  assert.match(games[0].autoStartBlockedReason, /1,000 unpaid/)
+
+  // Once the balance is collected, the next sweep starts it.
+  const paid = await startDueGames(db, { now, todayISO, hours, fpsStatusOf, paymentsOf: async () => [...downpayment, { amount: 1000, paymentStatus: 'paid' }] })
+  assert.deepEqual(paid.started, ['GP-1'])
+  assert.equal(games[0].Status, 'Ongoing')
 })

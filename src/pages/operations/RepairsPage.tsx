@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
-import { FiTool } from 'react-icons/fi'
+import { FiPlus, FiTool } from 'react-icons/fi'
 
 import { Card } from '../../components/ui/Card'
+import { Modal } from '../../components/ui/Modal'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { ItemCombobox } from '../../components/ui/ItemCombobox'
@@ -144,6 +145,7 @@ export function RepairsPage({ embedded = false }: { embedded?: boolean } = {}) {
   const [form, setForm] = useState({ itemKey: '', damage: '', gunsmith: '', damageReportId: '', reservationId: '', playerInduced: false })
   const [completingId, setCompletingId] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const [formOpen, setFormOpen] = useState(false)
   // One box: type a name (the list narrows as you type and the closest match is filled in) or pick one.
   const itemOptions = inventory.map((item) => ({
     key: `${item.collection}:${item.id}`,
@@ -189,6 +191,7 @@ export function RepairsPage({ embedded = false }: { embedded?: boolean } = {}) {
 
       toast.success(`${item.name} is now under repair.`)
       setForm({ itemKey: '', damage: '', gunsmith: form.gunsmith, damageReportId: '', reservationId: '', playerInduced: false })
+      setFormOpen(false)
       await load()
     } catch (e: any) {
       toast.error(e?.message || 'Could not open the repair')
@@ -225,19 +228,28 @@ export function RepairsPage({ embedded = false }: { embedded?: boolean } = {}) {
 
   return (
     <div className="space-y-4">
-      {embedded ? (
-        <p className="text-sm text-muted">Gunsmith repair log for weapons and gear: damage, parts replaced, repair date, and cost for each item.</p>
-      ) : (
+      {!embedded ? (
         <div>
           <h1 className="text-3xl font-bold">Repairs</h1>
           <p className="mt-1 text-sm text-muted">Gunsmith repair log: damage, parts replaced, repair date, and cost for each item.</p>
         </div>
-      )}
+      ) : null}
 
-      <div className="grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
-        <Card className="h-fit p-4 md:p-5">
-          <div className="flex items-center gap-2 text-sm font-bold"><FiTool /> Open a repair</div>
-          <form className="mt-3 space-y-3" onSubmit={open}>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h2 className="flex items-center gap-2 text-lg font-bold"><FiTool /> Repairs</h2>
+          <p className="mt-0.5 text-xs text-muted">
+            {inProgress.length > 0 ? <span className="font-semibold text-accent">{inProgress.length} in progress</span> : 'Nothing under repair'}
+            {' · '}{done.length} completed · {formatPHP(totalSpend)} spent
+          </p>
+        </div>
+        <Button size="sm" variant="secondary" onClick={() => setFormOpen(true)}><FiPlus /> Open repair</Button>
+      </div>
+      <p className="-mt-2 text-xs text-muted">Damage reports open their repair automatically. Use Open repair for wear and tear or anything found during maintenance.</p>
+
+      {formOpen ? (
+        <Modal title="Open a repair" eyebrow="Weapons & gear" size="md" onClose={() => setFormOpen(false)}>
+          <form className="space-y-3" onSubmit={open}>
             <ItemCombobox
               label="Item"
               placeholder="Type a weapon or gear name, or pick one"
@@ -266,22 +278,8 @@ export function RepairsPage({ embedded = false }: { embedded?: boolean } = {}) {
               {saving ? 'Saving…' : 'Open repair'}
             </Button>
           </form>
-        </Card>
-
-        <Card className="p-4 md:p-5">
-          <div className="flex items-end justify-between gap-3">
-            <div className="text-sm font-bold">Repair costs</div>
-            <div className="text-right">
-              <div className="text-xs text-muted">Total spend</div>
-              <div className="text-lg font-bold text-gold">{formatPHP(totalSpend)}</div>
-            </div>
-          </div>
-          <div className="mt-3 grid gap-4 md:grid-cols-2">
-            <SummaryTable title="By model / category" rows={summary.byCategory} />
-            <SummaryTable title="By item" rows={summary.byItem} />
-          </div>
-        </Card>
-      </div>
+        </Modal>
+      ) : null}
 
       <Card className="p-4 md:p-5">
         <div className="text-sm font-bold">In progress ({inProgress.length})</div>
@@ -304,7 +302,7 @@ export function RepairsPage({ embedded = false }: { embedded?: boolean } = {}) {
       </Card>
 
       <Card className="p-4 md:p-5">
-        <div className="text-sm font-bold">Repair history</div>
+        <div className="text-sm font-bold">Repair history ({done.length})</div>
         <ul className="mt-3 space-y-2">
           {done.length === 0 ? <li className="text-sm text-muted">No completed repairs yet.</li> : done.map((repair) => (
             <li key={repair.id} className="flex flex-col gap-1 rounded-xl border border-white/10 bg-white/5 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
@@ -315,12 +313,29 @@ export function RepairsPage({ embedded = false }: { embedded?: boolean } = {}) {
               <div className="text-right">
                 <div className="text-sm font-semibold">{formatPHP(Number(repair.totalCost || 0))}</div>
                 {Number(repair.penaltyAmount || 0) > 0 ? (
-                  <div className="text-[11px] text-warning">Billed to player · {repair.reservationId}</div>
+                  <div className="text-[11px] text-amber-400">Billed to player · {repair.reservationId}</div>
                 ) : null}
               </div>
             </li>
           ))}
         </ul>
+      </Card>
+
+      <Card className="p-4 md:p-5">
+        <div className="flex items-end justify-between gap-3">
+          <div>
+            <div className="text-sm font-bold">Repair costs</div>
+            <div className="text-xs text-muted">Which models and items break most, and what they cost.</div>
+          </div>
+          <div className="text-right">
+            <div className="text-xs text-muted">Total spend</div>
+            <div className="text-lg font-bold text-gold">{formatPHP(totalSpend)}</div>
+          </div>
+        </div>
+        <div className="mt-3 grid gap-4 md:grid-cols-2">
+          <SummaryTable title="By model / category" rows={summary.byCategory} />
+          <SummaryTable title="By item" rows={summary.byItem} />
+        </div>
       </Card>
     </div>
   )

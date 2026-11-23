@@ -92,6 +92,7 @@ export async function requestGuardianApprovals(db, reservation, appUrl) {
         await notifyRole(db, {
           role: 'registrar',
           type: 'reservation_status_update',
+          topic: 'waiver',
           title: 'Guardian approval needed in person',
           message: `${approval.minorName || 'A minor'} on reservation ${reservationId} has no guardian email on file. Confirm with their guardian at the counter.`,
           linkedResourceId: reservationId,
@@ -200,6 +201,7 @@ async function recordDecision(db, approval, { status, note, decidedBy }) {
     await notifyRole(db, {
       role,
       type: 'reservation_status_update',
+      topic: 'waiver',
       title: status === 'approved' ? 'Guardian approved a booking' : 'Guardian declined a booking',
       message: `${approval.minorName || 'A minor'} on reservation ${approval.reservationId}: ${status}. ${summary.approved}/${summary.required} guardian approvals in.`,
       linkedResourceId: approval.reservationId,

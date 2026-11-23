@@ -6,11 +6,15 @@ import { requireAuth, requireRole } from '../middleware/auth.js'
 import { nextShortId } from '../utils/shortIds.js'
 import { getReservationPayments, syncReservationPaymentState } from '../utils/paymentProgress.js'
 import { emailDamageCharge } from '../services/notificationEmails.js'
-import { getExperienceLevel, getAgeGroup, suggestBalancedTeams } from '../utils/teamBalancing.js'
+import { getExperienceLevel, getAgeGroup, suggestBalancedTeams, TEAM_COLORS } from '../utils/teamBalancing.js'
 import { createPieces, modelFilter } from '../utils/inventoryPieces.js'
 import { pieceAtBranch } from '../utils/inventoryHolds.js'
 import { computePenalty, getPenaltyRules, resolvePenaltyCharge } from '../utils/penaltyRules.js'
 import { fpsBlockReason, gameFpsStatus } from '../utils/fpsChecks.js'
+import { getSlotHours, slotHasEnded } from '../utils/slotHours.js'
+import { bookingBalances } from '../utils/bookingBalance.js'
+import { assignGearOnCheckIn, releaseAutoGear } from '../utils/autoGearAssign.js'
+import { manilaDateISO } from '../utils/reminders.js'
 
 // Field-side operations from the manuscript scope that sit outside the booking flow:
 // player experience and balanced team grouping, onsite/balance payments and extra
@@ -354,6 +358,7 @@ router.post('/team-grouping', requireAuth, requireRole(...STAFF), async (req, re
     if (teams.length < 2 || teams.length > 6) return res.status(400).json({ ok: false, error: 'Create between 2 and 6 teams.' })
     const cleaned = teams.map((team, index) => ({
       name: String(team?.name || `Team ${index + 1}`).trim().slice(0, 40),
+      color: TEAM_COLORS.includes(String(team?.color)) ? String(team.color) : TEAM_COLORS[index % TEAM_COLORS.length],
       playerKeys: [...new Set((Array.isArray(team?.playerKeys) ? team.playerKeys : []).map(String))],
     }))
     const seen = new Set()
@@ -450,15 +455,22 @@ router.put('/field-checkin', requireAuth, requireRole('admin', 'registrar', 'mar
     }
     const db = await getDb()
     const roster = await getSessionRoster(db, session)
-    if (!roster.some((player) => player.key === playerKey)) {
+    const player = roster.find((p) => p.key === playerKey)
+    if (!player) {
       return res.status(404).json({ ok: false, error: 'That player is not booked for this session.' })
     }
     const nowISO = new Date().toISOString()
-    const update = req.body?.checkedIn === true
+    const checkingIn = req.body?.checkedIn === true
+    const update = checkingIn
       ? { $set: { ...session, [`players.${playerKey}`]: { atISO: nowISO, ...actorOf(req) }, updatedAtISO: nowISO } }
       : { $set: { ...session, updatedAtISO: nowISO }, $unset: { [`players.${playerKey}`]: '' } }
     await db.collection('field_checkins').updateOne({ _id: sessionKey(session.location, session.date, session.slot) }, update, { upsert: true })
-    return res.json({ ok: true, data: { playerKey, checkedIn: req.body?.checkedIn === true, atISO: nowISO } })
+    // Checking in hands the player their booked rental pieces; checking out takes the automatic ones back.
+    const gear = checkingIn
+      ? await assignGearOnCheckIn(db, { reservationId: player.reservationId, player, actor: actorOf(req), nowISO })
+      : []
+    const released = checkingIn ? 0 : await releaseAutoGear(db, { reservationId: player.reservationId, player })
+    return res.json({ ok: true, data: { playerKey, checkedIn: checkingIn, atISO: nowISO, gear, released } })
   } catch (err) {
     return sendError(res, err)
   }
@@ -486,12 +498,10 @@ export function getChargeConfig() {
 
 function buildLedger(reservation, payments) {
   const active = payments.filter((p) => !['failed', 'rejected'].includes(String(p.paymentStatus || p.status || '').toLowerCase()))
-  const collected = Math.round(active.reduce((sum, p) => sum + Number(p.amount || 0), 0) * 100) / 100
   const verified = Math.round(active
     .filter((p) => PAID_STATUSES.includes(String(p.paymentStatus || p.status || '').toLowerCase()))
     .reduce((sum, p) => sum + Number(p.amount || 0), 0) * 100) / 100
-  const total = Math.round(Number(reservation.totalAmount || 0) * 100) / 100
-  const extraTotal = Math.round((reservation.extraCharges || []).reduce((sum, c) => sum + Number(c.amount || 0), 0) * 100) / 100
+  const { collected, total, extraTotal, balanceDue, bookingBalanceDue } = bookingBalances(reservation, payments)
   return {
     reservation: {
       id: keyOf(reservation),
@@ -524,11 +534,11 @@ function buildLedger(reservation, payments) {
     })),
     collected,
     verified,
-    balanceDue: Math.max(0, Math.round((total - collected) * 100) / 100),
+    balanceDue,
     // The part of the balance that belongs to the booking itself; the rest is additional charges
-    // added at the counter (payments count toward the booking first).
+    // added at the counter (payments count toward the booking first). See utils/bookingBalance.js.
     additionalTotal: extraTotal,
-    bookingBalanceDue: Math.max(0, Math.round((total - extraTotal - collected) * 100) / 100),
+    bookingBalanceDue,
   }
 }
 
@@ -629,15 +639,27 @@ router.post('/payments/onsite', requireAuth, requireRole('admin', 'registrar'), 
     })
     await syncReservationPaymentState(db, reservation)
     // Paying off the additional charges after every rental is back is the end of the game, so
-    // its gameplay record is marked Completed (unless staff already completed or cancelled it).
+    // its gameplay record is marked Completed: only a game that was started and whose slot is
+    // over (a bill settled mid-slot leaves the game running until staff finish it).
     let gameCompleted = false
     if (settlesGame) {
       const nowISO = new Date().toISOString()
-      const result = await db.collection('gameplay').updateMany(
-        { reservationId: { $in: [reservation.id, String(reservation._id)].filter(Boolean) }, Status: { $regex: '^(sched|ongo)', $options: 'i' } },
-        { $set: { Status: 'Completed', completedAtISO: nowISO, completedBy: actorOf(req), autoCompletedBy: 'final payment', updatedAtISO: nowISO } },
-      )
-      gameCompleted = result.modifiedCount > 0
+      const { hours } = await getSlotHours(db)
+      const today = manilaDateISO()
+      const running = await db.collection('gameplay')
+        .find({ reservationId: { $in: [reservation.id, String(reservation._id)].filter(Boolean) }, Status: { $regex: '^ongo', $options: 'i' } })
+        .toArray()
+      const over = running.filter((game) => {
+        const [day, slot] = String(game.Schedule || '').split('•').map((part) => part.trim())
+        return !slot || slotHasEnded(hours, slot.toLowerCase(), day, today)
+      })
+      if (over.length) {
+        const result = await db.collection('gameplay').updateMany(
+          { _id: { $in: over.map((game) => game._id) } },
+          { $set: { Status: 'Completed', completedAtISO: nowISO, completedBy: actorOf(req), autoCompletedBy: 'final payment', updatedAtISO: nowISO } },
+        )
+        gameCompleted = result.modifiedCount > 0
+      }
     }
     const payments = await getReservationPayments(db, reservation)
     return res.status(201).json({ ok: true, data: payment, gameCompleted, ledger: buildLedger(reservation, payments) })
@@ -982,6 +1004,123 @@ router.get('/reservations/:id/weapons', requireAuth, requireRole(...STAFF), asyn
       }
     })
     return res.json({ ok: true, data })
+  } catch (err) {
+    return sendError(res, err)
+  }
+})
+
+// GET /api/reservations/:id/game-items — the weapons and gear used in a game, each with the player
+// it is bound to when that is known (shown in a game's details, and used to file damage reports):
+//   - a piece handed out at Rentals is bound to the player it was handed to;
+//   - a piece only reserved with the booking is bound to the player when the game has just one;
+//   - a player's own gun or gear (source 'own') is bound to its owner.
+// Pieces already on a damage report for this game are marked with that report's ID.
+router.get('/reservations/:id/game-items', requireAuth, requireRole(...STAFF), async (req, res) => {
+  try {
+    const db = await getDb()
+    const reservation = await findById(db, 'reservations', req.params.id)
+    if (!reservation) return res.status(404).json({ ok: false, error: 'Reservation not found' })
+    const reservationId = keyOf(reservation)
+
+    // The game's players: the booker (or walk-in guest) and the team.
+    const memberIds = [reservation.userId, ...(reservation.teamMembers || []).map((m) => m?.id)].map((id) => String(id || '')).filter(Boolean)
+    const accounts = memberIds.length
+      ? await db.collection('user_accounts').find({ id: { $in: memberIds } }, { projection: { id: 1, name: 1 } }).toArray()
+      : []
+    const nameOf = new Map(accounts.map((a) => [String(a.id), String(a.name || '').trim()]))
+    const players = []
+    const addPlayer = (id, name) => {
+      const clean = String(name || '').trim()
+      if (clean && !players.some((p) => p.name === clean)) players.push({ id: String(id || ''), name: clean })
+    }
+    if (reservation.walkIn || !reservation.userId) addPlayer('', reservation.walkInName || reservation.bookerName)
+    else addPlayer(reservation.userId, nameOf.get(String(reservation.userId)) || reservation.bookerName)
+    for (const member of reservation.teamMembers || []) addPlayer(member?.id, member?.name || nameOf.get(String(member?.id || '')))
+    const soloPlayer = players.length === 1 ? players[0] : null
+
+    const [rentals, holds, reports] = await Promise.all([
+      db.collection('rentals').find({ reservationId, itemCollection: { $in: RENTAL_COLLECTIONS } }).sort({ issuedAtISO: 1 }).toArray(),
+      db.collection('inventory_holds').find({ reservationId, collection: { $in: RENTAL_COLLECTIONS }, kind: { $ne: 'ammo_grams' } }).toArray(),
+      db.collection('damage_reports').find({ reservationId }, { projection: { id: 1, itemId: 1 } }).toArray(),
+    ])
+    const reportedBy = new Map(reports.filter((r) => r.itemId).map((r) => [String(r.itemId), r.id]))
+
+    const items = []
+    const seen = new Set()
+    // Latest handout of each piece first, so a piece handed out twice is bound to who had it last.
+    for (const rental of [...rentals].reverse()) {
+      const itemId = String(rental.itemId || '')
+      if (!itemId || seen.has(itemId)) continue
+      seen.add(itemId)
+      const baseName = String(rental.itemName || itemId)
+      items.push({
+        collection: rental.itemCollection,
+        itemId,
+        // The unit label ("#51") is often already part of the piece's name.
+        name: rental.unitLabel && !baseName.includes(rental.unitLabel) ? `${baseName} ${rental.unitLabel}` : baseName,
+        source: 'rental',
+        rentalId: rental.id,
+        rentalStatus: rental.status,
+        playerName: rental.playerName || '',
+        playerId: String(rental.playerId || ''),
+        reportedId: rental.damageReportId || reportedBy.get(itemId) || '',
+      })
+    }
+    const heldIds = holds.map((hold) => ({ collection: hold.collection, itemId: String(hold.itemId || '') })).filter((h) => h.itemId && !seen.has(h.itemId))
+    for (const collection of RENTAL_COLLECTIONS) {
+      const ids = [...new Set(heldIds.filter((h) => h.collection === collection).map((h) => h.itemId))]
+      if (!ids.length) continue
+      const docs = await db.collection(collection).find({ id: { $in: ids } }, { projection: { id: 1, name: 1, unitNumber: 1 } }).toArray()
+      const byId = new Map(docs.map((doc) => [String(doc.id), doc]))
+      for (const itemId of ids) {
+        seen.add(itemId)
+        items.push({
+          collection,
+          itemId,
+          name: byId.get(itemId)?.name || itemId,
+          source: 'booked',
+          rentalId: '',
+          rentalStatus: '',
+          playerName: soloPlayer?.name || '',
+          playerId: soloPlayer?.id || '',
+          reportedId: reportedBy.get(itemId) || '',
+        })
+      }
+    }
+
+    // Players' own guns and gear (what the booking picked from their registered gear, plus the
+    // approved guns of anyone who said they'd bring their own), each bound to its owner.
+    const bringers = new Set((reservation.ownWeaponBringerIds || []).map(String))
+    const pickedOwn = {
+      weapons: (reservation.selectedOwnWeaponIds || []).map(String),
+      equipments: (reservation.selectedOwnEquipmentIds || []).map(String),
+    }
+    for (const collection of RENTAL_COLLECTIONS) {
+      if (!memberIds.length) break
+      const docs = await db.collection(collection).find(
+        { source: 'player', submittedBy: { $in: memberIds }, approvalStatus: { $ne: 'rejected' } },
+        { projection: { id: 1, name: 1, submittedBy: 1, approvalStatus: 1 } },
+      ).toArray()
+      for (const doc of docs) {
+        const itemId = String(doc.id || '')
+        const owner = String(doc.submittedBy)
+        const brought = pickedOwn[collection].includes(itemId) || (collection === 'weapons' && bringers.has(owner) && doc.approvalStatus === 'approved')
+        if (!itemId || !brought || seen.has(itemId)) continue
+        seen.add(itemId)
+        items.push({
+          collection,
+          itemId,
+          name: doc.name || 'Own item',
+          source: 'own',
+          rentalId: '',
+          rentalStatus: '',
+          playerName: players.find((p) => p.id === owner)?.name || nameOf.get(owner) || '',
+          playerId: owner,
+          reportedId: '',
+        })
+      }
+    }
+    return res.json({ ok: true, data: { items, players } })
   } catch (err) {
     return sendError(res, err)
   }

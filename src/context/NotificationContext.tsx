@@ -85,6 +85,7 @@ type NotificationContextValue = {
   loading: boolean
   addNotification: (item: Omit<NotificationItem, 'id' | 'read' | 'createdAtISO'>) => void
   markAsRead: (id: string) => void
+  markAsUnread: (id: string) => void
   markAllAsRead: (userId: string, role?: string) => void
   // Admins archive notifications instead of deleting them. No ids = every notification.
   archiveNotifications: (ids?: string[]) => Promise<number>
@@ -195,6 +196,16 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     [],
   )
 
+  const markAsUnread = useCallback(
+    (id: string) => {
+      setNotifications((prev) => sortNotifications(prev.map((n) => (n.id === id ? { ...n, read: false } : n))))
+      void apiPut(`/api/notifications/${encodeURIComponent(id)}`, { read: false }).catch((error) => {
+        console.warn('Failed to update notification', error)
+      })
+    },
+    [],
+  )
+
   const markAllAsRead = useCallback(
     (userId: string, role?: string) => {
       setNotifications((prev) => {
@@ -298,6 +309,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       loading,
       addNotification,
       markAsRead,
+      markAsUnread,
       markAllAsRead,
       archiveNotifications,
       restoreNotifications,
@@ -308,7 +320,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       deleteNotification,
       getAllNotifications,
     }),
-    [notifications, loading, addNotification, markAsRead, markAllAsRead, archiveNotifications, restoreNotifications, clearNotificationsByIds, unreadCount, getNotificationsForUser, getNotificationsForRole, deleteNotification, getAllNotifications],
+    [notifications, loading, addNotification, markAsRead, markAsUnread, markAllAsRead, archiveNotifications, restoreNotifications, clearNotificationsByIds, unreadCount, getNotificationsForUser, getNotificationsForRole, deleteNotification, getAllNotifications],
   )
 
   return <NotificationContext.Provider value={value}>{children}</NotificationContext.Provider>

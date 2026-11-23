@@ -10,7 +10,6 @@ import { confirmDialog } from '../../components/ui/ConfirmDialog'
 import { Modal } from '../../components/ui/Modal'
 import { apiGet, apiPut } from '../../utils/apiClient'
 import { Pagination } from '../../components/ui/Pagination'
-import { useAuth } from '../../context/AuthContext'
 import { LOCATIONS } from '../operations/shared'
 import { BookingPlayersSection } from '../../components/reservations/BookingPlayersSection'
 
@@ -94,28 +93,30 @@ const STATUS_ORDER: GameplayStatus[] = ['Ongoing', 'Scheduled', 'Completed', 'Ca
 export const locationName =(doc: { LocationId?: string; Location?: string }) =>
   LOCATIONS.find((loc) => loc.id === doc.LocationId)?.name || doc.Location || doc.LocationId || '—'
 
-type GameWeapon = {
-  id: string
+// The weapons and gear used in a game (GET /api/reservations/:id/game-items), each with the
+// player it is bound to: handed to them at Rentals, their own gear, or the only player in the game.
+type GameItem = {
+  collection: 'weapons' | 'equipments'
+  itemId: string
   name: string
-  unitNumber: number
-  status: string
-  source: 'rental' | 'own'
-  rentedTo: string
+  source: 'rental' | 'booked' | 'own'
   rentalStatus: string
+  playerName: string
+  playerId: string
 }
-
-const WEAPON_STATUS_LABELS: Record<string, string> = { available: 'Available', rented: 'Rented', 'needs-check': 'Needs check', removed: 'Removed' }
+type GameGear = { items: GameItem[]; players: Array<{ id: string; name: string }> }
 
 const statusTone = (status: GameplayStatus) => {
   switch (status) {
     case 'Ongoing':
       return 'bg-success/20 text-success border-success/30'
+    // Finished games are grey, so only the running ones (green) stand out.
     case 'Completed':
-      return 'bg-success/20 text-success border-success/30'
+      return 'bg-white/10 text-muted border-white/15'
     case 'Cancelled':
       return 'bg-danger/20 text-danger border-danger/30'
     case 'Archived':
-      return 'bg-white/5 text-muted border-white/10'
+      return 'bg-transparent text-muted/70 border-white/10'
     default:
       return 'bg-accent/20 text-accent border-accent/30'
   }
@@ -139,7 +140,7 @@ const GAME_MODES = [
   'Attack & Defend',
 ]
 
-type StatusFilter = 'active' | 'Scheduled' | 'Ongoing' | 'Completed' | 'Cancelled'
+type StatusFilter = 'active' | 'Scheduled' | 'Ongoing' | 'Completed'
 type DateFilter = 'any' | 'today' | 'tomorrow' | 'week' | 'upcoming' | 'past' | 'on' | 'range'
 type GameFilters = {
   status: StatusFilter
@@ -224,42 +225,26 @@ export function RegistrarOngoingGamesPage({ embedded = false }: { embedded?: boo
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
   const [counts, setCounts] = useState({ Scheduled: 0, Ongoing: 0, Completed: 0, Cancelled: 0, Archived: 0 })
-  const { user } = useAuth()
-  const canUpdateWeapons = user?.role === 'admin' || user?.role === 'marshal'
   // The game whose details pop-up is open; the row is re-read from the list after each refresh.
   const [detail, setDetail] = useState<GameplayDoc | null>(null)
   const detailDoc = detail ? items.find((doc) => rowId(doc) === rowId(detail)) || detail : null
-  const [weapons, setWeapons] = useState<GameWeapon[] | null>(null)
-  const [updatingWeaponId, setUpdatingWeaponId] = useState('')
+  const [gear, setGear] = useState<GameGear | null>(null)
 
-  const loadWeapons = React.useCallback(async (reservationId: string) => {
+  const loadGear = React.useCallback(async (reservationId: string) => {
     try {
-      const res = await apiGet<{ ok: boolean; data: GameWeapon[] }>(`/api/reservations/${encodeURIComponent(reservationId)}/weapons`)
-      setWeapons(Array.isArray(res?.data) ? res.data : [])
+      const res = await apiGet<{ ok: boolean; data: GameGear }>(`/api/reservations/${encodeURIComponent(reservationId)}/game-items`)
+      setGear({ items: res?.data?.items || [], players: res?.data?.players || [] })
     } catch (e: any) {
       toast.error(String(e?.message || e))
-      setWeapons([])
+      setGear({ items: [], players: [] })
     }
   }, [])
 
   const openDetails = (doc: GameplayDoc) => {
     setDetail(doc)
-    setWeapons(null)
-    if (doc.reservationId) void loadWeapons(doc.reservationId)
-    else setWeapons([])
-  }
-
-  const setWeaponStatus = async (weapon: GameWeapon, status: 'available' | 'needs-check') => {
-    setUpdatingWeaponId(weapon.id)
-    try {
-      await apiPut(`/api/weapons/${encodeURIComponent(weapon.id)}`, { status, updatedAtISO: new Date().toISOString() })
-      toast.success(`${weapon.name} marked ${status === 'available' ? 'available' : 'for a check'}`)
-      if (detailDoc?.reservationId) await loadWeapons(detailDoc.reservationId)
-    } catch (e: any) {
-      toast.error(String(e?.message || e))
-    } finally {
-      setUpdatingWeaponId('')
-    }
+    setGear(null)
+    if (doc.reservationId) void loadGear(doc.reservationId)
+    else setGear({ items: [], players: [] })
   }
 
   const setFilter =<K extends keyof GameFilters>(key: K, value: GameFilters[K]) => {
@@ -484,7 +469,9 @@ export function RegistrarOngoingGamesPage({ embedded = false }: { embedded?: boo
       </div>
       ) : null}
 
-      <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
+      {/* The center doesn't cancel games, so there's no Cancelled tile or filter. A game whose
+          booking was cancelled (e.g. the player closed their account) still shows under All. */}
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
         <Card className="rounded-xl px-3 py-2 md:px-3 md:py-2">
           <div className="truncate text-[10px] uppercase tracking-wider text-muted">Scheduled</div>
           <div className="mt-0.5 text-base font-bold text-accent">{counts.Scheduled}</div>
@@ -495,11 +482,7 @@ export function RegistrarOngoingGamesPage({ embedded = false }: { embedded?: boo
         </Card>
         <Card className="rounded-xl px-3 py-2 md:px-3 md:py-2">
           <div className="truncate text-[10px] uppercase tracking-wider text-muted">Completed</div>
-          <div className="mt-0.5 text-base font-bold text-success">{counts.Completed}</div>
-        </Card>
-        <Card className="rounded-xl px-3 py-2 md:px-3 md:py-2">
-          <div className="truncate text-[10px] uppercase tracking-wider text-muted">Cancelled</div>
-          <div className="mt-0.5 text-base font-bold text-danger">{counts.Cancelled}</div>
+          <div className="mt-0.5 text-base font-bold text-muted">{counts.Completed}</div>
         </Card>
         <Card className="rounded-xl px-3 py-2 md:px-3 md:py-2">
           <div className="truncate text-[10px] uppercase tracking-wider text-muted">Archived</div>
@@ -546,7 +529,6 @@ export function RegistrarOngoingGamesPage({ embedded = false }: { embedded?: boo
               <option value="Scheduled">Scheduled</option>
               <option value="Ongoing">Ongoing</option>
               <option value="Completed">Completed</option>
-              <option value="Cancelled">Cancelled</option>
             </select>
           </label>
           <label className="block text-xs font-semibold text-muted">
@@ -730,16 +712,73 @@ export function RegistrarOngoingGamesPage({ embedded = false }: { embedded?: boo
     {detailDoc ? (
       <GameDetailsDialog
         doc={detailDoc}
-        weapons={weapons}
-        canUpdateWeapons={canUpdateWeapons}
-        updatingWeaponId={updatingWeaponId}
-        onWeaponStatus={setWeaponStatus}
+        gear={gear}
         onStart={() => startGame(detailDoc)}
         onComplete={() => completeGame(detailDoc)}
         onArchive={() => archiveGame(detailDoc)}
         onClose={() => setDetail(null)}
       />
     ) : null}
+    </div>
+  )
+}
+
+// One row per player with the weapons and gear they have; pieces booked for the group but not yet
+// handed to anyone at Rentals go in a last "Not handed out yet" row.
+function GearTable({ gear }: { gear: GameGear | null }) {
+  if (gear === null) return <div className="mt-2 text-sm text-muted">Loading…</div>
+  const { items, players } = gear
+  if (players.length === 0 && items.length === 0) return <div className="mt-2 text-sm text-muted">No players or gear are recorded for this game.</div>
+
+  const forPlayer = (player: { id: string; name: string }) => items.filter((item) =>
+    (player.id && item.playerId === player.id) || (item.playerName && item.playerName === player.name))
+  const listed = new Set(players.flatMap((player) => forPlayer(player)).map((item) => item.itemId))
+  // Handed to someone not on the booking (e.g. a walk-in friend), or not handed out yet.
+  const others = items.filter((item) => !listed.has(item.itemId))
+  const extraNames = [...new Set(others.map((item) => item.playerName).filter(Boolean))]
+  const rows = [
+    ...players.map((player) => ({ key: player.id || player.name, name: player.name, note: '', items: forPlayer(player) })),
+    ...extraNames.map((name) => ({ key: `extra-${name}`, name, note: 'Not on the booking', items: others.filter((item) => item.playerName === name) })),
+    ...(others.some((item) => !item.playerName)
+      ? [{ key: 'unassigned', name: 'Not handed out yet', note: 'Booked for the group', items: others.filter((item) => !item.playerName) }]
+      : []),
+  ]
+
+  const chips = (list: GameItem[]) => list.length === 0 ? <span className="text-muted">—</span> : (
+    <div className="flex flex-wrap gap-1.5">
+      {list.map((item) => (
+        <span key={item.itemId} className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-white/5 px-2 py-0.5 text-xs">
+          {item.name}
+          {item.source === 'own' ? <span className="text-[10px] font-semibold text-accent">own</span> : null}
+          {item.rentalStatus === 'out' ? <span className="text-[10px] text-muted">· out</span> : null}
+        </span>
+      ))}
+    </div>
+  )
+
+  return (
+    <div className="mt-2 overflow-x-auto rounded-2xl border border-white/10">
+      <table className="w-full min-w-[480px] text-sm">
+        <thead>
+          <tr className="border-b border-white/10 text-left text-[11px] uppercase tracking-wider text-muted">
+            <th className="px-3 py-2 font-semibold">Player</th>
+            <th className="px-3 py-2 font-semibold">Weapons</th>
+            <th className="px-3 py-2 font-semibold">Gear</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-white/5">
+          {rows.map((row) => (
+            <tr key={row.key} className="align-top">
+              <td className="px-3 py-2">
+                <div className={`font-semibold ${row.key === 'unassigned' ? 'text-muted' : ''}`}>{row.name}</div>
+                {row.note ? <div className="text-[11px] text-muted">{row.note}</div> : null}
+              </td>
+              <td className="px-3 py-2">{chips(row.items.filter((item) => item.collection === 'weapons'))}</td>
+              <td className="px-3 py-2">{chips(row.items.filter((item) => item.collection === 'equipments'))}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   )
 }
@@ -754,23 +793,17 @@ function DetailRow({ label, children }: { label: string; children: React.ReactNo
 }
 
 // Everything about one game: the booking behind it (players, rentals, charges and payments),
-// package, mode, group, layout, the status actions, and the weapons used, which admins and marshals can mark available again or flag for a check.
+// package, mode, group, layout, the status actions, and who has which weapon and gear.
 function GameDetailsDialog({
   doc,
-  weapons,
-  canUpdateWeapons,
-  updatingWeaponId,
-  onWeaponStatus,
+  gear,
   onStart,
   onComplete,
   onArchive,
   onClose,
 }: {
   doc: GameplayDoc
-  weapons: GameWeapon[] | null
-  canUpdateWeapons: boolean
-  updatingWeaponId: string
-  onWeaponStatus: (weapon: GameWeapon, status: 'available' | 'needs-check') => void
+  gear: GameGear | null
   onStart: () => void
   onComplete: () => void
   onArchive: () => void
@@ -831,47 +864,8 @@ function GameDetailsDialog({
       </div>
 
       <section className="mt-5">
-        <div className="text-xs uppercase tracking-widest text-muted">Weapons used</div>
-        {weapons === null ? (
-          <div className="mt-2 text-sm text-muted">Loading weapons…</div>
-        ) : weapons.length === 0 ? (
-          <div className="mt-2 text-sm text-muted">No weapons are recorded for this game.</div>
-        ) : (
-          <ul className="mt-2 divide-y divide-white/5 rounded-2xl border border-white/10">
-            {weapons.map((weapon) => {
-              const available = weapon.status === 'available'
-              return (
-                <li key={weapon.id} className="flex flex-col gap-2 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-semibold">
-                      {weapon.name}{weapon.unitNumber ? ` #${weapon.unitNumber}` : ''}
-                    </div>
-                    <div className="text-[11px] text-muted">
-                      {weapon.id} · {weapon.source === 'own' ? "Player's own" : 'Rental'}
-                      {weapon.rentedTo ? ` · ${weapon.rentalStatus === 'out' ? 'with' : 'used by'} ${weapon.rentedTo}` : ''}
-                    </div>
-                  </div>
-                  <div className="flex flex-none items-center gap-2">
-                    <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${available ? 'border-success/30 bg-success/15 text-success' : weapon.status === 'rented' ? 'border-accent/30 bg-accent/15 text-accent' : 'border-danger/30 bg-danger/15 text-danger'}`}>
-                      {WEAPON_STATUS_LABELS[weapon.status] || weapon.status}
-                    </span>
-                    {canUpdateWeapons && weapon.status !== 'removed' ? (
-                      available ? (
-                        <Button size="xs" variant="danger-soft" disabled={updatingWeaponId === weapon.id} onClick={() => onWeaponStatus(weapon, 'needs-check')}>
-                          <FiX /> Not available
-                        </Button>
-                      ) : (
-                        <Button size="xs" variant="success-soft" disabled={updatingWeaponId === weapon.id} onClick={() => onWeaponStatus(weapon, 'available')}>
-                          <FiCheck /> Mark available
-                        </Button>
-                      )
-                    ) : null}
-                  </div>
-                </li>
-              )
-            })}
-          </ul>
-        )}
+        <div className="text-xs uppercase tracking-widest text-muted">Players' weapons and gear</div>
+        <GearTable gear={gear} />
       </section>
     </Modal>
   )

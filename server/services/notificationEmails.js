@@ -349,7 +349,7 @@ export function emailGearReviewEvent(db, item, kind, status) {
   })
 }
 
-// payLink opens the Split Payment page (after login if needed) where the teammate pays their share.
+// payLink opens My Reservations at the split payments (after login if needed), where the teammate pays their share.
 export function emailSplitShareRequest(db, reservation, userId, share, captainName, dueLabel, payLink = '') {
   if (!reservation || !userId) return Promise.resolve({ skipped: 'missing data' })
   const id = String(reservation.id || reservation._id)
