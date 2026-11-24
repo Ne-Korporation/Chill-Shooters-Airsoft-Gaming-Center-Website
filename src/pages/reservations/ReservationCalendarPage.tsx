@@ -50,6 +50,7 @@ import { closedDayMessage, useClosedDays } from '../../utils/closedDays'
 import { bookingRoles } from '../../utils/bookingRoles'
 import { addDaysISO, BOOKING_WINDOW_DAYS, monthsBetween } from '../../utils/bookingWindow'
 import { pieceAtBranch } from '../../utils/branches'
+import { emptySpots, fieldCountForPlayers, fieldCountMinimum, PRIVATE_MIN_PLAYERS } from '../../utils/privateGames'
 
 // Slot holds last 15 minutes on the server; refresh well before that while the player is booking.
 const SLOT_HOLD_REFRESH_MS = 4 * 60 * 1000
@@ -323,10 +324,6 @@ const STEP_LABELS: Record<BookingStep, string> = {
 // Public (weekend) games take bookings from a single player upward.
 const MIN_PLAYERS = 1
 
-const FIELD_COUNT_MINIMUMS = [0, 10, 20, 50]
-function fieldCountMinimum(fieldCount: number) {
-  return FIELD_COUNT_MINIMUMS[Math.min(Math.max(0, fieldCount), FIELD_COUNT_MINIMUMS.length - 1)]
-}
 
 // Upper Ground is the main field: a private booking is Upper Ground, Upper + Lower Ground, or all
 // three (fields are listed in that order). Matches the server's isAllowedFieldCombination.
@@ -340,13 +337,8 @@ function fieldChoiceIds(location: LocationOption, count: number): string[] {
   return getFieldsForLocation(location).slice(0, Math.max(1, count)).map((field) => field.id)
 }
 
-// Fields are assigned from the group size: 10-19 players get Upper Ground, 20-49 get Upper + Lower
-// Ground, 50+ get all three.
-function fieldCountForPlayers(players: number): number {
-  if (players >= FIELD_COUNT_MINIMUMS[3]) return 3
-  if (players >= FIELD_COUNT_MINIMUMS[2]) return 2
-  return 1
-}
+// Fields are assigned from the group size (utils/privateGames.ts): up to 19 players get Upper
+// Ground, 20-29 get Upper + Lower Ground, 30+ get all three. A group under 10 is billed as 10.
 
 export function ReservationCalendarPage() {
   const slotHours = useSlotHours()
@@ -1402,10 +1394,11 @@ export function ReservationCalendarPage() {
       r.locationId === selectedLocation)
   ), [isWd, reservations, dateISO, selectedLocation])
 
-  // Private games: the minimum depends on how many fields are picked (matches the server's
-  // fieldCountMinimum): 1 field needs 10 players, 2 fields 20, all 3 fields 50.
+  // Private games: Upper Ground takes any group (under 10 is billed as 10); 2 fields need 20
+  // players and all 3 need 30 (matches the server's fieldCountMinimum).
   const getMinPlayersForSelection = useCallback((ids: string[], _slotToCheck?: TimeSlot): number => {
-    return fieldCountMinimum(ids.filter((id) => getFieldById(id)).length)
+    const count = ids.filter((id) => getFieldById(id)).length
+    return count <= 1 ? MIN_PLAYERS : fieldCountMinimum(count)
   }, [])
 
   const getFieldSelectionValidity = useCallback(
@@ -1656,11 +1649,19 @@ export function ReservationCalendarPage() {
       ? layoutFeeFor(countLayoutPieces(fieldLayoutItems), layoutTiers)
       : layoutBlueprintUrl ? { ...layoutTiers[1], pieces: 0, next: null, untilNext: null } : null
   const layoutFeeTotal = layoutFee?.price || 0
+  // A private game under 10 players is billed as 10: each empty spot costs one player's package
+  // price (the entrance fee without a package), paid by the captain. Same as the server.
+  const privateEmptySpots = emptySpots(sessionType, players)
+  const emptySpotUnit = packageOnePlayerPrice
+    ?? (selectedPackage && packageIsGroupPrice
+      ? Math.round(Number(selectedPackage.settledAmount || 0) / Math.max(1, Math.round(Number(selectedPackage.players || 1))))
+      : ENTRANCE_FEE_PER_PLAYER)
+  const privateMinimumCharge = privateEmptySpots * emptySpotUnit
   const dynamicPricing = useMemo(() => {
-    if (extraAmmoTotal <= 0 && layoutFeeTotal <= 0) return basePricing
-    const total = basePricing.total + extraAmmoTotal + layoutFeeTotal
+    if (extraAmmoTotal <= 0 && layoutFeeTotal <= 0 && privateMinimumCharge <= 0) return basePricing
+    const total = basePricing.total + extraAmmoTotal + layoutFeeTotal + privateMinimumCharge
     return { ...basePricing, total, perPlayer: Math.round(total / Math.max(1, players)) }
-  }, [basePricing, extraAmmoTotal, layoutFeeTotal, players])
+  }, [basePricing, extraAmmoTotal, layoutFeeTotal, privateMinimumCharge, players])
 
   // Each slot of a full day is priced like a one-slot booking; the player pays for all of them.
   const bookingTotal = dynamicPricing.total * bookedSlots.length
@@ -1735,6 +1736,10 @@ export function ReservationCalendarPage() {
     if (layoutFee && layoutFee.price > 0) {
       itemizedBreakdown.push({ label: `Custom field layout (${layoutFee.label}, ${layoutFee.pieces > 0 ? `${layoutFee.pieces} piece${layoutFee.pieces === 1 ? '' : 's'}` : 'uploaded plan'})`, amount: layoutFee.price })
     }
+    if (privateMinimumCharge > 0) {
+      equipmentPrice += privateMinimumCharge
+      itemizedBreakdown.push({ label: `Private game minimum: ${privateEmptySpots} empty spot${privateEmptySpots === 1 ? '' : 's'} × ₱${emptySpotUnit.toLocaleString('en-PH')} (paid by the captain)`, amount: privateMinimumCharge })
+    }
 
     return {
       fieldPrice,
@@ -1744,7 +1749,7 @@ export function ReservationCalendarPage() {
       total: dynamicPricing.total,
       itemizedBreakdown,
     }
-  }, [customItemsTotal, customSelectedEquipment, customSelectedWeapons, dynamicPricing, packageEquipment, players, selectedPackage, selectionMode, extraAmmoTotal, extraAmmoReloads, ammoReloadPrice, rentalPlayers, packageSingleItems, rentOnlyCounts, validPlayerGuns, gunRentersNotTakingPackage, weapons, layoutFee])
+  }, [customItemsTotal, customSelectedEquipment, customSelectedWeapons, dynamicPricing, packageEquipment, players, selectedPackage, selectionMode, extraAmmoTotal, extraAmmoReloads, ammoReloadPrice, rentalPlayers, packageSingleItems, rentOnlyCounts, validPlayerGuns, gunRentersNotTakingPackage, weapons, layoutFee, privateMinimumCharge, privateEmptySpots, emptySpotUnit])
 
   // Each player's part of the booking total (every slot), the same way the server splits a payment
   // (server/utils/splitShares.js): in proportion to what each one gets, and a minor's part is paid
@@ -1762,7 +1767,7 @@ export function ReservationCalendarPage() {
     const anyAmmo = extraAmmoReloads > 0
     const costOf = (id: string) => {
       if (selectionMode !== 'package' || packageOnePlayerPrice === null) {
-        return anyAmmo ? basePricing.total / Math.max(1, players) + ammoOf(id) : 1
+        return anyAmmo || privateMinimumCharge > 0 ? basePricing.total / Math.max(1, players) + ammoOf(id) : 1
       }
       return (notTaking(id) ? ENTRANCE_FEE_PER_PLAYER + singlesCostOf(id) + gunsCostOf(id) : packageOnePlayerPrice + gunsCostOf(id)) + ammoOf(id)
     }
@@ -1773,12 +1778,15 @@ export function ReservationCalendarPage() {
       const pieces = [...guns, ...(validOwnGearRentals[id] || []).map((piece) => RENT_PIECE_LABEL[piece].toLowerCase())]
       return pieces.length ? `Rents only: ${pieces.join(', ')}` : 'Brings everything'
     }
+    const captainId = String(user?.id || '')
     const getsOf = (id: string) => {
       const reloads = validExtraAmmo[id] || 0
-      return reloads ? `${baseGetsOf(id)} + ${reloads} extra reload${reloads === 1 ? '' : 's'}` : baseGetsOf(id)
+      const withAmmo = reloads ? `${baseGetsOf(id)} + ${reloads} extra reload${reloads === 1 ? '' : 's'}` : baseGetsOf(id)
+      return id === captainId && privateEmptySpots > 0 ? `${withAmmo} + ${privateEmptySpots} empty spot${privateEmptySpots === 1 ? '' : 's'}` : withAmmo
     }
     const payerIds = new Set(roster.filter((row) => !row.isMinor).map((row) => row.id))
-    const weight = new Map(roster.filter((row) => !row.isMinor).map((row) => [row.id, costOf(row.id)]))
+    // The captain also pays for a private game's empty spots.
+    const weight = new Map(roster.filter((row) => !row.isMinor).map((row) => [row.id, costOf(row.id) + (row.id === captainId ? privateMinimumCharge : 0)]))
     // A minor's part goes on their parent or guardian on the team (else it's spread over everyone).
     for (const row of roster) {
       if (row.isMinor && row.guardianId && payerIds.has(row.guardianId)) weight.set(row.guardianId, (weight.get(row.guardianId) || 0) + costOf(row.id))
@@ -1802,7 +1810,7 @@ export function ReservationCalendarPage() {
     }))
     // gunModel / singlesCostOf / gunsCostOf follow the state listed here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.id, user?.name, selectedTeammates, validOwnGearIds, validOwnGearRentals, validPlayerGuns, selectionMode, packageOnePlayerPrice, bookingTotal, rentMode, weapons, packageSingleItems, validExtraAmmo, extraAmmoReloads, ammoReloadPrice, basePricing.total, players])
+  }, [user?.id, user?.name, selectedTeammates, validOwnGearIds, validOwnGearRentals, validPlayerGuns, selectionMode, packageOnePlayerPrice, bookingTotal, rentMode, weapons, packageSingleItems, validExtraAmmo, extraAmmoReloads, ammoReloadPrice, basePricing.total, players, privateMinimumCharge, privateEmptySpots])
 
   const reservationSummary = useMemo(() => {
     const selectedFields = availableFields.filter((f) => selectedFieldIds.includes(f.id))
@@ -2806,16 +2814,20 @@ export function ReservationCalendarPage() {
                       const current = selectedFieldIds.length === count
                       return (
                         <div key={count} className={current ? 'font-semibold text-accent' : ''}>
-                          • {fieldCountMinimum(count)}{count < 3 ? `–${fieldCountMinimum(count + 1) - 1}` : '+'} players: {FIELD_CHOICES[count - 1].label}{current ? ' (your group)' : ''}
+                          • {count === 1 ? `Up to ${fieldCountMinimum(2) - 1}` : `${fieldCountMinimum(count)}${count < 3 ? `–${fieldCountMinimum(count + 1) - 1}` : '+'}`} players: {FIELD_CHOICES[count - 1].label}{current ? ' (your group)' : ''}
                         </div>
                       )
                     })}
-                    <div className="mt-2 text-accent/80">
-                      Current selection requires at least {minPlayersForFields} players
-                      {players < minPlayersForFields && (
-                        <span className="text-danger ml-2">(Current: {players})</span>
-                      )}
+                    <div className="mt-2">
+                      Private games are billed for at least {PRIVATE_MIN_PLAYERS} players. The fields are assigned from your group size.
                     </div>
+                    {privateEmptySpots > 0 ? (
+                      <div className="mt-2 rounded-xl border border-warning/30 bg-warning/10 p-2 font-semibold text-warning">
+                        Your group of {players} pays for {privateEmptySpots} empty spot{privateEmptySpots === 1 ? '' : 's'}: +₱{privateMinimumCharge.toLocaleString('en-PH')} ({privateEmptySpots} × ₱{emptySpotUnit.toLocaleString('en-PH')}), added to the captain's share.
+                      </div>
+                    ) : players < minPlayersForFields ? (
+                      <div className="mt-2 text-danger">These fields need at least {minPlayersForFields} players (current: {players}).</div>
+                    ) : null}
                   </div>
                 </div>
               )}

@@ -262,11 +262,10 @@ export function RegistrarOngoingGamesPage({ embedded = false }: { embedded?: boo
     setPage(1)
   }
   const filtersActive = JSON.stringify({ ...filters, sort: DEFAULT_FILTERS.sort }) !== JSON.stringify(DEFAULT_FILTERS)
-  // Time slot, game mode and sort sit behind "More filters"; they stay visible while one is set.
+  // Time slot and game mode sit behind "More filters"; they stay visible while one is set.
+  // Sort by is always shown with the main filters.
   const [moreFiltersOpen, setMoreFiltersOpen] = useState(false)
-  const lookingBack = filters.status === 'Completed' || filters.date === 'past'
-  const autoSort = lookingBack ? 'latest' : DEFAULT_FILTERS.sort
-  const moreFiltersSet = Boolean(filters.slot || filters.mode || filters.sort !== autoSort)
+  const moreFiltersSet = Boolean(filters.slot || filters.mode)
   const showMoreFilters = moreFiltersOpen || moreFiltersSet
 
   // Latest filters for the background refresh.
@@ -588,7 +587,8 @@ export function RegistrarOngoingGamesPage({ embedded = false }: { embedded?: boo
           </div>
         </div>
 
-        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+        {/* The filters used most, and the order, always in view. */}
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <label className="block text-xs font-semibold text-muted">
             Status
             <select value={filters.status} onChange={(e) => setFilter('status', e.target.value as StatusFilter)} className="select-field mt-1 h-10 w-full">
@@ -636,10 +636,18 @@ export function RegistrarOngoingGamesPage({ embedded = false }: { embedded?: boo
               {LOCATIONS.map((loc) => <option key={loc.id} value={loc.id}>{loc.name}</option>)}
             </select>
           </label>
+          <label className="block text-xs font-semibold text-muted">
+            Sort by
+            <select value={filters.sort} onChange={(e) => setFilter('sort', e.target.value as GameFilters['sort'])} className="select-field mt-1 h-10 w-full">
+              <option value="soonest">Earliest first</option>
+              <option value="latest">Latest first</option>
+              <option value="newest">Recently booked</option>
+            </select>
+          </label>
         </div>
         {/* Less-used filters, tucked away until asked for (or while one of them is set). */}
         {showMoreFilters ? (
-        <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+        <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <label className="block text-xs font-semibold text-muted">
             Time slot
             <select value={filters.slot} onChange={(e) => setFilter('slot', e.target.value)} className="select-field mt-1 h-10 w-full">
@@ -654,14 +662,6 @@ export function RegistrarOngoingGamesPage({ embedded = false }: { embedded?: boo
             <select value={filters.mode} onChange={(e) => setFilter('mode', e.target.value)} className="select-field mt-1 h-10 w-full">
               <option value="">Any mode</option>
               {GAME_MODES.map((mode) => <option key={mode} value={mode}>{mode}</option>)}
-            </select>
-          </label>
-          <label className="block text-xs font-semibold text-muted">
-            Sort by
-            <select value={filters.sort} onChange={(e) => setFilter('sort', e.target.value as GameFilters['sort'])} className="select-field mt-1 h-10 w-full">
-              <option value="soonest">Game date (earliest first)</option>
-              <option value="latest">Game date (latest first)</option>
-              <option value="newest">Recently added</option>
             </select>
           </label>
         </div>

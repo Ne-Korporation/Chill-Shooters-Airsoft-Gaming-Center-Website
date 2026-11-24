@@ -27,6 +27,7 @@ import { closedDayError, findClosedDay, listClosedDays } from '../utils/closedDa
 import { countAccountBookings } from '../utils/accountClosure.js'
 import { roleNotificationFilter } from '../utils/roleNotifications.js'
 import { withSplitShares } from '../utils/splitShares.js'
+import { billedPlayers, fieldCountMinimum } from '../utils/privateGames.js'
 import { hasValidIdentity, identityVerifiedFields, validIdentityFilter, verifiedIdDocument } from '../utils/identityValidity.js'
 
 // ID type recorded on a child's waiver: the parent attaches any valid ID or school ID.
@@ -1450,14 +1451,9 @@ export const LOCATION_FIELD_DEFS = {
   ],
 }
 
-// Private games: the minimum group size depends on how many fields are booked, not which ones.
-// 1 field: 10 players, 2 fields: 20, all 3 fields: 50. Matches fieldCountMinimum on the booking page.
-const FIELD_COUNT_MINIMUMS = [0, 10, 20, 50]
-
-export function fieldCountMinimum(fieldCount) {
-  const count = Math.max(0, Math.floor(Number(fieldCount) || 0))
-  return FIELD_COUNT_MINIMUMS[Math.min(count, FIELD_COUNT_MINIMUMS.length - 1)]
-}
+// Private games: the headcount needed depends on how many fields are booked (1 field: 10,
+// 2 fields: 20, all 3: 30). A group under 10 is billed as 10 (utils/privateGames.js).
+export { fieldCountMinimum }
 
 // Upper Ground is the main field, so every private booking starts with it: Upper Ground,
 // Upper + Lower Ground, or all three. Lower Ground or Forest can't be booked without it.
@@ -1502,8 +1498,9 @@ function validatePrivateFieldSelection({ locationId, fieldIds, playersCount, boo
     return { ok: false, reason: 'One or more selected fields are already booked for this location and time slot.' }
   }
 
+  // Empty spots (a group under 10 pays for 10) count toward the headcount.
   const min = fieldCountMinimum(selectedFields.length)
-  if (playersCount < min) {
+  if (billedPlayers('private', playersCount) < min) {
     const count = selectedFields.length
     return { ok: false, reason: `Booking ${count} field${count === 1 ? '' : 's'} needs at least ${min} players.` }
   }
@@ -2537,6 +2534,20 @@ router.post('/:collection', requireAuth, async (req, res) => {
       )
     }
     if (req.user.role === 'user') await notifyStaffOfPlayerSubmission(db, collection, doc, req.user)
+    // A new announcement on the dashboards reaches everyone's notifications too (players and
+    // staff), marked as from the admin. Only admins can post (see the check above).
+    if (isDashboardPostCollection(collection) && req.user.role === 'admin' && doc.message) {
+      const [firstLine, ...rest] = String(doc.message).split('\n').map((line) => line.trim()).filter(Boolean)
+      await notifyUser(db, {
+        userId: 'broadcast',
+        targetRole: 'all',
+        type: 'announcement',
+        title: firstLine && firstLine.length <= 80 && rest.length ? firstLine : 'New announcement',
+        message: String(doc.message).trim().slice(0, 1000),
+        linkedResourceId: doc.id,
+        fields: { fromAdmin: true },
+      })
+    }
     if (collection === 'waivers' && doc.isMinor && doc.guardianEmail && !doc.forChild) void emailGuardianWaiverSubmitted(db, doc)
     // The profile reads the birthday from the account, so fill it in from the first waiver.
     if (collection === 'waivers' && req.user.role === 'user' && doc.birthDate && doc.age && !doc.forChild) {

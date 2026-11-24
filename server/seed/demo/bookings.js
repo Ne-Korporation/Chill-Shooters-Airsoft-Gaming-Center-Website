@@ -14,6 +14,7 @@ import {
 import { getPaymentProgress } from '../../utils/paymentRules.js'
 import { listActiveCauseDays } from '../../utils/causeDays.js'
 import { groundIdsForPlayers } from '../../utils/bookingSlots.js'
+import { fieldCountForPlayers } from '../../utils/privateGames.js'
 import { computePenalty, getPenaltyRules } from '../../utils/penaltyRules.js'
 import { getExperienceLevel, getAgeGroup, suggestBalancedTeams } from '../../utils/teamBalancing.js'
 import { waiverCovers } from './people.js'
@@ -312,7 +313,7 @@ export async function seedBookings(ctx) {
 
     const doc = {
       userId: captain.id,
-      fieldIds: sessionType === 'private' ? LOCATIONS[loc].fields.slice(0, rng.int(1, 2)) : groundIdsForPlayers(loc, playersCount),
+      fieldIds: sessionType === 'private' ? LOCATIONS[loc].fields.slice(0, fieldCountForPlayers(playersCount)) : groundIdsForPlayers(loc, playersCount),
       locationId: loc,
       locationName: LOCATIONS[loc].name,
       reservationDate: date,

@@ -1,4 +1,5 @@
 import { modelOf } from './inventoryPieces.js'
+import { emptySpots } from './privateGames.js'
 import { packageEquipmentQty } from './packageQuantities.js'
 import { RENT_ONLY_PIECES, gunRentersNotTakingPackage, packageRentOnlyItems, rentOnlyCounts, resolvePlayerGuns } from './ownGearRentals.js'
 
@@ -152,6 +153,8 @@ export async function calculateBookingPrice({ db, payload, players, findDocument
   // What one player of each kind costs before discounts, so a split payment can charge each
   // player for what they get (see utils/splitShares.js). Package bookings only.
   let loadoutUnitCosts = null
+  // One player's package price (before discounts): what an empty spot in a private game costs.
+  let packagePlayerUnit = null
   // What the guns each player picked cost: { [playerId]: amount } (see utils/ownGearRentals.js).
   const playerGunCosts = {}
   const breakdown = [{ label: 'Player entrance fee', amount: entranceFee }]
@@ -191,6 +194,7 @@ export async function calculateBookingPrice({ db, payload, players, findDocument
         subtotal += ownGearEntrance
         breakdown.push({ label: `Entrance fee, not taking the package (${ownGearCount})`, amount: ownGearEntrance })
       }
+      packagePlayerUnit = Math.round(settledPrice / (fixedPlayers > 1 ? fixedPlayers : 1))
       if (fixedPlayers <= 1) {
         loadoutUnitCosts = {
           package: Math.round(settledPrice),
@@ -227,6 +231,7 @@ export async function calculateBookingPrice({ db, payload, players, findDocument
       const packageBase = Math.round(basePrice * rentalPlayers * sessionMultiplier)
       const entranceUnit = config.entranceFeePerPlayer * sessionMultiplier
       const packageUnit = (basePrice + listedWeaponPrice + equipmentUnit) * sessionMultiplier + entranceUnit
+      packagePlayerUnit = Math.round(packageUnit)
       loadoutUnitCosts = {
         package: packageUnit,
         own_gun: packageUnit - (packageWeaponCount ? weaponPrices[0] * sessionMultiplier : 0),
@@ -340,6 +345,17 @@ export async function calculateBookingPrice({ db, payload, players, findDocument
     breakdown.push({ label: `Extra ammo reloads (${extraAmmoReloads})`, amount: ammoTotal })
   }
 
+  // Private games are billed for at least 10 players: each empty spot costs one player's package
+  // price (the entrance fee when there is no package), paid by the captain (utils/splitShares.js).
+  const spots = emptySpots(payload.sessionType, players)
+  let privateMinimumCharge = 0
+  if (spots > 0) {
+    const unit = packagePlayerUnit ?? Math.round(config.entranceFeePerPlayer * sessionMultiplier)
+    privateMinimumCharge = Math.round(unit * spots)
+    subtotal += privateMinimumCharge
+    breakdown.push({ label: `Private game minimum: ${spots} empty spot${spots === 1 ? '' : 's'} × ₱${unit.toLocaleString('en-PH')} (paid by the captain)`, amount: privateMinimumCharge })
+  }
+
   if (userId && !isOwnGear) {
     const account = await findDocumentById(db, 'user_accounts', userId)
     const verified = account && String(account.partnershipEligibilityStatus || '').toLowerCase() === 'verified'
@@ -375,6 +391,9 @@ export async function calculateBookingPrice({ db, payload, players, findDocument
   return {
     pricingVerified: true,
     layoutFeeAmount: layoutFee?.price || 0,
+    // A private game under 10 players: the empty spots the captain pays for.
+    privateEmptySpots: spots,
+    privateMinimumCharge,
     totalAmount,
     depositAmount: calculateDeposit(totalAmount, isOwnGear, config),
     balanceAmount: Math.max(0, totalAmount - calculateDeposit(totalAmount, isOwnGear, config)),

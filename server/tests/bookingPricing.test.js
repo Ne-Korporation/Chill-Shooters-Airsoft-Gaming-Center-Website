@@ -389,3 +389,28 @@ test('a price for a whole group cannot leave out a player bringing their own gea
     userId: 'player',
   }), /group of 2/)
 })
+test('a private game under 10 players is billed as 10; the captain pays the empty spots', async () => {
+  const price = (payload, players) => calculateBookingPrice({ db: {}, payload: { selectionMode: 'package', selectedPackageId: 'full-rental', ...payload }, players, findDocumentById, userId: 'player' })
+  const five = await price({ sessionType: 'private' }, 5)
+  // 5 players x ₱750 + 5 empty spots x ₱750 = the price of 10.
+  assert.equal(five.privateEmptySpots, 5)
+  assert.equal(five.privateMinimumCharge, 3750)
+  assert.equal(five.totalAmount, 7500)
+  assert.ok(five.pricingBreakdown.some((line) => /Private game minimum: 5 empty spots/.test(line.label) && line.amount === 3750))
+  // 10 or more players, and public games, have no empty spots.
+  assert.equal((await price({ sessionType: 'private' }, 12)).privateMinimumCharge, 0)
+  assert.equal((await price({ sessionType: 'public' }, 3)).totalAmount, 2250)
+
+  // Split between the captain and 4 teammates: the captain's share includes the empty spots.
+  const booking = { ...five, userId: 'P1', paymentMode: 'split', splitPayerIds: ['P2', 'P3', 'P4', 'P5'], numberOfPlayers: 5, teamMembers: [], ownGearPlayerIds: [], ownWeaponBringers: [] }
+  const shares = computeSplitShares(booking)
+  // Online now: 50% of ₱7,500. Teammates pay their own ₱375; the captain ₱375 + ₱1,875 for the spots.
+  assert.deepEqual(shares, { P1: 2250, P2: 375, P3: 375, P4: 375, P5: 375 })
+})
+
+test('private fields follow the headcount, empty spots included', async () => {
+  const { fieldCountForPlayers, billedPlayers } = await import('../utils/privateGames.js')
+  assert.equal(billedPlayers('private', 5), 10)
+  assert.equal(billedPlayers('public', 5), 5)
+  assert.deepEqual([5, 10, 19, 20, 29, 30, 60].map(fieldCountForPlayers), [1, 1, 1, 2, 2, 3, 3])
+})

@@ -24,18 +24,25 @@ export function loadoutOf(reservation, playerId) {
 
 export function computeSplitShares(reservation) {
   const costs = reservation.loadoutUnitCosts
-  if (String(reservation.paymentMode || 'self').toLowerCase() !== 'split' || !costs) return null
+  // A private game under 10 players: the captain pays for the empty spots (utils/privateGames.js).
+  const emptySpotsCharge = Math.max(0, Number(reservation.privateMinimumCharge) || 0)
+  if (String(reservation.paymentMode || 'self').toLowerCase() !== 'split' || (!costs && !emptySpotsCharge)) return null
   const payers = [String(reservation.userId), ...(reservation.splitPayerIds || []).map(String)]
     .filter((id, index, all) => id && all.indexOf(id) === index)
   if (payers.length < 2) return null
 
   // What each payer gets, plus the extra ammo reloads they bought for themselves.
-  const ammoOf = (id) => Math.max(0, Math.round(Number(reservation.extraAmmoByPlayer?.[id]) || 0)) * Math.max(0, Number(costs.ammo) || 0)
+  const ammoOf = (id) => (costs ? Math.max(0, Math.round(Number(reservation.extraAmmoByPlayer?.[id]) || 0)) * Math.max(0, Number(costs.ammo) || 0) : 0)
   // A player not taking the package also pays for the single pieces they rent (gun, mask, vest).
-  const singlesOf = (id) => rentOnlyOf(reservation, id).reduce((sum, piece) => sum + Math.max(0, Number(costs[`rent_${piece}`]) || 0), 0)
+  const singlesOf = (id) => (costs ? rentOnlyOf(reservation, id).reduce((sum, piece) => sum + Math.max(0, Number(costs[`rent_${piece}`]) || 0), 0) : 0)
   // And for the guns they picked themselves.
   const gunsOf = (id) => Math.max(0, Number(reservation.playerGunCosts?.[id]) || 0)
-  const costOf = (id) => Math.max(0, Number(costs[loadoutOf(reservation, id)]) || 0) + singlesOf(id) + gunsOf(id) + ammoOf(id)
+  // Without per-player prices, everyone gets the same part of the rest of the bill.
+  const evenPart = Math.max(0, (Number(reservation.totalAmount) || 0) - emptySpotsCharge) / Math.max(1, Number(reservation.numberOfPlayers) || payers.length)
+  const costOf = (id) => (costs
+    ? Math.max(0, Number(costs[loadoutOf(reservation, id)]) || 0) + singlesOf(id) + gunsOf(id) + ammoOf(id)
+    : evenPart)
+  const captainId = String(reservation.userId)
   // A minor doesn't pay: their parent or guardian on the team pays for them, on top of their own
   // share. A minor whose guardian isn't paying is spread over the payers, as before.
   const guardianExtra = new Map()
@@ -44,7 +51,7 @@ export function computeSplitShares(reservation) {
     const guardian = String(member.guardianId || '')
     if (payers.includes(guardian)) guardianExtra.set(guardian, (guardianExtra.get(guardian) || 0) + costOf(String(member.id)))
   }
-  const weights = payers.map((id) => costOf(id) + (guardianExtra.get(id) || 0))
+  const weights = payers.map((id) => costOf(id) + (guardianExtra.get(id) || 0) + (id === captainId ? emptySpotsCharge : 0))
   const sum = weights.reduce((a, b) => a + b, 0)
   if (sum <= 0 || weights.every((w) => Math.abs(w - weights[0]) < 0.005)) return null
 
