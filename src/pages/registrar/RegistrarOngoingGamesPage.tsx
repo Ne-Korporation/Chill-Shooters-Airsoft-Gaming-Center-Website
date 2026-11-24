@@ -417,20 +417,23 @@ export function RegistrarOngoingGamesPage({ embedded = false }: { embedded?: boo
   const [searchParams, setSearchParams] = useSearchParams()
   const focusParam = searchParams.get('game')
   const [highlightId, setHighlightId] = useState<string | null>(null)
+  // The lookup isn't cancelled when ?game= is removed from the address (that removal re-runs this
+  // effect); only leaving the page drops its answer.
+  const mounted = React.useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => { mounted.current = false }
+  }, [])
   useEffect(() => {
     if (!focusParam) return
-    let alive = true
-    setSearchParams((params) => {
-      params.delete('game')
-      return params
-    }, { replace: true })
-    const q = focusParam.startsWith('R-') ? { reservationId: focusParam } : { $or: [{ id: focusParam }, { reservationId: focusParam }] }
+    const target = focusParam
+    const q = target.startsWith('R-') ? { reservationId: target } : { $or: [{ id: target }, { reservationId: target }] }
     apiGet<{ ok: boolean; data: GameplayDoc[] }>(`/api/gameplay?q=${encodeURIComponent(JSON.stringify(q))}&limit=1`)
       .then((res) => {
-        if (!alive) return
+        if (!mounted.current) return
         const doc = Array.isArray(res?.data) ? res.data[0] : undefined
         if (!doc) {
-          toast(focusParam.startsWith('R-')
+          toast(target.startsWith('R-')
             ? "This booking isn't on the games board yet. It's added once the booking is paid and confirmed."
             : 'That game could not be found. It may have been removed.')
           return
@@ -438,8 +441,11 @@ export function RegistrarOngoingGamesPage({ embedded = false }: { embedded?: boo
         openDetails(doc)
         setHighlightId(rowId(doc))
       })
-      .catch((e: any) => { if (alive) toast.error(String(e?.message || e)) })
-    return () => { alive = false }
+      .catch((e: any) => { if (mounted.current) toast.error(String(e?.message || e)) })
+      .finally(() => {
+        // Done with the link: a refresh or a later visit doesn't open the game again.
+        if (mounted.current) setSearchParams((params) => { params.delete('game'); return params }, { replace: true })
+      })
     // openDetails only sets state; the lookup runs once per link.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusParam])
