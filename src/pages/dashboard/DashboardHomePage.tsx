@@ -298,8 +298,8 @@ export function DashboardHomePage() {
           <SplitShareDueCard />
           <WeatherAdvisoryWidget />
           <div className="grid grid-cols-3 gap-2">
-            <StatTile compact label="Bookings" value={dashboard.totalReservations} hint="All time" loading={loading} />
-            <StatTile compact label="Upcoming" value={dashboard.upcomingReservations} hint="Confirmed" loading={loading} />
+            <StatTile compact label="Bookings" value={dashboard.totalReservations} hint="All time" loading={loading} to="/app/my-reservations" />
+            <StatTile compact label="Upcoming" value={dashboard.upcomingReservations} hint="Confirmed" loading={loading} to="/app/my-reservations" />
             <StatTile
               compact
               label="Pending"
@@ -307,6 +307,7 @@ export function DashboardHomePage() {
               hint={dashboard.pendingPayments > 0 ? 'Not confirmed' : 'None'}
               attention={dashboard.pendingPayments > 0}
               loading={loading}
+              to="/app/my-reservations"
             />
           </div>
 

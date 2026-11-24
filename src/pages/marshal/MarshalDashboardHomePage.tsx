@@ -183,9 +183,9 @@ export function MarshalDashboardHomePage() {
           <WeatherAdvisoryWidget />
 
           <div className="grid grid-cols-3 gap-2">
-            <StatTile compact label="Upcoming" value={stats.upcomingGames} hint={nextGameLabel(stats.nextGameDate, stats.activeGames)} loading={loading} />
-            <StatTile compact label="Players" value={stats.playersToday} hint="Expected today" loading={loading} />
-            <StatTile compact label="Guns out" value={stats.gunsOut} hint={stats.gunsOut > 0 ? 'To check in' : 'All back'} attention={stats.gunsOut > 0} loading={loading} />
+            <StatTile compact label="Upcoming" value={stats.upcomingGames} hint={nextGameLabel(stats.nextGameDate, stats.activeGames)} loading={loading} to="/app/games" />
+            <StatTile compact label="Players" value={stats.playersToday} hint="Expected today" loading={loading} to="/app/counter?view=today" />
+            <StatTile compact label="Guns out" value={stats.gunsOut} hint={stats.gunsOut > 0 ? 'To check in' : 'All back'} attention={stats.gunsOut > 0} loading={loading} to="/app/counter?view=out" />
           </div>
 
           {(() => {
