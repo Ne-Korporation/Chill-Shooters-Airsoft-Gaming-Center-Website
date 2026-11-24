@@ -5,11 +5,12 @@
 //     confirmed onto the games board, and the players' own weapons coming to it (each is
 //     chronographed before play).
 //   - Registrars: payments (including balances to collect onsite), waivers (guardian approvals
-//     count as waiver work), and every player ID submitted for verification.
+//     count as waiver work), every player ID submitted for verification, and partnership
+//     discount requests to review.
 // A notification qualifies by its type, or by the `topic` it was sent with.
 export const ROLE_NOTIFICATION_RULES = {
   marshal: { types: ['game_booked', 'gameplay_created', 'own_weapons_incoming'], topics: ['game_booked'] },
-  registrar: { types: ['reservation_payment_finalized', 'waiver_submitted', 'onsite_payment_due', 'player_id_submitted'], topics: ['payment', 'waiver', 'identity'] },
+  registrar: { types: ['reservation_payment_finalized', 'waiver_submitted', 'onsite_payment_due', 'player_id_submitted', 'partnership_requested', 'damage_charge_added'], topics: ['payment', 'waiver', 'identity', 'partnership'] },
 }
 
 const ALWAYS_ALLOWED_TYPES = ['announcement']

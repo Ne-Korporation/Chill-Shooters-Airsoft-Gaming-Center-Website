@@ -1,5 +1,5 @@
 import React from 'react'
-import { confirmDialog } from '../../components/ui/ConfirmDialog'
+import { confirmDialog, promptDialog } from '../../components/ui/ConfirmDialog'
 import { FiAlertTriangle, FiCheck, FiCrosshair, FiEdit2, FiPlus, FiTool, FiTrash2 } from 'react-icons/fi'
 import { useSearchParams } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
@@ -11,9 +11,8 @@ import { Card } from '../../components/ui/Card'
 import { Modal } from '../../components/ui/Modal'
 import { apiGet, apiGetAll, apiPost, apiPut, apiDelete } from '../../utils/apiClient'
 import { Pagination, usePagination } from '../../components/ui/Pagination'
-import { ModelSummaryStrip } from '../../components/inventory/ModelSummaryStrip'
 import { BulkUpdateModal, InventoryToolbar, SelectBox, forEachPiece, type BulkChange } from '../../components/inventory/BulkActionBar'
-import { modelOf, summarizeModels } from '../../utils/inventoryModels'
+import { modelOf } from '../../utils/inventoryModels'
 import { SafetyLogPage } from '../marshal/SafetyLogPage'
 import { RepairsPage } from '../operations/RepairsPage'
 import { Input } from '../../components/ui/Input'
@@ -53,6 +52,8 @@ type WeaponItem = {
   source?: 'business' | 'player'
   approvalStatus?: 'pending' | 'approved' | 'rejected'
   rejectionReason?: string
+  // Why the piece is flagged (set by a damage report, a repair, or a hand flag).
+  maintenanceReason?: string
 }
 
 // Mirrors the center's rental inventory: rifles, gel blasters, pistols, snipers, a machine
@@ -69,6 +70,114 @@ const categoryOptions: { key: WeaponCategory; label: string; subtitle: string }[
 ]
 
 const categoryLabel = (key: string) => categoryOptions.find((option) => option.key === key)?.label || key
+
+// What's wrong with a flagged piece: its open damage / loss report, or its open repair, or the
+// reason it was flagged by hand.
+type DamageInfo = {
+  description: string
+  reportId?: string
+  repairId?: string
+  repairStatus?: string
+  gunsmith?: string
+  playerName?: string
+  reservationId?: string
+  reportedAtISO?: string
+  reportedBy?: string
+  evidenceUrl?: string
+  kind?: 'damage' | 'loss'
+}
+
+function formatWhen(iso?: string) {
+  if (!iso) return ''
+  const date = new Date(iso)
+  return Number.isNaN(date.getTime()) ? '' : date.toLocaleString('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short' })
+}
+
+function DamageDetails({ info, compact = false }: { info: DamageInfo; compact?: boolean }) {
+  const repairState = info.repairStatus === 'in_progress' ? ' (in progress)' : info.repairStatus ? ` (${info.repairStatus.replace(/_/g, ' ')})` : ''
+  const facts = [
+    info.reportId ? `Report ${info.reportId}` : '',
+    info.repairId ? `Repair ${info.repairId}${repairState}` : '',
+    info.gunsmith ? `Gunsmith: ${info.gunsmith}` : '',
+    info.playerName ? `Player: ${info.playerName}` : '',
+    info.reservationId ? `Booking ${info.reservationId}` : '',
+    info.reportedBy ? `Reported by ${info.reportedBy}` : '',
+    formatWhen(info.reportedAtISO),
+  ].filter(Boolean)
+  const label = info.kind === 'loss' ? 'Reported lost' : 'Damage'
+  return (
+    <div className={compact ? 'mt-1' : 'rounded-xl border border-danger/30 bg-danger/10 p-3'}>
+      {!compact ? <div className="text-[11px] font-semibold uppercase tracking-widest text-danger">{label}</div> : null}
+      <div className={compact ? 'text-xs text-text' : 'mt-1 text-sm text-text'}>
+        {compact ? <span className="font-semibold text-danger">{label}: </span> : null}
+        {info.description}
+      </div>
+      {facts.length ? <div className="mt-1 text-[11px] text-muted">{facts.join(' · ')}</div> : null}
+      {info.evidenceUrl ? (
+        <a href={info.evidenceUrl} target="_blank" rel="noreferrer" className="mt-1 inline-block text-[11px] font-semibold text-accent underline">View photo</a>
+      ) : null}
+    </div>
+  )
+}
+
+// The center's weapons in one table: a row per model, a column per field (plus pieces not assigned
+// to a field, when there are any) with "available / total", the total across fields, and the price.
+// Follows the Category and Branch filters. Player-owned guns aren't the center's inventory.
+function WeaponInventoryTable({ weapons, category, branch }: { weapons: WeaponItem[]; category: WeaponCategory | 'all'; branch: string }) {
+  const known = new Set<string>(BRANCHES.map((entry) => entry.id))
+  const fieldOf = (weapon: WeaponItem) => (known.has(String(weapon.locationId || '')) ? String(weapon.locationId) : 'none')
+  const own = weapons.filter((weapon) => weapon.source !== 'player' && (category === 'all' || weapon.category === category))
+  if (own.length === 0) return null
+  const hasUnassigned = own.some((weapon) => fieldOf(weapon) === 'none')
+  const allColumns = [
+    ...BRANCHES.map((entry) => ({ id: entry.id as string, label: entry.label as string })),
+    ...(hasUnassigned ? [{ id: 'none', label: 'Unassigned' }] : []),
+  ]
+  // One field picked: just its column. All branches: every field plus the total.
+  const columns = branch === 'all' ? allColumns : allColumns.filter((column) => column.id === branch)
+  const showTotal = branch === 'all'
+  const groups = new Map<string, WeaponItem[]>()
+  for (const weapon of own) {
+    const model = modelOf(weapon)
+    groups.set(model, [...(groups.get(model) || []), weapon])
+  }
+  const rows = [...groups.entries()].sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }))
+  const cell = (items: WeaponItem[]) => {
+    const total = items.length
+    if (total === 0) return <span className="text-muted">—</span>
+    const available = items.filter((weapon) => weapon.status === 'available').length
+    const tone = available === 0 ? 'text-danger' : available < total ? 'text-warning' : 'text-success'
+    return <span><span className={`font-semibold ${tone}`}>{available}</span><span className="text-muted"> / {total}</span></span>
+  }
+  return (
+    <div className="mt-4 overflow-x-auto rounded-2xl border border-white/5">
+      <table className="w-full min-w-[560px] text-sm">
+        <thead className="bg-white/5 text-left text-[11px] uppercase tracking-widest text-muted">
+          <tr>
+            <th className="px-3 py-2 font-semibold">Model</th>
+            {columns.map((column) => <th key={column.id} className="px-3 py-2 text-right font-semibold">{column.label}</th>)}
+            {showTotal ? <th className="px-3 py-2 text-right font-semibold">All fields</th> : null}
+            <th className="px-3 py-2 text-right font-semibold">Price</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-white/5">
+          {rows.map(([model, items]) => (
+            <tr key={model}>
+              <td className="px-3 py-2">
+                <div className="font-semibold">{model}</div>
+                <div className="text-[11px] text-muted">{categoryLabel(items[0].category)}</div>
+              </td>
+              {columns.map((column) => <td key={column.id} className="px-3 py-2 text-right">{cell(items.filter((weapon) => fieldOf(weapon) === column.id))}</td>)}
+              {showTotal ? <td className="px-3 py-2 text-right">{cell(items)}</td> : null}
+              <td className="whitespace-nowrap px-3 py-2 text-right text-muted">₱{Number(items[0].price || 0).toLocaleString()} each</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="border-t border-white/5 px-3 py-2 text-[11px] text-muted">Available / total pieces at each field.</div>
+    </div>
+  )
+}
 
 // A label only: a piece becomes "rented" when it is checked out at Rentals, and "needs check"
 // through Flag. Clicking it used to flip available/rented, which bypassed the rental records.
@@ -127,6 +236,8 @@ function WeaponInventory() {
       .catch(() => setPartners([]))
   }, [isAdmin])
 
+  const [damageReports, setDamageReports] = React.useState<any[]>([])
+  const [repairs, setRepairs] = React.useState<any[]>([])
   const refresh = React.useCallback(async () => {
     setLoading(true)
     try {
@@ -152,8 +263,16 @@ function WeaponInventory() {
         locationId: d.locationId || '',
         fpsClass: d.fpsClass || '',
         fpsLimit: Number(d.fpsLimit) || 0,
+        maintenanceReason: d.maintenanceReason || '',
       }))
       setWeapons(normalized)
+      // Damage reports and repairs, so a flagged piece shows what's wrong with it.
+      const [reportsRes, repairsRes] = await Promise.all([
+        apiGet<{ data: any[] }>('/api/damage-reports?limit=500').catch(() => ({ data: [] as any[] })),
+        apiGet<{ data: any[] }>('/api/repairs').catch(() => ({ data: [] as any[] })),
+      ])
+      setDamageReports(Array.isArray(reportsRes?.data) ? reportsRes.data : [])
+      setRepairs(Array.isArray(repairsRes?.data) ? repairsRes.data : [])
     } catch (e: any) {
       toast.error(String(e?.message || e))
       setWeapons([])
@@ -219,9 +338,44 @@ function WeaponInventory() {
 
   const activeCategoryMeta = category === 'all' ? null : categoryOptions.find((item) => item.key === category)
   const maintenanceQueue = weapons.filter((weapon) => weapon.status === 'needs-check')
+  // The newest report and repair for a piece (both lists come newest first).
+  const damageOf = (weapon: WeaponItem): DamageInfo | null => {
+    const id = String(weapon.id)
+    const actor = (by: any) => (by ? [by.role ? String(by.role).charAt(0).toUpperCase() + String(by.role).slice(1) : '', by.name || by.email || ''].filter(Boolean).join(' ') : '')
+    const report = damageReports.find((item) => String(item.itemId || '') === id)
+    const repair = (report?.repairId ? repairs.find((item) => item.id === report.repairId) : undefined)
+      || repairs.find((item) => String(item.itemId || '') === id)
+    if (report) {
+      return {
+        description: String(report.description || 'No details given.'),
+        kind: report.kind === 'loss' ? 'loss' : 'damage',
+        reportId: report.id,
+        repairId: report.repairId || repair?.id,
+        repairStatus: repair?.status,
+        gunsmith: repair?.gunsmith,
+        playerName: report.playerName,
+        reservationId: report.reservationId,
+        reportedAtISO: report.reportedAtISO,
+        reportedBy: actor(report.reportedBy),
+        evidenceUrl: report.evidenceUrl,
+      }
+    }
+    if (repair) {
+      return {
+        description: String(repair.damage || 'No details given.'),
+        repairId: repair.id,
+        repairStatus: repair.status,
+        gunsmith: repair.gunsmith,
+        reservationId: repair.reservationId,
+        reportedAtISO: repair.openedAtISO,
+        reportedBy: actor(repair.openedBy),
+      }
+    }
+    if (weapon.maintenanceReason) return { description: weapon.maintenanceReason }
+    return null
+  }
   const maintenanceCount = maintenanceQueue.length
 
-  const models = summarizeModels(weapons)
 
   // Each physical weapon is its own record: adding 20 creates 20 pieces with their own IDs.
   const addWeapon = async () => {
@@ -344,9 +498,16 @@ function WeaponInventory() {
     const weapon = weapons.find((w) => w.id === id)
     if (!weapon) return
     const newStatus = weapon.status === 'needs-check' ? 'available' : 'needs-check'
+    // Flagging asks what's wrong, so whoever checks the piece knows what to look at.
+    let reason = ''
+    if (newStatus === 'needs-check') {
+      reason = (await promptDialog({ title: `What's wrong with ${weapon.name}?`, label: 'Damage or problem', placeholder: 'e.g. Hop-up not working, cracked stock', confirmLabel: 'Flag', required: true, multiline: true })) || ''
+      if (!reason) return
+    }
     try {
       await apiPut<any>(`/api/weapons/${encodeURIComponent(id)}`, {
         status: newStatus,
+        maintenanceReason: newStatus === 'needs-check' ? reason : '',
         updatedAtISO: new Date().toISOString(),
       })
       await refresh()
@@ -470,9 +631,11 @@ function WeaponInventory() {
               <li key={weapon.id} className="flex flex-col gap-2 py-2.5 sm:flex-row sm:items-center sm:justify-between">
                 <div className="min-w-0">
                   <div className="text-sm font-semibold">{weapon.name}</div>
-                  <div className="text-xs text-muted">
-                    {weapon.id}{weapon.note || weapon.description ? ` · ${weapon.note || weapon.description}` : ''}
-                  </div>
+                  <div className="text-xs text-muted">{weapon.id}{weapon.locationId ? ` · ${branchLabel(weapon.locationId)}` : ''}</div>
+                  {(() => {
+                    const info = damageOf(weapon)
+                    return info ? <DamageDetails info={info} compact /> : <div className="mt-1 text-xs text-muted">No reason was given when it was flagged.</div>
+                  })()}
                 </div>
                 <div className="flex flex-none gap-2">
                   <Button size="sm" variant="ghost" onClick={() => handleSelect(weapon)}><FiEdit2 /> Details</Button>
@@ -498,7 +661,8 @@ function WeaponInventory() {
           </div>
         </div>
 
-        <ModelSummaryStrip models={models} unit="piece" />
+        {/* Each model's pieces per field, with the price. */}
+        <WeaponInventoryTable weapons={weapons} category={category} branch={branchFilter} />
 
         {/* Filters and the select/update/add toolbar sit right above the list they act on, after the model summary. */}
         <div className="mt-4 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
@@ -670,6 +834,11 @@ function WeaponInventory() {
           <div className="text-sm text-muted">
             {selectedWeaponId ? 'Update this piece, or every piece of the same model.' : 'Every physical weapon is its own piece with its own ID.'}
           </div>
+          {(() => {
+            const piece = selectedWeaponId ? weapons.find((w) => w.id === selectedWeaponId) : null
+            const info = piece && piece.status === 'needs-check' ? damageOf(piece) : null
+            return info ? <div className="mt-3"><DamageDetails info={info} /></div> : null
+          })()}
           <div className="mt-4 grid gap-3">
             <label className="block">
               <div className="mb-2 text-sm font-semibold text-text">Weapon name</div>

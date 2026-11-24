@@ -307,11 +307,11 @@ export function AppSidebar({
             <SidebarLink item={profile} onNavigate={onNavigate} />
           </div>
         </nav>
-        {role === 'user' ? (
-          <div className="divider mt-3 border-t pt-3">
-            <CapacityCalendar mini defaultLocation={lastLocation} />
-          </div>
-        ) : null}
+        {/* Players, registrars and marshals all get the games calendar under the menu (on desktop;
+            phones show it on the dashboard instead). */}
+        <div className="divider mt-3 border-t pt-3">
+          <CapacityCalendar mini defaultLocation={role === 'user' ? lastLocation : undefined} />
+        </div>
         {role === 'marshal' ? (
           <div className="divider mt-3 border-t px-3 pt-3">
             <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted">Before each session</div>

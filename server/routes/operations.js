@@ -5,6 +5,7 @@ import { requireAuth, requireRole } from '../middleware/auth.js'
 import { nextShortId } from '../utils/shortIds.js'
 import { emailDamageCharge } from '../services/notificationEmails.js'
 import { notifyDamageCharge } from '../utils/playerNotices.js'
+import { notifyRole, notifyUser } from '../utils/paymentProgress.js'
 import { listDiscountInstitutions } from '../utils/bookingPricing.js'
 import { PENALTY_RULES_ID, computePenalty, getPenaltyRules, resolvePenaltyCharge } from '../utils/penaltyRules.js'
 import { computeNetRevenue, computePartnerIncome } from '../utils/reachNetRevenue.js'
@@ -317,7 +318,9 @@ router.post('/damage-reports', requireAuth, requireRole('admin', 'marshal'), asy
 // PUT /api/damage-reports/:id/review { decision: 'bill' | 'waive', chargeAmount?, overrideReason?, note }
 // Only an admin can attach a charge; it is added to the linked reservation's balance. The amount
 // comes from the penalty rules; billing a different amount needs an override reason.
-router.put('/damage-reports/:id/review', requireAuth, requireRole('admin'), async (req, res) => {
+// Marshals (who inspect the gear) and admins set the damage fee; it goes on the booking's bill as
+// a line the registrar collects at the counter, and the registrars are told.
+router.put('/damage-reports/:id/review', requireAuth, requireRole('admin', 'marshal'), async (req, res) => {
   const body = req.body || {}
   const decision = String(body.decision || '').toLowerCase()
   if (!['bill', 'waive'].includes(decision)) {
@@ -360,9 +363,22 @@ router.put('/damage-reports/:id/review', requireAuth, requireRole('admin'), asyn
         const result = await db.collection('reservations').updateOne(
           { $or: [{ id: report.reservationId }, ...(ObjectId.isValid(report.reservationId) ? [{ _id: new ObjectId(report.reservationId) }] : [])] },
           {
-            $inc: { totalAmount: chargeAmount, balanceAmount: chargeAmount, damageChargesTotal: chargeAmount },
+            $inc: { totalAmount: chargeAmount, balanceAmount: chargeAmount, damageChargesTotal: chargeAmount, extraChargesTotal: chargeAmount },
             $push: {
               pricingBreakdown: { label, amount: chargeAmount },
+              // A line on the counter bill, so the registrar sees it and collects it.
+              extraCharges: {
+                id: `CHG-${new ObjectId().toHexString().slice(-8).toUpperCase()}`,
+                type: 'damage',
+                label,
+                quantity: 1,
+                unitPrice: chargeAmount,
+                amount: chargeAmount,
+                note: note || (penalty.overridden ? penalty.overrideReason : ''),
+                reportId: report.id,
+                addedBy: actorOf(req),
+                atISO: nowISO,
+              },
               damageCharges: { reportId: report.id, kind: report.kind || 'damage', itemName: report.itemName, amount: chargeAmount, penalty, approvedBy: actorOf(req), atISO: nowISO },
             },
             $set: { updatedAtISO: nowISO },
@@ -391,6 +407,15 @@ router.put('/damage-reports/:id/review', requireAuth, requireRole('admin'), asyn
       const reservation = await findById(db, 'reservations', updated.reservationId)
       void emailDamageCharge(db, reservation, updated)
       void notifyDamageCharge(db, reservation, updated).catch(() => null)
+      // The registrars collect it at the counter (admins get a copy).
+      await notifyRole(db, {
+        role: 'registrar',
+        topic: 'payment',
+        type: 'damage_charge_added',
+        title: `₱${Number(updated.chargeAmount || 0).toLocaleString()} damage fee to collect`,
+        message: `${updated.kind === 'loss' ? 'Loss' : 'Damage'} fee for ${updated.itemName}${updated.playerName ? ` (${updated.playerName})` : ''} was added to booking ${updated.reservationId}. Collect it with the balance at the counter.`,
+        linkedResourceId: String(updated.reservationId || ''),
+      }).catch(() => null)
     }
     return res.json({ ok: true, data: updated })
   } catch (err) {
@@ -786,6 +811,16 @@ router.post('/partnership-discount/request', requireAuth, requireRole('user'), a
         $push: { partnershipHistory: { status: 'pending', institution, atISO: nowISO, actorId: String(req.user.id), actorRole: 'user' } },
       },
     )
+    // Tell the staff who review it (registrars; admins get a copy through notifyRole).
+    const playerId = String(account.id || account._id)
+    await notifyRole(db, {
+      role: 'registrar',
+      topic: 'partnership',
+      type: 'partnership_requested',
+      title: 'Partnership discount to review',
+      message: `${account.name || playerId} asked for the ${institution} partnership discount and sent their proof.`,
+      linkedResourceId: playerId,
+    }).catch((err) => console.warn('Partnership request notice failed', err))
     return res.json({ ok: true, data: { partnershipInstitution: institution, partnershipEligibilityStatus: 'pending' } })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
@@ -818,6 +853,15 @@ router.put('/partnership-discount/:userId/review', requireAuth, requireRole('adm
         $push: { partnershipHistory: { status: decision, reason, atISO: nowISO, ...actorOf(req) } },
       },
     )
+    // The player hears the decision either way.
+    await notifyUser(db, {
+      userId: String(account.id || account._id),
+      type: decision === 'verified' ? 'partnership_verified' : 'partnership_rejected',
+      title: decision === 'verified' ? 'Partnership discount approved' : 'Partnership discount not approved',
+      message: decision === 'verified'
+        ? `Your ${account.partnershipInstitution} partnership discount is approved. It's applied to your bookings from now on.`
+        : `Your ${account.partnershipInstitution} partnership discount request wasn't approved. Reason: ${reason} You can send a new request from your profile.`,
+    }).catch((err) => console.warn('Partnership decision notice failed', err))
     return res.json({ ok: true, data: { partnershipEligibilityStatus: decision } })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })

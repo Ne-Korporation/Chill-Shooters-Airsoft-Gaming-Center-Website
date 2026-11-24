@@ -104,19 +104,21 @@ export function MarshalDashboardHomePage() {
         }
       />
 
-      {/* Same layout as the admin and registrar dashboards: the capacity calendar in the main
-          column (view only; games for a cause are set by the admin) and one column beside it:
-          the weather, today's counts, then announcements. Gear and weapon alerts are counts on
-          the Weapons and Gear items in the sidebar, with the before-each-session checklist. */}
-      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
-        <div className="min-w-0">
-          <CapacityCalendar
-            title="Game Capacity"
-            subtitle="Spots booked for each weekend's open games. Click a day for details."
+      {/* Same layout as the player dashboard: announcements in the main column, the calendar under
+          the sidebar menu on desktop (under the announcements on phones), and the weather and today's
+          counts on the right. Gear and weapon alerts are counts on the Weapons and Gear items in the
+          sidebar, with the before-each-session checklist. */}
+      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="min-w-0 space-y-4">
+          <DashboardPostsPanel
+            title="Announcements"
+            subtitle="Updates and reminders from the Chill Shooters team."
+            initialCount={3}
           />
+          <div className="lg:hidden"><CapacityCalendar /></div>
         </div>
 
-        <aside className="space-y-3">
+        <aside className="order-first space-y-3 lg:order-none">
           <WeatherAdvisoryWidget />
 
           <div className="grid grid-cols-3 gap-2">
@@ -124,11 +126,6 @@ export function MarshalDashboardHomePage() {
             <StatTile compact label="Reserved" value={stats.reservedGames} hint="Approved/paid" loading={loading} />
             <StatTile compact label="Ready" value={stats.playersReady} hint="ID verified" loading={loading} />
           </div>
-
-          <DashboardPostsPanel
-            title="Announcements"
-            initialCount={3}
-          />
         </aside>
       </div>
     </div>

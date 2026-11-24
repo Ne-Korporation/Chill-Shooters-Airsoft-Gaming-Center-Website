@@ -37,6 +37,12 @@ export type NotificationType =
   // Staff: money to collect at the counter (registrars), players' own weapons coming (marshals).
   | 'onsite_payment_due'
   | 'own_weapons_incoming'
+  // Partnership discount: a request for staff to review, and the decision sent to the player.
+  | 'partnership_requested'
+  | 'partnership_verified'
+  | 'partnership_rejected'
+  // Staff: a damage fee added to a booking, for the registrar to collect.
+  | 'damage_charge_added'
   // Sent by an admin from the notifications page to an audience or one account.
   | 'announcement'
 
