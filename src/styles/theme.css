@@ -11,6 +11,8 @@
 
   /* Slightly tinted glass for light mode (more pleasant than pure white alpha) */
   --glass:255,255,255;
+  /* Amber for warnings (text-warning, bg-warning/10): dark enough to read on white */
+  --warning:180 83 9;
 }
 
 
@@ -23,7 +25,59 @@
   --border:255,255,255;
   --shadow:0 10px 30px rgba(0,0,0,.35);
   --glass:26,26,26;
+  --warning:245 158 11;
 }
+
+/* ------------------------------------------------------------------
+   Day mode. Many components were drawn for night mode with see-through
+   white borders and tints (border-white/10, bg-white/5, divide-white/5)
+   and dark panels (bg-black/20). On a light page those vanish, so cards
+   lose their edges and rows their hover. Here they become the same
+   effect in dark ink. Night mode is unchanged.
+------------------------------------------------------------------- */
+:root:not([data-theme='dark']) .border-white\/5{ border-color: rgba(var(--text), .07); }
+:root:not([data-theme='dark']) .border-white\/10{ border-color: rgba(var(--text), .12); }
+:root:not([data-theme='dark']) .border-white\/15,
+:root:not([data-theme='dark']) .border-white\/20,
+:root:not([data-theme='dark']) .border-white\/25{ border-color: rgba(var(--text), .16); }
+:root:not([data-theme='dark']) .border-white\/40,
+:root:not([data-theme='dark']) .hover\:border-white\/50:hover{ border-color: rgba(var(--text), .28); }
+
+:root:not([data-theme='dark']) .bg-white\/\[0\.02\],
+:root:not([data-theme='dark']) .bg-white\/\[0\.03\],
+:root:not([data-theme='dark']) .bg-white\/3{ background-color: rgba(var(--text), .025); }
+:root:not([data-theme='dark']) .bg-white\/5,
+:root:not([data-theme='dark']) .bg-white\/6{ background-color: rgba(var(--text), .035); }
+:root:not([data-theme='dark']) .bg-white\/8,
+:root:not([data-theme='dark']) .bg-white\/10,
+:root:not([data-theme='dark']) .file\:bg-white\/10::file-selector-button{ background-color: rgba(var(--text), .06); }
+:root:not([data-theme='dark']) .bg-white\/15{ background-color: rgba(var(--text), .08); }
+:root:not([data-theme='dark']) .hover\:bg-white\/5:hover{ background-color: rgba(var(--text), .05); }
+:root:not([data-theme='dark']) .hover\:bg-white\/8:hover,
+:root:not([data-theme='dark']) .hover\:bg-white\/10:hover{ background-color: rgba(var(--text), .07); }
+
+:root:not([data-theme='dark']) .divide-white\/5 > :not([hidden]) ~ :not([hidden]){ border-color: rgba(var(--text), .07); }
+:root:not([data-theme='dark']) .divide-white\/10 > :not([hidden]) ~ :not([hidden]){ border-color: rgba(var(--text), .12); }
+:root:not([data-theme='dark']) .ring-white\/10{ --tw-ring-color: rgba(var(--text), .12); }
+
+/* Dark panels and chips (inputs, counters, inner boxes) become a soft grey. Heavier blacks
+   (bg-black/60 and up) are photo shades and pop-up backdrops and stay as they are. */
+:root:not([data-theme='dark']) .bg-black\/10,
+:root:not([data-theme='dark']) .bg-black\/15{ background-color: rgba(var(--text), .035); }
+:root:not([data-theme='dark']) .bg-black\/20,
+:root:not([data-theme='dark']) .bg-black\/30,
+:root:not([data-theme='dark']) .bg-black\/40{ background-color: rgba(var(--text), .05); }
+:root:not([data-theme='dark']) .hover\:bg-black\/5:hover{ background-color: rgba(var(--text), .05); }
+
+/* Brand gold and success green are light colours: as text on white they are hard to read.
+   In day mode they print a darker shade of the same colour (backgrounds and borders keep the
+   brand shade). */
+:root:not([data-theme='dark']) .text-accent,
+:root:not([data-theme='dark']) .text-gold,
+:root:not([data-theme='dark']) .hover\:text-accent:hover,
+:root:not([data-theme='dark']) .hover\:text-gold:hover{ color: rgb(138,104,32); }
+:root:not([data-theme='dark']) .text-success{ color: rgb(30,122,50); }
+:root:not([data-theme='dark']) .text-danger{ color: rgb(185,40,40); }
 
 /* Paper is white: printing (reports, bills, Save as PDF) always uses the day colors, even in
    night mode, so nothing prints as a dark page or light text on dark. */

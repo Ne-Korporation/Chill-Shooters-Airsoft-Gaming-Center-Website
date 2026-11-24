@@ -876,7 +876,7 @@ export function LandingPage() {
         </div>
 
         {mobileNavOpen ? (
-          <nav className="border-t border-white/10 px-4 pb-4 lg:hidden">
+          <nav className="border-t border-[rgba(255,255,255,0.1)] px-4 pb-4 lg:hidden">
             {navLinks.map((link) => (
               <a
                 key={link.href}

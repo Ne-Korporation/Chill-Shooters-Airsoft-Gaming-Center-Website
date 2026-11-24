@@ -317,7 +317,7 @@ export function FieldLayoutDesigner({
             <div
               ref={fieldRef}
               onPointerDown={() => setSelectedId(null)}
-              className="relative w-full touch-none select-none overflow-hidden rounded-xl border-2 border-white/40"
+              className="relative w-full touch-none select-none overflow-hidden rounded-xl border-2 border-[rgba(255,255,255,0.4)]"
               style={{
                 aspectRatio: `${FIELD_W} / ${FIELD_H}`,
                 backgroundColor: '#2f4a22',

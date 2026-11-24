@@ -232,6 +232,31 @@ export function buildComms({ now, todayISO, staff, files, people, reservations, 
   if (guardianWait) notify({ userId: guardianWait.userId, type: 'reservation_payment_finalized', title: 'Payment received: waiting for guardian approval', message: `Your payment for ${guardianWait.reservationDate} (${guardianWait.reservationTime}) is verified. The booking is confirmed as soon as every guardian approves it.`, linkedResourceId: guardianWait.id, createdAtISO: ago(26) })
   const sentBack = upcoming.find((r) => r.sentBack)
   if (sentBack) notify({ userId: sentBack.userId, type: 'reservation_status_update', title: 'Staff sent your booking back', message: sentBack.sentBack.note, linkedResourceId: sentBack.id, createdAtISO: sentBack.sentBack.atISO })
+  // The front desk's own notices, worded as the server sends them (utils/paymentProgress.js,
+  // routes/crud.js, routes/uploads.js), each with the admins' copy.
+  const toDesk = (n) => { for (const role of ['registrar', 'admin']) notify({ userId: 'broadcast', targetRole: role, ...n }) }
+  const peso = (n) => `₱${Number(n || 0).toLocaleString('en-PH', { maximumFractionDigits: 2 })}`
+  // Balances to collect at the counter, for games confirmed in the last week.
+  const onsite = reservations
+    .filter((r) => !r.walkIn && r.reservationStatus === 'confirmed' && r.reservationDate >= todayISO && r.onsiteNoticeSentAtISO && Date.parse(r.onsiteNoticeSentAtISO) > now - 7 * DAY)
+    .sort((a, b) => a.onsiteNoticeSentAtISO.localeCompare(b.onsiteNoticeSentAtISO))
+    .slice(-5)
+  for (const r of onsite) {
+    const due = Math.round(Math.max(0, r.totalAmount - r.depositAmount) * 100) / 100
+    toDesk({
+      topic: 'payment', type: 'onsite_payment_due', title: `${peso(due)} to collect onsite for ${r.id}`,
+      message: `${r.bookerName || 'The player who booked'}'s booking for ${r.reservationDate} (${r.reservationTime}) is confirmed with ${peso(due)} to pay at the counter (the remaining 50%). Collect it before the game starts.`,
+      linkedResourceId: r.id, read: Date.parse(r.onsiteNoticeSentAtISO) < now - 3 * DAY, createdAtISO: r.onsiteNoticeSentAtISO,
+    })
+  }
+  // A minor's waiver signed by the parent, waiting for review.
+  for (const w of people.waivers.filter((x) => x.status === 'pending')) {
+    toDesk({ topic: 'waiver', type: 'waiver_submitted', title: 'New Waiver Submitted', message: `A new waiver was submitted by ${w.fullName}.`, linkedResourceId: w.id, createdAtISO: w.submittedAtISO })
+  }
+  // A player's ID waiting to be verified.
+  for (const a of people.accounts.filter((x) => x.identityVerificationStatus === 'pending_review')) {
+    toDesk({ topic: 'identity', type: 'player_id_submitted', title: 'ID to Verify', message: `${a.name} submitted their ${a.identityIdType} for verification.`, linkedResourceId: a.id, createdAtISO: a.identityVerificationUpdatedAt })
+  }
   const damaged = reservations.find((r) => (r.damageCharges || []).length)
   if (damaged) notify({ userId: damaged.userId, type: 'reservation_damage_charge', title: 'Repair charge added to your booking', message: `₱${damaged.damageCharges[0].amount.toLocaleString()} for ${damaged.damageCharges[0].itemName}.`, linkedResourceId: damaged.id, read: true, createdAtISO: damaged.damageCharges[0].atISO })
 

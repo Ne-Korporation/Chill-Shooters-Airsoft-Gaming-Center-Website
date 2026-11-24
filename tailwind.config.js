@@ -1,6 +1,7 @@
 /** @type {import('tailwindcss').Config} */
 export default {
-  darkMode: 'class',
+  // ThemeContext marks night mode with data-theme="dark" on <html>, so `dark:` classes follow it.
+  darkMode: ['selector', '[data-theme="dark"]'],
   content: ['./index.html', './src/**/*.{ts,tsx}'],
   theme: {
     extend: {
@@ -22,6 +23,8 @@ export default {
 
         success: "rgb(63,163,77)",
         danger: "rgb(214,69,69)",
+        // Amber for "needs attention" notes; darker in day mode so it reads on white.
+        warning: "rgb(var(--warning) / <alpha-value>)",
       },
       borderRadius: {
         xl: '16px',

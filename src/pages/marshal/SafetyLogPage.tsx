@@ -360,7 +360,7 @@ export function SafetyLogPage({ embedded = false, tab: tabFromPage, onRepairOpen
               <h2 className="flex items-center gap-2 text-lg font-bold"><FiAlertTriangle /> Damage &amp; loss reports</h2>
               <p className="mt-0.5 text-xs text-muted">
                 {reportCounts.reported > 0
-                  ? <><span className="font-semibold text-amber-400">{reportCounts.reported} waiting for a charge decision</span> · {reports.length} total</>
+                  ? <><span className="font-semibold text-warning">{reportCounts.reported} waiting for a charge decision</span> · {reports.length} total</>
                   : `${reports.length} report${reports.length === 1 ? '' : 's'}, none waiting for a decision`}
               </p>
             </div>
@@ -441,13 +441,13 @@ export function SafetyLogPage({ embedded = false, tab: tabFromPage, onRepairOpen
                       </div>
                       {report.reviewNote ? <div className="mt-1 text-xs text-muted">Review: {report.reviewNote}</div> : null}
                       {report.penalty?.overridden ? (
-                        <div className="mt-1 text-xs text-amber-400">
+                        <div className="mt-1 text-xs text-warning">
                           Override{report.penalty.computedAmount != null ? ` (rule gave ₱${report.penalty.computedAmount.toLocaleString()})` : ''}: {report.penalty.overrideReason}
                         </div>
                       ) : null}
                     </div>
                     <div className="flex shrink-0 flex-col items-end gap-2">
-                      <span className={`rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${report.status === 'billed' ? 'border-danger/30 bg-danger/10 text-danger' : report.status === 'waived' ? 'border-success/30 bg-success/10 text-success' : 'border-amber-400/30 bg-amber-400/10 text-amber-400'}`}>
+                      <span className={`rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${report.status === 'billed' ? 'border-danger/30 bg-danger/10 text-danger' : report.status === 'waived' ? 'border-success/30 bg-success/10 text-success' : 'border-amber-400/30 bg-amber-400/10 text-warning'}`}>
                         {report.status === 'reported' ? 'Needs decision' : report.status === 'billed' ? `Billed ₱${report.chargeAmount.toLocaleString()}` : 'Waived'}
                       </span>
                       {isAdmin && report.status === 'reported' && review?.id !== report.id ? (
@@ -463,7 +463,7 @@ export function SafetyLogPage({ embedded = false, tab: tabFromPage, onRepairOpen
                           {!review.quote ? (
                             <span className="text-muted">Computing penalty…</span>
                           ) : review.quote.amount === null ? (
-                            <span className="text-amber-400">{review.quote.missing}</span>
+                            <span className="text-warning">{review.quote.missing}</span>
                           ) : (
                             <div className="space-y-0.5">
                               {(review.quote.lines || []).map((line) => (
@@ -497,7 +497,7 @@ export function SafetyLogPage({ embedded = false, tab: tabFromPage, onRepairOpen
                           <Button variant="secondary" disabled={saving} onClick={() => submitReview('waive')}>Waive</Button>
                           <Button variant="ghost" disabled={saving} onClick={() => setReview(null)}>Cancel</Button>
                         </div>
-                        {!report.reservationId ? <div className="text-xs text-amber-400 sm:col-span-2">No reservation linked, so this can only be waived.</div> : null}
+                        {!report.reservationId ? <div className="text-xs text-warning sm:col-span-2">No reservation linked, so this can only be waived.</div> : null}
                       </div>
                     )
                   ) : null}

@@ -307,19 +307,19 @@ export function AdminWaiversPage() {
 
       {selectedWaiver && portalTarget ? createPortal(
         <div className="fixed inset-0 z-[9999] grid place-items-center bg-black/60 p-3 sm:p-4" role="dialog" aria-modal="true" aria-labelledby="waiver-details-title">
-          <article className="flex max-h-[90dvh] w-full max-w-5xl flex-col overflow-hidden bg-white text-slate-950 dark:bg-slate-950 dark:text-white shadow-none">
+          <article className="flex max-h-[90dvh] w-full max-w-5xl flex-col overflow-hidden bg-white text-slate-950 shadow-none">
             {/* The title row sits above the scrolling area, so the close button stays in reach and no text slides under it. */}
-            <div className="flex shrink-0 items-start justify-between gap-4 border-b border-slate-200/70 bg-white px-6 pb-4 pt-6 dark:bg-slate-950">
+            <div className="flex shrink-0 items-start justify-between gap-4 border-b border-slate-200/70 bg-white px-6 pb-4 pt-6">
               <div>
                 <div className="text-xs uppercase tracking-widest text-slate-500">Waiver document</div>
                 <h2 id="waiver-details-title" className="mt-1 text-2xl font-semibold">{selectedWaiver.fullName || 'Unnamed player'}</h2>
-                <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">What the participant submitted. Staff can approve or deny it but not change it.</p>
+                <p className="mt-2 text-sm text-slate-600">What the participant submitted. Staff can approve or deny it but not change it.</p>
               </div>
-              <button type="button" aria-label="Close waiver details" onClick={() => setSelectedWaiver(null)} className="shrink-0 rounded-lg p-2 text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"><FiX /></button>
+              <button type="button" aria-label="Close waiver details" onClick={() => setSelectedWaiver(null)} className="shrink-0 rounded-lg p-2 text-slate-600 hover:bg-slate-100"><FiX /></button>
             </div>
 
             <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 pb-6">
-            <div className="grid gap-4 sm:grid-cols-2 pt-5 text-sm leading-relaxed text-slate-700 dark:text-slate-300">
+            <div className="grid gap-4 sm:grid-cols-2 pt-5 text-sm leading-relaxed text-slate-700">
               <div>
                 <div className="text-[11px] uppercase tracking-widest text-slate-500">Waiver ID</div>
                 <p className="mt-1 font-medium">{selectedWaiver.id || selectedWaiver._id || '-'}</p>
@@ -351,7 +351,7 @@ export function AdminWaiversPage() {
               </div>
             </div>
 
-            <div className="pt-6 text-sm leading-relaxed text-slate-700 dark:text-slate-300">
+            <div className="pt-6 text-sm leading-relaxed text-slate-700">
               <p className="uppercase tracking-widest text-[11px] text-slate-500">Participant details</p>
               <p className="mt-3"><span className="font-semibold">Name:</span> {selectedWaiver.fullName || '-'}</p>
               <p className="mt-2"><span className="font-semibold">Email:</span> {selectedWaiver.email || '-'}</p>
@@ -424,7 +424,7 @@ export function AdminWaiversPage() {
                   <p className="mt-6 uppercase tracking-widest text-[11px] text-slate-500">Edit history</p>
                   <ul className="mt-3 space-y-2 text-xs">
                     {[...selectedWaiver.editHistory].reverse().map((entry, index) => (
-                      <li key={index} className="rounded-lg border border-slate-200 p-2 dark:border-slate-700">
+                      <li key={index} className="rounded-lg border border-slate-200 p-2">
                         <div className="font-semibold">{formatDate(entry.atISO)}{entry.by?.email ? ` · ${entry.by.email}` : ''}</div>
                         {Object.entries(entry.fields).map(([field, change]) => (
                           <div key={field}>{field}: “{String(change.from ?? '')}” → “{String(change.to ?? '')}”</div>
@@ -468,16 +468,16 @@ export function AdminWaiversPage() {
                   ) : (
                     <div className="mt-2 text-xs text-slate-500">No signature image submitted.</div>
                   )}
-                  <p className="mt-2 text-sm font-semibold text-slate-900 dark:text-slate-100">{selectedWaiver.fullName || '-'}</p>
+                  <p className="mt-2 text-sm font-semibold text-slate-900">{selectedWaiver.fullName || '-'}</p>
                 </div>
               </div>
             </div>
 
-            <div className="mt-8 border-t border-slate-200/70 pt-4 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
+            <div className="mt-8 border-t border-slate-200/70 pt-4 text-sm text-slate-500">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div className="text-sm text-slate-500 dark:text-slate-400">
-                  <p><span className="font-semibold text-slate-700 dark:text-slate-200">Document reference:</span> {selectedWaiver.id || selectedWaiver._id || '-'}</p>
-                  <p className="mt-2"><span className="font-semibold text-slate-700 dark:text-slate-200">Displayed as:</span> waiver document view</p>
+                <div className="text-sm text-slate-500">
+                  <p><span className="font-semibold text-slate-700">Document reference:</span> {selectedWaiver.id || selectedWaiver._id || '-'}</p>
+                  <p className="mt-2"><span className="font-semibold text-slate-700">Displayed as:</span> waiver document view</p>
                 </div>
                 {/* Destructive action sits apart on the left; the review decision reads left-to-right
                     ending in the primary Approve. */}
@@ -487,7 +487,7 @@ export function AdminWaiversPage() {
                     onClick={() => void setArchived(!selectedWaiver.archived)}
                     disabled={savingStatus || (!selectedWaiver.archived && ['pending', 'review', 'submitted', ''].includes(String(selectedWaiver.status || '').toLowerCase()))}
                     title={!selectedWaiver.archived && ['pending', 'review', 'submitted', ''].includes(String(selectedWaiver.status || '').toLowerCase()) ? 'Approve or deny this waiver before archiving it.' : undefined}
-                    className="inline-flex h-10 items-center justify-center gap-2 whitespace-nowrap rounded-xl px-4 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800 sm:mr-4"
+                    className="inline-flex h-10 items-center justify-center gap-2 whitespace-nowrap rounded-xl px-4 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 text-slate-700 hover:bg-slate-100 sm:mr-4"
                   >
                     {selectedWaiver.archived ? <><FiRotateCcw /> Restore</> : <><FiArchive /> Archive</>}
                   </button>

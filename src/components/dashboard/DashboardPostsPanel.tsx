@@ -500,7 +500,7 @@ useEffect(() => {
           type="button"
           onClick={() => setLightboxUrl(null)}
           aria-label="Close full size image"
-          className="absolute right-4 top-4 inline-flex items-center gap-2 rounded-full border border-white/20 bg-black/60 px-3 py-2 text-sm font-semibold text-white transition hover:bg-black/80"
+          className="absolute right-4 top-4 inline-flex items-center gap-2 rounded-full border border-[rgba(255,255,255,0.2)] bg-black/60 px-3 py-2 text-sm font-semibold text-white transition hover:bg-black/80"
         >
           <FiX /> Close
         </button>
