@@ -22,6 +22,8 @@ type IdPhoto = { blob: Blob; name: string; preview: string }
 
 type PlayerProfileDoc = {
   id?: string
+  // Staff accounts: their position at the field (e.g. "Head marshal").
+  jobTitle?: string
   name?: string
   firstName?: string
   middleInitial?: string
@@ -547,6 +549,10 @@ export function PlayerProfilePage() {
   const displayRole = player?.role || user?.role || 'user'
   // Admin, marshal and registrar accounts don't verify an ID.
   const isPlayerAccount = String(displayRole).toLowerCase() === 'user'
+  // Staff profiles show only what applies to staff: no age, gear, games or player cards.
+  const isStaffProfile = !isPlayerAccount
+  const STAFF_ROLE_LABEL: Record<string, string> = { admin: 'Admin', registrar: 'Registrar', marshal: 'Marshal' }
+  const staffRoleLabel = STAFF_ROLE_LABEL[String(displayRole).toLowerCase()] || String(displayRole)
   // A parent looking at one of their children's profiles: same page, the child's own progress.
   const viewingChild = Boolean(player?.isChildProfile && String(player.guardianId) === String(user?.id))
   const viewingOwn = !playerId || String(playerId) === String(user?.id)
@@ -982,6 +988,8 @@ export function PlayerProfilePage() {
                 ) : null}
               </div>
 
+              {/* Only players need a birthday (for ID verification and waivers). */}
+              {isPlayerAccount ? (
               <Input
                 label="Birthday"
                 type="date"
@@ -996,6 +1004,7 @@ export function PlayerProfilePage() {
                     ? `Age: ${ageFromBirthDate(editBirthDate)}. Needed before you can verify your ID.`
                     : 'Needed before you can verify your ID. Also fills in your age on waivers.'}
               />
+              ) : null}
 
               {!viewingChild && isPlayerAccount && isVerified ? (
                 <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
@@ -1020,9 +1029,11 @@ export function PlayerProfilePage() {
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div className="space-y-2">
-          <div className="text-sm font-medium text-accent">{viewingChild ? `Minor on your account` : 'Player'}</div>
-          <h1 className="text-3xl font-bold">{viewingChild ? `${player?.name || 'Child'}'s Profile` : 'Player Profile'}</h1>
-          <p className="text-muted text-sm">Profile details for ID: {playerId ?? '—'}</p>
+          <div className="text-sm font-medium text-accent">{viewingChild ? `Minor on your account` : isStaffProfile && !loading ? 'Staff' : 'Player'}</div>
+          <h1 className="text-3xl font-bold">
+            {viewingChild ? `${player?.name || 'Child'}'s Profile` : isStaffProfile && !loading ? (viewingOwn ? 'My Profile' : 'Staff Profile') : 'Player Profile'}
+          </h1>
+          <p className="text-muted text-sm">{isStaffProfile && !loading ? 'Staff ID' : 'Profile details for ID'}: {playerId ?? '—'}</p>
         </div>
         {/* Minors don't have profiles of their own; a parent opened an old link to one. */}
         {viewingChild ? (
@@ -1062,15 +1073,28 @@ export function PlayerProfilePage() {
                   </span>
                 </div>
               ) : null}
-              <div className="text-sm text-muted">Role: {displayRole}</div>
-              <div className="text-sm text-muted">Email: {displayEmail}</div>
-              <div className="text-sm text-muted">
-                Age: {ageFromBirthDate(player?.birthDate) ?? '—'}
-                {player?.birthDate ? ` (born ${new Date(`${player.birthDate}T00:00:00`).toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric' })})` : ''}
-              </div>
+              {isStaffProfile ? (
+                <>
+                  <div className="mt-1 flex flex-wrap items-center gap-2">
+                    <span className="rounded-full border border-accent/30 bg-accent/15 px-3 py-1 text-[11px] font-semibold text-accent">{staffRoleLabel}</span>
+                    {player?.jobTitle ? <span className="text-sm text-muted">{player.jobTitle}</span> : null}
+                  </div>
+                  <div className="mt-1 text-sm text-muted">Email: {displayEmail}</div>
+                </>
+              ) : (
+                <>
+                  <div className="text-sm text-muted">Role: {displayRole}</div>
+                  <div className="text-sm text-muted">Email: {displayEmail}</div>
+                  <div className="text-sm text-muted">
+                    Age: {ageFromBirthDate(player?.birthDate) ?? '—'}
+                    {player?.birthDate ? ` (born ${new Date(`${player.birthDate}T00:00:00`).toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric' })})` : ''}
+                  </div>
+                </>
+              )}
             </div>
           </div>
 
+          {isStaffProfile ? null : (
           <div className="mt-4 rounded-2xl bg-white/5 border border-white/10 p-4">
             <div className="text-xs uppercase tracking-widest text-muted">Gear Owned</div>
             <div className="mt-2 flex flex-wrap gap-2">
@@ -1087,6 +1111,7 @@ export function PlayerProfilePage() {
               )}
             </div>
           </div>
+          )}
 
           {displayRole === 'user' && isMinorPlayer ? (
             <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
