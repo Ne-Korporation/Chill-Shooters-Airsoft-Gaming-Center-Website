@@ -145,11 +145,11 @@ export function DemoPaymentPage() {
       <div className="mx-auto flex min-h-screen max-w-md flex-col px-4 pb-8 pt-4">
         {/* Top bar like a wallet app */}
         <div className="flex items-center justify-between text-white">
-          <button type="button" onClick={cancel} disabled={locked} className="rounded-full p-2 hover:bg-white/10 disabled:opacity-40" aria-label="Cancel payment">
+          <button type="button" onClick={cancel} disabled={locked} className="rounded-full p-2 hover:bg-[rgba(255,255,255,0.1)] disabled:opacity-40" aria-label="Cancel payment">
             <FiChevronLeft className="h-6 w-6" />
           </button>
           <div className="text-xl font-black tracking-tight">{theme.name}</div>
-          <button type="button" onClick={cancel} disabled={locked} className="rounded-full p-2 hover:bg-white/10 disabled:opacity-40" aria-label="Close">
+          <button type="button" onClick={cancel} disabled={locked} className="rounded-full p-2 hover:bg-[rgba(255,255,255,0.1)] disabled:opacity-40" aria-label="Close">
             <FiX className="h-5 w-5" />
           </button>
         </div>
@@ -169,7 +169,7 @@ export function DemoPaymentPage() {
         ) : (
           <>
             {/* Method switch */}
-            <div className="mt-4 grid grid-cols-2 gap-1 rounded-full bg-white/15 p-1" role="tablist" aria-label="Payment method">
+            <div className="mt-4 grid grid-cols-2 gap-1 rounded-full bg-[rgba(255,255,255,0.15)] p-1" role="tablist" aria-label="Payment method">
               {(['GCASH', 'QRPH'] as Channel[]).map((option) => (
                 <button
                   key={option}

@@ -313,7 +313,7 @@ export function RepairsPage({ embedded = false }: { embedded?: boolean } = {}) {
               <div className="text-right">
                 <div className="text-sm font-semibold">{formatPHP(Number(repair.totalCost || 0))}</div>
                 {Number(repair.penaltyAmount || 0) > 0 ? (
-                  <div className="text-[11px] text-amber-400">Billed to player · {repair.reservationId}</div>
+                  <div className="text-[11px] text-warning">Billed to player · {repair.reservationId}</div>
                 ) : null}
               </div>
             </li>

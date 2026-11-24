@@ -2469,7 +2469,7 @@ export function ReservationCalendarPage() {
                   <div className="mt-2">
                     {monthCalendars.map((month) => (
                       <div key={month.key} className="rounded-2xl border border-white/10 bg-black/20 p-3">
-                        <div className="text-sm font-bold text-white">{month.label}</div>
+                        <div className="text-sm font-bold text-text">{month.label}</div>
                         <div className="mt-2 grid grid-cols-7 gap-1 text-[10px] uppercase tracking-[0.12em] text-muted">
                           {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((weekday) => (
                             <div key={weekday} className="py-1 text-center">{weekday}</div>

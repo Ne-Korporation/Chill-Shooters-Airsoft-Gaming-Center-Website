@@ -1042,13 +1042,13 @@ export function WaiverPage({
 
       {viewWaiverOpen && submittedWaiver ? createPortal(
         <div className="waiver-print-overlay fixed inset-0 z-[9999] grid place-items-center bg-black/60 p-3 sm:p-4">
-          <div className="waiver-print-sheet flex max-h-[90dvh] w-full max-w-5xl flex-col overflow-hidden bg-white text-slate-950 dark:bg-slate-950 dark:text-white shadow-2xl">
+          <div className="waiver-print-sheet flex max-h-[90dvh] w-full max-w-5xl flex-col overflow-hidden bg-white text-slate-950 shadow-2xl">
             {/* The title row sits above the scrolling area, so the close button stays in reach and no text slides under it. */}
-            <div className="flex shrink-0 flex-col gap-4 border-b border-slate-200/70 bg-white px-6 pb-4 pt-6 dark:bg-slate-950 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex shrink-0 flex-col gap-4 border-b border-slate-200/70 bg-white px-6 pb-4 pt-6 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <div className="text-xs uppercase tracking-widest text-slate-500">Waiver document</div>
                 <h2 id="waiver-details-title" className="mt-1 text-2xl font-semibold">{submittedWaiver.fullName || 'Unnamed player'}</h2>
-                <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">This is your submitted waiver record.</p>
+                <p className="mt-2 text-sm text-slate-600">This is your submitted waiver record.</p>
               </div>
               <div className="waiver-print-controls flex shrink-0 items-center gap-2 self-start sm:self-auto">
                 <Button variant="secondary" onClick={printWaiver}>
@@ -1058,7 +1058,7 @@ export function WaiverPage({
                 <button
                   type="button"
                   onClick={() => setViewWaiverOpen(false)}
-                  className="shrink-0 rounded-lg p-2 text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+                  className="shrink-0 rounded-lg p-2 text-slate-600 hover:bg-slate-100"
                   aria-label="Close waiver view"
                 >
                   <FiX />
@@ -1067,7 +1067,7 @@ export function WaiverPage({
             </div>
 
             <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 pb-6">
-            <div className="grid gap-4 sm:grid-cols-2 pt-5 text-sm leading-relaxed text-slate-700 dark:text-slate-300">
+            <div className="grid gap-4 sm:grid-cols-2 pt-5 text-sm leading-relaxed text-slate-700">
               <div>
                 <div className="text-[11px] uppercase tracking-widest text-slate-500">Waiver ID</div>
                 <p className="mt-1 font-medium">{submittedWaiver.id || submittedWaiver._id || '-'}</p>
@@ -1086,7 +1086,7 @@ export function WaiverPage({
               </div>
             </div>
 
-            <div className="waiver-print-body pt-6 text-sm leading-relaxed text-slate-700 dark:text-slate-300">
+            <div className="waiver-print-body pt-6 text-sm leading-relaxed text-slate-700">
               <p className="uppercase tracking-widest text-[11px] text-slate-500">Participant details</p>
               <p className="mt-3"><span className="font-semibold">Name:</span> {submittedWaiver.fullName || '-'}</p>
               <p className="mt-2"><span className="font-semibold">Age:</span> {submittedWaiver.age ?? '-'}</p>
@@ -1140,7 +1140,7 @@ export function WaiverPage({
                 <WaiverTermsBody
                   text={signedWaiverText(submittedWaiver)}
                   isMinor={Boolean(submittedWaiver.isMinor)}
-                  textClass="text-slate-700 dark:text-slate-300"
+                  textClass="text-slate-700"
                   headingClass="text-slate-500"
                 />
               </div>
@@ -1154,15 +1154,15 @@ export function WaiverPage({
                 ) : (
                   <div className="mt-2 text-xs text-slate-500">No signature image submitted.</div>
                 )}
-                <p className="mt-2 text-sm font-semibold text-slate-900 dark:text-slate-100">{submittedWaiver.fullName || '-'}</p>
+                <p className="mt-2 text-sm font-semibold text-slate-900">{submittedWaiver.fullName || '-'}</p>
               </div>
             </div>
 
-            <div className="mt-8 border-t border-slate-200/70 pt-4 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
+            <div className="mt-8 border-t border-slate-200/70 pt-4 text-sm text-slate-500">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <p><span className="font-semibold text-slate-700 dark:text-slate-200">Document reference:</span> {submittedWaiver.id || submittedWaiver._id || '-'}</p>
-                  <p className="mt-2"><span className="font-semibold text-slate-700 dark:text-slate-200">Displayed as:</span> waiver document view</p>
+                  <p><span className="font-semibold text-slate-700">Document reference:</span> {submittedWaiver.id || submittedWaiver._id || '-'}</p>
+                  <p className="mt-2"><span className="font-semibold text-slate-700">Displayed as:</span> waiver document view</p>
                 </div>
                 <Button variant="ghost" onClick={printWaiver}>
                   <FiPrinter />
