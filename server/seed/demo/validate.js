@@ -87,7 +87,7 @@ export async function validateDemo(db, { now, todayISO, slotHours }) {
     if (r.reservationStatus === 'confirmed' && games.length !== 1) err(`Reservation ${r.id} is confirmed with ${games.length} game records`)
     if (r.reservationStatus !== 'confirmed' && games.length) err(`Reservation ${r.id} (${r.reservationStatus}) has a game record`)
     const game = games[0]
-    if (game?.Status === 'Completed') {
+    if (['Completed', 'Archived'].includes(game?.Status)) {
       if (r.reservationDate > todayISO) err(`Game ${game.id} completed before its date`)
       if (Math.abs(paid - Number(r.totalAmount)) > 0.01) err(`Reservation ${r.id}: game completed but paid ₱${paid} of ₱${r.totalAmount}`)
       const session = checkins.find((c) => c._id === `${r.locationId}:${r.reservationDate}:${r.reservationTime}`)
@@ -208,7 +208,7 @@ export async function validateDemo(db, { now, todayISO, slotHours }) {
   // Money ---------------------------------------------------------------------------------------------
   const sum = (type) => ledger.filter((e) => e.type === type).reduce((s, e) => s + e.amount, 0)
   const reachBalance = sum('allocation') + sum('donation') - sum('expenditure')
-  if (reachBalance < 0) err(`REACH fund balance is negative (₱${reachBalance})`)
+  if (reachBalance < 0) err(`Donation fund balance is negative (₱${reachBalance})`)
 
   // Dashboards read at most 200 records of each.
   if (reservations.length > 200) err(`${reservations.length} reservations: dashboards only read 200`)

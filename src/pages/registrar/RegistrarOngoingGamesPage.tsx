@@ -1,5 +1,5 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useLiveRefresh } from '../../utils/liveUpdates'
 import { FiArchive, FiCheck, FiChevronDown, FiChevronRight, FiEye, FiFolder, FiFolderMinus, FiMapPin, FiSearch, FiShield, FiX } from 'react-icons/fi'
 import { toast } from 'react-hot-toast'
@@ -248,13 +248,25 @@ export function RegistrarOngoingGamesPage({ embedded = false }: { embedded?: boo
   }
 
   const setFilter =<K extends keyof GameFilters>(key: K, value: GameFilters[K]) => {
-    setFilters((current) => ({ ...current, [key]: value }))
+    setFilters((current) => {
+      const next = { ...current, [key]: value }
+      // Looking back (completed games, past dates) shows the latest day first; looking ahead, the
+      // soonest. Only the date orders follow along; "Recently added" stays as chosen.
+      if (key === 'status' || key === 'date') {
+        const lookingBack = next.status === 'Completed' || next.date === 'past'
+        if (lookingBack && next.sort === 'soonest') next.sort = 'latest'
+        if (!lookingBack && next.sort === 'latest') next.sort = 'soonest'
+      }
+      return next
+    })
     setPage(1)
   }
   const filtersActive = JSON.stringify({ ...filters, sort: DEFAULT_FILTERS.sort }) !== JSON.stringify(DEFAULT_FILTERS)
   // Time slot, game mode and sort sit behind "More filters"; they stay visible while one is set.
   const [moreFiltersOpen, setMoreFiltersOpen] = useState(false)
-  const moreFiltersSet = Boolean(filters.slot || filters.mode || filters.sort !== DEFAULT_FILTERS.sort)
+  const lookingBack = filters.status === 'Completed' || filters.date === 'past'
+  const autoSort = lookingBack ? 'latest' : DEFAULT_FILTERS.sort
+  const moreFiltersSet = Boolean(filters.slot || filters.mode || filters.sort !== autoSort)
   const showMoreFilters = moreFiltersOpen || moreFiltersSet
 
   // Latest filters for the background refresh.
@@ -399,6 +411,55 @@ export function RegistrarOngoingGamesPage({ embedded = false }: { embedded?: boo
   const defaultOpenDay = folders.some((f) => f.day === manilaToday()) ? manilaToday() : folders[0]?.day
   const folderOpen = (day: string) => folderToggles[day] ?? day === defaultOpenDay
   const toggleFolder = (day: string) => setFolderToggles((current) => ({ ...current, [day]: !folderOpen(day) }))
+
+  // Opened from a notification (?game=GP-… or a booking id R-…): that game's details open, and
+  // its row is shown (page and day folder opened), scrolled to and highlighted for a moment.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const focusParam = searchParams.get('game')
+  const [highlightId, setHighlightId] = useState<string | null>(null)
+  useEffect(() => {
+    if (!focusParam) return
+    let alive = true
+    setSearchParams((params) => {
+      params.delete('game')
+      return params
+    }, { replace: true })
+    const q = focusParam.startsWith('R-') ? { reservationId: focusParam } : { $or: [{ id: focusParam }, { reservationId: focusParam }] }
+    apiGet<{ ok: boolean; data: GameplayDoc[] }>(`/api/gameplay?q=${encodeURIComponent(JSON.stringify(q))}&limit=1`)
+      .then((res) => {
+        if (!alive) return
+        const doc = Array.isArray(res?.data) ? res.data[0] : undefined
+        if (!doc) {
+          toast(focusParam.startsWith('R-')
+            ? "This booking isn't on the games board yet. It's added once the booking is paid and confirmed."
+            : 'That game could not be found. It may have been removed.')
+          return
+        }
+        openDetails(doc)
+        setHighlightId(rowId(doc))
+      })
+      .catch((e: any) => { if (alive) toast.error(String(e?.message || e)) })
+    return () => { alive = false }
+    // openDetails only sets state; the lookup runs once per link.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusParam])
+  // Revealed once per link; the board's refreshes don't move the page again.
+  const revealedId = React.useRef<string | null>(null)
+  useEffect(() => {
+    if (!highlightId || revealedId.current === highlightId) return
+    const index = allFolders.findIndex((folder) => folder.games.some((doc) => rowId(doc) === highlightId))
+    if (index < 0) return
+    revealedId.current = highlightId
+    const day = allFolders[index].day
+    setPage(Math.floor(index / DAYS_PER_PAGE) + 1)
+    setFolderToggles((current) => ({ ...current, [day]: true }))
+    window.setTimeout(() => document.getElementById(`game-${highlightId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 150)
+  }, [highlightId, allFolders])
+  useEffect(() => {
+    if (!highlightId) return
+    const clear = window.setTimeout(() => setHighlightId(null), 6000)
+    return () => window.clearTimeout(clear)
+  }, [highlightId])
 
   const updateStatus = async (doc: GameplayDoc, nextStatus: GameplayStatus) => {
     const id = rowId(doc)
@@ -658,7 +719,11 @@ export function RegistrarOngoingGamesPage({ embedded = false }: { embedded?: boo
                   {isOpen ? (
                     <ul className="divide-y divide-white/5 border-t border-white/10">
                       {folder.games.map((doc) => (
-                        <li key={rowId(doc)} className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:gap-4">
+                        <li
+                          key={rowId(doc)}
+                          id={`game-${rowId(doc)}`}
+                          className={['flex flex-col gap-2 px-4 py-3 transition-colors sm:flex-row sm:items-center sm:gap-4', highlightId === rowId(doc) ? 'bg-accent/15 ring-1 ring-inset ring-accent/50' : ''].join(' ')}
+                        >
                           <div className="min-w-0 flex-1">
                             <div className="font-semibold">
                               {slotOf(doc)} · {locationName(doc)}

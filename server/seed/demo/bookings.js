@@ -819,6 +819,15 @@ export async function seedBookings(ctx) {
     }
   }
 
+  // Staff archive finished days from the board ("Archive day"); the last week stays on it.
+  for (const game of out.gameplay) {
+    if (game.Status !== 'Completed') continue
+    const day = String(game.Schedule).slice(0, 10)
+    if (day >= addDays(todayISO, -7)) continue
+    const atMs = past(atManila(addDays(day, rng.int(1, 3)), '21:00'))
+    Object.assign(game, { Status: 'Archived', archivedAtISO: new Date(atMs).toISOString(), updatedAtISO: new Date(atMs).toISOString() })
+  }
+
   // A booking moved by the player (shown in its history and the audit log).
   const movable = out.reservations.find((r) => r.reservationStatus === 'confirmed' && r.reservationDate > addDays(todayISO, 6) && !r.walkIn && r.sessionType === 'public')
   if (movable) {

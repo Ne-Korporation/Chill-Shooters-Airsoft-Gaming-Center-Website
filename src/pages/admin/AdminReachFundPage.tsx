@@ -59,7 +59,7 @@ export function AdminReachFundPage() {
       setEntries(res.data || [])
       setRateInput(res.summary?.ratePercent == null ? '' : String(res.summary.ratePercent))
     } catch (err: any) {
-      toast.error(err?.message || 'Unable to load the REACH fund')
+      toast.error(err?.message || 'Unable to load the donation fund')
     } finally {
       setLoading(false)
     }
@@ -109,7 +109,7 @@ export function AdminReachFundPage() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="flex items-center gap-2 text-3xl font-bold"><FiHeart /> REACH Fund</h1>
+        <h1 className="flex items-center gap-2 text-3xl font-bold"><FiHeart /> Donation Fund</h1>
         <p className="mt-1 text-sm text-muted">
           Community outreach fund, kept in its own ledger and never counted as operating revenue. Spending can't exceed the fund balance.
         </p>

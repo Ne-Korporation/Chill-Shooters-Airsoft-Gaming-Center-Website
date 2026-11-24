@@ -37,7 +37,7 @@ Every demo account uses the password **`ChillDemo2026!`**. Emails end in `@demo.
 
 | Role | Email (before `@demo.chillshooters.test`) | Shows |
 |---|---|---|
-| Admin (owner) | `ricardo.villanueva` | Dashboards, reports, REACH fund, expenses |
+| Admin (owner) | `ricardo.villanueva` | Dashboards, reports, donation fund, expenses |
 | Registrar | `liza.manalo` | Counter payments, check-in, ID, waiver and CvSU review |
 | Marshal | `jomar.bautista`, `kevin.soriano` | Games board, rentals, FPS checks, repairs |
 | Player (regular) | `juan.delacruz`, `marco.santos` | Long booking history, receipts, feedback |
@@ -54,7 +54,7 @@ Every demo account uses the password **`ChillDemo2026!`**. Emails end in `@demo.
 - `people.js`: staff, players, children, ID verification, CvSU requests, waivers.
 - `bookings.js`: reservations, payments, games, check-ins, teams, rentals, FPS checks, damage,
   repairs, receipts, feedback. Uses the server's own pricing, split-share and inventory functions.
-- `extras.js`: cause and closed days, expenses, REACH fund, partner loans, announcements,
+- `extras.js`: cause and closed days, expenses, donation fund, partner loans, announcements,
   messages, notifications, weather advisories, audit log.
 - `validate.js`: the consistency checks.
 - `serve.js`: starts the API on the demo database.
