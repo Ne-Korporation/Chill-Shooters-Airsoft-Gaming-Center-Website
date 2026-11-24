@@ -817,6 +817,8 @@ router.post('/reservations/:id/charges/:chargeId/remove', requireAuth, requireRo
     const charge = charges.find((c) => c.id === req.params.chargeId)
     if (!charge) return res.status(404).json({ ok: false, error: 'That charge is no longer on the bill.' })
     if (!canRemoveChargeType(req.user.role, charge.type)) return res.status(403).json({ ok: false, error: 'Only the registrar can take this charge off the bill.' })
+    // A damage fee is settled through its damage report, not removed from the bill here.
+    if (charge.type === 'damage') return res.status(409).json({ ok: false, error: 'A damage fee can\'t be taken off the bill. It was set on the damage report.' })
 
     const quantity = Number(charge.quantity || 1)
     const asked = req.body?.quantity === undefined ? quantity : Number(req.body.quantity)
@@ -1490,9 +1492,23 @@ router.put('/repairs/:id/complete', requireAuth, requireRole('admin', 'marshal')
           await db.collection('reservations').updateOne(
             { _id: reservation._id },
             {
-              $inc: { totalAmount: penaltyAmount, balanceAmount: penaltyAmount, damageChargesTotal: penaltyAmount },
+              $inc: { totalAmount: penaltyAmount, balanceAmount: penaltyAmount, damageChargesTotal: penaltyAmount, extraChargesTotal: penaltyAmount },
               $push: {
                 pricingBreakdown: { label: `Repair penalty: ${repair.itemName}`, amount: penaltyAmount },
+                // A line on the counter bill, so the registrar sees it and collects it.
+                extraCharges: {
+                  id: `CHG-${new ObjectId().toHexString().slice(-8).toUpperCase()}`,
+                  type: 'damage',
+                  label: `Repair penalty: ${repair.itemName}`,
+                  quantity: 1,
+                  unitPrice: penaltyAmount,
+                  amount: penaltyAmount,
+                  note: '',
+                  reportId: repair.damageReportId || '',
+                  repairId: repair.id,
+                  addedBy: actorOf(req),
+                  atISO: nowISO,
+                },
                 damageCharges: { repairId: repair.id, reportId: repair.damageReportId || '', kind: 'damage', itemName: repair.itemName, amount: penaltyAmount, penalty, approvedBy: actorOf(req), atISO: nowISO },
               },
               $set: { updatedAtISO: nowISO },

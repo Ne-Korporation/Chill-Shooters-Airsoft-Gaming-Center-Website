@@ -59,6 +59,13 @@ export function resolveNotificationRoute(notification: NotificationItem, role?: 
     return '/app/waiver'
   }
 
+  // A damage fee added to a booking: open that booking's bill at the counter.
+  if (notificationType === 'damage_charge_added') {
+    if (!isStaffRole(currentRole)) return '/app/my-reservations'
+    const id = String(notification.linkedResourceId || '').trim()
+    return id ? `/app/counter?reservation=${encodeURIComponent(id)}` : '/app/counter'
+  }
+
   if (notificationType.startsWith('payment_')) {
     if (currentRole === 'admin') return '/app/admin/payments'
     if (currentRole === 'registrar') return '/app/registrar/submitted-payments'
@@ -75,11 +82,21 @@ export function resolveNotificationRoute(notification: NotificationItem, role?: 
     return '/app'
   }
 
-  // A player submitted an ID: open the ID verification list on the players page.
+  // A player submitted an ID: open that player's details on the players page (the link is their
+  // account id), or the ID verification list when the notice names no one.
   if (notificationType === 'player_id_submitted') {
-    if (currentRole === 'admin') return '/app/admin/player-management#id-verifications'
-    if (currentRole === 'registrar') return '/app/registrar/players#id-verifications'
-    return null
+    const base = currentRole === 'admin' ? '/app/admin/player-management' : currentRole === 'registrar' ? '/app/registrar/players' : ''
+    if (!base) return null
+    const playerId = String(notification.linkedResourceId || '').trim()
+    return playerId ? `${base}?player=${encodeURIComponent(playerId)}#id-verifications` : `${base}#id-verifications`
+  }
+
+  // Partnership discount: staff open the requests list; the player opens their profile, where the
+  // discount card shows the decision.
+  if (notificationType.startsWith('partnership_')) {
+    if (currentRole === 'admin') return '/app/admin/player-management#partnership-requests'
+    if (currentRole === 'registrar') return '/app/registrar/players#partnership-requests'
+    return userId ? `/app/players/${encodeURIComponent(userId)}` : '/app'
   }
 
   if (notificationType.startsWith('player_')) {

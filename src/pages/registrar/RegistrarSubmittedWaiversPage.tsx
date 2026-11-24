@@ -4,10 +4,12 @@ import toast from 'react-hot-toast'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
-import { FiCheck, FiShield, FiClock, FiAlertTriangle } from 'react-icons/fi'
+import { FiCheck, FiShield, FiClock, FiAlertTriangle, FiEye, FiPrinter } from 'react-icons/fi'
 import { apiGetAll, apiPut } from '../../utils/apiClient'
 import { Pagination, usePagination } from '../../components/ui/Pagination'
 import { WaiverApprovalDialog, type WaiverIdCheck } from '../../components/waivers/WaiverApprovalDialog'
+import { Modal } from '../../components/ui/Modal'
+import { buildWaiverPrintHtml, printWaiverDocument, type PrintableWaiver } from '../../utils/waiverPrint'
 
 type WaiverStatus = 'pending' | 'accepted' | 'flagged' | 'expired'
 
@@ -26,6 +28,8 @@ type WaiverRow = {
   guardianName: string
   guardianIdType: string
   guardianIdImage: string
+  // The full waiver as saved, for viewing and printing the signed document.
+  doc: PrintableWaiver
 }
 
 function dateTime(iso: string) {
@@ -74,6 +78,7 @@ export function RegistrarSubmittedWaiversPage() {
         guardianName: item.guardianName || '',
         guardianIdType: item.guardianIdType || '',
         guardianIdImage: item.guardianIdImage || '',
+        doc: item,
       }))
       setRows(mapped.sort((a, b) => b.submittedAtISO.localeCompare(a.submittedAtISO)))
     } catch (e: any) {
@@ -106,6 +111,8 @@ export function RegistrarSubmittedWaiversPage() {
   const flaggedCount = useMemo(() => rows.filter((r) => r.status === 'flagged').length, [rows])
 
   const [approving, setApproving] = useState<{ row: WaiverRow; note: string } | null>(null)
+  // The waiver open in the viewer: the signed document as it prints.
+  const [viewing, setViewing] = useState<WaiverRow | null>(null)
 
   const updateStatus = async (id: string, nextStatus: WaiverStatus, reviewerNote: string, idCheck?: WaiverIdCheck) => {
     setSavingId(id)
@@ -139,6 +146,28 @@ export function RegistrarSubmittedWaiversPage() {
         onCancel={() => setApproving(null)}
         onConfirm={(check) => approving && void updateStatus(approving.row.id, 'accepted', approving.note, check)}
       />
+      {viewing ? (
+        <Modal
+          eyebrow="Waiver"
+          title={`${viewing.participantSummary} · ${viewing.id}`}
+          size="lg"
+          confirmDiscard={false}
+          onClose={() => setViewing(null)}
+          footer={
+            <>
+              <Button variant="ghost" onClick={() => setViewing(null)} className="flex-1 sm:flex-none">Close</Button>
+              <Button variant="primary" onClick={() => printWaiverDocument(viewing.doc)} className="flex-1 sm:flex-none"><FiPrinter /> Print</Button>
+            </>
+          }
+        >
+          {/* The signed waiver exactly as it prints: text, signatures and the IDs sent with it. */}
+          <iframe
+            title={`Waiver ${viewing.id}`}
+            srcDoc={buildWaiverPrintHtml(viewing.doc)}
+            className="h-[70dvh] w-full rounded-xl border border-white/10 bg-white"
+          />
+        </Modal>
+      ) : null}
       <div className="space-y-2">
         <div className="text-sm font-medium text-accent">Registrar</div>
         <h1 className="text-3xl font-bold">Submitted Online Waivers</h1>
@@ -231,19 +260,22 @@ export function RegistrarSubmittedWaiversPage() {
                     </span>
                   </td>
                   <td className="py-3 pr-3">
-                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                    {/* Compact so the whole row fits: View and Print are icon buttons (named on hover),
+                        then the one review action the waiver needs. */}
+                    <div className="flex items-center gap-1.5 whitespace-nowrap">
+                      <Button variant="ghost" size="xs" onClick={() => setViewing(r)} title="View waiver" aria-label="View waiver"><FiEye /></Button>
+                      <Button variant="ghost" size="xs" onClick={() => printWaiverDocument(r.doc)} title="Print waiver" aria-label="Print waiver"><FiPrinter /></Button>
                       {r.status === 'pending' ? (
-                        <Button variant="primary" className="w-full sm:w-auto" onClick={() => accept(r)} disabled={savingId === r.id}>
+                        <Button variant="primary" size="xs" onClick={() => accept(r)} disabled={savingId === r.id}>
                           <FiCheck /> {savingId === r.id ? 'Saving…' : 'Accept'}
                         </Button>
                       ) : null}
                       {r.status === 'flagged' ? (
-                        <Button variant="ghost" className="w-full sm:w-auto" onClick={() => clearFlag(r)} disabled={savingId === r.id}>
+                        <Button variant="ghost" size="xs" onClick={() => clearFlag(r)} disabled={savingId === r.id}>
                           <FiAlertTriangle /> {savingId === r.id ? 'Saving…' : 'Re-verify'}
                         </Button>
                       ) : null}
-                      {r.status === 'accepted' ? <div className="text-xs text-muted">No action</div> : null}
-                      {r.status === 'expired' ? <div className="text-xs text-muted">Player must submit a new waiver</div> : null}
+                      {r.status === 'expired' ? <div className="whitespace-normal text-xs text-muted">Player must submit a new waiver</div> : null}
                     </div>
                   </td>
                 </tr>

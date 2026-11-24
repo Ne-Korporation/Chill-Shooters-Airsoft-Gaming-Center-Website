@@ -80,6 +80,8 @@ function toItems(docs: any[]): InventoryItem[] {
 export function SafetyLogPage({ embedded = false, tab: tabFromPage, onRepairOpened }: { embedded?: boolean; tab?: 'fps' | 'damage'; onRepairOpened?: () => void } = {}) {
   const { user } = useAuth()
   const isAdmin = user?.role === 'admin'
+  // Marshals inspect the damage, so they set the fee too; it goes on the booking's bill for the registrar.
+  const canSetFee = isAdmin || user?.role === 'marshal'
   const [ownTab, setTab] = useState<'fps' | 'damage'>('fps')
   const tab = tabFromPage || ownTab
   const [fpsLogs, setFpsLogs] = useState<FpsLog[]>([])
@@ -450,13 +452,13 @@ export function SafetyLogPage({ embedded = false, tab: tabFromPage, onRepairOpen
                       <span className={`rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${report.status === 'billed' ? 'border-danger/30 bg-danger/10 text-danger' : report.status === 'waived' ? 'border-success/30 bg-success/10 text-success' : 'border-amber-400/30 bg-amber-400/10 text-warning'}`}>
                         {report.status === 'reported' ? 'Needs decision' : report.status === 'billed' ? `Billed ₱${report.chargeAmount.toLocaleString()}` : 'Waived'}
                       </span>
-                      {isAdmin && report.status === 'reported' && review?.id !== report.id ? (
-                        <Button size="xs" variant="secondary" onClick={() => void openReview(report)}>Review charge</Button>
+                      {canSetFee && report.status === 'reported' && review?.id !== report.id ? (
+                        <Button size="xs" variant="secondary" onClick={() => void openReview(report)}>Set damage fee</Button>
                       ) : null}
                     </div>
                   </div>
 
-                  {isAdmin && report.status === 'reported' && review?.id === report.id ? (
+                  {canSetFee && report.status === 'reported' && review?.id === report.id ? (
                     (
                       <div className="mt-3 grid gap-2 rounded-xl border border-white/10 bg-white/5 p-3 sm:grid-cols-2">
                         <div className="text-xs sm:col-span-2">
@@ -474,7 +476,7 @@ export function SafetyLogPage({ embedded = false, tab: tabFromPage, onRepairOpen
                           )}
                         </div>
                         <Input
-                          label="Charge (₱)"
+                          label="Damage fee (₱)"
                           type="number"
                           min={1}
                           value={review.amount}
@@ -493,11 +495,13 @@ export function SafetyLogPage({ embedded = false, tab: tabFromPage, onRepairOpen
                           onChange={(e) => setReview((c) => c && { ...c, note: e.target.value })}
                         />
                         <div className="flex flex-wrap gap-2 sm:col-span-2">
-                          <Button variant="danger" disabled={saving || !report.reservationId} onClick={() => submitReview('bill')}>Bill to reservation</Button>
+                          <Button variant="danger" disabled={saving || !report.reservationId} onClick={() => submitReview('bill')}>Add to player's bill</Button>
                           <Button variant="secondary" disabled={saving} onClick={() => submitReview('waive')}>Waive</Button>
                           <Button variant="ghost" disabled={saving} onClick={() => setReview(null)}>Cancel</Button>
                         </div>
-                        {!report.reservationId ? <div className="text-xs text-warning sm:col-span-2">No reservation linked, so this can only be waived.</div> : null}
+                        {report.reservationId
+                          ? <div className="text-xs text-muted sm:col-span-2">The fee is added to booking {report.reservationId}'s remaining balance, and the registrar collects it at the counter.</div>
+                          : <div className="text-xs text-warning sm:col-span-2">No reservation linked, so this can only be waived.</div>}
                       </div>
                     )
                   ) : null}

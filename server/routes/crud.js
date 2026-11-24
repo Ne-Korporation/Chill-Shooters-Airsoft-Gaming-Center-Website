@@ -20,7 +20,7 @@ import { notifyBookingRescheduled, notifyGameStatus, notifyWaiverDecision } from
 import { ageFromBirthDate } from '../utils/age.js'
 import { ACTIVE_WAIVER_STATUSES, expireOldWaivers, expireWaiversForNewText, validUntilFrom } from '../utils/waiverValidity.js'
 import { manilaDateISO } from '../utils/reminders.js'
-import { formatSlotTime, getSlotHours, slotHasEnded, slotHasStarted } from '../utils/slotHours.js'
+import { getSlotHours, slotHasStarted } from '../utils/slotHours.js'
 import { summarizeWeekendCapacity, weekendDatesOf } from '../utils/weekendCapacity.js'
 import { listActiveCauseDays, weekendDatesInMonth } from '../utils/causeDays.js'
 import { closedDayError, findClosedDay, listClosedDays } from '../utils/closedDays.js'
@@ -1325,6 +1325,29 @@ function canAccessNotification(doc, user) {
   return doc?.userId === 'broadcast' && ['all', user?.role].includes(doc?.targetRole)
 }
 
+// When the signed-in account was created (ISO). Broadcasts sent before then aren't theirs:
+// a new account starts with an empty notification list. Falls back to the ObjectId's timestamp
+// for older accounts saved without createdAtISO.
+async function accountCreatedAtISO(db, userId) {
+  const objectId = safeIdParam(userId)
+  const account = await db.collection('user_accounts').findOne(
+    { $or: [{ id: String(userId) }, ...(objectId ? [{ _id: objectId }] : [])] },
+    { projection: { createdAtISO: 1 } },
+  )
+  if (!account) return ''
+  if (account.createdAtISO) return String(account.createdAtISO)
+  return account._id instanceof ObjectId ? account._id.getTimestamp().toISOString() : ''
+}
+
+// Broadcasts made before the account existed are left out (ones without a date are kept).
+function notCreatedBefore(sinceISO) {
+  return sinceISO ? { $or: [{ createdAtISO: { $gte: sinceISO } }, { createdAtISO: { $exists: false } }] } : {}
+}
+
+function sentBeforeAccount(doc, sinceISO) {
+  return Boolean(sinceISO && doc?.userId === 'broadcast' && doc?.createdAtISO && String(doc.createdAtISO) < sinceISO)
+}
+
 // Broadcast notifications are one shared record, so non-admins read and clear them
 // per account (readBy / dismissedBy) instead of changing them for everyone.
 function isSharedNotification(doc, user) {
@@ -1592,12 +1615,14 @@ router.get('/:collection', requireAuth, async (req, res) => {
       const owners = await gearOwnerIds(db, req.user.id)
       filter = mergeFilters(filter, { $or: [{ source: { $ne: 'player' } }, ...owners.map(playerOwnershipFilter)] })
     }
+    // Broadcasts (to everyone or a role) only count from when this account was created.
+    const since = collection === 'notifications' ? notCreatedBefore(await accountCreatedAtISO(db, req.user.id)) : {}
     if (playerUser && collection === 'notifications') {
       filter = mergeFilters(filter, {
         $or: [
           { userId: String(req.user.id) },
-          { userId: 'broadcast', targetRole: 'all' },
-          { userId: 'broadcast', targetRole: 'user' },
+          { $and: [{ userId: 'broadcast', targetRole: 'all' }, since] },
+          { $and: [{ userId: 'broadcast', targetRole: 'user' }, since] },
         ],
       })
     }
@@ -1607,8 +1632,8 @@ router.get('/:collection', requireAuth, async (req, res) => {
       filter = mergeFilters(filter, {
         $or: [
           { userId: String(req.user.id) },
-          { userId: 'broadcast', targetRole: 'all' },
-          { userId: 'broadcast', targetRole: req.user.role, ...roleNotificationFilter(req.user.role) },
+          { $and: [{ userId: 'broadcast', targetRole: 'all' }, since] },
+          { $and: [{ userId: 'broadcast', targetRole: req.user.role, ...roleNotificationFilter(req.user.role) }, since] },
         ],
       })
     }
@@ -1673,6 +1698,9 @@ router.get('/:collection/:id', requireAuth, async (req, res) => {
     }
     if (collection === 'notifications') {
       if (!canAccessNotification(doc, req.user)) return res.status(404).json({ ok: false, error: 'not found' })
+      if (req.user.role !== 'admin' && sentBeforeAccount(doc, await accountCreatedAtISO(db, req.user.id))) {
+        return res.status(404).json({ ok: false, error: 'not found' })
+      }
       return res.json({ ok: true, data: personalizeNotification(doc, req.user) })
     }
     if (collection === 'user_accounts') {
@@ -2695,19 +2723,12 @@ router.put('/:collection/:id', requireAuth, async (req, res) => {
       if (['ongoing', 'completed'].includes(nextStatus) && /^\d{4}-\d{2}-\d{2}$/.test(gameDay) && gameDay > manilaDateISO()) {
         return res.status(409).json({ ok: false, error: `This game is scheduled for ${gameDay}. It can be started on game day.` })
       }
-      // Completing a game: it must have been started, and its slot must be over (an afternoon
-      // game can't be marked done at 3 PM when the slot runs until 5 PM).
+      // Completing a game: it must have been started. Staff can end it any time after that,
+      // including before its slot is over when the squad finishes early.
       const currentStatus = String(existing.Status || '').toLowerCase()
       if (nextStatus === 'completed' && !currentStatus.startsWith('complet')) {
         if (!currentStatus.startsWith('ongo')) {
           return res.status(409).json({ ok: false, error: 'This game hasn\'t started yet. Start it before marking it done.' })
-        }
-        const slot = String(existing.Schedule || '').split('•')[1]?.trim().toLowerCase() || ''
-        if (/^\d{4}-\d{2}-\d{2}$/.test(gameDay) && slot) {
-          const { hours } = await getSlotHours(db)
-          if (!slotHasEnded(hours, slot, gameDay, manilaDateISO())) {
-            return res.status(409).json({ ok: false, error: `The ${slot} slot runs until ${formatSlotTime(hours[slot]?.end)}. The game can be marked done after that.` })
-          }
         }
         if (!changes.completedAtISO) changes.completedAtISO = new Date().toISOString()
       }

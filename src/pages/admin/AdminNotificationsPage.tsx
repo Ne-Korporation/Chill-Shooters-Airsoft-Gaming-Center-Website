@@ -164,9 +164,21 @@ export function AdminNotificationsPage() {
     const base = { type: 'announcement' as const, title: title.trim(), message: body.trim(), imageUrl: imageUrl.trim() || undefined, linkedResourceId: undefined }
     if (sendTo === 'person') {
       addNotification({ ...base, userId: targetUserId.trim() })
+      // A notice to one registrar or marshal is copied to the admins too.
+      const staffRole = String(selectedAccount?.role || '').toLowerCase()
+      if (staffRole === 'registrar' || staffRole === 'marshal') {
+        addNotification({
+          ...base,
+          userId: 'broadcast',
+          targetRole: 'admin',
+          message: `Sent to ${selectedAccount?.name || 'a staff member'} (${ROLE_SINGULAR[staffRole]}): ${base.message}`,
+        })
+      }
       toast.success('Notification sent.')
     } else {
-      const targets: Array<Role | 'all'> = sendTo === 'everyone' ? ['all'] : roles
+      const targets: Array<Role | 'all'> = sendTo === 'everyone' ? ['all'] : [...roles]
+      // Everything sent to registrars or marshals reaches the admins as well.
+      if (targets.some((role) => role === 'registrar' || role === 'marshal') && !targets.includes('admin')) targets.push('admin')
       targets.forEach((role) => addNotification({ ...base, userId: 'broadcast', targetRole: role }))
       toast.success(`Notification sent to ${targets.map((role) => ROLE_LABEL[role]).join(', ')}.`)
     }

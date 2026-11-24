@@ -1158,6 +1158,13 @@ export function ReservationCalendarPage() {
   useEffect(() => {
     setOwnWeaponTarget(markedOwnWeaponCount)
   }, [markedOwnWeaponCount])
+  // Picking items yourself there's no Bring Your Own to mark, so clear any mark left from a package
+  // (or a saved draft).
+  useEffect(() => {
+    if (selectionMode !== 'custom') return
+    setCaptainOwnGun(false)
+    setTeammateOwnWeaponIds([])
+  }, [selectionMode])
 
   // Whether the gear for this booking is free for the slot, so players see a shortage here
   // instead of at payment. The server answers only yes / no (and which models are short): players
@@ -1544,6 +1551,23 @@ export function ReservationCalendarPage() {
   const customSelectedWeapons = useMemo(() => {
     return weapons.filter((w) => customWeaponIds.includes(w.id))
   }, [weapons, customWeaponIds])
+
+  // Guns rented in a custom selection (grenades are thrown, not a player's gun), and how many the
+  // group still needs once the players bringing their own are taken off.
+  const rentedGunIds = useMemo(
+    () => customSelectedWeapons.filter((weapon) => String(weapon.category || '').toLowerCase() !== 'grenades').map((weapon) => weapon.id),
+    [customSelectedWeapons],
+  )
+  const gunsNeeded = Math.max(0, players - markedOwnWeaponCount)
+  // Marking someone as bringing their own gun drops a rented gun the group no longer needs.
+  const previousOwnCount = React.useRef(markedOwnWeaponCount)
+  useEffect(() => {
+    const grew = markedOwnWeaponCount > previousOwnCount.current
+    previousOwnCount.current = markedOwnWeaponCount
+    if (!grew || rentMode !== 'custom' || rentedGunIds.length <= gunsNeeded) return
+    const drop = new Set(rentedGunIds.slice(gunsNeeded))
+    setCustomWeaponIds((current) => current.filter((id) => !drop.has(id)))
+  }, [markedOwnWeaponCount, gunsNeeded, rentedGunIds, rentMode])
 
   const customSelectedEquipment = useMemo(() => {
     return equipment.filter((e) => customEquipmentIds.includes(e.id))
@@ -3313,6 +3337,57 @@ export function ReservationCalendarPage() {
             </Card>
             )}
 
+            {/* Bring Your Own, before the rentals: who brings a gun decides how many weapons to rent.
+                With a custom selection, or with a package (that player skips its weapon). */}
+            {/* A solo player picking items marks the gun or gear they bring (Hybrid decides per player in its table). */}
+            {/* Picking items yourself, a player who brings a gun simply rents none, so the card is only
+                shown with a package (where it takes the weapon off that player's package). */}
+            {ownWeaponsAllowed && rentMode === 'custom' && selectionMode === 'package' && (
+            <Card className="p-4 md:p-6">
+              <div className="flex items-center gap-2 text-sm font-bold">
+                <FiTool /> <span>Bring Your Own (Free)</span>
+              </div>
+              <p className="mt-1 text-xs text-muted">
+                {selectionMode === 'package'
+                  ? "Anyone bringing their own weapon gets the package without its weapon, so it isn't charged."
+                  : "Bringing your own weapon? Mark who is bringing one: they don't need a rented weapon below."}
+                {' '}Nothing to register: just bring it. Every gun is checked on the chronograph (FPS) before the game.
+              </p>
+
+              <div className="mt-4">
+                <div className="mb-2 text-xs font-bold uppercase tracking-[0.18em] text-muted">Who brings their own weapon</div>
+                <div className="flex flex-wrap gap-2">
+                  {[
+                    ...(captainOwnGear ? [] : [{ id: String(user?.id || ''), name: 'You', isCaptain: true }]),
+                    ...(ownGearAllowed ? [] : selectedTeammates.filter((member) => !member.isMinor).map((member) => ({ id: member.id, name: member.name, isCaptain: false }))),
+                  ].filter((player) => player.id).map((player) => {
+                    const bringsOwn = player.isCaptain ? captainOwnGun : teammateOwnWeaponIds.includes(player.id)
+                    const toggle = () => {
+                      if (player.isCaptain) setCaptainOwnGun((current) => !current)
+                      else setTeammateOwnWeaponIds((current) => (current.includes(player.id) ? current.filter((id) => id !== player.id) : [...current, player.id]))
+                    }
+                    return (
+                      <button
+                        key={player.id}
+                        type="button"
+                        role="checkbox"
+                        aria-checked={bringsOwn}
+                        onClick={toggle}
+                        className={[
+                          'inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-semibold transition',
+                          bringsOwn ? 'border-success/30 bg-success/10 text-success' : 'border-white/10 bg-white/5 text-muted hover:bg-white/10',
+                        ].join(' ')}
+                      >
+                        {bringsOwn ? <FiCheck className="h-3 w-3" /> : <FiCrosshair className="h-3 w-3" />}
+                        {player.name}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            </Card>
+            )}
+
             {selectionMode === 'package' ? (
               <>
                 <Card className="p-4 md:p-6">
@@ -3720,6 +3795,14 @@ export function ReservationCalendarPage() {
                   <p className="mt-1 text-xs text-muted">
                     Set how many of each weapon your group needs. Units are assigned automatically from what's free for your slot.
                   </p>
+                  {markedOwnWeaponCount > 0 ? (
+                    <p className={`mt-2 text-xs font-semibold ${rentedGunIds.length > gunsNeeded ? 'text-warning' : 'text-muted'}`}>
+                      {gunsNeeded === 0
+                        ? `${players === 1 ? "You're" : 'Everyone is'} bringing their own weapon, so no rental weapon is needed.`
+                        : `${markedOwnWeaponCount} of ${players} player${players === 1 ? '' : 's'} bring${markedOwnWeaponCount === 1 ? 's' : ''} their own: ${gunsNeeded} rental weapon${gunsNeeded === 1 ? '' : 's'} needed.`}
+                      {rentedGunIds.length > gunsNeeded ? ` You have ${rentedGunIds.length} selected.` : ''}
+                    </p>
+                  ) : null}
                   <ModelQuantityPicker
                     groups={weaponGroups}
                     selected={customWeaponIds}
@@ -3789,53 +3872,6 @@ export function ReservationCalendarPage() {
               ) : null}
             </Card>
 
-            {/* Bring Your Own: with a custom selection, or with a package (that player skips its weapon). */}
-            {/* A solo player picking items marks the gun or gear they bring (Hybrid decides per player in its table). */}
-            {ownWeaponsAllowed && rentMode === 'custom' && (
-            <Card className="p-4 md:p-6">
-              <div className="flex items-center gap-2 text-sm font-bold">
-                <FiTool /> <span>Bring Your Own (Free)</span>
-              </div>
-              <p className="mt-1 text-xs text-muted">
-                {selectionMode === 'package'
-                  ? "Anyone bringing their own weapon gets the package without its weapon, so it isn't charged."
-                  : 'Bringing your own weapon? Mark who is and rent fewer weapons above.'}
-                {' '}Nothing to register: just bring it. Every gun is checked on the chronograph (FPS) before the game.
-              </p>
-
-              <div className="mt-4">
-                <div className="mb-2 text-xs font-bold uppercase tracking-[0.18em] text-muted">Who brings their own weapon</div>
-                <div className="flex flex-wrap gap-2">
-                  {[
-                    ...(captainOwnGear ? [] : [{ id: String(user?.id || ''), name: 'You', isCaptain: true }]),
-                    ...(ownGearAllowed ? [] : selectedTeammates.filter((member) => !member.isMinor).map((member) => ({ id: member.id, name: member.name, isCaptain: false }))),
-                  ].filter((player) => player.id).map((player) => {
-                    const bringsOwn = player.isCaptain ? captainOwnGun : teammateOwnWeaponIds.includes(player.id)
-                    const toggle = () => {
-                      if (player.isCaptain) setCaptainOwnGun((current) => !current)
-                      else setTeammateOwnWeaponIds((current) => (current.includes(player.id) ? current.filter((id) => id !== player.id) : [...current, player.id]))
-                    }
-                    return (
-                      <button
-                        key={player.id}
-                        type="button"
-                        role="checkbox"
-                        aria-checked={bringsOwn}
-                        onClick={toggle}
-                        className={[
-                          'inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-semibold transition',
-                          bringsOwn ? 'border-success/30 bg-success/10 text-success' : 'border-white/10 bg-white/5 text-muted hover:bg-white/10',
-                        ].join(' ')}
-                      >
-                        {bringsOwn ? <FiCheck className="h-3 w-3" /> : <FiCrosshair className="h-3 w-3" />}
-                        {player.name}
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
-            </Card>
-            )}
           </div>
 
           <div className={SIDE_PANEL_CLASS}>

@@ -63,3 +63,11 @@ test('admins also get what registrars are filtered out of, and admin-only notice
   await notifyRole(db, { role: 'admin', type: 'inventory_low_stock', title: 't', message: 'm' })
   assert.deepEqual(db.stored.map((n) => n.targetRole), ['admin', 'admin'])
 })
+
+test('a partnership discount request goes to registrars, and admins get a copy', async () => {
+  const { notifyRole } = await import('../utils/paymentProgress.js')
+  const db = fakeNotifyDb()
+  await notifyRole(db, { role: 'registrar', topic: 'partnership', type: 'partnership_requested', title: 'Partnership discount to review', message: 'x' })
+  assert.deepEqual(db.stored.map((n) => n.targetRole).sort(), ['admin', 'registrar'])
+  assert.equal(roleReceivesNotification('marshal', { type: 'partnership_requested' }), false)
+})

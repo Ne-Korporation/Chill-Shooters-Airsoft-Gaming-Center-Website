@@ -61,14 +61,15 @@ export function RegistrarDashboardHomePage() {
 
   const { user } = useAuth()
   const firstName = String(user?.name || 'there').trim().split(/\s+/)[0]
-  const totalQueue = pendingReservations + pendingWaivers + pendingPayments
+  // Pending bookings wait on the player (waiver, payment), so only waivers and payments are work here.
+  const totalQueue = pendingWaivers + pendingPayments
 
   return (
     <div className="space-y-6">
       <DashboardHeader
         eyebrow="Dashboard"
         title={`Welcome back, ${firstName}`}
-        description="Approve reservations, then verify waivers and payments to confirm each booking."
+        description="Verify waivers and payments; each booking is confirmed once both are done."
         actions={
           <Link to="/app/registrar/reservations" className="inline-flex h-10 items-center gap-2 rounded-xl bg-primary px-4 text-sm font-semibold text-white transition hover:brightness-110">
             <FiCalendar /> Reservations
@@ -76,26 +77,24 @@ export function RegistrarDashboardHomePage() {
         }
       />
 
-      {/* Same layout as the admin dashboard: the capacity calendar in the main column (view only;
-          games for a cause are set by the admin) and one column beside it: announcements first, then the
-          counts and the work queue. */}
-      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
-        <div className="min-w-0">
-          <CapacityCalendar
-            title="Game Capacity"
-            subtitle="Spots booked for each weekend's open games. Click a day for details."
-          />
-        </div>
-
-        <aside className="space-y-3">
-          <WeatherAdvisoryWidget />
+      {/* Same layout as the player dashboard: announcements in the main column, the calendar under
+          the sidebar menu on desktop (under the announcements on phones), and the weather, counts
+          and work queue on the right. */}
+      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="min-w-0 space-y-4">
           <DashboardPostsPanel
             title="Announcements"
+            subtitle="Updates and reminders from the Chill Shooters team."
             initialCount={3}
           />
+          <div className="lg:hidden"><CapacityCalendar /></div>
+        </div>
+
+        <aside className="order-first space-y-3 lg:order-none">
+          <WeatherAdvisoryWidget />
 
           <div className="grid grid-cols-3 gap-2">
-            <StatTile compact label="To approve" value={pendingReservations} hint={pendingReservations > 0 ? 'Bookings' : 'All clear'} attention={pendingReservations > 0} loading={loading} />
+            <StatTile compact label="Pending" value={pendingReservations} hint={pendingReservations > 0 ? 'Not confirmed yet' : 'None'} loading={loading} />
             <StatTile compact label="Waivers" value={pendingWaivers} hint={pendingWaivers > 0 ? 'To review' : 'All clear'} attention={pendingWaivers > 0} loading={loading} />
             <StatTile compact label="Payments" value={pendingPayments} hint={pendingPayments > 0 ? 'To verify' : 'All clear'} attention={pendingPayments > 0} loading={loading} />
           </div>
@@ -110,8 +109,7 @@ export function RegistrarDashboardHomePage() {
                 to="/app/registrar/reservations"
                 icon={FiCalendar}
                 title="Reservations"
-                description="Approve or reject booking requests"
-                badge={loading ? undefined : pendingReservations}
+                description="Bookings by date and their players"
               />
               <ActionRow
                 to="/app/registrar/waivers"

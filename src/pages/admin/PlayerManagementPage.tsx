@@ -69,10 +69,33 @@ export function PlayerManagementPage() {
   const [partnershipRequestsOpen, setPartnershipRequestsOpen] = React.useState(false)
   const [idRequestsOpen, setIdRequestsOpen] = React.useState(false)
 
-  // Opened from an "ID to Verify" notification: show the waiting IDs straight away.
+  // Opened from an "ID to Verify" notification: show that player's details (their ID photos and the
+  // verify buttons), or the list of waiting IDs when the notice names no one we can find.
+  const openedFromLink = React.useRef('')
+  // Opened from a "Partnership discount to review" notification: show the waiting requests.
   React.useEffect(() => {
-    if (location.hash === '#id-verifications') setIdRequestsOpen(true)
+    if (location.hash === '#partnership-requests') setPartnershipRequestsOpen(true)
   }, [location.hash, location.key])
+  React.useEffect(() => {
+    if (location.hash !== '#id-verifications' || openedFromLink.current === location.key) return
+    const playerId = new URLSearchParams(location.search).get('player') || ''
+    if (!playerId) {
+      openedFromLink.current = location.key
+      setIdRequestsOpen(true)
+      return
+    }
+    // Wait for the players to load before deciding.
+    if (players.length === 0) return
+    openedFromLink.current = location.key
+    const player = players.find((p) => String(p.id) === playerId)
+    if (player) {
+      setIdRequestsOpen(false)
+      setSelectedPlayer(player)
+    } else {
+      setSelectedPlayer(null)
+      setIdRequestsOpen(true)
+    }
+  }, [location.hash, location.search, location.key, players])
 
   const fetchUsers = React.useCallback(async (silent = false) => {
     if (!silent) setLoading(true)
@@ -399,6 +422,8 @@ export function PlayerManagementPage() {
     try {
       await apiPut(`/api/partnership-discount/${encodeURIComponent(playerId)}/review`, { decision, reason })
       toast.success(decision === 'verified' ? 'Discount verified.' : 'Discount request rejected.')
+      // Keep an open player details window in step with the decision.
+      setSelectedPlayer((current: any) => (current?.id === playerId ? { ...current, partnershipEligibilityStatus: decision } : current))
       await fetchUsers()
     } catch (e: any) {
       toast.error(String(e?.message || e))
@@ -668,6 +693,7 @@ export function PlayerManagementPage() {
                   ) : null}
                 </div>
                 <ActionGroup>
+                  <Button size="xs" variant="ghost" onClick={() => { setPartnershipRequestsOpen(false); setSelectedPlayer(p) }}><FiEye /> Details</Button>
                   <Button size="xs" variant="success-soft" disabled={verifyingId === p.id} onClick={() => reviewPartnership(p.id, 'verified')}><FiCheck /> Verify</Button>
                   <Button size="xs" variant="danger-soft" disabled={verifyingId === p.id} onClick={() => reviewPartnership(p.id, 'rejected')}><FiX /> Reject</Button>
                 </ActionGroup>
@@ -749,6 +775,12 @@ export function PlayerManagementPage() {
               </div>
             ) : null}
             <div className="mt-4 rounded-3xl border border-white/10 bg-white/5 p-4 text-center">
+              <div className="mb-3 text-left">
+                <div className="text-xs uppercase tracking-widest text-muted">Submitted ID</div>
+                <div className="mt-1 text-sm">
+                  The player's ID for verification{selectedPlayer.identityIdType ? <>: <span className="font-semibold">{selectedPlayer.identityIdType}</span></> : null}
+                </div>
+              </div>
               {selectedPlayer.identityDocumentUrl ? (
                 <div className={`grid gap-4 ${selectedPlayer.identityDocumentBackUrl ? 'md:grid-cols-2' : ''}`}>
                   <figure>
@@ -766,6 +798,38 @@ export function PlayerManagementPage() {
                 <div className="text-sm text-muted">No submitted ID image is available for this player.</div>
               )}
             </div>
+            {/* The partnership discount request: the organization, where it stands, and the proof
+                (school or membership ID) the player sent, with the review buttons while it waits. */}
+            {selectedPlayer.partnershipInstitution ? (
+              <div className="mt-4 rounded-3xl border border-white/10 bg-white/5 p-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <div className="text-xs uppercase tracking-widest text-muted">Partnership discount</div>
+                    <div className="mt-1 text-sm">
+                      <span className="font-semibold">{selectedPlayer.partnershipInstitution}</span>
+                      {' · '}
+                      {({ pending: 'Waiting for review', verified: 'Verified', rejected: 'Rejected' } as Record<string, string>)[selectedPlayer.partnershipEligibilityStatus] || 'Not reviewed'}
+                    </div>
+                  </div>
+                  {selectedPlayer.partnershipEligibilityStatus === 'pending' && selectedPlayer.id ? (
+                    <ActionGroup>
+                      <Button size="sm" variant="success-soft" disabled={verifyingId === selectedPlayer.id} onClick={() => reviewPartnership(selectedPlayer.id, 'verified')}><FiCheck /> Verify discount</Button>
+                      <Button size="sm" variant="danger-soft" disabled={verifyingId === selectedPlayer.id} onClick={() => reviewPartnership(selectedPlayer.id, 'rejected')}><FiX /> Reject</Button>
+                    </ActionGroup>
+                  ) : null}
+                </div>
+                {selectedPlayer.partnershipProofUrl ? (
+                  <figure className="mt-3 text-center">
+                    <a href={selectedPlayer.partnershipProofUrl} target="_blank" rel="noreferrer" title="Open the proof in full size">
+                      <img src={selectedPlayer.partnershipProofUrl} alt="Partnership proof (school or membership ID)" className="mx-auto max-h-[420px] w-auto rounded-3xl object-contain" />
+                    </a>
+                    <figcaption className="mt-2 text-xs text-muted">Proof sent for the discount (school or membership ID)</figcaption>
+                  </figure>
+                ) : (
+                  <div className="mt-3 text-sm text-muted">No proof image was sent with this request.</div>
+                )}
+              </div>
+            ) : null}
           </div>
         </div>
       ) : null}

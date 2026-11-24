@@ -17,7 +17,8 @@ import { FpsCheckPanel, loadFpsStatus, type FpsStatus } from './FpsCheckPanel'
 import { TeamCheckIn, fetchCheckInTeams, type CheckInSession, type CheckInTeam } from './FieldCheckInPage'
 import { SessionTeams } from './TeamGroupingPage'
 import { categoryLabel, formatDateTime, formatPHP, manilaTodayISO, selectClass } from './shared'
-import { formatSlotRange, useSlotHours } from '../../utils/slotHours'
+import { formatClock, formatSlotRange, slotHasEnded, useSlotHours, type SlotName } from '../../utils/slotHours'
+import { confirmDialog } from '../../components/ui/ConfirmDialog'
 
 type Ledger = {
   reservation: {
@@ -250,11 +251,12 @@ function AddGunCard({ reservationId, ledger, onLedger, refreshKey = 0 }: { reser
 
 // The bill for one booking: what was charged and paid, quick ammo reloads, any other charge, and
 // the onsite payment form.
-// `canTakePayment`: only admins and registrars take payment; marshals add ammo and guns.
+// `canTakePayment`: only admins and registrars take payment. The bill (ammo and guns included) is the
+// registrar's; marshals don't see it.
 function LedgerPanel({ reservationId, canTakePayment, onLoaded, active = true, onGoToRentals, onGameCompleted }: { reservationId: string; canTakePayment: boolean; onLoaded?: (ledger: Ledger) => void; active?: boolean; onGoToRentals?: () => void; onGameCompleted?: () => void }) {
-  // Marshals hand out ammo and guns; the registrar runs the rest of the bill and the payments.
+  // The registrar runs the whole bill: ammo, guns, other charges and the payments.
   const { user } = useAuth()
-  const canHandleGear = user?.role === 'admin' || user?.role === 'marshal'
+  const canHandleGear = user?.role === 'admin' || user?.role === 'registrar'
   const canBill = user?.role === 'admin' || user?.role === 'registrar'
   // The same rule as the server: registrars fix any line, marshals only ammo and gun lines.
   const canRemove = (type: string) => canBill || (canHandleGear && ['ammo_reload', 'gun_rental'].includes(type))
@@ -432,7 +434,7 @@ function LedgerPanel({ reservationId, canTakePayment, onLoaded, active = true, o
                   <span className="min-w-0 truncate text-muted">{c.label}</span>
                   <span className="flex shrink-0 items-center gap-1.5">
                     <span>{formatPHP(c.amount)}</span>
-                    {canRemove(c.type) ? (
+                    {canRemove(c.type) && c.type !== 'damage' ? (
                     <button
                       type="button"
                       disabled={busy}
@@ -470,7 +472,7 @@ function LedgerPanel({ reservationId, canTakePayment, onLoaded, active = true, o
       </Card>
 
       <div className="space-y-4">
-        {/* Ammo and guns: the marshals hand them out. */}
+        {/* Ammo and guns: added to the bill by the registrar. */}
         {canHandleGear ? (
         <>
         <Card className="p-4">
@@ -599,12 +601,13 @@ function LedgerPanel({ reservationId, canTakePayment, onLoaded, active = true, o
 type DialogTab = 'checkin' | 'teams' | 'bill' | 'rentals' | 'fps'
 
 // Pop-up for one game, in the order a game day runs: Check-in (tick off players as they arrive),
-// Teams (balanced teams for the whole session; admins and marshals), Bill & ammo (extra ammo,
-// charges, payment) and Rentals (which player has which unit).
-function GameDialog({ reservationId, game, canTakePayment, canGroupTeams, onClose }: { reservationId: string; game?: GameDoc; canTakePayment: boolean; canGroupTeams: boolean; onClose: () => void }) {
+// Teams (balanced teams for the whole session; admins and marshals), Bill & ammo (admins and
+// registrars: extra ammo, guns, charges, payment), Rentals (which player has which unit) and the
+// FPS check (admins and marshals).
+function GameDialog({ reservationId, game, canTakePayment, canGroupTeams, canSeeBill, canCheckFps, onClose }: { reservationId: string; game?: GameDoc; canTakePayment: boolean; canGroupTeams: boolean; canSeeBill: boolean; canCheckFps: boolean; onClose: () => void }) {
   const [ledger, setLedger] = useState<Ledger | null>(null)
   // A game that hasn't started is usually opened to check players in; a running one to bill it.
-  const [tab, setTab] = useState<DialogTab>(/^(ongo|compl)/i.test(String(game?.Status || '')) ? 'bill' : 'checkin')
+  const [tab, setTab] = useState<DialogTab>(canSeeBill && /^(ongo|compl)/i.test(String(game?.Status || '')) ? 'bill' : 'checkin')
   // The game's status, kept here so Start / Done (or the final payment) update the pop-up at once.
   const [status, setStatus] = useState(String(game?.Status || 'Scheduled'))
   const setCompletedNow = () => setStatus('Completed')
@@ -613,12 +616,26 @@ function GameDialog({ reservationId, game, canTakePayment, canGroupTeams, onClos
   const gameDay = String(game?.Schedule || '').slice(0, 10)
   const canStart = !ongoing && !finished && !/^cancel/i.test(status) && Boolean(gameDay) && gameDay <= manilaTodayISO()
   const [savingStatus, setSavingStatus] = useState(false)
+  const slotHours = useSlotHours()
   // Today's chronograph results for the game's guns (filled when the FPS tab loads or on Start).
   const [fpsStatus, setFpsStatus] = useState<FpsStatus | null>(null)
 
   const changeStatus = async (next: 'Ongoing' | 'Completed') => {
     const id = String(game?.id || game?._id?.$oid || game?._id || '')
     if (!id) return
+    // Finishing before the slot is over is allowed (the squad finished early): just make sure.
+    if (next === 'Completed') {
+      const slot = String(game?.Schedule || '').split('•')[1]?.trim().toLowerCase() || ''
+      if (gameDay && slot && !slotHasEnded(slotHours, slot, gameDay)) {
+        const end = slotHours[slot as SlotName]?.end
+        const ok = await confirmDialog({
+          title: 'Finish this game early?',
+          message: `The ${slot} slot runs until ${end ? formatClock(end) : 'later'}. Mark the game done now if the players have finished.`,
+          confirmLabel: 'Mark game done',
+        })
+        if (!ok) return
+      }
+    }
     setSavingStatus(true)
     try {
       if (next === 'Ongoing') {
@@ -627,7 +644,7 @@ function GameDialog({ reservationId, game, canTakePayment, canGroupTeams, onClos
         if (fps?.blockReason) {
           toast.error(fps.blockReason)
           setFpsStatus(fps)
-          setTab('fps')
+          if (canCheckFps) setTab('fps')
           return
         }
       }
@@ -649,7 +666,7 @@ function GameDialog({ reservationId, game, canTakePayment, canGroupTeams, onClos
         toast.success(ledger && ledger.balanceDue > 0
           ? `Game marked done. ${formatPHP(ledger.balanceDue)} is still unpaid on the bill.`
           : 'Game marked done.')
-        setTab('bill')
+        if (canSeeBill) setTab('bill')
       } else {
         toast.success('Game started.')
       }
@@ -704,17 +721,17 @@ function GameDialog({ reservationId, game, canTakePayment, canGroupTeams, onClos
         options={[
           ['checkin', 'Check-in'],
           ...(canGroupTeams ? [['teams', 'Teams'] as const] : []),
-          ['bill', 'Bill & ammo'],
+          ...(canSeeBill ? [['bill', 'Bill & ammo'] as const] : []),
           ['rentals', 'Rentals'],
           // The chronograph check, done after guns are handed out and before the game starts.
-          ['fps', (
+          ...(canCheckFps ? [['fps', (
             <span key="fps" className="inline-flex items-center gap-1">
               FPS check
               {fpsStatus && fpsStatus.items.length ? (
                 fpsStatus.allPassed ? <FiCheck className="text-success" /> : <span className="text-[11px] text-warning">({fpsStatus.pending + fpsStatus.failed})</span>
               ) : null}
             </span>
-          )],
+          )] as const] : []),
         ]}
       />
       {/* All tabs stay mounted so switching keeps what was typed and what was loaded. */}
@@ -736,12 +753,15 @@ function GameDialog({ reservationId, game, canTakePayment, canGroupTeams, onClos
           )}
         </div>
       ) : null}
+      {canSeeBill ? (
       <div className={`mt-4 ${tab === 'bill' ? '' : 'hidden'}`}>
         <LedgerPanel reservationId={reservationId} canTakePayment={canTakePayment} onLoaded={setLedger} active={tab === 'bill'} onGoToRentals={() => setTab('rentals')} onGameCompleted={setCompletedNow} />
       </div>
+      ) : null}
       <div className={`mt-4 ${tab === 'rentals' ? '' : 'hidden'}`}>
         <RentalsPanel reservationId={reservationId} active={tab === 'rentals'} finished={finished} />
       </div>
+      {canCheckFps ? (
       <div className={`mt-4 ${tab === 'fps' ? '' : 'hidden'}`}>
         <FpsCheckPanel
           reservationId={reservationId}
@@ -751,6 +771,7 @@ function GameDialog({ reservationId, game, canTakePayment, canGroupTeams, onClos
           onGoToRentals={() => setTab('rentals')}
         />
       </div>
+      ) : null}
     </Modal>
   )
 }
@@ -781,8 +802,11 @@ const VIEWS: View[] = ['ongoing', 'today', 'completed', 'out']
 export function CounterPage() {
   const { user } = useAuth()
   const canTakePayment = user?.role === 'admin' || user?.role === 'registrar'
-  // Both registrars and marshals run players: check-in and teams.
-  const canGroupTeams = user?.role === 'admin' || user?.role === 'marshal' || user?.role === 'registrar'
+  // Teams are the marshal's job; the bill (ammo, guns, payments) is the registrar's. Admins get both.
+  const canGroupTeams = user?.role === 'admin' || user?.role === 'marshal'
+  const canSeeBill = user?.role === 'admin' || user?.role === 'registrar'
+  // The chronograph (FPS) check is done by the marshals.
+  const canCheckFps = user?.role === 'admin' || user?.role === 'marshal'
   const [searchParams, setSearchParams] = useSearchParams()
   const fromLink = searchParams.get('reservation') || ''
   const fromView = searchParams.get('view') as View | null
@@ -905,9 +929,9 @@ export function CounterPage() {
           <h1 className="text-3xl font-bold">Games</h1>
           <p className="mt-1 text-sm text-muted">
             {user?.role === 'registrar'
-              ? 'Click a game to check players in, group teams, add field fees and collect payment.'
+              ? 'Click a game to check players in, add ammo, guns and field fees to the bill, and collect payment.'
               : user?.role === 'marshal'
-                ? 'Click a game to check players in, group teams, hand out guns, gear and ammo, and check them back in.'
+                ? 'Click a game to check players in, group teams, hand out rentals and check them back in.'
                 : 'Click a game to check players in, add ammo and charges, hand out rentals, and collect payment.'}
           </p>
         </div>
@@ -1015,7 +1039,7 @@ export function CounterPage() {
         </>
       )}
 
-      {open ? <GameDialog key={open.reservationId} reservationId={open.reservationId} game={open.game} canTakePayment={canTakePayment} canGroupTeams={canGroupTeams} onClose={close} /> : null}
+      {open ? <GameDialog key={open.reservationId} reservationId={open.reservationId} game={open.game} canTakePayment={canTakePayment} canGroupTeams={canGroupTeams} canSeeBill={canSeeBill} canCheckFps={canCheckFps} onClose={close} /> : null}
     </div>
   )
 }

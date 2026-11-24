@@ -68,3 +68,15 @@ export function slotHasStarted(hours: SlotHours, slot: string, dateISO: string, 
   const get = (type: string) => Number(parts.find((part) => part.type === type)?.value || 0)
   return get('hour') * 60 + get('minute') >= h * 60 + m
 }
+
+// Whether a game's slot is over (Manila time). Matches the server's slotHasEnded.
+export function slotHasEnded(hours: SlotHours, slot: string, dateISO: string, now = new Date()) {
+  const todayISO = manilaTodayISO(now)
+  if (dateISO !== todayISO) return dateISO < todayISO
+  const range = hours[slot as SlotName]
+  if (!range) return true
+  const [h, m] = range.end.split(':').map(Number)
+  const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Manila', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(now)
+  const get = (type: string) => Number(parts.find((part) => part.type === type)?.value || 0)
+  return get('hour') * 60 + get('minute') >= h * 60 + m
+}
