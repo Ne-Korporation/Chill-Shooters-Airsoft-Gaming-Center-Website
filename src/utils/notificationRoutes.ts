@@ -24,6 +24,8 @@ export function resolveNotificationRoute(notification: NotificationItem, role?: 
     return '/app/my-reservations'
   }
   if (notificationType === 'own_weapons_incoming') return isStaffRole(currentRole) ? '/app/games' : '/app'
+  // A game just booked: marshals and admins open the games board.
+  if (notificationType === 'game_booked') return isStaffRole(currentRole) ? '/app/games' : '/app'
 
   // A message from a player opens the admin Inbox.
   if (notificationType === 'contact_message') return currentRole === 'admin' ? '/app/admin/inbox' : null
@@ -60,14 +62,12 @@ export function resolveNotificationRoute(notification: NotificationItem, role?: 
 
   if (notificationType.startsWith('weapon_')) {
     if (currentRole === 'admin' || currentRole === 'marshal') return '/app/admin/weapons'
-    if (userId) return `/app/players/${encodeURIComponent(userId)}/weapons-and-equipment`
-    return '/app/players'
+    return '/app'
   }
 
   if (notificationType.startsWith('equipment_')) {
     if (currentRole === 'admin' || currentRole === 'marshal') return '/app/admin/equipment'
-    if (userId) return `/app/players/${encodeURIComponent(userId)}/weapons-and-equipment`
-    return '/app/players'
+    return '/app'
   }
 
   // A player submitted an ID: open the ID verification list on the players page.

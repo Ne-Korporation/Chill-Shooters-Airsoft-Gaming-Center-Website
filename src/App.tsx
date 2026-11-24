@@ -18,7 +18,6 @@ import { PaymentPage } from './pages/payments/PaymentPage'
 import { PaymentCompletePage } from './pages/payments/PaymentCompletePage'
 import { DemoPaymentPage } from './pages/payments/DemoPaymentPage'
 import { PlayerProfilePage } from './pages/players/PlayerProfilePage'
-import { MyWeaponsAndEquipmentPage } from './pages/players/MyWeaponsAndEquipmentPage'
 
 import { AdminDashboardPage } from './pages/admin/AdminDashboardPage'
 import { AdminReservationsPage } from './pages/admin/AdminReservationsPage'
@@ -158,7 +157,6 @@ export default function App() {
         <Route path="feedback" element={<RequireRole roles={['user']}><PlayerFeedbackPage /></RequireRole>} />
         <Route path="notifications" element={<RequireRole roles={['user', 'admin', 'registrar', 'marshal']}><NotificationsPageForRole /></RequireRole>} />
         <Route path="players/:playerId" element={<RequireOwnProfile><PlayerProfilePage /></RequireOwnProfile>} />
-        <Route path="players/:playerId/weapons-and-equipment" element={<RequireOwnProfile suffix="/weapons-and-equipment"><MyWeaponsAndEquipmentPage /></RequireOwnProfile>} />
         <Route
           path="games"
           element={

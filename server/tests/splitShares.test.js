@@ -82,3 +82,16 @@ test('a payer is asked for their own share', () => {
   assert.equal(getGcashAmountDue(r, [], 'P3'), 100)
   assert.equal(getGcashAmountDue(r, [], 'P2'), 500)
 })
+
+test("a parent's share shows their own part and their child's part", async () => {
+  const { shareBreakdown } = await import('../utils/splitShares.js')
+  const reservation = {
+    loadoutUnitCosts: { package: 750, own_gun: 750, own_gear: 150 },
+    teamMembers: [{ id: 'K', name: 'Charlz', isMinor: true, guardianId: 'C' }, { id: 'P', name: 'Juan' }],
+    ownGearPlayerIds: ['C'],
+  }
+  // Parent brings their own gear (₱150 weight), the child gets the package (₱750 weight).
+  assert.deepEqual(shareBreakdown(reservation, 'C', 900), { own: 150, children: [{ id: 'K', name: 'Charlz', amount: 750 }] })
+  // No children: it's all their own.
+  assert.deepEqual(shareBreakdown(reservation, 'P', 750), { own: 750, children: [] })
+})

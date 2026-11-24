@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
-import { FiCheck, FiClock, FiCreditCard, FiMail, FiRefreshCw, FiUserPlus, FiX } from 'react-icons/fi'
+import { FiCheck, FiClock, FiCreditCard, FiEye, FiMail, FiRefreshCw, FiUserPlus, FiX } from 'react-icons/fi'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { Modal } from '../../components/ui/Modal'
@@ -10,6 +10,11 @@ import { useLiveRefresh } from '../../utils/liveUpdates'
 import { startXenditCheckout } from '../../utils/xendit'
 import { isPrivateSession } from '../../utils/bookingRoles'
 import { SPLIT_PAYMENTS_CHANGED_EVENT } from '../payments/SplitPaymentPage'
+
+// Asks My Reservations to open a booking (detail: its id): the team payment pop-up, or its details.
+export const OPEN_BOOKING_EVENT = 'open-booking'
+// Asks this section to open "invite a player" for a booking's first free spot (detail: booking id).
+export const FILL_SPOT_EVENT = 'fill-spot'
 
 type BookingSummary = {
   id: string
@@ -32,7 +37,9 @@ type Invite = {
 
 type OpenSlot = {
   reservation: BookingSummary
-  slot: { id: string; playerId: string; name: string; amount: number; status: 'open' | 'covering'; reason: string; deadlineISO: string }
+  slot: { id: string; playerId: string; name: string; amount: number; status: 'open' | 'covering' | 'paid'; reason: string; deadlineISO: string
+    // Its share already moved to the captain's balance at the field.
+    onsite?: boolean }
 }
 
 type Found = { id: string; name: string; email: string; waiverApproved: boolean }
@@ -42,6 +49,7 @@ const REASON_LABEL: Record<string, string> = {
   expired: "didn't answer in 24 hours",
   expired_unpaid: "didn't pay in 24 hours",
   unavailable: 'is playing another game in that slot',
+  removed: 'was removed from the team',
 }
 
 function formatPHP(value: number) {
@@ -82,6 +90,17 @@ export function InvitationsSection() {
   }, [])
 
   useLiveRefresh(['reservations', 'notifications'], () => load())
+  // "Add player" on a booking's card: invite someone into its first free spot.
+  useEffect(() => {
+    const fill = (event: Event) => {
+      const id = String((event as CustomEvent).detail || '')
+      const spot = openSlots.find((item) => String(item.reservation.id) === id)
+      if (spot) setFilling(spot)
+      else toast.error('No free spot on this booking. A spot opens when a teammate declines or is removed.')
+    }
+    window.addEventListener(FILL_SPOT_EVENT, fill)
+    return () => window.removeEventListener(FILL_SPOT_EVENT, fill)
+  }, [openSlots])
   useEffect(() => {
     void load()
     const timer = window.setInterval(() => { if (document.visibilityState === 'visible') void load() }, 30_000)
@@ -195,7 +214,7 @@ export function InvitationsSection() {
         <div className="space-y-2">
           <h2 className="flex items-center gap-2 text-base font-bold">
             <FiUserPlus /> Open spots on your bookings
-            <span className="text-xs font-normal text-muted">· Not filled or paid in 24 hours? The share is added to what you pay at the field.</span>
+            <span className="text-xs font-normal text-muted">· Their share is paid at the counter before the game, unless a substitute joins and pays it online.</span>
           </h2>
           <div className="grid gap-2 md:grid-cols-2">
             {openSlots.map((item) => {
@@ -208,19 +227,30 @@ export function InvitationsSection() {
                   </div>
                   <div className="mt-0.5 text-xs text-muted">
                     <span className="font-semibold text-text">{s.name}</span> {REASON_LABEL[s.reason] || 'left'}.
-                    {s.amount > 0 ? <> Their share: <span className="font-semibold text-gold">{formatPHP(s.amount)}</span>.</> : ' Nothing extra to pay.'}
+                    {s.status === 'paid'
+                      ? <> You already paid <span className="font-semibold text-gold">{formatPHP(s.amount)}</span> for this spot. Put a substitute in it: <b className="text-text">they play for free</b>.</>
+                      : s.amount > 0
+                      ? s.onsite
+                        ? <> Their share of <span className="font-semibold text-gold">{formatPHP(s.amount)}</span> is added to what you pay <b className="text-text">at the counter before the game</b>, so the booking can go through.</>
+                        : <> Their share: <span className="font-semibold text-gold">{formatPHP(s.amount)}</span>.</>
+                      : ' Nothing extra to pay.'}
                   </div>
                   <div className="mt-1 inline-flex items-center gap-1 text-[11px] text-muted">
-                    <FiClock /> Act by {formatWhen(s.deadlineISO)} · {timeLeft(s.deadlineISO)}
+                    <FiClock /> {s.onsite || s.status === 'paid' ? 'Add a substitute' : 'Act'} by {formatWhen(s.deadlineISO)} · {timeLeft(s.deadlineISO)}
+                    {s.onsite && s.amount > 0 ? ' · if they pay online, it comes off your field balance' : ''}
                   </div>
                   <div className="mt-2 flex flex-wrap gap-2">
-                    {s.amount > 0 ? (
+                    {s.amount > 0 && !s.onsite && s.status !== 'paid' ? (
                       <Button size="xs" variant="primary" disabled={Boolean(busy)} onClick={() => cover(item)}>
                         <FiCreditCard /> {busy === `cover:${s.id}` ? 'Opening payment…' : s.status === 'covering' ? `Finish paying ${formatPHP(s.amount)}` : `Pay for the spot (${formatPHP(s.amount)})`}
                       </Button>
                     ) : null}
                     <Button size="xs" variant="ghost" disabled={Boolean(busy)} onClick={() => setFilling(item)}>
-                      <FiUserPlus /> Invite another player
+                      <FiUserPlus /> {s.onsite || s.status === 'paid' ? 'Invite a substitute' : 'Invite another player'}
+                    </Button>
+                    {/* The booking itself: who pays what (team payment) or its details. */}
+                    <Button size="xs" variant="ghost" onClick={() => window.dispatchEvent(new CustomEvent(OPEN_BOOKING_EVENT, { detail: item.reservation.id }))}>
+                      <FiEye /> View
                     </Button>
                     {s.reason !== 'unavailable' ? (
                       <Button size="xs" variant="ghost" disabled={Boolean(busy)} onClick={() => reinvite(item)}>

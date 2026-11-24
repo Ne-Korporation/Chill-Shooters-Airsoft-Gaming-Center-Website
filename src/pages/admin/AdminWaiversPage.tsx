@@ -141,25 +141,7 @@ export function AdminWaiversPage() {
       if (response?.data) {
         setSelectedWaiver(response.data)
         setWaivers((current) => current.map((waiver) => (waiver.id === waiverId || waiver._id === waiverId ? response.data : waiver)))
-
-        try {
-
-          // Notify the player
-          if (selectedWaiver.userId) {
-            addNotification({
-              userId: selectedWaiver.userId,
-              type: status === 'approved' ? 'waiver_approved' : 'waiver_denied',
-              title: status === 'approved' ? 'Waiver Approved' : 'Waiver Denied',
-              message: status === 'approved'
-                ? 'Your waiver has been approved. You can now proceed with your reservation.'
-                : 'Your waiver has been denied. Please open the Waiver page, review it, and submit a new one.',
-              linkedResourceId: waiverId,
-            })
-          }
-        } catch (err) {
-          console.warn('Notification failed', err)
-        }
-
+        // The server tells the player (or the parent, for a child's waiver).
         toast.success(status === 'approved' ? 'Waiver approved' : 'Waiver denied')
       }
     } catch (e: any) {

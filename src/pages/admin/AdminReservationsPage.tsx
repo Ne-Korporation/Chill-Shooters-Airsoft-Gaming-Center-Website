@@ -2,6 +2,7 @@ import React from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { FiCalendar } from 'react-icons/fi'
 import { SlotHoursCard } from '../../components/reservations/SlotHoursCard'
+import { FieldObstaclesCard } from '../../components/reservations/FieldObstaclesCard'
 import { FilterTabs } from '../../components/ui/FilterTabs'
 import { InfoDropdown, type InfoItem } from '../../components/ui/InfoDropdown'
 import { RegistrarArchivedGamesPage, RegistrarOngoingGamesPage } from '../registrar'
@@ -41,6 +42,7 @@ export function AdminReservationsPage() {
       {tab === 'games' ? (
         <>
           <SlotHoursCard />
+          <FieldObstaclesCard />
           <RegistrarOngoingGamesPage embedded />
         </>
       ) : (

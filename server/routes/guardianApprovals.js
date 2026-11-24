@@ -197,7 +197,7 @@ async function recordDecision(db, approval, { status, note, decidedBy }) {
     message: `${status === 'approved' ? 'Approved' : 'Declined'} for ${reservation?.reservationDate || 'your booking'}.${note ? ` Note: ${note}` : ''}`,
     linkedResourceId: approval.reservationId,
   })
-  for (const role of ['admin', 'registrar']) {
+  { const role = 'registrar' // admins get a copy (notifyRole)
     await notifyRole(db, {
       role,
       type: 'reservation_status_update',

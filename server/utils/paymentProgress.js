@@ -65,9 +65,14 @@ export async function notifyUser(db, { userId, targetRole, type, title, message,
 
 // Sends to everyone with `role`, unless that role doesn't take this kind of notification
 // (see roleNotifications.js). `topic` tags what it's about when the type alone doesn't say.
+// Admins see everything: whatever goes to registrars or marshals is copied to them too, so send
+// a notice once, to the role that acts on it, never to admin and that role separately.
 export async function notifyRole(db, { role, topic, fields, ...rest }) {
-  if (!roleReceivesNotification(role, { type: rest.type, topic })) return
-  return notifyUser(db, { ...rest, userId: 'broadcast', targetRole: role, fields: { ...(fields || {}), ...(topic ? { topic } : {}) } })
+  const roles = role === 'admin' || role === 'all' || role === 'user' ? [role] : [role, 'admin']
+  for (const target of roles) {
+    if (!roleReceivesNotification(target, { type: rest.type, topic })) continue
+    await notifyUser(db, { ...rest, userId: 'broadcast', targetRole: target, fields: { ...(fields || {}), ...(topic ? { topic } : {}) } })
+  }
 }
 
 // A confirmed booking with money left to collect at the counter (the other 50% on the cash plan,
@@ -142,13 +147,9 @@ export async function autoConfirmIfVerified(db, reservationId, startSession) {
   void emailReservationEvent(db, confirmed, 'confirmed', 'auto')
   await notifyRegistrarsOfOnsiteBalance(db, confirmed)
   const balance = Math.max(0, Number(reservation.totalAmount || 0) - Number(reservation.depositAmount || 0))
-  await notifyUser(db, {
-    userId: reservation.userId,
-    type: 'reservation_confirmed',
-    title: 'Reservation confirmed',
-    message: `Your payment was verified and your reservation for ${reservationLabel(reservation)} is confirmed.${balance > 0 ? ` Please pay the remaining ₱${balance.toLocaleString()} at the counter on game day by cash, GCash, or bank transfer.` : ''}`,
-    linkedResourceId: reservation.id,
-  })
+  // Everyone on the booking is told: the captain (with any balance to pay) and each teammate.
+  const { notifyBookingConfirmed } = await import('./playerNotices.js')
+  await notifyBookingConfirmed(db, { ...reservation, ...confirmed }, { balance }).catch(() => null)
   // Staff aren't told: an automatic confirmation needs nobody to act (it shows on Reservations).
   return 'confirmed'
 }
@@ -156,10 +157,39 @@ export async function autoConfirmIfVerified(db, reservationId, startSession) {
 // Recomputes the stored payment state after a payment is submitted or reviewed. Once every share
 // is in and verified, the booking is confirmed automatically; while a payment still needs a staff
 // check, admins are told to verify it on Verification & receipts.
+// Spots the captain chose to pay for (openSlots status 'covering') are done once the captain's
+// payments cover their own share plus those spots, without waiting for the rest of the team.
+// Returns how many spots were marked paid.
+export async function settleCoveredSlots(db, reservation, payments) {
+  const covering = (reservation?.openSlots || []).filter((slot) => slot?.status === 'covering')
+  if (!covering.length) return 0
+  const captainId = String(reservation.userId || '')
+  const active = payments.filter((p) => !['failed', 'rejected', 'cancelled'].includes(String(p.paymentStatus || p.status || '').toLowerCase()))
+  const captainPaid = active.filter((p) => String(p.userId || '') === captainId).reduce((sum, p) => sum + Number(p.amount || 0), 0)
+  const recorded = Number(reservation.splitShares?.[captainId])
+  const ownShare = Number.isFinite(recorded)
+    ? recorded
+    : Math.round((Number(reservation.depositAmount || 0) / Math.max(1, Number(reservation.teamSize) || 1)) * 100) / 100
+  const coverTotal = covering.reduce((sum, slot) => sum + Number(slot.amount || 0), 0)
+  if (captainPaid < ownShare + coverTotal - 0.01) return 0
+  const nowISO = new Date().toISOString()
+  let settled = 0
+  for (const slot of covering) {
+    const done = await db.collection('reservations').updateOne(
+      { _id: reservation._id, openSlots: { $elemMatch: { id: slot.id, status: 'covering' } } },
+      { $set: { 'openSlots.$.status': 'paid', 'openSlots.$.paidAtISO': nowISO } },
+    )
+    settled += done.modifiedCount
+  }
+  return settled
+}
+
 export async function syncReservationPaymentState(db, reservation) {
   if (!reservation) return null
   const payments = await getReservationPayments(db, reservation)
   const progress = getPaymentProgress(reservation, payments)
+  // A spot the captain just paid for is done (it leaves "Open spots on your bookings").
+  if (isSplit(reservation)) await settleCoveredSlots(db, reservation, payments).catch(() => 0)
   const filter = { id: String(reservation.id) }
   const nowISO = new Date().toISOString()
 
@@ -205,7 +235,7 @@ export async function syncReservationPaymentState(db, reservation) {
     )
     if (forwarded.modifiedCount === 1) {
       // Registrars handle payments, so they're told as well as admins.
-      for (const role of ['admin', 'registrar']) {
+      { const role = 'registrar' // admins get a copy (notifyRole)
         await notifyRole(db, {
           role,
           type: 'reservation_payment_finalized',
@@ -298,15 +328,9 @@ export async function expireOverdueReservations(db, startSession, { force = fals
         reason: 'payment_window_expired',
       })
       expired += 1
-      for (const userId of getSplitPayerIds(reservation)) {
-        await notifyUser(db, {
-          userId,
-          type: 'reservation_status_update',
-          title: 'Reservation released — payment window expired',
-          message: `The reservation for ${reservationLabel(reservation)} expired because payment was not completed within ${paymentWindowLabel(reservation)}. The slot is open for anyone to book again.`,
-          linkedResourceId: reservation.id,
-        })
-      }
+      // Everyone on the booking is told (not only those splitting the payment).
+      const { notifyBookingCancelled } = await import('./playerNotices.js')
+      await notifyBookingCancelled(db, reservation, { reason: 'expired' }).catch(() => null)
     } catch (err) {
       console.error('Payment window expiry failed', reservation.id, err?.message || err)
     }

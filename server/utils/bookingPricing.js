@@ -344,9 +344,28 @@ export async function calculateBookingPrice({ db, payload, players, findDocument
     }
   }
 
+  // A custom field layout (private games): priced by how many props staff have to set up, in
+  // tiers (see utils/fieldObstacles.js). Not discounted: it's set-up work, not rentals.
+  // A plan uploaded as a picture can't be counted, so it's charged the middle (Standard) tier.
+  let layoutFee = null
+  const privateGame = String(payload.sessionType || '').toLowerCase() === 'private'
+  const designed = Array.isArray(payload.fieldLayoutItems) && payload.fieldLayoutItems.length > 0
+  if (privateGame && (designed || payload.layoutBlueprintUrl)) {
+    const { DEFAULT_LAYOUT_FEES, countLayoutPieces, getLayoutFees, layoutFeeFor } = await import('./fieldObstacles.js')
+    const tiers = db ? await getLayoutFees(db) : DEFAULT_LAYOUT_FEES
+    const pieces = designed ? countLayoutPieces(payload.fieldLayoutItems) : 0
+    layoutFee = pieces > 0 ? layoutFeeFor(pieces, tiers) : !designed ? { ...tiers[1], pieces: 0 } : null
+    if (layoutFee && layoutFee.price > 0) {
+      subtotal += layoutFee.price
+      const detail = layoutFee.pieces > 0 ? `${layoutFee.pieces} piece${layoutFee.pieces === 1 ? '' : 's'}` : 'uploaded plan'
+      breakdown.push({ label: `Custom field layout (${layoutFee.label}, ${detail})`, amount: layoutFee.price })
+    }
+  }
+
   const totalAmount = Math.max(0, Math.round(subtotal))
   return {
     pricingVerified: true,
+    layoutFeeAmount: layoutFee?.price || 0,
     totalAmount,
     depositAmount: calculateDeposit(totalAmount, isOwnGear, config),
     balanceAmount: Math.max(0, totalAmount - calculateDeposit(totalAmount, isOwnGear, config)),

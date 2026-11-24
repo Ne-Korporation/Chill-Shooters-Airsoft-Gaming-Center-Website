@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { FiCopy, FiRotateCw, FiTrash2, FiX } from 'react-icons/fi'
 import { Button } from '../ui/Button'
 import { Card } from '../ui/Card'
+import { countLayoutPieces, layoutFeeFor, type LayoutFeeTier } from '../../utils/fieldObstacles'
 
 // A mock of the field the booker arranges obstacles on. Positions are in field units
 // (FIELD_W x FIELD_H, top-left origin) so the layout keeps its shape at any screen size.
@@ -114,9 +115,15 @@ export function FieldLayoutDesigner({
   error,
   onClose,
   onSave,
+  limits,
+  fees,
 }: {
   open: boolean
   fieldName: string
+  // How many of each piece the field really has (and caps on markers); no limit when not given.
+  limits?: Partial<Record<ObstacleType, number>>
+  // The custom layout fee tiers: the fee is shown live as pieces are placed.
+  fees?: LayoutFeeTier[]
   initialItems: LayoutItem[]
   saving?: boolean
   // Shown above the buttons when saving fails.
@@ -125,6 +132,9 @@ export function FieldLayoutDesigner({
   onSave: (items: LayoutItem[], image: File) => void | Promise<void>
 }) {
   const [items, setItems] = useState<LayoutItem[]>(initialItems)
+  // How many of a piece are placed, and how many more the field has.
+  const usedOf = (type: ObstacleType) => items.filter((item) => item.type === type).length
+  const leftOf = (type: ObstacleType) => (limits?.[type] === undefined ? Infinity : Math.max(0, (limits[type] as number) - usedOf(type)))
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const fieldRef = useRef<HTMLDivElement>(null)
   // The piece being dragged and where in it the pointer grabbed it.
@@ -201,7 +211,7 @@ export function FieldLayoutDesigner({
 
   const duplicateSelected = () => {
     const source = items.find((item) => item.id === selectedId)
-    if (!source) return
+    if (!source || leftOf(source.type) <= 0) return
     const copy = { ...source, id: newId(), x: clamp(source.x + 20, 0, FIELD_W), y: clamp(source.y + 20, 0, FIELD_H) }
     setItems((current) => [...current, copy])
     setSelectedId(copy.id)
@@ -223,6 +233,7 @@ export function FieldLayoutDesigner({
 
   const startNew = (type: ObstacleType) => (event: React.PointerEvent) => {
     event.preventDefault()
+    if (leftOf(type) <= 0) return
     const { x, y } = toField(event.clientX, event.clientY)
     const item: LayoutItem = { id: newId(), type, x, y, rot: 0 }
     setItems((current) => [...current, item])
@@ -232,6 +243,7 @@ export function FieldLayoutDesigner({
 
   // Keyboard / tap fallback: a click without dragging drops the piece in the middle of the field.
   const addCentered = (type: ObstacleType) => {
+    if (leftOf(type) <= 0) return
     const item: LayoutItem = { id: newId(), type, x: FIELD_W / 2 + (Math.random() - 0.5) * 60, y: FIELD_H / 2 + (Math.random() - 0.5) * 60, rot: 0 }
     setItems((current) => [...current, item])
     setSelectedId(item.id)
@@ -266,6 +278,7 @@ export function FieldLayoutDesigner({
             <div id="layout-designer-title" className="text-base font-bold">Design your field layout · {fieldName}</div>
             <p className="mt-0.5 text-xs text-muted">
               Drag obstacles from the left onto the field, then drag them around. Select one to rotate (R) or delete it (Del). Drag a piece off the field to remove it.
+              {limits ? ' You can only use what this field has: the number left is next to each piece.' : ''}
             </p>
           </div>
           <button type="button" onClick={onClose} className="rounded-xl p-2 text-muted hover:bg-white/10 hover:text-text" aria-label="Close layout designer">
@@ -275,19 +288,29 @@ export function FieldLayoutDesigner({
 
         <div className="mt-4 grid min-h-0 flex-1 gap-4 overflow-auto md:grid-cols-[180px_1fr]">
           <div className="grid grid-cols-2 gap-2 self-start md:grid-cols-1">
-            {PALETTE.map((type) => (
+            {PALETTE.filter((type) => limits?.[type] !== 0 || usedOf(type) > 0).map((type) => {
+              const left = leftOf(type)
+              return (
               <button
                 key={type}
                 type="button"
+                disabled={left <= 0}
+                aria-label={`${SPECS[type].label}${Number.isFinite(left) ? `, ${left} left` : ''}`}
                 onPointerDown={startNew(type)}
                 onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); addCentered(type) } }}
-                className="flex cursor-grab touch-none select-none items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-2 py-1.5 text-left text-xs font-semibold hover:bg-white/10 active:cursor-grabbing"
-                title={`Drag a ${SPECS[type].label.toLowerCase()} onto the field`}
+                className="flex cursor-grab touch-none select-none items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-2 py-1.5 text-left text-xs font-semibold hover:bg-white/10 active:cursor-grabbing disabled:cursor-not-allowed disabled:opacity-40"
+                title={left <= 0 ? `This field has no more ${SPECS[type].label.toLowerCase()}s` : `Drag a ${SPECS[type].label.toLowerCase()} onto the field`}
               >
                 <span className="h-5 w-5 shrink-0"><ObstacleShape type={type} className="text-[9px]" /></span>
-                {SPECS[type].label}
+                <span className="min-w-0 flex-1 truncate">{SPECS[type].label}</span>
+                {Number.isFinite(left) ? (
+                  <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] tabular-nums ${left > 0 ? 'bg-white/10 text-muted' : 'bg-danger/15 text-danger'}`}>
+                    {left > 0 ? `${left} left` : 'none left'}
+                  </span>
+                ) : null}
               </button>
-            ))}
+              )
+            })}
           </div>
 
           <div className="min-w-0">
@@ -333,7 +356,7 @@ export function FieldLayoutDesigner({
               <span className="text-xs text-muted">{items.length} piece{items.length === 1 ? '' : 's'}{selected ? ` · ${SPECS[selected.type].label} selected` : ''}</span>
               <div className="ml-auto flex flex-wrap gap-2">
                 <Button variant="ghost" size="xs" disabled={!selected} onClick={rotateSelected}><FiRotateCw /> Rotate</Button>
-                <Button variant="ghost" size="xs" disabled={!selected} onClick={duplicateSelected}><FiCopy /> Duplicate</Button>
+                <Button variant="ghost" size="xs" disabled={!selected || leftOf(selected.type) <= 0} onClick={duplicateSelected}><FiCopy /> Duplicate</Button>
                 <Button variant="ghost" size="xs" disabled={!selected} onClick={deleteSelected}><FiTrash2 /> Delete</Button>
                 <Button variant="ghost" size="xs" disabled={items.length === 0} onClick={() => { setItems([]); setSelectedId(null) }}>Clear all</Button>
               </div>
@@ -344,7 +367,26 @@ export function FieldLayoutDesigner({
         {error ? (
           <div role="alert" className="mt-4 rounded-2xl border border-danger/25 bg-danger/10 p-3 text-xs font-semibold text-danger">{error}</div>
         ) : null}
-        <div className="mt-4 flex flex-col-reverse gap-2 border-t border-white/10 pt-4 sm:flex-row sm:justify-end">
+        <div className="mt-4 flex flex-col-reverse gap-2 border-t border-white/10 pt-4 sm:flex-row sm:items-center sm:justify-end">
+          {/* What this layout costs: a tier by how many pieces staff set up (markers don't count). */}
+          {fees ? (() => {
+            const pieces = countLayoutPieces(items)
+            const fee = layoutFeeFor(pieces, fees)
+            return (
+              <div className="mr-auto text-xs" aria-live="polite">
+                {fee ? (
+                  <>
+                    <span className="font-bold">{fee.label} layout · <span className="text-gold">₱{fee.price.toLocaleString('en-PH')}</span></span>
+                    <span className="text-muted"> · {pieces} piece{pieces === 1 ? '' : 's'}{fee.next && fee.untilNext ? ` · ${fee.untilNext} more and it's ${fee.next.label} (₱${fee.next.price.toLocaleString('en-PH')})` : ''}</span>
+                  </>
+                ) : (
+                  <span className="text-muted">
+                    No pieces yet: the standard field is free. A custom layout starts at ₱{fees[0].price.toLocaleString('en-PH')} ({fees[0].label}, up to {fees[0].maxPieces} pieces).
+                  </span>
+                )}
+              </div>
+            )
+          })() : null}
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
           <Button variant="primary" disabled={saving || items.length === 0} onClick={() => void save()}>
             {saving ? 'Saving…' : 'Save layout'}

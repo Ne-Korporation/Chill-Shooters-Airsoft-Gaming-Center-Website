@@ -4,7 +4,7 @@ import { getDb, startDbSession } from '../db/mongo.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
 import { getGcashAmountDue, getPaymentProgress, getSplitPayerIds } from '../utils/paymentRules.js'
 import { expireOverdueReservations, getReservationPayments } from '../utils/paymentProgress.js'
-import { loadoutOf } from '../utils/splitShares.js'
+import { loadoutOf, shareBreakdown } from '../utils/splitShares.js'
 import { playerGunsOf, rentOnlyOf } from '../utils/ownGearRentals.js'
 import {
   ACTIVE_BOOKING_STATUSES,
@@ -13,6 +13,8 @@ import {
   declineInvite,
   fillOpenSlot,
   latestInvite,
+  gameStartMs,
+  removeTeammate,
 } from '../utils/teamInvites.js'
 import { manilaDateISO } from '../utils/reminders.js'
 
@@ -50,6 +52,121 @@ function summarize(reservation) {
   }
 }
 
+// One booking's team payment, as the player `me` sees it: who plays and pays what, what they owe,
+// and the team's progress (who has paid: captain only). Used by the list below and by a single
+// booking's view at any stage (still being paid, confirmed, played).
+async function buildTeamPayment(db, reservation, me) {
+  const payments = await getReservationPayments(db, reservation)
+  const progress = getPaymentProgress(reservation, payments)
+  const isCaptain = String(reservation.userId) === me
+  const iHavePaid = progress.paidPayerIds.includes(me)
+  let myShareDue = 0
+  if (!iHavePaid) {
+    try {
+      myShareDue = getGcashAmountDue(reservation, payments, me)
+    } catch {
+      myShareDue = 0
+    }
+  }
+  const payerIds = getSplitPayerIds(reservation)
+  const memberIds = (reservation.teamMembers || []).map((m) => String(m?.id || '')).filter(Boolean)
+  const accounts = await namesById(db, [...new Set([...payerIds, String(reservation.userId), ...memberIds])])
+  // Everyone on the booking, so an invited teammate can see who booked and who they're playing with.
+  // Models of the guns players picked themselves, for "Gets".
+  const gunIds = Object.values(reservation.playerGuns || {}).flat().map(String)
+  const gunModels = new Map(gunIds.length
+    ? (await db.collection('weapons').find({ id: { $in: gunIds } }, { projection: { id: 1, name: 1, model: 1 } }).toArray())
+      .map((w) => [String(w.id), w.model || String(w.name || '').replace(/\s+#\d+$/, '')])
+    : [])
+  // What each payer's share of the online amount is: their own (uneven) share when players get
+  // different things, else an even split. Minors don't pay (null).
+  const online = Math.max(0, Number(reservation.depositAmount) || 0)
+  const evenShare = payerIds.length ? Math.round((online / payerIds.length) * 100) / 100 : 0
+  const shareOf = (id) => {
+    if (!payerIds.includes(id)) return null
+    const recorded = Number(reservation.splitShares?.[id])
+    return Number.isFinite(recorded) ? recorded : evenShare
+  }
+  // A payer's share split into their own part and each child's part they pay for.
+  const breakdowns = new Map(payerIds.map((id) => [id, shareBreakdown(reservation, id, shareOf(id))]))
+  const childPart = (childId) => {
+    for (const breakdown of breakdowns.values()) {
+      const part = breakdown.children.find((child) => child.id === childId)
+      if (part) return part.amount
+    }
+    return null
+  }
+  const players = [String(reservation.userId), ...memberIds]
+    .filter((id, index, all) => id && all.indexOf(id) === index)
+    .map((id) => ({
+      id,
+      name: accounts.get(id)?.name || (reservation.teamMembers || []).find((m) => String(m?.id) === id)?.name || 'Player',
+      isCaptain: id === String(reservation.userId),
+      isMe: id === me,
+      // What the person who booked chose for them: the package, own gun, or own gun and gear.
+      loadout: String(reservation.selectionMode || '').toLowerCase() === 'package' ? loadoutOf(reservation, id) : null,
+      // Not taking the package: the single pieces they rent (gun, mask, vest), if any.
+      rentOnly: rentOnlyOf(reservation, id),
+      pickedGuns: playerGunsOf(reservation, id).map((gunId) => gunModels.get(gunId) || 'Gun'),
+      // Everyone on the team sees what each player pays online (who has paid stays captain-only).
+      share: shareOf(id),
+      // Of that share, what's for themselves and what's for each child they pay for.
+      ownPart: breakdowns.get(id)?.children.length ? breakdowns.get(id).own : null,
+      forChildren: breakdowns.get(id)?.children.length ? breakdowns.get(id).children.map(({ name, amount }) => ({ name, amount })) : [],
+      // A child's part, paid inside their parent's share.
+      childPart: payerIds.includes(id) ? null : childPart(id),
+      // A minor doesn't pay; their parent or guardian on the team does.
+      paidBy: (() => {
+        const member = (reservation.teamMembers || []).find((m) => String(m?.id) === id)
+        if (!member?.isMinor) return null
+        const guardianId = String(member.guardianId || '')
+        return payerIds.includes(guardianId) ? (accounts.get(guardianId)?.name || 'Their guardian') : null
+      })(),
+    }))
+  const paidByUser = new Map()
+  for (const payment of payments) {
+    const status = String(payment.paymentStatus || payment.status || '').toLowerCase()
+    if (['failed', 'rejected', 'cancelled'].includes(status)) continue
+    // Everything this payer has put in (a top-up is a second payment), and the latest status.
+    const before = paidByUser.get(String(payment.userId))
+    paidByUser.set(String(payment.userId), { amount: Math.round(((before?.amount || 0) + Number(payment.amount || 0)) * 100) / 100, status })
+  }
+
+  return {
+    reservation: summarize(reservation),
+    isCaptain,
+    captainName: accounts.get(String(reservation.userId))?.name || 'Team captain',
+    players,
+    // Spots of teammates who left that the captain is paying for, or paid for, online.
+    coveredSpots: (reservation.openSlots || [])
+      .filter((slot) => (['covering', 'paid'].includes(String(slot.status || '')) || slot.captainPaid) && Number(slot.amount) > 0)
+      .map((slot) => ({ name: slot.name || 'Teammate', amount: Number(slot.amount) || 0, status: slot.captainPaid ? 'paid' : slot.status, reason: slot.reason || '' })),
+    myShareDue,
+    iHavePaid,
+    progress: {
+      target: progress.target,
+      submitted: progress.submitted,
+      remaining: progress.remaining,
+      state: progress.state,
+      // Everyone sees how many shares are in; only the captain sees who paid.
+      paidCount: progress.paidPayerIds.length,
+      payerCount: payerIds.length,
+    },
+    // Captains see who has paid; teammates only see their own share.
+    members: isCaptain
+      ? payerIds.map((id) => ({
+        id,
+        name: accounts.get(id)?.name || id,
+        isCaptain: id === String(reservation.userId),
+        // Paid in full: their whole share (a top-up still due means not yet).
+        paid: progress.paidPayerIds.includes(id),
+        amount: paidByUser.get(id)?.amount || 0,
+        paymentStatus: paidByUser.get(id)?.status || null,
+      }))
+      : undefined,
+  }
+}
+
 // GET /api/split-payments/mine — split payments the player still has to pay, or (as captain)
 // is tracking. Empty once everything is paid, which hides the sidebar module.
 router.get('/split-payments/mine', requireAuth, requireRole('user'), async (req, res) => {
@@ -73,96 +190,28 @@ router.get('/split-payments/mine', requireAuth, requireRole('user'), async (req,
       const iHavePaid = progress.paidPayerIds.includes(me)
       if (progress.state === 'finalized' || (!isCaptain && iHavePaid)) continue
 
-      let myShareDue = 0
-      if (!iHavePaid) {
-        try {
-          myShareDue = getGcashAmountDue(reservation, payments, me)
-        } catch {
-          myShareDue = 0
-        }
-      }
-      const payerIds = getSplitPayerIds(reservation)
-      const memberIds = (reservation.teamMembers || []).map((m) => String(m?.id || '')).filter(Boolean)
-      const accounts = await namesById(db, [...new Set([...payerIds, String(reservation.userId), ...memberIds])])
-      // Everyone on the booking, so an invited teammate can see who booked and who they're playing with.
-      // Models of the guns players picked themselves, for "Gets".
-      const gunIds = Object.values(reservation.playerGuns || {}).flat().map(String)
-      const gunModels = new Map(gunIds.length
-        ? (await db.collection('weapons').find({ id: { $in: gunIds } }, { projection: { id: 1, name: 1, model: 1 } }).toArray())
-          .map((w) => [String(w.id), w.model || String(w.name || '').replace(/\s+#\d+$/, '')])
-        : [])
-      // What each payer's share of the online amount is: their own (uneven) share when players get
-      // different things, else an even split. Minors don't pay (null).
-      const online = Math.max(0, Number(reservation.depositAmount) || 0)
-      const evenShare = payerIds.length ? Math.round((online / payerIds.length) * 100) / 100 : 0
-      const shareOf = (id) => {
-        if (!payerIds.includes(id)) return null
-        const recorded = Number(reservation.splitShares?.[id])
-        return Number.isFinite(recorded) ? recorded : evenShare
-      }
-      const players = [String(reservation.userId), ...memberIds]
-        .filter((id, index, all) => id && all.indexOf(id) === index)
-        .map((id) => ({
-          id,
-          name: accounts.get(id)?.name || (reservation.teamMembers || []).find((m) => String(m?.id) === id)?.name || 'Player',
-          isCaptain: id === String(reservation.userId),
-          isMe: id === me,
-          // What the person who booked chose for them: the package, own gun, or own gun and gear.
-          loadout: String(reservation.selectionMode || '').toLowerCase() === 'package' ? loadoutOf(reservation, id) : null,
-          // Not taking the package: the single pieces they rent (gun, mask, vest), if any.
-          rentOnly: rentOnlyOf(reservation, id),
-          pickedGuns: playerGunsOf(reservation, id).map((gunId) => gunModels.get(gunId) || 'Gun'),
-          // Everyone on the team sees what each player pays online (who has paid stays captain-only).
-          share: shareOf(id),
-          // A minor doesn't pay; their parent or guardian on the team does.
-          paidBy: (() => {
-            const member = (reservation.teamMembers || []).find((m) => String(m?.id) === id)
-            if (!member?.isMinor) return null
-            const guardianId = String(member.guardianId || '')
-            return payerIds.includes(guardianId) ? (accounts.get(guardianId)?.name || 'Their guardian') : null
-          })(),
-        }))
-      const paidByUser = new Map()
-      for (const payment of payments) {
-        const status = String(payment.paymentStatus || payment.status || '').toLowerCase()
-        if (['failed', 'rejected'].includes(status)) continue
-        paidByUser.set(String(payment.userId), { amount: Number(payment.amount || 0), status })
-      }
-
-      items.push({
-        reservation: summarize(reservation),
-        isCaptain,
-        captainName: accounts.get(String(reservation.userId))?.name || 'Team captain',
-        players,
-        myShareDue,
-        iHavePaid,
-        progress: {
-          target: progress.target,
-          submitted: progress.submitted,
-          remaining: progress.remaining,
-          state: progress.state,
-          // Everyone sees how many shares are in; only the captain sees who paid.
-          paidCount: progress.paidPayerIds.length,
-          payerCount: payerIds.length,
-        },
-        // Captains see who has paid; teammates only see their own share.
-        members: isCaptain
-          ? payerIds.map((id) => ({
-            id,
-            name: accounts.get(id)?.name || id,
-            isCaptain: id === String(reservation.userId),
-            // Paid in full: their whole share (a top-up still due means not yet).
-            paid: progress.paidPayerIds.includes(id),
-            amount: paidByUser.get(id)?.amount || 0,
-            paymentStatus: paidByUser.get(id)?.status || null,
-          }))
-          : undefined,
-      })
+      items.push(await buildTeamPayment(db, reservation, me))
     }
 
     return res.json({ ok: true, data: items })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
+  }
+})
+
+// GET /api/reservations/:id/team-payment — one team (split) booking's team payment, at any stage,
+// for the captain or a teammate on it (the booking's View shows who pays what).
+router.get('/reservations/:id/team-payment', requireAuth, requireRole('user'), async (req, res) => {
+  try {
+    const db = await getDb()
+    const me = String(req.user.id)
+    const reservation = await findById(db, 'reservations', req.params.id)
+    const onIt = reservation && (String(reservation.userId) === me || (reservation.teamMembers || []).some((m) => String(m?.id) === me))
+    if (!onIt) return res.status(404).json({ ok: false, error: 'Reservation not found' })
+    if (String(reservation.paymentMode || 'self').toLowerCase() !== 'split') return res.json({ ok: true, data: null })
+    return res.json({ ok: true, data: await buildTeamPayment(db, reservation, me) })
+  } catch (err) {
+    return sendError(res, err)
   }
 })
 
@@ -187,7 +236,8 @@ router.get('/invitations/mine', requireAuth, requireRole('user'), async (req, re
       reservationDate: { $gte: manilaDateISO() },
       $or: [
         { invites: { $elemMatch: { playerId: me, status: 'pending' } } },
-        { userId: me, openSlots: { $elemMatch: { status: { $in: ['open', 'covering'] } } } },
+        // Spots to fill: open ones, and ones the captain paid for that nobody plays in yet.
+        { userId: me, openSlots: { $elemMatch: { status: { $in: ['open', 'covering', 'paid'] } } } },
       ],
     }).limit(50).toArray()
     const accounts = await namesById(db, [...new Set(reservations.map((r) => String(r.userId)))])
@@ -211,10 +261,11 @@ router.get('/invitations/mine', requireAuth, requireRole('user'), async (req, re
         })
       }
       if (String(reservation.userId) === me) {
-        for (const slot of (reservation.openSlots || []).filter((s) => ['open', 'covering'].includes(s.status))) {
+        for (const slot of (reservation.openSlots || []).filter((s) => ['open', 'covering', 'paid'].includes(s.status))) {
           openSlots.push({
             reservation: summarize(reservation),
-            slot: { id: slot.id, playerId: slot.playerId, name: slot.name, amount: Number(slot.amount) || 0, status: slot.status, reason: slot.reason, deadlineISO: slot.deadlineISO },
+            // A spot already paid for can take a substitute until the game starts.
+            slot: { id: slot.id, playerId: slot.playerId, name: slot.name, amount: Number(slot.amount) || 0, status: slot.status, reason: slot.reason, deadlineISO: slot.status === 'paid' ? new Date(gameStartMs(reservation)).toISOString() : slot.deadlineISO, onsite: Boolean(slot.onsite) },
           })
         }
       }
@@ -250,6 +301,20 @@ router.post('/reservations/:id/decline', requireAuth, requireRole('user'), async
     const result = await declineInvite(db, reservation, req.user.id)
     const updated = await db.collection('reservations').findOne({ _id: reservation._id })
     return res.json({ ok: true, data: { mode: result.mode, numberOfPlayers: updated?.numberOfPlayers, totalAmount: updated?.totalAmount } })
+  } catch (err) {
+    return sendError(res, err)
+  }
+})
+
+// POST /api/reservations/:id/members/:playerId/remove — the captain takes a teammate who hasn't paid
+// off the team, to put a substitute in their spot (see removeTeammate).
+router.post('/reservations/:id/members/:playerId/remove', requireAuth, requireRole('user'), async (req, res) => {
+  try {
+    const db = await getDb()
+    const reservation = await findById(db, 'reservations', req.params.id)
+    if (!reservation) return res.status(404).json({ ok: false, error: 'Reservation not found' })
+    const result = await removeTeammate(db, reservation, req.params.playerId, req.user.id)
+    return res.json({ ok: true, data: { mode: result.mode } })
   } catch (err) {
     return sendError(res, err)
   }

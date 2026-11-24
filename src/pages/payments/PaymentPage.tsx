@@ -90,6 +90,15 @@ function PaymentPageContent() {
   const [paymentPlan, setPaymentPlan] = useState<PaymentPlan>('cash_balance')
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([])
   const [isOwnGear, setIsOwnGear] = useState(false)
+  // The booker's part of a split, by what each player gets (from the booking page).
+  const [myShareFraction] = useState<number>(() => {
+    try {
+      const fraction = Number(JSON.parse(localStorage.getItem('pending_reservation') || 'null')?.myShareFraction)
+      return Number.isFinite(fraction) && fraction > 0 && fraction <= 1 ? fraction : 0
+    } catch {
+      return 0
+    }
+  })
   // Set once the server amount is known after submitting.
   const [amountDue, setAmountDue] = useState(0)
   // Who pays and how can change until the reservation is created; then the server has fixed them.
@@ -109,12 +118,15 @@ function PaymentPageContent() {
   const showWhoPays = canSplit || paymentMode === 'split'
   const teamSize = paymentMode === 'split' ? teamMembers.length + 1 : 1
   const paysInFull = paymentPlan === 'full'
-  // Estimate shown before submitting; the server recalculates the exact amount.
+  // Estimate shown before submitting; the server recalculates the exact amount. In a split each
+  // player pays for what they get, so the booker's share follows their part of the booking.
   const payerShareAmount = useMemo(() => {
     const total = breakdown.total
     const online = paysInFull ? total : isOwnGear ? Math.min(total, 350) : Math.min(total, Math.round(total * 0.5))
-    return paymentMode === 'split' ? Math.round((online / teamSize) * 100) / 100 : online
-  }, [breakdown.total, isOwnGear, paymentMode, paysInFull, teamSize])
+    if (paymentMode !== 'split') return online
+    const fraction = myShareFraction || 1 / teamSize
+    return Math.round(online * fraction * 100) / 100
+  }, [breakdown.total, isOwnGear, paymentMode, paysInFull, teamSize, myShareFraction])
 
   // Saves the choice into the booking draft, which is what gets sent when the reservation is created.
   const updateChoice = (changes: { paymentMode?: PaymentMode; paymentPlan?: PaymentPlan }) => {
@@ -370,8 +382,12 @@ function PaymentPageContent() {
       if (serverMode === 'split' && (!Number.isInteger(Number(serverReservation.teamSize)) || Number(serverReservation.teamSize) < 2)) {
         throw new Error('The server could not verify your group payment settings.')
       }
+      // The booker's recorded share (each player pays for what they get), else an even split.
+      const recordedShare = Number(serverReservation.splitShares?.[String(user?.id || '')])
       const amount = serverMode === 'split'
-        ? Math.round((serverDeposit / Number(serverReservation.teamSize)) * 100) / 100
+        ? (Number.isFinite(recordedShare) && recordedShare > 0
+          ? recordedShare
+          : Math.round((serverDeposit / Number(serverReservation.teamSize)) * 100) / 100)
         : serverDeposit
       setBalanceDue(Number(serverReservation.balanceAmount) || 0)
       setBreakdown((current) => ({
@@ -485,7 +501,7 @@ function PaymentPageContent() {
             {([
               ['self', "I'll pay for everyone", 'This player pays the full reservation.'],
               ['split', 'Split among the team', canSplit
-                ? 'Divide the total equally among you and your selected teammates.'
+                ? 'Each player pays for what they get (package, own gun, own gear), and a parent pays for their child.'
                 : 'Add at least one registered teammate when booking to split the payment.'],
             ] as const).map(([mode, title, description]) => (
               <button
@@ -602,7 +618,7 @@ function PaymentPageContent() {
               <div className="flex items-center justify-between gap-3">
                 <div className="text-xs uppercase tracking-widest text-muted">Team payment</div>
                 <div className="text-[11px] uppercase tracking-[0.18em] text-muted">
-                  {paymentMode === 'split' ? `Split among ${teamSize}` : 'One payer'}
+                  {paymentMode === 'split' ? `Split among ${teamSize} by what each gets` : 'One payer'}
                 </div>
               </div>
               {teamMembers.length > 0 ? (

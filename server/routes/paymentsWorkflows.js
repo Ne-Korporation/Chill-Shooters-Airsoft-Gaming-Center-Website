@@ -9,6 +9,7 @@ import {
 } from '../utils/paymentRules.js'
 import { recordVerifiedStripePayment } from '../utils/stripePayments.js'
 import { emailPaymentEvent, emailPaymentReceipt } from '../services/notificationEmails.js'
+import { notifyPaymentDecision, notifyPaymentReceived } from '../utils/playerNotices.js'
 import { getReservationPayments, syncReservationPaymentState } from '../utils/paymentProgress.js'
 import { normalizePhPhone } from '../utils/phone.js'
 import { nextShortId } from '../utils/shortIds.js'
@@ -159,6 +160,7 @@ router.post('/payments/stripe-confirm', requireAuth, async (req, res) => {
 
     await syncReservationPaymentState(db, reservation)
     void emailPaymentReceipt(db, payment, payment?.paymentStatus || 'paid')
+    void notifyPaymentReceived(db, payment, reservation).catch(() => null)
     return res.json({ ok: true, data: payment })
   } catch (err) {
     console.error('Stripe payment confirmation error:', err)
@@ -336,6 +338,7 @@ router.put('/payments/:id/verify', requireAuth, requireRole('admin', 'registrar'
     await syncReservationPaymentState(db, reservation)
 
     void emailPaymentEvent(db, updated, nextStatus, reason)
+    void notifyPaymentDecision(db, updated, nextStatus, reason).catch(() => null)
     return res.json({ ok: true, data: updated })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
@@ -349,9 +352,11 @@ router.get('/stripe/config', requireAuth, (_req, res) => {
   res.json({ ok: true, enabled, publishableKey: enabled ? publishableKey : '' })
 })
 
-// POST /api/reservations/:id/receipt — the official receipt number for the reservation's verified
-// payments. The first print of a given set of verified payments issues the next OR-###### number;
-// printing the same set again returns the same number, and a new verified payment issues a new one.
+// POST /api/reservations/:id/receipt { payerId? } — the official receipt number for one payer's
+// verified payments on the reservation: a player gets their own (in a split payment each teammate
+// pays their share and gets their own receipt); staff pass the payer whose payment they opened.
+// The first print of a given set of verified payments issues the next OR-###### number; printing
+// the same set again returns the same number, and a new verified payment issues a new one.
 router.post('/reservations/:id/receipt', requireAuth, async (req, res) => {
   try {
     const db = await getDb()
@@ -364,8 +369,12 @@ router.post('/reservations/:id/receipt', requireAuth, async (req, res) => {
       return res.status(404).json({ ok: false, error: 'Reservation not found' })
     }
 
+    // A player only ever gets a receipt for what they paid. Payments with no payer recorded are the captain's.
+    const payerId = req.user.role === 'user' ? String(req.user.id) : String(req.body?.payerId || '').trim()
+    const payerOf = (payment) => String(payment.userId || reservation.userId || '')
     const payments = (await getReservationPayments(db, reservation)).filter((payment) =>
-      RECEIPT_STATUSES.includes(String(payment.paymentStatus || payment.status || '').toLowerCase()))
+      RECEIPT_STATUSES.includes(String(payment.paymentStatus || payment.status || '').toLowerCase())
+      && (!payerId || payerOf(payment) === payerId))
     if (!payments.length) return res.status(409).json({ ok: false, error: 'No verified payments to receipt yet.' })
 
     const reservationId = String(reservation.id || reservation._id)
@@ -385,6 +394,7 @@ router.post('/reservations/:id/receipt', requireAuth, async (req, res) => {
         receiptNo: await nextShortId(db, 'receipts', 'OR'),
         id: '',
         reservationId,
+        ...(payerId ? { payerId } : {}),
         paymentIds,
         paymentKey,
         totalPaid,

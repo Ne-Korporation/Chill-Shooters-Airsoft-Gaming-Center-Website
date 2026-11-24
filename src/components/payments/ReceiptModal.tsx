@@ -7,6 +7,8 @@ import {
   downloadReceiptHtml,
   fetchReceiptNo,
   isVerifiedPayment,
+  payerIdOf,
+  paymentsOfPayer,
   printReceiptHtml,
   type ReceiptPayment,
   type ReceiptReservation,
@@ -36,18 +38,21 @@ export function ReceiptModal({
   useEffect(() => {
     let alive = true
     const booking: ReceiptReservation = reservation || { id: payment.reservationId }
+    // The receipt is the payer's own: only what the person who made this payment paid.
+    const payerId = payerIdOf(payment, reservation)
     const asRecord = () => {
       const receiptNo = String(payment.id || payment._id || 'payment')
-      return { html: buildReceiptHtml(booking, [payment], payerName, receiptNo, { record: true }), receiptNo, official: false }
+      return { html: buildReceiptHtml(booking, [payment], payerName, receiptNo, { record: true, payerId }), receiptNo, official: false }
     }
     if (!isVerifiedPayment(payment) || !reservation) {
       setState(asRecord())
       return
     }
     setState(null)
-    fetchReceiptNo(reservation)
+    fetchReceiptNo(reservation, payerId)
       .then((receiptNo) => {
-        if (alive) setState({ html: buildReceiptHtml(reservation, reservationPayments, payerName, receiptNo), receiptNo, official: true })
+        const mine = paymentsOfPayer(reservationPayments, payerId, reservation)
+        if (alive) setState({ html: buildReceiptHtml(reservation, mine, payerName, receiptNo, { payerId }), receiptNo, official: true })
       })
       // No receipt number (e.g. the booking was removed): still show what was paid.
       .catch(() => { if (alive) setState(asRecord()) })

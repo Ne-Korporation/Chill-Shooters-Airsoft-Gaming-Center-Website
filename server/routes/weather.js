@@ -4,6 +4,8 @@ import { requireAuth, requireRole } from '../middleware/auth.js'
 import { WEATHER_DAILY, WEATHER_OUTLOOK, forecastForDate, isWeatherConfigured, liveDailyForecast, locationCoords, refreshWeatherOutlook, sendAdvisory, sendWeatherAlerts } from '../utils/weather.js'
 import { SLOT_HOURS_ID, SLOT_ORDER, getSlotHours, slotHasStarted, validateSlotHours } from '../utils/slotHours.js'
 import { manilaDateISO } from '../utils/reminders.js'
+import { FIELD_OBSTACLES_ID, MARKER_LIMITS, getFieldObstacles, getLayoutFees, validateLayoutFees, validateObstacleCounts } from '../utils/fieldObstacles.js'
+import { LOCATION_FIELD_DEFS } from './crud.js'
 
 // Game slot hours, the weather forecast for staff, manual advisories to booked players,
 // and the advisory history.
@@ -45,6 +47,60 @@ router.put('/slot-hours', requireAuth, requireRole('admin'), async (req, res) =>
       { upsert: true },
     )
     return res.json({ ok: true, data: await getSlotHours(db) })
+  } catch (err) {
+    return sendError(res, err)
+  }
+})
+
+// Every field at every branch: { id, name, locationId }.
+const allFields = () => Object.entries(LOCATION_FIELD_DEFS).flatMap(([locationId, fields]) => fields.map((field) => ({ ...field, locationId })))
+
+// GET /api/field-obstacles — how many of each obstacle each field has (the layout designer only
+// lets players place what's there), and the caps on game markers.
+router.get('/field-obstacles', async (_req, res) => {
+  try {
+    const db = await getDb()
+    const fields = allFields()
+    const counts = await getFieldObstacles(db, fields.map((field) => field.id))
+    return res.json({ ok: true, data: { fields: fields.map((field) => ({ ...field, counts: counts[field.id] })), markers: MARKER_LIMITS, layoutFees: await getLayoutFees(db) } })
+  } catch (err) {
+    return sendError(res, err)
+  }
+})
+
+// PUT /api/field-obstacles/:fieldId { wall, bunker, barrel, tires, tower, container } — admin.
+router.put('/field-obstacles/:fieldId', requireAuth, requireRole('admin'), async (req, res) => {
+  const fieldId = String(req.params.fieldId || '')
+  if (!allFields().some((field) => field.id === fieldId)) return res.status(404).json({ ok: false, error: 'Unknown field.' })
+  const checked = validateObstacleCounts(req.body || {})
+  if (checked.error) return res.status(400).json({ ok: false, error: checked.error })
+  try {
+    const db = await getDb()
+    const nowISO = new Date().toISOString()
+    await db.collection('settings').updateOne(
+      { _id: FIELD_OBSTACLES_ID },
+      { $set: { [`fields.${fieldId}`]: checked.counts, updatedAtISO: nowISO, updatedBy: actorOf(req) } },
+      { upsert: true },
+    )
+    return res.json({ ok: true, data: (await getFieldObstacles(db, [fieldId]))[fieldId] })
+  } catch (err) {
+    return sendError(res, err)
+  }
+})
+
+// PUT /api/field-layout-fees [{ maxPieces, price }, { maxPieces, price }, { price }] — admin: the
+// custom layout tiers (Simple / Standard / Complex).
+router.put('/field-layout-fees', requireAuth, requireRole('admin'), async (req, res) => {
+  const checked = validateLayoutFees(req.body?.tiers)
+  if (checked.error) return res.status(400).json({ ok: false, error: checked.error })
+  try {
+    const db = await getDb()
+    await db.collection('settings').updateOne(
+      { _id: FIELD_OBSTACLES_ID },
+      { $set: { layoutFees: checked.tiers, updatedAtISO: new Date().toISOString(), updatedBy: actorOf(req) } },
+      { upsert: true },
+    )
+    return res.json({ ok: true, data: await getLayoutFees(db) })
   } catch (err) {
     return sendError(res, err)
   }

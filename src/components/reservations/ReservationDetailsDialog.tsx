@@ -36,6 +36,8 @@ export type ReservationDetails = {
   // The captain's name, kept on the booking when it's made.
   bookerName?: string
   paymentState?: string
+  // What the whole team has paid online so far (kept by the server).
+  paymentSubmittedAmount?: number
   pricingBreakdown?: Array<{ label?: string; amount?: number }>
   teamMembers?: Array<{ id?: string; name?: string }>
   ownWeapons?: string
@@ -80,12 +82,18 @@ export function ReservationDetailsDialog({
   captainName,
   slotHours,
   onClose,
+  teamSection,
+  ownPayments = false,
 }: {
   reservation: ReservationDetails
   payments: Payment[]
   captainName: string
   slotHours: SlotHours
   onClose: () => void
+  // A team (split) payment: who plays and pays what, shown in place of the plain team list.
+  teamSection?: React.ReactNode
+  // The payments given are only the viewer's own (a player's view), not the whole team's.
+  ownPayments?: boolean
 }) {
   const date = reservation.reservationDate || reservation.dateISO || ''
   const slot = String(reservation.reservationTime || reservation.slot || '').toLowerCase()
@@ -123,13 +131,17 @@ export function ReservationDetailsDialog({
           </section>
 
           <section>
-            <div className="text-xs uppercase tracking-widest text-muted">{bookingRoles(reservation.sessionType).group}</div>
-            <ul className="mt-2 space-y-1 text-sm">
-              <li><span className="font-semibold">{captainName}</span> <span className="text-xs text-muted">· {bookingRoles(reservation.sessionType).booker}</span></li>
-              {(reservation.teamMembers || []).map((member) => (
-                <li key={member.id || member.name}>{member.name || member.id}</li>
-              ))}
-            </ul>
+            {teamSection ? null : (
+              <>
+                <div className="text-xs uppercase tracking-widest text-muted">{bookingRoles(reservation.sessionType).group}</div>
+                <ul className="mt-2 space-y-1 text-sm">
+                  <li><span className="font-semibold">{captainName}</span> <span className="text-xs text-muted">· {bookingRoles(reservation.sessionType).booker}</span></li>
+                  {(reservation.teamMembers || []).map((member) => (
+                    <li key={member.id || member.name}>{member.name || member.id}</li>
+                  ))}
+                </ul>
+              </>
+            )}
             {reservation.gameModePreference || reservation.layoutRequest || reservation.notes ? (
               <>
                 <div className="mt-4 text-xs uppercase tracking-widest text-muted">Game preferences</div>
@@ -146,7 +158,9 @@ export function ReservationDetailsDialog({
           </section>
         </div>
 
-        <ReservationChargesSections reservation={reservation} payments={payments} />
+        {teamSection ? <section className="mt-2">{teamSection}</section> : null}
+
+        <ReservationChargesSections reservation={reservation} payments={payments} ownPayments={ownPayments} />
       </div>
     </div>,
     document.body,
@@ -155,20 +169,27 @@ export function ReservationDetailsDialog({
 
 // Rentals, charges and payments, and reschedules of one booking. Shared by the reservation
 // details sheet and the staff game details pop-up.
-export function ReservationChargesSections({ reservation, payments }: { reservation: ReservationDetails; payments: Payment[] }) {
-  const rentals = (reservation.pricingBreakdown || []).filter((line) => !/entrance fee|discount/i.test(String(line.label || '')))
-  const otherLines = (reservation.pricingBreakdown || []).filter((line) => /entrance fee|discount/i.test(String(line.label || '')))
+export function ReservationChargesSections({ reservation, payments, ownPayments = false }: { reservation: ReservationDetails; payments: Payment[]; ownPayments?: boolean }) {
+  const rentals = (reservation.pricingBreakdown || []).filter((line) => !/entrance fee|discount|field layout/i.test(String(line.label || '')))
+  const otherLines = (reservation.pricingBreakdown || []).filter((line) => /entrance fee|discount|field layout/i.test(String(line.label || '')))
   const paidFromRecords = payments
     .filter((payment) => !['failed', 'rejected', 'cancelled'].includes(String(payment.paymentStatus || '').toLowerCase()))
     .reduce((sum, payment) => sum + Number(payment.amount || 0), 0)
   // A teammate doesn't receive the captain's payment records; the booking's own payment state
   // still says whether the online amount is fully in ("finalized").
-  const paid = payments.length
-    ? paidFromRecords
-    : reservation.paymentState === 'finalized' ? Number(reservation.depositAmount || 0) : 0
+  const split = reservation.paymentMode === 'split'
   const total = Number(reservation.totalAmount || 0)
+  const online = Number(reservation.depositAmount || 0)
+  // What's been paid online by everyone (a player only receives their own payment records; the
+  // booking keeps the team's running total).
+  const paid = Number.isFinite(Number(reservation.paymentSubmittedAmount)) && reservation.paymentSubmittedAmount != null
+    ? Math.max(Number(reservation.paymentSubmittedAmount), split ? 0 : paidFromRecords)
+    : payments.length ? paidFromRecords : reservation.paymentState === 'finalized' ? online : 0
+  const stillOnline = Math.max(0, Math.round((online - paid) * 100) / 100)
+  // Paid at the counter: the rest of a down payment booking, and teammates' shares the captain pays there.
+  const atCounter = Math.max(0, Math.round((total - online) * 100) / 100)
   // Paid in full online, or a down payment now and the rest on game day.
-  const fullOnline = Number(reservation.depositAmount || 0) >= total && total > 0
+  const fullOnline = online >= total && total > 0
 
   return (
     <>
@@ -192,10 +213,11 @@ export function ReservationChargesSections({ reservation, payments }: { reservat
         <div className="text-xs uppercase tracking-widest text-muted">Charges & payments</div>
         <div className="mt-1">
           {otherLines.map((line, index) => <Row key={`${line.label}-${index}`} label={String(line.label || '')}>{peso(line.amount)}</Row>)}
-          <Row label="Total">{peso(reservation.totalAmount)}</Row>
-          <Row label={fullOnline ? 'Online payment (full amount)' : 'Down payment (online)'}>{peso(reservation.depositAmount)}</Row>
-          <Row label="Paid so far">{peso(paid)}</Row>
-          <Row label="Balance due on game day">{peso(Math.max(0, total - Math.max(paid, 0)))}</Row>
+          <Row label="Booking total">{peso(reservation.totalAmount)}</Row>
+          <Row label={fullOnline ? 'Paid online (full amount)' : split ? 'Online amount (team shares)' : 'Down payment (online)'}>{peso(online)}</Row>
+          <Row label={split ? 'Paid online so far (whole team)' : 'Paid online so far'}>{peso(paid)}</Row>
+          {stillOnline > 0 ? <Row label={split ? 'Still to pay online (teammates)' : 'Still to pay online'}>{peso(stillOnline)}</Row> : null}
+          <Row label="Pay at the counter on game day">{atCounter > 0 ? peso(atCounter) : 'Nothing'}</Row>
           {/* The captain pays for everyone unless the team split it; "To be paid by" until it's in. */}
           {reservation.paymentMode === 'split' ? (
             <Row label="Paid by">Each player pays their share</Row>
@@ -204,7 +226,10 @@ export function ReservationChargesSections({ reservation, payments }: { reservat
           )}
         </div>
         {payments.length ? (
-          <ul className="mt-2 space-y-1 text-xs text-muted">
+          <div className="mt-3 text-xs uppercase tracking-widest text-muted">{split && ownPayments ? 'Your payments' : 'Payments'}</div>
+        ) : null}
+        {payments.length ? (
+          <ul className="mt-1 space-y-1 text-xs text-muted">
             {payments.map((payment, index) => (
               <li key={index}>
                 {payment.createdAtISO ? new Date(payment.createdAtISO).toLocaleDateString('en-PH', { dateStyle: 'medium' }) : ''} · {payment.paymentMethod || '—'} · {peso(payment.amount)} ·{' '}

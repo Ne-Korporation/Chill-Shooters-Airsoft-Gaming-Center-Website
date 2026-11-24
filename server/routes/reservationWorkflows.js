@@ -5,6 +5,7 @@ import { requireAuth, requireRole } from '../middleware/auth.js'
 import { updateReservationStatusAtomically } from '../utils/reservationStatus.js'
 import { ensureGameplayForReservation } from '../utils/reservationGameplay.js'
 import { emailReservationEvent } from '../services/notificationEmails.js'
+import { notifyBookingCancelled, notifyBookingConfirmed, notifyTeammatesSentBack } from '../utils/playerNotices.js'
 import { assertGuardianApprovalsComplete } from './guardianApprovals.js'
 import { notifyRegistrarsOfOnsiteBalance, notifyRole, notifyUser, syncReservationPaymentState } from '../utils/paymentProgress.js'
 import { buildPaymentStatusUpdate, getPaymentProgress, getSplitPayerIds } from '../utils/paymentRules.js'
@@ -132,6 +133,8 @@ async function updateReservationStatus(req, res) {
         message: `Reason: ${sendBackNote} Open My Reservations to choose a new date.`,
         linkedResourceId: reservationKey(updatedReservation),
       })
+      // Teammates hear the game is on hold until the captain picks a new date.
+      await notifyTeammatesSentBack(db, updatedReservation).catch(() => null)
     } else if (reservation.sentBack) {
       // Any other decision (or a fresh "needs review" without a note) closes the send-back.
       await db.collection('reservations').updateOne(reservationFilter, { $unset: { sentBack: '' } })
@@ -164,7 +167,7 @@ async function updateReservationStatus(req, res) {
       const by = actorLabel(req.user, await getActorName(db, req.user).catch(() => ''))
       const verb = { confirmed: 'approved', pending: 'marked pending', 'needs review': 'marked for review', cancelled: 'cancelled' }[nextStatus]
       const message = `${by} ${verb} reservation ${reservationKey(updatedReservation)} for ${updatedReservation.reservationDate} (${updatedReservation.reservationTime}).${sendBackNote ? ` Note: ${sendBackNote}` : ''}`
-      for (const role of ['admin', 'registrar']) {
+      { const role = 'registrar' // admins get a copy (notifyRole)
         await notifyRole(db, {
           role,
           type: 'reservation_status_update',
@@ -173,15 +176,12 @@ async function updateReservationStatus(req, res) {
           linkedResourceId: reservationKey(updatedReservation),
         })
       }
+      // Everyone on the booking is told it's confirmed, or that staff cancelled it.
       if (!sendBackNote && nextStatus === 'confirmed') {
-        await notifyUser(db, {
-          userId: updatedReservation.userId,
-          type: 'reservation_confirmed',
-          title: 'Reservation confirmed',
-          message: `Your reservation for ${updatedReservation.reservationDate} (${updatedReservation.reservationTime}) was approved by ${by}.`,
-          linkedResourceId: reservationKey(updatedReservation),
-        })
+        const balance = Math.max(0, Number(updatedReservation.totalAmount || 0) - Number(updatedReservation.depositAmount || 0))
+        await notifyBookingConfirmed(db, updatedReservation, { by, balance }).catch(() => null)
       }
+      if (nextStatus === 'cancelled') await notifyBookingCancelled(db, updatedReservation, { reason: 'staff' }).catch(() => null)
     }
 
     return res.json({
@@ -239,16 +239,8 @@ router.post('/reservations/:id/cancel', requireAuth, requireRole('user'), async 
     })
     await db.collection('reservations').updateOne({ _id: reservation._id }, { $set: { cancellationReason: 'cancelled_by_player_before_payment' } })
     void emailReservationEvent(db, cancelled, 'cancelled', 'player')
-    const label = `${reservation.reservationDate} (${reservation.reservationTime})`
-    for (const userId of getSplitPayerIds(reservation).filter((payerId) => payerId !== String(req.user.id))) {
-      await notifyUser(db, {
-        userId,
-        type: 'reservation_status_update',
-        title: 'Reservation cancelled',
-        message: `The team captain cancelled the reservation for ${label}. You don't need to pay your share.`,
-        linkedResourceId: reservation.id,
-      })
-    }
+    // Every teammate on the booking (not only those splitting the payment) is told.
+    await notifyBookingCancelled(db, reservation, { reason: 'captain', except: String(req.user.id) }).catch(() => null)
     return res.json({ ok: true, data: { id: String(reservation.id), reservationStatus: 'cancelled' } })
   } catch (err) {
     if (err?.statusCode) return res.status(err.statusCode).json({ ok: false, error: err.message })

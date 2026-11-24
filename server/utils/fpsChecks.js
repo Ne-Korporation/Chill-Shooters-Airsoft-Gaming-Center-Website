@@ -42,8 +42,33 @@ export async function gameGuns(db, reservation) {
       if (!brought || guns.has(id)) continue
       guns.set(id, { weaponId: id, name: w.name || 'Own gun', source: 'own', playerName: names.get(String(w.submittedBy)) || '' })
     }
+
+    // Players who said they bring their own gun (own gun, or own gun and gear). Nothing is
+    // registered, so each one gets a line of their own, keyed by booking and player, that the
+    // marshal fills in with today's reading. Players who rent a gun instead don't get one.
+    const declared = new Set([
+      ...(reservation.ownWeaponBringerIds || []).map(String),
+      ...(reservation.ownGearPlayerIds || []).map(String).filter((id) => !(reservation.playerGuns?.[id] || []).length),
+    ])
+    const captainName = String(reservation.bookerName || '')
+    for (const playerId of declared) {
+      if (own.some((w) => String(w.submittedBy) === playerId && guns.has(keyOf(w)))) continue
+      const weaponId = ownGunKey(reservationId, playerId)
+      guns.set(weaponId, {
+        weaponId,
+        name: 'Own gun',
+        source: 'own',
+        playerName: names.get(playerId) || (playerId === String(reservation.userId) ? captainName : '') || 'Player',
+      })
+    }
   }
   return [...guns.values()]
+}
+
+// The chronograph key for a gun a player brings from home (not in inventory).
+export const OWN_GUN_PREFIX = 'own:'
+export function ownGunKey(reservationId, playerId) {
+  return `${OWN_GUN_PREFIX}${reservationId}:${playerId}`
 }
 
 // Each gun with today's latest reading: 'pass', 'fail', or 'pending' (not tested yet today).
