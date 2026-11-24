@@ -22,3 +22,6 @@ server/.env.*
 npm-debug.log*
 yarn-debug.log*
 pnpm-debug.log*
+
+# Database backups made by the demo seed (may contain personal data)
+server/backups/
