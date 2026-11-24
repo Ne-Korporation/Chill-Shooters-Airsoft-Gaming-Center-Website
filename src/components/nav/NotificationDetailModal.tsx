@@ -54,6 +54,27 @@ export function NotificationDetailModal({
   const destination = resolveNotificationRoute(notification, role, userId)
   const linkedId = String(notification.linkedResourceId || '')
   const [reservation, setReservation] = useState<LinkedReservation | null>(null)
+  const [announcementImageUrl, setAnnouncementImageUrl] = useState('')
+
+  useEffect(() => {
+    if (notification.imageUrl) {
+      setAnnouncementImageUrl(notification.imageUrl)
+      return
+    }
+    if (!isAdminAnnouncement(notification) || !linkedId) {
+      setAnnouncementImageUrl('')
+      return
+    }
+    let alive = true
+    apiGet<{ ok: boolean; data: Array<{ id?: string; imageUrl?: string }> }>('/api/dashboard_posts?limit=50')
+      .then((res) => {
+        if (!alive) return
+        const post = (res?.data || []).find((item) => String(item.id || '') === linkedId)
+        setAnnouncementImageUrl(String(post?.imageUrl || '').trim())
+      })
+      .catch(() => { if (alive) setAnnouncementImageUrl('') })
+    return () => { alive = false }
+  }, [notification.imageUrl, notification.type, notification.fromAdmin, linkedId])
 
   // Bookings show their details; anything the viewer can't open just shows the message.
   useEffect(() => {
@@ -86,11 +107,12 @@ export function NotificationDetailModal({
       onClose={onClose}
       footer={
         <>
-          {onRemove ? <Button variant="danger-soft" onClick={onRemove} className="mr-auto"><FiTrash2 /> Remove</Button> : null}
-          <Button variant="ghost" onClick={onClose}>Close</Button>
+          {onRemove ? <Button variant="danger-soft" onClick={onRemove} className="w-full sm:mr-auto sm:w-auto"><FiTrash2 /> Remove</Button> : null}
+          <Button variant="ghost" onClick={onClose} className="flex-1 sm:flex-none">Close</Button>
           {destination ? (
             <Button
               variant="primary"
+              className="flex-1 sm:flex-none"
               onClick={() => {
                 onClose()
                 navigate(destination)
@@ -104,24 +126,38 @@ export function NotificationDetailModal({
     >
       <div className="space-y-4">
         {isAdminAnnouncement(notification) ? (
-          <div className="flex items-center gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm">
+          <div className="flex items-center gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs sm:text-sm">
             <FiShield className="h-4 w-4 shrink-0 text-amber-500" />
             <span><span className="font-semibold text-amber-600 dark:text-amber-400">Sent by Admin</span><span className="text-muted"> · Chill Shooters management</span></span>
           </div>
         ) : null}
-        <div className="flex items-start gap-3">
-          <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-accent/15 text-accent">
+        <div className="flex items-start gap-2 sm:gap-3">
+          <span className="hidden h-10 w-10 shrink-0 place-items-center rounded-xl bg-accent/15 text-accent sm:grid">
             <Icon className="h-5 w-5" />
           </span>
-          <p className="min-w-0 flex-1 whitespace-pre-wrap break-words pt-2 text-sm text-text">{notification.message}</p>
+          <p className="min-w-0 flex-1 whitespace-pre-wrap break-words text-sm leading-5 text-text sm:pt-2">{notification.message}</p>
         </div>
+        {announcementImageUrl ? (
+          <button
+            type="button"
+            className="block w-full cursor-zoom-in overflow-hidden rounded-2xl border border-white/10 bg-black/20"
+            onClick={() => window.open(announcementImageUrl, '_blank', 'noopener,noreferrer')}
+            aria-label="Open announcement picture"
+          >
+            <img
+              src={announcementImageUrl}
+              alt="Announcement attachment"
+              className="block max-h-[45dvh] w-full object-contain sm:max-h-[520px]"
+            />
+          </button>
+        ) : null}
 
         {rows.length ? (
           <dl className="divide-y divide-white/5 rounded-xl border border-white/10 bg-white/5 text-sm">
             {rows.map(([label, value]) => (
-              <div key={label} className="flex items-baseline justify-between gap-4 px-3 py-2">
-                <dt className="text-xs text-muted">{label}</dt>
-                <dd className="text-right font-medium">{value}</dd>
+              <div key={label} className="flex items-baseline justify-between gap-3 px-3 py-2.5">
+                <dt className="shrink-0 text-xs text-muted">{label}</dt>
+                <dd className="max-w-[68%] break-words text-right text-sm font-medium leading-5">{value}</dd>
               </div>
             ))}
           </dl>

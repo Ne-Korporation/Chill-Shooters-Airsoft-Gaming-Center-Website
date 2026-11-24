@@ -49,6 +49,7 @@ export type NotificationItem = {
   type: NotificationType
   title: string
   message: string
+  imageUrl?: string
   linkedResourceId?: string
   read: boolean
   createdAtISO: string

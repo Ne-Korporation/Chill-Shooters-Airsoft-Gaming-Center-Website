@@ -2545,7 +2545,10 @@ router.post('/:collection', requireAuth, async (req, res) => {
         title: firstLine && firstLine.length <= 80 && rest.length ? firstLine : 'New announcement',
         message: String(doc.message).trim().slice(0, 1000),
         linkedResourceId: doc.id,
-        fields: { fromAdmin: true },
+        fields: {
+          fromAdmin: true,
+          ...(doc.imageUrl ? { imageUrl: String(doc.imageUrl).trim() } : {}),
+        },
       })
     }
     if (collection === 'waivers' && doc.isMinor && doc.guardianEmail && !doc.forChild) void emailGuardianWaiverSubmitted(db, doc)
