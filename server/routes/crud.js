@@ -2011,6 +2011,11 @@ router.post('/:collection', requireAuth, async (req, res) => {
       delete payload.targetRole
     }
   }
+  // Only the server says an announcement came from an admin (shown pinned and labelled "From Admin").
+  if (collection === 'notifications') {
+    if (req.user.role === 'admin' && String(payload.type || '') === 'announcement') payload.fromAdmin = true
+    else delete payload.fromAdmin
+  }
 
   try {
     const db = await getDb()

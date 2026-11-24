@@ -1,12 +1,13 @@
 import type { IconType } from 'react-icons'
 import { FiBell, FiCalendar, FiCloudRain, FiCreditCard, FiFlag, FiInbox, FiShield, FiTarget, FiUsers, FiVolume2 } from 'react-icons/fi'
-import type { NotificationItem } from '../context/NotificationContext'
+import { isAdminAnnouncement, type NotificationItem } from '../context/NotificationContext'
 
 // Shared by the notification bell and the notifications page so both read the same way.
 
 // What a notification is about, from its type: an icon and a short label.
 export function kindOf(item: NotificationItem): { icon: IconType; label: string } {
   const type = String(item.type || '').toLowerCase()
+  if (isAdminAnnouncement(item)) return { icon: FiVolume2, label: 'Announcement from Admin' }
   // The server only ever broadcasts announcements to players / everyone (older ones were saved with
   // another type). Broadcasts to staff roles are system notices, labelled by their type below.
   if (type === 'announcement' || (item.userId === 'broadcast' && ['user', 'all'].includes(String(item.targetRole || 'all')))) {

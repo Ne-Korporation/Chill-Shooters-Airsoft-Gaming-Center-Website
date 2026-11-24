@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { useLiveRefresh } from '../../utils/liveUpdates'
-import { FiCalendar, FiCheck, FiClock, FiCreditCard, FiShield, FiTool } from 'react-icons/fi'
+import { FiCalendar, FiCheck, FiCreditCard, FiShield, FiTool } from 'react-icons/fi'
 import { Link } from 'react-router-dom'
 import { CapacityCalendar } from '../../components/booking/CapacityCalendar'
 import { useAuth } from '../../context/AuthContext'
@@ -23,7 +23,6 @@ type DashboardState = {
   reservations: number
   players: number
   payments: number
-  pendingApprovals: number
   equipmentAlerts: number
   reviewQueue: number
   waiversToReview: number
@@ -34,7 +33,6 @@ const defaultState: DashboardState = {
   reservations: 0,
   players: 0,
   payments: 0,
-  pendingApprovals: 0,
   equipmentAlerts: 0,
   reviewQueue: 0,
   waiversToReview: 0,
@@ -93,11 +91,6 @@ export function AdminDashboardPage() {
         const users = Array.isArray(usersRes?.data) ? usersRes.data : []
         const equipment = Array.isArray(equipmentRes?.data) ? equipmentRes.data : []
 
-        const pendingApprovals = reservations.filter((reservation) => {
-          const status = String(reservation?.reservationStatus || '').trim().toLowerCase()
-          return status === 'pending' || status === 'needs review' || status === 'needs_review' || status === 'review'
-        }).length
-
         const equipmentAlertCount = equipmentAlerts(equipment).count
 
         const reviewQueue = payments.filter((payment) => {
@@ -140,7 +133,6 @@ export function AdminDashboardPage() {
           reservations: reservations.length,
           players: users.filter((user) => String(user?.role || '').trim().toLowerCase() === 'user').length || users.length,
           payments: payments.length,
-          pendingApprovals,
           equipmentAlerts: equipmentAlertCount,
           reviewQueue,
           waiversToReview,
@@ -170,7 +162,9 @@ export function AdminDashboardPage() {
 
   const { user } = useAuth()
   const firstName = String(user?.name || 'there').trim().split(/\s+/)[0]
-  const attentionCount = dashboard.pendingApprovals + dashboard.reviewQueue + dashboard.waiversToReview + dashboard.equipmentAlerts
+  // Bookings confirm themselves once paid (server/utils/paymentProgress.js), so pending ones wait on
+  // players, not staff, and are not counted here.
+  const attentionCount = dashboard.reviewQueue + dashboard.waiversToReview + dashboard.equipmentAlerts
 
   return (
     <div className="space-y-6">
@@ -219,15 +213,6 @@ export function AdminDashboardPage() {
               <div className="flex items-center gap-2 py-1 text-sm text-success"><FiCheck /> Nothing needs your attention.</div>
             ) : (
             <div className="space-y-0.5">
-              {dashboard.pendingApprovals > 0 ? (
-              <ActionRow
-                to="/app/admin/reservations"
-                icon={FiClock}
-                title="Reservations to approve"
-                description={dashboard.pendingApprovals > 0 ? 'Pending or flagged for review' : 'Nothing pending'}
-                badge={dashboard.pendingApprovals}
-              />
-              ) : null}
               {dashboard.reviewQueue > 0 ? (
               <ActionRow
                 to="/app/admin/payments"

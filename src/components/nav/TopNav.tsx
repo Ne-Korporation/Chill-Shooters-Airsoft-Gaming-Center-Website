@@ -5,7 +5,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { ThemeToggle } from './ThemeToggle'
 import { useTheme } from '../../context/ThemeContext'
 import { useAuth } from '../../context/AuthContext'
-import { useNotifications, type NotificationItem } from '../../context/NotificationContext'
+import { isAdminAnnouncement, useNotifications, type NotificationItem } from '../../context/NotificationContext'
 import { NotificationDetailModal } from './NotificationDetailModal'
 import { resolveNotificationRoute } from '../../utils/notificationRoutes'
 import { kindOf, timeLabel } from '../../utils/notificationDisplay'
@@ -92,6 +92,9 @@ function NotificationBell({ userId, role }: { userId: string; role?: string }) {
               <div className="-mx-1 min-h-0 flex-1 space-y-0.5 overflow-y-auto overscroll-contain px-1 sm:max-h-[min(420px,60vh)]">
                 {userNotifications.map((n) => {
                   const Icon = kindOf(n).icon
+                  // Unread admin announcements are pinned on top (see sortNotifications) and stand out.
+                  const fromAdmin = isAdminAnnouncement(n)
+                  const highlight = fromAdmin && !n.read
                   return (
                     <button
                       key={n.id}
@@ -101,12 +104,15 @@ function NotificationBell({ userId, role }: { userId: string; role?: string }) {
                         setDetail(n)
                         setOpen(false)
                       }}
-                      className={`hover-row flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2.5 text-left ${!n.read ? 'bg-accent/10' : ''}`}
+                      className={`hover-row flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2.5 text-left ${highlight ? 'border border-amber-500/40 bg-amber-500/10' : !n.read ? 'bg-accent/10' : ''}`}
                     >
-                      <span className={`mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg ${n.read ? 'bg-[rgba(var(--text),0.06)] text-muted' : 'bg-accent/15 text-accent'}`}>
+                      <span className={`mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg ${highlight ? 'bg-amber-500/20 text-amber-500' : n.read ? 'bg-[rgba(var(--text),0.06)] text-muted' : 'bg-accent/15 text-accent'}`}>
                         <Icon className="h-4 w-4" />
                       </span>
                       <span className="min-w-0 flex-1">
+                        {fromAdmin ? (
+                          <span className="mb-0.5 block text-[10px] font-bold uppercase tracking-wider text-amber-600 dark:text-amber-400">From Admin</span>
+                        ) : null}
                         <span className="flex items-baseline gap-2">
                           <span className={`min-w-0 flex-1 truncate text-[13px] text-text ${n.read ? 'font-medium' : 'font-semibold'}`}>{n.title}</span>
                           <span className="shrink-0 text-[10px] text-muted">{timeLabel(n.createdAtISO, now)}</span>

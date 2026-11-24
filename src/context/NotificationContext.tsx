@@ -54,7 +54,13 @@ export type NotificationItem = {
   createdAtISO: string
   // Set when an admin archives it: off the admin's lists, still on record (and still with the recipients).
   archivedAtISO?: string
+  // Set by the server on announcements an admin sent: pinned on top until read, labelled "From Admin".
+  fromAdmin?: boolean
 }
+
+// An announcement the server marked as sent by an admin.
+export const isAdminAnnouncement = (item: Pick<NotificationItem, 'type' | 'fromAdmin'>) =>
+  item.type === 'announcement' && item.fromAdmin === true
 
 export const STAFF_NOTIFICATION_ROLES: NotificationTargetRole[] = ['admin', 'registrar', 'marshal']
 
@@ -111,8 +117,11 @@ type NotificationContextValue = {
 const LEGACY_STORAGE_KEY = 'chillshooters_notifications'
 const NOTIFICATIONS_ENDPOINT = '/api/notifications?limit=500'
 
+// Unread admin announcements come first (pinned until read); everything else is newest first.
+const pinned = (item: NotificationItem) => isAdminAnnouncement(item) && !item.read
 function sortNotifications(items: NotificationItem[]) {
-  return [...items].sort((a, b) => new Date(b.createdAtISO).getTime() - new Date(a.createdAtISO).getTime())
+  return [...items].sort((a, b) => Number(pinned(b)) - Number(pinned(a))
+    || new Date(b.createdAtISO).getTime() - new Date(a.createdAtISO).getTime())
 }
 
 let notificationCounter = 0

@@ -325,6 +325,15 @@ export async function calculateBookingPrice({ db, payload, players, findDocument
   }
 
   const extraAmmoReloads = normalizeExtraAmmoReloads(payload.extraAmmoReloads)
+  // Extra reloads are bought per player. Without per-player prices (custom picks, a group-priced
+  // package) everyone gets the same even part of the rest, so a split still bills each player's
+  // reloads to them alone.
+  const ammoByPlayer = payload.extraAmmoByPlayer
+  const ammoIsPerPlayer = ammoByPlayer && typeof ammoByPlayer === 'object' && !Array.isArray(ammoByPlayer) && Object.keys(ammoByPlayer).length > 0
+  if (!loadoutUnitCosts && extraAmmoReloads > 0 && ammoIsPerPlayer && players > 0) {
+    const even = subtotal / players
+    loadoutUnitCosts = { package: even, own_gun: even, own_gear: even }
+  }
   if (extraAmmoReloads > 0) {
     const ammoTotal = Math.round(getAmmoReloadPrice() * extraAmmoReloads)
     subtotal += ammoTotal

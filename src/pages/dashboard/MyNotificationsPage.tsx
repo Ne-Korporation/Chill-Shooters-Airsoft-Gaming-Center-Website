@@ -6,7 +6,7 @@ import { useNavigate } from 'react-router-dom'
 import { Button } from '../../components/ui/Button'
 import { FilterTabs } from '../../components/ui/FilterTabs'
 import { useAuth } from '../../context/AuthContext'
-import { useNotifications, type NotificationItem } from '../../context/NotificationContext'
+import { isAdminAnnouncement, useNotifications, type NotificationItem } from '../../context/NotificationContext'
 import { NotificationDetailModal } from '../../components/nav/NotificationDetailModal'
 import { resolveNotificationRoute } from '../../utils/notificationRoutes'
 import { groupOf, kindOf, timeLabel } from '../../utils/notificationDisplay'
@@ -34,7 +34,8 @@ export function MyNotificationsPage() {
 
   const groups: Array<{ label: string; items: NotificationItem[] }> = []
   for (const item of visible) {
-    const label = groupOf(item.createdAtISO, now)
+    // Unread admin announcements are sorted first; they get their own group on top.
+    const label = isAdminAnnouncement(item) && !item.read ? 'From Admin' : groupOf(item.createdAtISO, now)
     const last = groups[groups.length - 1]
     if (last?.label === label) last.items.push(item)
     else groups.push({ label, items: [item] })
@@ -138,9 +139,10 @@ export function MyNotificationsPage() {
                   {group.items.map((item) => {
                     const kind = kindOf(item)
                     const Icon = kind.icon
+                    const highlight = isAdminAnnouncement(item) && !item.read
                     // One row: [unread dot] [icon] [title + message] [time, swapped for the actions on hover].
                     return (
-                      <li key={item.id} className={`group hover-row flex items-center gap-2 rounded-lg pl-1.5 pr-2 ${item.read ? '' : 'bg-accent/5'}`}>
+                      <li key={item.id} className={`group hover-row flex items-center gap-2 rounded-lg pl-1.5 pr-2 ${highlight ? 'border border-amber-500/40 bg-amber-500/10' : item.read ? '' : 'bg-accent/5'}`}>
                         <span className="flex w-2 shrink-0 justify-center" aria-hidden={item.read}>
                           {!item.read ? <span className="h-2 w-2 rounded-full bg-accent" aria-label="Unread" /> : null}
                         </span>
@@ -154,6 +156,9 @@ export function MyNotificationsPage() {
                             <Icon className="h-4 w-4" />
                           </span>
                           <span className="min-w-0 flex-1">
+                            {isAdminAnnouncement(item) ? (
+                              <span className="block text-[10px] font-bold uppercase tracking-wider text-amber-600 dark:text-amber-400">From Admin</span>
+                            ) : null}
                             <span className={`block truncate text-sm ${item.read ? 'font-medium text-muted' : 'font-semibold text-text'}`}>{item.title}</span>
                             <span className="mt-0.5 block truncate text-xs text-muted">{item.message}</span>
                           </span>
