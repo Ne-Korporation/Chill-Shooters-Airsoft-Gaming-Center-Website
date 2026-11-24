@@ -125,11 +125,31 @@ export function InvitationsSection() {
     }
   }
 
-  const accept = (invite: Invite) => act(
-    `accept:${invite.reservation.id}`,
-    () => apiPost(`/api/reservations/${encodeURIComponent(invite.reservation.id)}/accept`, {}),
-    invite.split ? 'Invite accepted. Pay your share below to keep your spot.' : `You're in! ${invite.captainName} has been told.`,
-  )
+  // Accepting a split invite goes straight to paying the player's share (the spot is only kept
+  // once it's paid). If the payment page can't open, the share stays payable on the booking below.
+  const accept = async (invite: Invite) => {
+    if (!invite.split || !(invite.myShare > 0)) {
+      await act(`accept:${invite.reservation.id}`, () => apiPost(`/api/reservations/${encodeURIComponent(invite.reservation.id)}/accept`, {}), `You're in! ${invite.captainName} has been told.`)
+      return
+    }
+    setBusy(`accept:${invite.reservation.id}`)
+    try {
+      await apiPost(`/api/reservations/${encodeURIComponent(invite.reservation.id)}/accept`, {})
+    } catch (e: any) {
+      toast.error(e?.message || 'Something went wrong. Please try again.')
+      setBusy(null)
+      return
+    }
+    changed()
+    try {
+      toast.success('Invite accepted. Opening payment for your share…')
+      await startXenditCheckout(invite.reservation.id)
+    } catch (e: any) {
+      toast.error(e?.message ? `${e.message} Pay your share below to keep your spot.` : 'Could not open the payment page. Pay your share below to keep your spot.')
+      setBusy(null)
+      void load()
+    }
+  }
 
   const decline = async (invite: Invite) => {
     const ok = await confirmDialog({

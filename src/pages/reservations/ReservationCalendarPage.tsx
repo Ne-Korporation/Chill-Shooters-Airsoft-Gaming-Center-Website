@@ -690,8 +690,32 @@ export function ReservationCalendarPage() {
   // Obstacles placed in the field mock (see FieldLayoutDesigner); saved as the blueprint image.
   const [fieldLayoutItems, setFieldLayoutItems] = useState<LayoutItem[]>(() => (Array.isArray(draftState.fieldLayoutItems) ? draftState.fieldLayoutItems : []))
   const [layoutDesignerOpen, setLayoutDesignerOpen] = useState(false)
-  // Extra BB reloads bought with the booking, on top of what the package gives.
-  const [extraAmmoReloads, setExtraAmmoReloads] = useState<number>(() => Number(draftState.extraAmmoReloads) || 0)
+  // Extra BB reloads each player buys for themselves, on top of what the package gives. In a split
+  // payment each player's reloads go on their own share (server/utils/splitShares.js).
+  const [extraAmmoByPlayer, setExtraAmmoByPlayer] = useState<Record<string, number>>(() => {
+    const saved = draftState.extraAmmoByPlayer
+    return saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {}
+  })
+  // Only players still on the booking count (a removed teammate's reloads drop off).
+  const validExtraAmmo = useMemo(() => {
+    const onTeam = new Set([String(user?.id || ''), ...selectedTeammates.map((member) => member.id)])
+    const result: Record<string, number> = {}
+    for (const [id, value] of Object.entries(extraAmmoByPlayer)) {
+      const count = Math.max(0, Math.round(Number(value) || 0))
+      if (count && onTeam.has(id)) result[id] = count
+    }
+    return result
+  }, [extraAmmoByPlayer, user?.id, selectedTeammates])
+  const extraAmmoReloads = Object.values(validExtraAmmo).reduce((sum, n) => sum + n, 0)
+  const changeExtraAmmo = (id: string, delta: number) => setExtraAmmoByPlayer((current) => {
+    const mine = Math.max(0, Math.round(Number(current[id]) || 0))
+    const othersTotal = extraAmmoReloads - (validExtraAmmo[id] || 0)
+    const nextCount = Math.max(0, Math.min(mine + delta, MAX_EXTRA_AMMO_RELOADS - othersTotal))
+    const next = { ...current }
+    if (nextCount) next[id] = nextCount
+    else delete next[id]
+    return next
+  })
   const [ammoReloadPrice, setAmmoReloadPrice] = useState(DEFAULT_AMMO_RELOAD_PRICE)
   // Inline error labels, one per area of the page.
   const [slotError, setSlotError] = useState<string | null>(null)
@@ -1732,16 +1756,26 @@ export function ReservationCalendarPage() {
     ].filter((row) => row.id)
     const notTaking = (id: string) => validOwnGearIds.includes(id)
     // What a player gets, for one slot. Without per-player prices (custom picks, a group price) everyone counts the same.
+    // Each player's own extra reloads go on their part. Without per-player prices, the rest is
+    // shared evenly (as the server does).
+    const ammoOf = (id: string) => (validExtraAmmo[id] || 0) * ammoReloadPrice
+    const anyAmmo = extraAmmoReloads > 0
     const costOf = (id: string) => {
-      if (selectionMode !== 'package' || packageOnePlayerPrice === null) return 1
-      return notTaking(id) ? ENTRANCE_FEE_PER_PLAYER + singlesCostOf(id) + gunsCostOf(id) : packageOnePlayerPrice + gunsCostOf(id)
+      if (selectionMode !== 'package' || packageOnePlayerPrice === null) {
+        return anyAmmo ? basePricing.total / Math.max(1, players) + ammoOf(id) : 1
+      }
+      return (notTaking(id) ? ENTRANCE_FEE_PER_PLAYER + singlesCostOf(id) + gunsCostOf(id) : packageOnePlayerPrice + gunsCostOf(id)) + ammoOf(id)
     }
-    const getsOf = (id: string) => {
+    const baseGetsOf = (id: string) => {
       if (selectionMode !== 'package') return rentMode === 'own_all' ? 'Brings everything' : 'Picked items'
       const guns = (validPlayerGuns[id] || []).map(gunModel)
       if (!notTaking(id)) return guns.length ? `Package + ${guns.join(', ')}` : 'Package'
       const pieces = [...guns, ...(validOwnGearRentals[id] || []).map((piece) => RENT_PIECE_LABEL[piece].toLowerCase())]
       return pieces.length ? `Rents only: ${pieces.join(', ')}` : 'Brings everything'
+    }
+    const getsOf = (id: string) => {
+      const reloads = validExtraAmmo[id] || 0
+      return reloads ? `${baseGetsOf(id)} + ${reloads} extra reload${reloads === 1 ? '' : 's'}` : baseGetsOf(id)
     }
     const payerIds = new Set(roster.filter((row) => !row.isMinor).map((row) => row.id))
     const weight = new Map(roster.filter((row) => !row.isMinor).map((row) => [row.id, costOf(row.id)]))
@@ -1768,7 +1802,7 @@ export function ReservationCalendarPage() {
     }))
     // gunModel / singlesCostOf / gunsCostOf follow the state listed here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.id, user?.name, selectedTeammates, validOwnGearIds, validOwnGearRentals, validPlayerGuns, selectionMode, packageOnePlayerPrice, bookingTotal, rentMode, weapons, packageSingleItems])
+  }, [user?.id, user?.name, selectedTeammates, validOwnGearIds, validOwnGearRentals, validPlayerGuns, selectionMode, packageOnePlayerPrice, bookingTotal, rentMode, weapons, packageSingleItems, validExtraAmmo, extraAmmoReloads, ammoReloadPrice, basePricing.total, players])
 
   const reservationSummary = useMemo(() => {
     const selectedFields = availableFields.filter((f) => selectedFieldIds.includes(f.id))
@@ -2011,14 +2045,14 @@ export function ReservationCalendarPage() {
         step, selectedLocation, selectedFieldIds, dateISO, slot, selectedSlots, pickedSlots, players, notes, teamName, gameModePreference,
         layoutRequest, layoutBlueprintUrl, selectedPackageId, selectionMode, customWeaponIds, customEquipmentIds,
         ownWeapons, ownEquipment, captainOwnGun, ownWeaponTarget, teammateOwnWeaponIds,
-        ownGearIds, ownGearRentals, playerGuns, rentMode, selectedTeammates, paymentMode, paymentPlan, extraAmmoReloads, fieldLayoutItems, budgetInput,
+        ownGearIds, ownGearRentals, playerGuns, rentMode, selectedTeammates, paymentMode, paymentPlan, extraAmmoByPlayer, fieldLayoutItems, budgetInput,
       },
     })
   }, [
     user?.id, step, draftLabel, selectedLocation, selectedFieldIds, dateISO, slot, selectedSlots, pickedSlots, players, notes, teamName,
     gameModePreference, layoutRequest, layoutBlueprintUrl, selectedPackageId, selectionMode, customWeaponIds,
     customEquipmentIds, ownWeapons, ownEquipment, captainOwnGun, ownWeaponTarget,
-    teammateOwnWeaponIds, ownGearIds, ownGearRentals, playerGuns, rentMode, selectedTeammates, paymentMode, paymentPlan, extraAmmoReloads, fieldLayoutItems, budgetInput,
+    teammateOwnWeaponIds, ownGearIds, ownGearRentals, playerGuns, rentMode, selectedTeammates, paymentMode, paymentPlan, extraAmmoByPlayer, fieldLayoutItems, budgetInput,
   ])
 
   // Coming back to a draft: hold the slot again (it may have been taken in the meantime).
@@ -2156,7 +2190,7 @@ export function ReservationCalendarPage() {
         ...(layoutBlueprintUrl && !publicGame ? { layoutBlueprintUrl } : {}),
         // The pieces placed in the designer: the server checks them against the field and prices the layout.
         ...(layoutBlueprintUrl && !publicGame && fieldLayoutItems.length ? { fieldLayoutItems } : {}),
-        ...(extraAmmoReloads > 0 ? { extraAmmoReloads } : {}),
+        ...(extraAmmoReloads > 0 ? { extraAmmoReloads, extraAmmoByPlayer: validExtraAmmo } : {}),
         reservationStatus: 'pending',
         packageName: pkgName,
         selectionMode,
@@ -3699,28 +3733,47 @@ export function ReservationCalendarPage() {
               </>
             )}
 
-            {/* Extra ammo: reloads bought with the booking, on top of what the package gives */}
+            {/* Extra ammo: each player buys their own reloads, on top of what the package gives.
+                In a split payment a player's reloads go on their share only. */}
             <Card className="p-4 md:p-6">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <div className="flex items-center gap-2 text-sm font-bold">
-                    <FiPlus /> <span>Additional Ammo</span>
-                  </div>
-                  <p className="mt-1 text-xs text-muted">
-                    {selectionMode === 'package'
-                      ? `${INCLUDED_RELOADS_PER_PLAYER} reloads per player are free with your package (${INCLUDED_RELOADS_PER_PLAYER * players} for the group). Need more? `
-                      : 'Add BB reloads for the group. '}
-                    ₱{ammoReloadPrice.toLocaleString()} per extra reload.
-                  </p>
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  <Button variant="ghost" size="sm" onClick={() => setExtraAmmoReloads((n) => Math.max(0, n - 1))} disabled={extraAmmoReloads === 0} aria-label="Fewer ammo reloads"><FiMinus /></Button>
-                  <span className="w-8 text-center text-lg font-bold" aria-live="polite">{extraAmmoReloads}</span>
-                  <Button variant="ghost" size="sm" onClick={() => setExtraAmmoReloads((n) => Math.min(MAX_EXTRA_AMMO_RELOADS, n + 1))} disabled={extraAmmoReloads >= MAX_EXTRA_AMMO_RELOADS} aria-label="More ammo reloads"><FiPlus /></Button>
-                </div>
+              <div className="flex items-center gap-2 text-sm font-bold">
+                <FiPlus /> <span>Additional Ammo</span>
+              </div>
+              <p className="mt-1 text-xs text-muted">
+                {selectionMode === 'package'
+                  ? `${INCLUDED_RELOADS_PER_PLAYER} reloads per player are free with your package. Need more? `
+                  : 'Add BB reloads. '}
+                ₱{ammoReloadPrice.toLocaleString()} per extra reload
+                {selectedTeammates.length > 0 ? ", charged to the player who buys it." : '.'}
+              </p>
+              <div className="mt-3 divide-y divide-white/5 rounded-xl border border-white/10">
+                {[
+                  { id: String(user?.id || ''), name: user?.name || 'You', isMe: true, isMinor: false },
+                  ...selectedTeammates.map((member) => ({ id: member.id, name: member.name, isMe: false, isMinor: Boolean(member.isMinor) })),
+                ].filter((row) => row.id).map((row) => {
+                  const count = validExtraAmmo[row.id] || 0
+                  return (
+                    <div key={row.id} className="flex items-center justify-between gap-3 px-3 py-2">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-semibold">
+                          {row.name}{row.isMe ? <span className="ml-1.5 text-xs font-normal text-muted">(you)</span> : null}
+                        </div>
+                        <div className="text-[11px] text-muted">
+                          {count > 0 ? `+ ${formatCurrency(count * ammoReloadPrice)}` : 'No extra reloads'}
+                          {row.isMinor ? ' · paid by their guardian' : ''}
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <Button variant="ghost" size="sm" onClick={() => changeExtraAmmo(row.id, -1)} disabled={count === 0} aria-label={`Fewer ammo reloads for ${row.name}`}><FiMinus /></Button>
+                        <span className="w-8 text-center text-lg font-bold" aria-live="polite">{count}</span>
+                        <Button variant="ghost" size="sm" onClick={() => changeExtraAmmo(row.id, 1)} disabled={extraAmmoReloads >= MAX_EXTRA_AMMO_RELOADS} aria-label={`More ammo reloads for ${row.name}`}><FiPlus /></Button>
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
               {extraAmmoReloads > 0 ? (
-                <div className="mt-3 text-xs font-semibold text-accent">+ {formatCurrency(extraAmmoTotal)} for {extraAmmoReloads} extra reload{extraAmmoReloads === 1 ? '' : 's'}</div>
+                <div className="mt-3 text-xs font-semibold text-accent">+ {formatCurrency(extraAmmoTotal)} for {extraAmmoReloads} extra reload{extraAmmoReloads === 1 ? '' : 's'} in all</div>
               ) : null}
             </Card>
 

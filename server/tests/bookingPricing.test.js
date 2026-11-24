@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { calculateBookingPrice } from '../utils/bookingPricing.js'
+import { computeSplitShares } from '../utils/splitShares.js'
 
 const records = {
   packages: [
@@ -251,6 +252,22 @@ test('extra ammo reloads are added at the reload price and capped', async () => 
   const huge = await calculateBookingPrice({ db: {}, payload: { ...base, extraAmmoReloads: 9999 }, players: 1, findDocumentById, userId: 'player' })
   assert.equal(huge.totalAmount, without.totalAmount + 50 * 50)
   assert.ok(without.pricingBreakdown.some((line) => line.label === 'BB reloads included (2) — free' && line.amount === 0))
+})
+
+test('extra ammo bought per player is billed to that player even without per-player prices', async () => {
+  // Everyone brings their own (custom, nothing picked): 2 x 150 entrance, P1 buys 4 reloads.
+  const payload = { selectionMode: 'custom', sessionType: 'public', extraAmmoReloads: 4, extraAmmoByPlayer: { P1: 4 } }
+  const result = await calculateBookingPrice({ db: {}, payload, players: 2, findDocumentById, userId: 'player' })
+  assert.equal(result.totalAmount, 300 + 200)
+  const shares = computeSplitShares({
+    userId: 'P1', paymentMode: 'split', splitPayerIds: ['P2'], depositAmount: result.totalAmount,
+    loadoutUnitCosts: result.loadoutUnitCosts, extraAmmoByPlayer: { P1: 4 },
+  })
+  assert.deepEqual(shares, { P1: 350, P2: 150 })
+
+  // Without anyone's reloads named, a custom booking still splits evenly.
+  const plain = await calculateBookingPrice({ db: {}, payload: { ...payload, extraAmmoByPlayer: undefined }, players: 2, findDocumentById, userId: 'player' })
+  assert.equal(plain.loadoutUnitCosts, null)
 })
 
 test('an all-weapons package charges every listed weapon per player; own guns replace the main one', async () => {

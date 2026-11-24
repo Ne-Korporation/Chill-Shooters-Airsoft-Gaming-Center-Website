@@ -2,8 +2,8 @@ import React, { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Modal } from '../ui/Modal'
 import { Button } from '../ui/Button'
-import { FiTrash2 } from 'react-icons/fi'
-import type { NotificationItem } from '../../context/NotificationContext'
+import { FiShield, FiTrash2 } from 'react-icons/fi'
+import { isAdminAnnouncement, type NotificationItem } from '../../context/NotificationContext'
 import { apiGet } from '../../utils/apiClient'
 import { kindOf } from '../../utils/notificationDisplay'
 import { resolveNotificationRoute } from '../../utils/notificationRoutes'
@@ -103,6 +103,12 @@ export function NotificationDetailModal({
       }
     >
       <div className="space-y-4">
+        {isAdminAnnouncement(notification) ? (
+          <div className="flex items-center gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm">
+            <FiShield className="h-4 w-4 shrink-0 text-amber-500" />
+            <span><span className="font-semibold text-amber-600 dark:text-amber-400">Sent by Admin</span><span className="text-muted"> · Chill Shooters management</span></span>
+          </div>
+        ) : null}
         <div className="flex items-start gap-3">
           <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-accent/15 text-accent">
             <Icon className="h-5 w-5" />
