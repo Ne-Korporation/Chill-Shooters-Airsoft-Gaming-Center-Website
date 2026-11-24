@@ -10,7 +10,12 @@
   "build": "vite build",
   "dev:all": "concurrently \"npm run server\" \"npm run dev\"",
   "preview": "vite preview",
-  "lint": "echo \"(no lint configured)\""
+  "lint": "echo \"(no lint configured)\"",
+  "demo:plan": "node server/seed/demo/index.js --plan",
+  "demo:seed": "node server/seed/demo/index.js --confirm chillshooters_demo",
+  "demo:seed:deployed": "node server/seed/demo/index.js --confirm chillshooters_demo --files-base https://chill-shooters-api.onrender.com",
+  "demo:validate": "node server/seed/demo/index.js --validate-only --target chillshooters_demo",
+  "demo:server": "node server/seed/demo/serve.js"
 },
   "dependencies": {
     "@fontsource/inter": "^5.3.0",
