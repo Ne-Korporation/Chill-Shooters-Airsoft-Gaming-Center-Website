@@ -6,7 +6,7 @@ test('private-game minimum depends on how many fields are booked', () => {
   assert.equal(fieldCountMinimum(0), 0)
   assert.equal(fieldCountMinimum(1), 10)
   assert.equal(fieldCountMinimum(2), 20)
-  assert.equal(fieldCountMinimum(3), 50)
+  assert.equal(fieldCountMinimum(3), 30)
 })
 
 test('every private booking starts with Upper Ground', async () => {

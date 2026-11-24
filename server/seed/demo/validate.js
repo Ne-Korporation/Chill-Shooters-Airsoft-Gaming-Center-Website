@@ -2,6 +2,7 @@
 
 import { getPaymentProgress } from '../../utils/paymentRules.js'
 import { manilaDay } from './lib.js'
+import { emptySpots, fieldCountForPlayers } from '../../utils/privateGames.js'
 
 const PAID = ['paid', 'confirmed', 'verified', 'approved', 'succeeded']
 const ACTIVE = (p) => !['failed', 'rejected', 'cancelled'].includes(String(p.paymentStatus || p.status || '').toLowerCase())
@@ -101,6 +102,19 @@ export async function validateDemo(db, { now, todayISO, slotHours }) {
       for (const [payerId, share] of Object.entries(r.splitShares)) {
         const theirs = mine.filter((p) => ACTIVE(p) && String(p.userId) === payerId && p.kind !== 'onsite').reduce((s, p) => s + p.amount, 0)
         if (Math.abs(theirs - share) > 0.01) err(`Reservation ${r.id}: ${payerId} paid ₱${theirs} online, share is ₱${share}`)
+      }
+    }
+    // Private games: billed for at least 10 players (the captain pays the empty spots) and the
+    // fields follow the headcount.
+    if (r.sessionType === 'private') {
+      const spots = emptySpots('private', r.numberOfPlayers)
+      if (Number(r.privateEmptySpots || 0) !== spots) err(`Reservation ${r.id}: ${r.numberOfPlayers} players should bill ${spots} empty spots, not ${r.privateEmptySpots || 0}`)
+      if (spots > 0 && !(r.pricingBreakdown || []).some((l) => /Private game minimum/.test(l.label) && l.amount > 0)) err(`Reservation ${r.id}: empty spots missing from the bill`)
+      const fields = (r.fieldIds || []).length
+      if (fields !== fieldCountForPlayers(r.numberOfPlayers)) err(`Reservation ${r.id}: ${r.numberOfPlayers} players on ${fields} field(s), expected ${fieldCountForPlayers(r.numberOfPlayers)}`)
+      if (spots > 0 && r.paymentMode === 'split' && r.splitShares) {
+        const captainShare = Number(r.splitShares[r.userId] || 0)
+        if (!Object.entries(r.splitShares).every(([id, share]) => id === String(r.userId) || share < captainShare)) err(`Reservation ${r.id}: the captain's share doesn't include the empty spots`)
       }
     }
     const captain = accountById.get(String(r.userId))

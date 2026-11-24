@@ -203,8 +203,12 @@ export function buildComms({ now, todayISO, staff, files, people, reservations, 
 
   const notify = (n) => notifications.push({ id: nextN(), read: false, ...n, ...DEMO_FLAG })
   const ago = (h) => new Date(now - h * HOUR).toISOString()
-  // From the admin, to every player and to the marshals.
-  notify({ userId: 'broadcast', targetRole: 'user', type: 'announcement', fromAdmin: true, title: 'Holiday schedule', message: 'We are closed on Dec 24, Dec 25 and Jan 1. Weekend public games continue all December.', createdAtISO: ago(70) })
+  // Every announcement posted on the dashboards also went to everyone's notifications (as the
+  // server does when an admin posts one; see routes/crud.js).
+  for (const post of posts) {
+    notify({ userId: 'broadcast', targetRole: 'all', type: 'announcement', fromAdmin: true, title: 'New announcement', message: post.message, linkedResourceId: post.id, read: Date.parse(post.postedAtISO) < now - 10 * DAY, createdAtISO: post.postedAtISO })
+  }
+  // An admin notice just for the marshals.
   notify({ userId: 'broadcast', targetRole: 'marshal', type: 'announcement', fromAdmin: true, title: 'Chronograph every gun, every game', message: 'Reminder: every rental and player-owned gun must pass the FPS check before the game starts. Log each reading on the Safety page.', createdAtISO: ago(30) })
 
   const upcoming = reservations.filter((r) => !r.walkIn && r.reservationDate >= todayISO).sort((a, b) => a.reservationDate.localeCompare(b.reservationDate))

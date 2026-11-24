@@ -154,6 +154,17 @@ async function main() {
   }
 
   const started = Date.now()
+  // Kept across re-seeds: what people made in the demo themselves (announcements they posted,
+  // accounts they signed up), with the files those use. Everything else is rebuilt.
+  const carried = {
+    posts: await target.collection('dashboard_posts').find({ demoSeed: { $ne: true } }).toArray(),
+    accounts: await target.collection('user_accounts').find({ demoSeed: { $ne: true }, role: 'user' }).toArray(),
+  }
+  const carriedFileIds = [...new Set([...JSON.stringify(carried).matchAll(/\/api\/files\/([0-9a-f-]{36})/gi)].map((m) => m[1]))]
+  carried.files = carriedFileIds.length ? await target.collection('uploaded_files').find({ _id: { $in: carriedFileIds } }).toArray() : []
+  if (carried.posts.length || carried.accounts.length) {
+    console.log(`Keeping what was made in the demo: ${carried.posts.length} announcement(s), ${carried.accounts.length} account(s).`)
+  }
   await target.dropDatabase()
   console.log(`Cleared ${TARGET}.`)
 
@@ -265,6 +276,30 @@ async function main() {
   await insert('weather_advisories', comms.advisories)
   await insert('audit_logs', [...cal.auditLogs, ...b.auditLogs, ...extras.staffAuditLogs({ people, staff, now })])
   await insert('uploaded_files', files.files)
+
+  // Put back what people made in the demo (skipping anything whose id the seed now uses).
+  const taken = async (name, field, values) => new Set((await target.collection(name).find({ [field]: { $in: values } }, { projection: { [field]: 1 } }).toArray()).map((d) => String(d[field])))
+  const usedAccountIds = await taken('user_accounts', 'id', carried.accounts.map((a) => a.id))
+  const usedEmails = await taken('user_accounts', 'emailCanonical', carried.accounts.map((a) => a.emailCanonical).filter(Boolean))
+  const keepAccounts = carried.accounts.filter((a) => !usedAccountIds.has(String(a.id)) && !usedEmails.has(String(a.emailCanonical)))
+  const usedPostIds = await taken('dashboard_posts', 'id', carried.posts.map((p) => p.id))
+  const keepPosts = carried.posts.filter((p) => !usedPostIds.has(String(p.id)))
+  await insert('user_accounts', keepAccounts)
+  await insert('dashboard_posts', keepPosts)
+  const freshFiles = carried.files.filter((f) => !files.files.some((x) => x._id === f._id))
+  await insert('uploaded_files', freshFiles)
+  // A kept announcement reaches everyone's notifications, like one posted in the app.
+  const { nextShortId } = await import('../../utils/shortIds.js')
+  for (const post of keepPosts) {
+    const [first, ...rest] = String(post.message || '').split('\n').map((line) => line.trim()).filter(Boolean)
+    await target.collection('notifications').insertOne({
+      id: await nextShortId(target, 'notifications', 'N'), userId: 'broadcast', targetRole: 'all', type: 'announcement', fromAdmin: true,
+      title: first && first.length <= 80 && rest.length ? first : 'New announcement', message: String(post.message || '').trim().slice(0, 1000),
+      linkedResourceId: post.id, read: false, createdAtISO: post.postedAtISO || post.createdAtISO || new Date(now).toISOString(),
+    })
+  }
+  const skipped = carried.accounts.length - keepAccounts.length + carried.posts.length - keepPosts.length
+  if (keepAccounts.length || keepPosts.length) console.log(`Kept ${keepPosts.length} announcement(s) and ${keepAccounts.length} account(s) made in the demo.${skipped ? ` ${skipped} skipped: their id is now used by demo data.` : ''}`)
 
   // ----- validate and report ------------------------------------------------------------------------------
   const report = await validateDemo(target, { now, todayISO, slotHours })

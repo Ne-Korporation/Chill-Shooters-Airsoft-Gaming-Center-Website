@@ -62,12 +62,12 @@ const bookingLocations: { id: LocationOption; name: string; detail: string; maxP
 ]
 
 // Fields are assigned from the group size, same as the booking page: 10-19 players get Upper Ground,
-// 20-49 get Upper + Lower Ground, 50+ get all three. Weekday private games start at 10 players;
-// weekends are public games with no minimum.
+// 20-29 get Upper + Lower Ground, 30+ get all three. Weekday private games are billed for at least
+// 10 players (a smaller group pays for the empty spots); weekends are public games with no minimum.
 const PRIVATE_MIN_PLAYERS = 10
 
 function fieldAreaForPlayers(players: number): FieldArea {
-  if (players >= 50) return 'All 3 fields'
+  if (players >= 30) return 'All 3 fields'
   if (players >= 20) return 'Upper + Lower Ground'
   return 'Upper Ground'
 }
@@ -83,7 +83,8 @@ function isWeekendISO(dateISO: string) {
 function playerLimits(booking: { location: LocationOption; dateISO: string }) {
   const max = bookingLocations.find((l) => l.id === booking.location)?.maxPlayers ?? 400
   const weekend = isWeekendISO(booking.dateISO)
-  return { min: weekend ? MIN_BOOKING_PLAYERS : PRIVATE_MIN_PLAYERS, max, weekend }
+  // Any group can book a private game; under 10 it is billed as 10 (see the note under the picker).
+  return { min: MIN_BOOKING_PLAYERS, max, weekend }
 }
 
 const bookingSlots: { id: TimeSlot; label: string }[] = [
@@ -1057,7 +1058,7 @@ export function LandingPage() {
                   <p className="mt-3 text-xs leading-relaxed text-[#6a6a6a]">
                     {limits.weekend
                       ? `Weekends are public games on all 3 fields (Upper Ground, Lower Ground and Forest): join with any group size. Up to ${limits.max} players per slot.`
-                      : `Weekday private game: at least ${limits.min} players, up to ${limits.max}. Your fields: ${booking.fieldArea} (20+ players get Lower Ground too, 50+ get all 3 fields).`}
+                      : `Weekday private game for up to ${limits.max} players, billed for at least ${PRIVATE_MIN_PLAYERS} (a smaller group pays for the empty spots). Your fields: ${booking.fieldArea} (20+ players get Lower Ground too, 30+ get all 3 fields).`}
                   </p>
                   <button
                     type="button"

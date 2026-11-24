@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { promptDialog } from '../../components/ui/ConfirmDialog'
 import { useLiveRefresh } from '../../utils/liveUpdates'
-import { FiCheck, FiCornerUpLeft, FiFileText, FiFlag } from 'react-icons/fi'
+import { FiCheck, FiCornerUpLeft, FiDollarSign, FiFileText, FiFlag } from 'react-icons/fi'
+import { useNavigate } from 'react-router-dom'
 import { ActionGroup, Button } from '../../components/ui/Button'
 import { FilterTabs, titleCaseLabel } from '../../components/ui/FilterTabs'
 import { Card } from '../../components/ui/Card'
@@ -38,6 +39,43 @@ type PaymentItem = {
 }
 
 const KNOWN_STATUSES: PaymentStatus[] = ['paid', 'pending', 'failed', 'review', 'confirmed', 'cancelled']
+const VERIFIED: PaymentStatus[] = ['paid', 'confirmed']
+
+// Tabs: every payment, bookings with money still to collect, then the payment statuses that need
+// (or needed) a person. "Needs review" holds what the gateway flagged and older proof uploads.
+type Tab = 'all' | 'balance' | 'review' | 'failed' | 'cancelled'
+
+// A booking that isn't fully paid yet: the 50% downpayment with the rest due at the field, or a
+// team still paying its shares online.
+type BalanceRow = {
+  reservationId: string
+  booker: string
+  dateISO: string
+  slot: string
+  location: string
+  players: number
+  total: number
+  paid: number
+  due: number
+  stage: string
+  split: boolean
+  overdue: boolean
+}
+
+const peso = (value: number) => `₱${Number(value || 0).toLocaleString('en-PH', { maximumFractionDigits: 2 })}`
+
+function formatWhen(iso: string) {
+  const time = Date.parse(iso)
+  if (!Number.isFinite(time)) return iso || '—'
+  return new Date(time).toLocaleString('en-PH', { timeZone: 'Asia/Manila', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })
+}
+
+function formatGameDate(dateISO: string) {
+  const time = Date.parse(`${dateISO}T12:00:00+08:00`)
+  return Number.isFinite(time) ? new Date(time).toLocaleDateString('en-PH', { weekday: 'short', month: 'short', day: 'numeric' }) : dateISO
+}
+
+const manilaToday = () => new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10)
 
 function normalizePaymentStatus(value: unknown): PaymentStatus {
   const lower = String(value || 'pending').toLowerCase()
@@ -66,15 +104,18 @@ const statusBadge = (status: PaymentStatus) => {
 const StatusPill = ({ status }: { status: PaymentStatus }) => {
   return (
     <span className={`inline-flex items-center rounded-full border px-3 py-1 text-[11px] font-semibold ${statusBadge(status)}`}>
-      {status.toUpperCase()}
+      {status === 'failed' ? 'Sent back' : titleCaseLabel(status)}
     </span>
   )
 }
 
 export function AdminPaymentsPage() {
   const { user } = useAuth()
-  const [active, setActive] = React.useState<PaymentStatus | 'all'>('all')
+  const navigate = useNavigate()
+  const [active, setActive] = React.useState<Tab>('all')
   const [payments, setPayments] = React.useState<PaymentItem[]>([])
+  const [reservations, setReservations] = useState<any[]>([])
+  const [nameOf, setNameOf] = useState<Map<string, string>>(new Map())
   const [loading, setLoading] = useState(true)
   const { addNotification } = useNotifications()
   // Reservations by id (and Mongo _id), for each payment's receipt.
@@ -106,7 +147,9 @@ export function AdminPaymentsPage() {
         .filter((r: any) => String(r.reservationStatus || '').toLowerCase() === 'cancelled')
         .flatMap((r: any) => [r.id, r._id].filter(Boolean).map(String)))
       setReservationById(new Map(reservations.flatMap((r: any) => [r.id, r._id].filter(Boolean).map((key: any) => [String(key), r] as [string, ReceiptReservation]))))
-      const nameById = new Map(accounts.map((a: any) => [String(a.id || a._id || ''), String(a.name || a.email || '')]))
+      setReservations(reservations)
+      const nameById = new Map<string, string>(accounts.map((a: any) => [String(a.id || a._id || ''), String(a.name || a.email || '')]))
+      setNameOf(nameById)
       setPayments(
         docs.map((d: any) => {
           const status = normalizePaymentStatus(d.paymentStatus ?? d.status)
@@ -148,18 +191,63 @@ export function AdminPaymentsPage() {
   // New payments and bookings show up without reloading the page.
   useAutoRefresh(() => load(true))
 
+  const needsReview = (payment: PaymentItem) => payment.status === 'pending' || payment.status === 'review'
   const filtered = useMemo(
-    () => payments.filter((payment) => (active === 'all' ? true : payment.status === active)),
+    () => payments.filter((payment) => (
+      active === 'all' ? true
+        : active === 'review' ? needsReview(payment)
+          : payment.status === active
+    )),
     [payments, active],
   )
   const { page, setPage, pageCount, pageItems, total } = usePagination(filtered, undefined, active)
-  const reviewCount = payments.filter((payment) => payment.status === 'review').length
-  const pendingValue = payments.filter((payment) => payment.status === 'pending').reduce((sum, p) => sum + p.amount, 0)
-  const todayLabel = new Date().toDateString()
-  const completedToday = payments.filter((payment) => {
-    const time = Date.parse(payment.date)
-    return (payment.status === 'paid' || payment.status === 'confirmed') && Number.isFinite(time) && new Date(time).toDateString() === todayLabel
-  }).length
+  const reviewCount = payments.filter(needsReview).length
+  const todayISO = manilaToday()
+  const paidToday = payments.filter((payment) => VERIFIED.includes(payment.status) && new Date(Date.parse(payment.date) + 8 * 3600_000).toISOString().slice(0, 10) === todayISO)
+  const collectedToday = paidToday.reduce((sum, p) => sum + p.amount, 0)
+
+  // Bookings with money still to collect: everything active that isn't paid in full (the 50%
+  // downpayment plan pays the rest at the field; a team may still be paying its shares online).
+  const balances = useMemo<BalanceRow[]>(() => {
+    const paidFor = new Map<string, number>()
+    for (const payment of payments) {
+      if (!VERIFIED.includes(payment.status)) continue
+      paidFor.set(payment.reservationId, (paidFor.get(payment.reservationId) || 0) + payment.amount)
+    }
+    return reservations
+      .filter((r) => !r.walkIn && ['confirmed', 'pending', 'needs review'].includes(String(r.reservationStatus || '').toLowerCase()))
+      .map((r) => {
+        const ids = [r.id, r._id].filter(Boolean).map(String)
+        const paid = Math.round(ids.reduce((sum, id) => sum + (paidFor.get(id) || 0), 0) * 100) / 100
+        const totalAmount = Number(r.totalAmount || 0)
+        const deposit = Number(r.depositAmount || 0)
+        const split = String(r.paymentMode || 'self').toLowerCase() === 'split'
+        const payerCount = 1 + (Array.isArray(r.splitPayerIds) ? r.splitPayerIds.length : 0)
+        const paidPayers = new Set(payments.filter((p) => ids.includes(p.reservationId) && VERIFIED.includes(p.status)).map((p) => String(p.raw?.userId || '')))
+        const stage = paid + 0.01 < deposit
+          ? (split ? `Waiting for online shares (${paidPayers.size} of ${payerCount} paid)` : 'Waiting for the online payment')
+          : r.paymentPlan === 'full' ? 'Additional charges to collect' : '50% downpayment paid · rest at the field'
+        const dateISO = String(r.reservationDate || '')
+        return {
+          reservationId: String(r.id || r._id),
+          booker: r.bookerName || nameOf.get(String(r.userId)) || String(r.userId || '—'),
+          dateISO,
+          slot: String(r.reservationTime || ''),
+          location: String(r.locationName || r.locationId || ''),
+          players: Number(r.numberOfPlayers || 0),
+          total: totalAmount,
+          paid,
+          due: Math.round(Math.max(0, totalAmount - paid) * 100) / 100,
+          stage,
+          split,
+          overdue: dateISO < todayISO,
+        }
+      })
+      .filter((row) => row.due > 0.01)
+      .sort((a, b) => a.dateISO.localeCompare(b.dateISO) || a.slot.localeCompare(b.slot))
+  }, [payments, reservations, nameOf, todayISO])
+  const balanceTotal = balances.reduce((sum, row) => sum + row.due, 0)
+  const balancePages = usePagination(balances, undefined, `balance-${active}`)
 
   const [updatingId, setUpdatingId] = useState('')
 
@@ -200,49 +288,101 @@ export function AdminPaymentsPage() {
   }
 
 
+  const sentBackCount = payments.filter((p) => p.status === 'failed').length
+  const cancelledCount = payments.filter((p) => p.status === 'cancelled').length
+  const tabs: Array<{ value: Tab; label: string; count: number }> = [
+    { value: 'all', label: 'All payments', count: payments.length },
+    { value: 'balance', label: 'Pending balance', count: balances.length },
+    { value: 'review', label: 'Needs review', count: reviewCount },
+    ...(sentBackCount ? [{ value: 'failed' as const, label: 'Sent back', count: sentBackCount }] : []),
+    ...(cancelledCount ? [{ value: 'cancelled' as const, label: 'Cancelled', count: cancelledCount }] : []),
+  ]
+
   return (
     <div className="space-y-4">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="text-3xl font-bold">Payments</h1>
-          <p className="mt-1 text-sm text-muted">Payments made through Xendit are checked automatically and their bookings confirmed. Use this page for anything Xendit flagged, older proof uploads, and receipts.</p>
-        </div>
+      <div>
+        <h1 className="text-3xl font-bold">Payments</h1>
+        <p className="mt-1 max-w-3xl text-sm text-muted">
+          Online payments go through the payment gateway and confirm bookings automatically. Here you track the balances still to
+          collect at the field, check anything the gateway flagged, and print receipts.
+        </p>
       </div>
 
-      <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
-        <Card className="rounded-xl px-3 py-2 md:px-3 md:py-2">
-          <div className="truncate text-[10px] uppercase tracking-wider text-muted">Needs review</div>
-          <div className="mt-0.5 text-base font-bold text-accent">{reviewCount}</div>
+      <div className="grid gap-2 sm:grid-cols-3">
+        <Card className="rounded-xl px-4 py-3">
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-muted">Collected today</div>
+          <div className="mt-1 text-xl font-bold text-success">{peso(collectedToday)}</div>
+          <div className="text-xs text-muted">{paidToday.length} payment{paidToday.length === 1 ? '' : 's'}</div>
         </Card>
-        <Card className="rounded-xl px-3 py-2 md:px-3 md:py-2">
-          <div className="truncate text-[10px] uppercase tracking-wider text-muted">Pending amount</div>
-          <div className="mt-0.5 text-base font-bold text-danger">₱{pendingValue}</div>
-        </Card>
-        <Card className="rounded-xl px-3 py-2 md:px-3 md:py-2">
-          <div className="truncate text-[10px] uppercase tracking-wider text-muted">Completed today</div>
-          <div className="mt-0.5 text-base font-bold text-success">{completedToday}</div>
-        </Card>
+        <button type="button" onClick={() => setActive('balance')} className="text-left">
+          <Card className="h-full rounded-xl px-4 py-3 transition hover:border-accent/40">
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-muted">Balance to collect</div>
+            <div className="mt-1 text-xl font-bold text-warning">{peso(balanceTotal)}</div>
+            <div className="text-xs text-muted">{balances.length} booking{balances.length === 1 ? '' : 's'} not fully paid</div>
+          </Card>
+        </button>
+        <button type="button" onClick={() => setActive('review')} className="text-left">
+          <Card className="h-full rounded-xl px-4 py-3 transition hover:border-accent/40">
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-muted">Needs review</div>
+            <div className={`mt-1 text-xl font-bold ${reviewCount ? 'text-danger' : 'text-text'}`}>{reviewCount}</div>
+            <div className="text-xs text-muted">{reviewCount ? 'Flagged by the gateway or a proof upload' : 'Nothing to check'}</div>
+          </Card>
+        </button>
       </div>
 
       <Card className="p-4">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-          <div>
-            <div className="text-xs uppercase tracking-widest text-muted">Verification & receipts</div>
-            <div className="mt-2 text-sm text-muted">Approve payments, request corrections, or flag suspicious transactions.</div>
-          </div>
-          <FilterTabs
-            ariaLabel="Filter payments by status"
-            value={active}
-            onChange={setActive}
-            options={(['all', 'pending', 'review', 'paid', 'confirmed', 'failed', 'cancelled'] as const).map((status) => ({
-              value: status,
-              label: status === 'all' ? 'All' : status === 'failed' ? 'Sent back' : titleCaseLabel(status),
-              count: status === 'all' ? payments.length : payments.filter((p) => p.status === status).length,
-            }))}
-          />
-        </div>
+        <FilterTabs ariaLabel="Filter payments" value={active} onChange={setActive} options={tabs} />
 
-        <div className="mt-4 overflow-x-auto rounded-2xl border border-white/5">
+        {active === 'balance' ? (
+          <>
+            <p className="mt-3 text-sm text-muted">
+              Bookings not paid in full yet, by game date. Most chose the 50% downpayment: the rest is paid at the counter on game day.
+            </p>
+            <div className="mt-3 overflow-x-auto rounded-2xl border border-white/5">
+              <div className="hidden bg-white/5 px-3 py-2 text-xs uppercase tracking-widest text-muted lg:grid lg:grid-cols-12">
+                <div className="col-span-3">Booking</div>
+                <div className="col-span-3">Game</div>
+                <div className="col-span-1 text-right">Total</div>
+                <div className="col-span-1 text-right">Paid</div>
+                <div className="col-span-2 text-right">Balance due</div>
+                <div className="col-span-2 text-right" />
+              </div>
+              <div className="divide-y divide-white/5">
+                {balances.length === 0 ? (
+                  <div className="p-6 text-sm text-muted">Every active booking is paid in full.</div>
+                ) : balancePages.pageItems.map((row) => (
+                  <div key={row.reservationId} className="flex flex-col gap-2 px-3 py-3 lg:grid lg:grid-cols-12 lg:items-center">
+                    <div className="min-w-0 lg:col-span-3">
+                      <div className="truncate text-sm font-semibold">{row.booker}</div>
+                      <ReservationIdTag id={row.reservationId} className="mt-0.5 text-[11px] text-muted" />
+                    </div>
+                    <div className="min-w-0 lg:col-span-3">
+                      <div className={`text-sm font-semibold ${row.dateISO === todayISO ? 'text-accent' : row.overdue ? 'text-danger' : ''}`}>
+                        {row.dateISO === todayISO ? 'Today' : formatGameDate(row.dateISO)} · {titleCaseLabel(row.slot)}{row.overdue ? ' (past)' : ''}
+                      </div>
+                      <div className="truncate text-xs text-muted">{row.location} · {row.players} player{row.players === 1 ? '' : 's'}</div>
+                      <div className="mt-0.5 text-xs text-warning">{row.stage}</div>
+                    </div>
+                    <div className="text-sm lg:col-span-1 lg:text-right"><span className="text-xs text-muted lg:hidden">Total </span>{peso(row.total)}</div>
+                    <div className="text-sm text-success lg:col-span-1 lg:text-right"><span className="text-xs text-muted lg:hidden">Paid </span>{peso(row.paid)}</div>
+                    <div className="text-base font-bold text-warning lg:col-span-2 lg:text-right"><span className="text-xs font-normal text-muted lg:hidden">Due </span>{peso(row.due)}</div>
+                    <div className="lg:col-span-2 lg:text-right">
+                      <Button size="xs" variant="accent-soft" onClick={() => navigate(`/app/counter?reservation=${encodeURIComponent(row.reservationId)}`)}>
+                        <FiDollarSign /> Collect at counter
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <Pagination page={balancePages.page} pageCount={balancePages.pageCount} total={balancePages.total} onPageChange={balancePages.setPage} />
+          </>
+        ) : (
+        <>
+        {active === 'review' ? (
+          <p className="mt-3 text-sm text-muted">Payments the gateway held for a person (e.g. paid after the booking was cancelled), and older proof uploads.</p>
+        ) : null}
+        <div className="mt-3 overflow-x-auto rounded-2xl border border-white/5">
           <div className="hidden lg:grid lg:grid-cols-12 bg-white/5 px-3 py-2 text-xs uppercase tracking-widest text-muted">
             <div className="col-span-3">Payment ID</div>
             <div className="col-span-2">Player</div>
@@ -257,9 +397,9 @@ export function AdminPaymentsPage() {
             ) : (
               pageItems.map((payment) => (
                 <div key={payment.id} className="flex flex-col gap-3 px-3 py-3 lg:grid lg:grid-cols-12 lg:items-center">
-                  <div className="lg:col-span-3">
-                    <div className="text-sm font-semibold">{payment.id}</div>
-                    <div className="mt-1 text-xs text-muted">{payment.date}</div>
+                  <div className="min-w-0 lg:col-span-3">
+                    <div className="truncate text-sm font-semibold" title={payment.id}>{payment.id}</div>
+                    <div className="mt-1 text-xs text-muted">{formatWhen(payment.date)}</div>
                     {payment.reservationId ? <ReservationIdTag id={payment.reservationId} className="mt-1 text-[11px] text-muted" /> : null}
                   </div>
                   <div className="min-w-0 lg:col-span-2">
@@ -267,7 +407,7 @@ export function AdminPaymentsPage() {
                     <div className="mt-1 truncate text-xs text-muted">{payment.note}</div>
                     {payment.reviewReason ? <div className="mt-1 text-xs text-warning">{payment.reviewReason}</div> : null}
                   </div>
-                  <div className="text-sm font-semibold lg:col-span-1 lg:text-right">₱{payment.amount}</div>
+                  <div className="text-sm font-semibold lg:col-span-1 lg:text-right">{peso(payment.amount)}</div>
                   <div className="lg:col-span-2 lg:text-right">
                     <StatusPill status={payment.status} />
                     <div className="mt-1 text-xs text-muted">{payment.method}</div>
@@ -310,6 +450,8 @@ export function AdminPaymentsPage() {
           </div>
         </div>
         <Pagination page={page} pageCount={pageCount} total={total} onPageChange={setPage} />
+        </>
+        )}
       </Card>
 
       {receipt ? (
