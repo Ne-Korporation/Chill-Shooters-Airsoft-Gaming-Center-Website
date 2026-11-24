@@ -78,7 +78,7 @@ export function Modal({
         >
           <div className="min-w-0">
             {eyebrow ? <div className="text-xs uppercase tracking-widest text-muted">{eyebrow}</div> : null}
-            <h2 id={titleId} className="mt-1 break-words text-xl font-bold sm:text-2xl">{title}</h2>
+            <h2 id={titleId} className="mt-1 break-words text-lg font-bold leading-tight sm:text-2xl">{title}</h2>
           </div>
           <Button size="sm" variant="ghost" onClick={requestClose} aria-label="Close" className="w-10 shrink-0 px-0"><FiX /></Button>
         </div>

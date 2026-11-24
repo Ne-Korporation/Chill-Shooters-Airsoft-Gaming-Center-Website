@@ -398,17 +398,17 @@ useEffect(() => {
             </>
           ) : undefined}
         >
+          <div className="whitespace-pre-wrap text-sm leading-6 text-text">{viewing.message || 'No text'}</div>
           {viewing.imageUrl ? (
             <button
               type="button"
               onClick={() => setLightboxUrl(viewing.imageUrl || null)}
               aria-label="View image full size"
-              className="block w-full cursor-zoom-in overflow-hidden rounded-xl bg-[rgba(var(--text),0.04)]"
+              className="mt-4 block w-full cursor-zoom-in overflow-hidden rounded-xl bg-[rgba(var(--text),0.04)]"
             >
               <img src={viewing.imageUrl} alt="Announcement attachment" className="block max-h-[420px] w-full object-contain" />
             </button>
           ) : null}
-          <div className={`${viewing.imageUrl ? 'mt-4 ' : ''}whitespace-pre-wrap text-sm leading-6 text-text`}>{viewing.message || 'No text'}</div>
         </Modal>
       ) : null}
 

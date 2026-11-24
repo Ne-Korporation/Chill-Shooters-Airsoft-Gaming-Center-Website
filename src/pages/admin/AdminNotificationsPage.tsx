@@ -11,7 +11,7 @@ import { resolveNotificationRoute } from '../../utils/notificationRoutes'
 import { kindOf, timeLabel } from '../../utils/notificationDisplay'
 import toast from 'react-hot-toast'
 import { Paged } from '../../components/ui/Pagination'
-import { apiGet, apiGetAll } from '../../utils/apiClient'
+import { apiBase, apiGet, apiGetAll, getApiAuthHeaders } from '../../utils/apiClient'
 import { useLiveRefresh } from '../../utils/liveUpdates'
 
 type Role = 'user' | 'registrar' | 'marshal' | 'admin'
@@ -57,6 +57,8 @@ export function AdminNotificationsPage() {
   const [targetUserId, setTargetUserId] = useState('')
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
+  const [imageUrl, setImageUrl] = useState('')
+  const [uploadingImage, setUploadingImage] = useState(false)
   const [feedFilter, setFeedFilter] = useState<FeedFilter>('all')
   // Notifications are archived, never cleared: the Archived view lists them and can restore them.
   const [showArchived, setShowArchived] = useState(false)
@@ -129,6 +131,27 @@ export function AdminNotificationsPage() {
       .slice(0, 8)
   }, [accounts, personQuery])
 
+  const handleUploadImage = async (file: File) => {
+    setUploadingImage(true)
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      const response = await fetch(`${apiBase}/api/uploads/upload-image`, {
+        method: 'POST',
+        headers: getApiAuthHeaders(),
+        body: formData,
+      })
+      const json = await response.json().catch(() => null)
+      if (!response.ok) throw new Error(json?.error || 'Unable to upload image')
+      setImageUrl(String(json?.url || '').trim())
+      toast.success('Picture attached.')
+    } catch (error: any) {
+      toast.error(error?.message || 'Unable to upload image')
+    } finally {
+      setUploadingImage(false)
+    }
+  }
+
   const toggleRole = (role: Role) =>
     setRoles((current) => (current.includes(role) ? current.filter((item) => item !== role) : [...current, role]))
 
@@ -138,7 +161,7 @@ export function AdminNotificationsPage() {
 
   const handleSend = () => {
     if (!canSend) return
-    const base = { type: 'announcement' as const, title: title.trim(), message: body.trim(), linkedResourceId: undefined }
+    const base = { type: 'announcement' as const, title: title.trim(), message: body.trim(), imageUrl: imageUrl.trim() || undefined, linkedResourceId: undefined }
     if (sendTo === 'person') {
       addNotification({ ...base, userId: targetUserId.trim() })
       toast.success('Notification sent.')
@@ -149,6 +172,7 @@ export function AdminNotificationsPage() {
     }
     setTitle('')
     setBody('')
+    setImageUrl('')
     setTargetUserId('')
   }
 
@@ -324,6 +348,34 @@ export function AdminNotificationsPage() {
                 placeholder="e.g. Please confirm the gear checklist for the Saturday booking before 5:00 PM."
               />
             </label>
+
+            <div>
+              <div className="mb-2 text-sm font-semibold">Picture <span className="font-normal text-muted">(optional)</span></div>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  type="file"
+                  accept="image/*"
+                  disabled={uploadingImage}
+                  className="block min-w-0 flex-1 text-xs text-muted file:mr-3 file:rounded-lg file:border-0 file:bg-accent/15 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-accent"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0]
+                    event.target.value = ''
+                    if (file) void handleUploadImage(file)
+                  }}
+                />
+                {imageUrl ? (
+                  <Button type="button" size="sm" variant="ghost" onClick={() => setImageUrl('')}>
+                    <FiX /> Remove
+                  </Button>
+                ) : null}
+              </div>
+              {uploadingImage ? <p className="mt-2 text-xs text-muted">Uploading picture…</p> : null}
+              {imageUrl ? (
+                <div className="mt-3 overflow-hidden rounded-xl border border-white/10 bg-black/20">
+                  <img src={imageUrl} alt="Announcement picture preview" className="block max-h-64 w-full object-contain" />
+                </div>
+              ) : null}
+            </div>
 
             <Button onClick={handleSend} disabled={!canSend} className="w-full">
               <FiSend /> Send notification
