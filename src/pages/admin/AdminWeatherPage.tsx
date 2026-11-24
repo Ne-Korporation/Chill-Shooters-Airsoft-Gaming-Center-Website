@@ -8,6 +8,7 @@ import { Modal } from '../../components/ui/Modal'
 import { apiGet, apiPost } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
 import { formatSlotRange, useSlotHours } from '../../utils/slotHours'
+import { formatDateTime } from '../../utils/dates'
 
 type SlotForecast = {
   slot: string
@@ -221,7 +222,7 @@ export function WeatherPanel() {
                 <tr><td colSpan={5} className="py-3 text-muted">No advisories yet. They're sent automatically when bad weather is forecast for a booked game.</td></tr>
               ) : advisories.map((a) => (
                 <tr key={a.id}>
-                  <td className="py-2 pr-4 text-xs text-muted">{new Date(a.createdAtISO).toLocaleString()}</td>
+                  <td className="py-2 pr-4 text-xs text-muted">{formatDateTime(a.createdAtISO)}</td>
                   <td className="py-2 pr-4 text-xs">{a.date} · {a.slot || 'all slots'} · {LOCATIONS.find((l) => l.id === a.locationId)?.name || a.locationId}</td>
                   <td className="py-2 pr-4 text-xs">{a.source === 'auto' ? 'System (automatic)' : a.createdBy?.actorEmail || 'Staff'}</td>
                   <td className="py-2 pr-4 text-xs text-muted">{a.message}</td>

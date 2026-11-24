@@ -206,7 +206,7 @@ export function ResetPasswordPage() {
                 ))}
               </div>
               <Button type="submit" disabled={busy} className="w-full">
-                {busy ? 'Saving...' : token ? 'Set password' : 'Update Password'}
+                {busy ? 'Saving…' : token ? 'Set password' : 'Update password'}
               </Button>
 
               <div className="pt-2 text-xs">

@@ -124,7 +124,8 @@ export function ReachNetRevenuePanel({ onAllocated }: { onAllocated: () => void 
     ? [
         [`Collected payments (${data.paymentCount})`, data.collected],
         ['Less damage / loss penalties', -data.penalties, 'Reimburse repairs, not revenue'],
-        ['Less partner gear share', -data.partnerShare, 'Owed to gear partners'],
+        // Partner-owned gear is no longer tracked, so this line only shows for older months that had some.
+        ...(Number(data.partnerShare) ? [['Less partner gear share', -data.partnerShare, 'Owed to gear partners'] as [string, number, string]] : []),
         ['Less operating expenses', -data.expenses],
       ]
     : []

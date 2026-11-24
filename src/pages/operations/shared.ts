@@ -1,4 +1,5 @@
 import { modelOf } from '../../utils/inventoryModels'
+import { formatDateTime as formatAppDateTime } from '../../utils/dates'
 
 export const LOCATIONS = [
   { id: 'salawag', name: 'Chill Shooters (Salawag)' },
@@ -21,10 +22,9 @@ export function formatPHP(value: number) {
   return amount < 0 ? `−${text}` : text
 }
 
+// Manila time, one format everywhere (see utils/dates).
 export function formatDateTime(iso?: string) {
-  if (!iso) return '-'
-  const date = new Date(iso)
-  return Number.isNaN(date.getTime()) ? iso : date.toLocaleString()
+  return formatAppDateTime(iso, '-')
 }
 
 export type InventoryOption = {

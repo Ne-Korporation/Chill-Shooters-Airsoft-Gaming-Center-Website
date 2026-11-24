@@ -48,8 +48,9 @@ export function computePenalty({ kind, item, repairCost, rules = DEFAULT_PENALTY
   return { amount: round2(cost + fee), basis: 'damage', lines }
 }
 
-// Decides the amount to bill. A requested amount that differs from the computed one
-// (or any amount when nothing could be computed) needs an override reason.
+// Decides the amount to bill. The staff member's amount is billed as entered (marking it as
+// overridden when it isn't the rule's amount); a reason is optional and kept when given. With no
+// amount entered, the rule's amount is used, if the rule could compute one.
 export function resolvePenaltyCharge(computed, { requestedAmount, overrideReason }) {
   const requested = requestedAmount === undefined || requestedAmount === null || requestedAmount === ''
     ? null
@@ -58,14 +59,12 @@ export function resolvePenaltyCharge(computed, { requestedAmount, overrideReason
   if (requested !== null && (!Number.isFinite(requested) || requested <= 0)) {
     return { error: 'Enter a positive charge amount.' }
   }
-  if (computed.amount === null) {
-    if (requested === null) return { error: computed.missing }
-    if (!reason) return { error: `${computed.missing} Or give a reason for the amount you are billing.` }
-    return { amount: requested, overridden: true, overrideReason: reason }
-  }
-  if (requested === null || Math.abs(requested - computed.amount) < 0.005) {
+  if (requested === null) {
+    if (computed.amount === null) return { error: `${computed.missing} Or enter the fee yourself.` }
     return { amount: computed.amount, overridden: false }
   }
-  if (!reason) return { error: `The rule gives ₱${computed.amount.toLocaleString()}. Give a reason to bill a different amount.` }
+  if (computed.amount !== null && Math.abs(requested - computed.amount) < 0.005) {
+    return { amount: computed.amount, overridden: false }
+  }
   return { amount: requested, overridden: true, overrideReason: reason }
 }

@@ -3,6 +3,7 @@ import toast from 'react-hot-toast'
 import { apiGet } from '../../utils/apiClient'
 import { Card } from '../../components/ui/Card'
 import { Paged } from '../../components/ui/Pagination'
+import { formatDateTime } from '../../utils/dates'
 
 type FeedbackRecord = {
   id?: string
@@ -74,7 +75,7 @@ export function AdminFeedbackPage() {
           <article key={String(item.id || `${item.gameplayId}-${item.userId}`)} className="py-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="text-sm font-semibold">Gameplay {item.gameplayId || '—'}</div>
-              <div className="text-xs text-muted">{item.createdAtISO ? new Date(item.createdAtISO).toLocaleString() : 'Date unavailable'}</div>
+              <div className="text-xs text-muted">{formatDateTime(item.createdAtISO, 'Date unavailable')}</div>
             </div>
             <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
               {categories.map(({ key, label }) => <span key={key}>{label}: {item[key] ?? '—'}/5</span>)}

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
 import { FiAlertTriangle, FiArchive, FiCheck, FiMail, FiRotateCcw, FiSend } from 'react-icons/fi'
 import { apiGet, apiPost, apiPut } from '../../utils/apiClient'
@@ -57,12 +57,19 @@ export function AdminInboxPage() {
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
 
+  // Messages opened while on Unread: opening marks them read, but they stay in that list (shown
+  // as read) until the admin switches tabs, so a message doesn't vanish the moment it's clicked.
+  const openedOnUnread = useRef<Set<string>>(new Set())
+
   const load = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true)
     try {
-      const status = filter === 'inbox' ? '' : `?status=${filter}`
+      // Unread loads the inbox and keeps the unread ones plus the ones opened here, so those stay
+      // up to date (replies, status) while they're kept.
+      const status = filter === 'inbox' || filter === 'new' ? '' : `?status=${filter}`
       const res = await apiGet<{ ok: boolean; data: ContactMessage[]; unread: number }>(`/api/admin/inbox${status}`)
-      setMessages(Array.isArray(res.data) ? res.data : [])
+      const data = Array.isArray(res.data) ? res.data : []
+      setMessages(filter === 'new' ? data.filter((m) => m.status === 'new' || openedOnUnread.current.has(m.id)) : data)
       setUnread(Number(res.unread) || 0)
     } catch (err: any) {
       if (!quiet) toast.error(err?.message || 'Could not load the inbox')
@@ -88,6 +95,7 @@ export function AdminInboxPage() {
   }
 
   const changeFilter = (value: Filter) => {
+    openedOnUnread.current = new Set()
     setFilter(value)
     setOpenId(null)
     setDraft('')
@@ -114,7 +122,10 @@ export function AdminInboxPage() {
     const opening = openId !== message.id
     setOpenId(opening ? message.id : null)
     setDraft('')
-    if (opening && message.status === 'new') void setStatus(message, 'read', true)
+    if (opening && message.status === 'new') {
+      if (filter === 'new') openedOnUnread.current.add(message.id)
+      void setStatus(message, 'read', true)
+    }
   }
 
   return (

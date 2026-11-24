@@ -7,6 +7,7 @@ import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
 import { apiPut } from '../../utils/apiClient'
 import { useCurrentWaiverText, type WaiverText } from '../../utils/waiverText'
+import { formatDateTime } from '../../utils/dates'
 
 const textareaClass = 'w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm outline-none focus:border-accent/40'
 
@@ -57,7 +58,7 @@ export function WaiverTextEditor() {
         <div>
           <div className="text-xs uppercase tracking-widest text-muted">Waiver text</div>
           <div className="mt-1 text-sm text-muted">
-            {updatedAtISO ? `Edited ${new Date(updatedAtISO).toLocaleString()}.` : 'Using the official Chill Shooters text.'}{' '}
+            {updatedAtISO ? `Edited ${formatDateTime(updatedAtISO)}.` : 'Using the official Chill Shooters text.'}{' '}
             Changing it expires every current waiver right away: all players are notified to answer the new one before their next game.
           </div>
         </div>

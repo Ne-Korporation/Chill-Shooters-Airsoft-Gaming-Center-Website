@@ -101,7 +101,7 @@ export function ReservationDetailsDialog({
 
   return createPortal(
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/70 p-3 sm:p-4" role="dialog" aria-modal="true" aria-labelledby="reservation-details-title" onClick={onClose}>
-      <div className="max-h-[90dvh] w-full max-w-2xl overflow-y-auto rounded-3xl border border-white/10 bg-background p-4 shadow-soft sm:p-5" onClick={(event) => event.stopPropagation()}>
+      <div className="max-h-[90dvh] w-full max-w-2xl overflow-y-auto rounded-3xl border border-white/10 bg-background p-4 text-text shadow-soft sm:p-5" onClick={(event) => event.stopPropagation()}>
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="text-xs uppercase tracking-widest text-muted">Reservation details</div>
@@ -185,9 +185,12 @@ export function ReservationChargesSections({ reservation, payments, ownPayments 
   const paid = Number.isFinite(Number(reservation.paymentSubmittedAmount)) && reservation.paymentSubmittedAmount != null
     ? Math.max(Number(reservation.paymentSubmittedAmount), split ? 0 : paidFromRecords)
     : payments.length ? paidFromRecords : reservation.paymentState === 'finalized' ? online : 0
-  const stillOnline = Math.max(0, Math.round((online - paid) * 100) / 100)
-  // Paid at the counter: the rest of a down payment booking, and teammates' shares the captain pays there.
-  const atCounter = Math.max(0, Math.round((total - online) * 100) / 100)
+  const round = (value: number) => Math.round(value * 100) / 100
+  const stillOnline = Math.max(0, round(online - paid))
+  // Paid at the counter: the rest of a down payment booking, and teammates' shares the captain pays
+  // there, less anything already paid beyond the online part (e.g. the team paid in full online).
+  const atCounter = Math.max(0, round(total - Math.max(online, paid)))
+  const balance = Math.max(0, round(total - paid))
   // Paid in full online, or a down payment now and the rest on game day.
   const fullOnline = online >= total && total > 0
 
@@ -197,7 +200,8 @@ export function ReservationChargesSections({ reservation, payments, ownPayments 
         <div className="text-xs uppercase tracking-widest text-muted">Rentals</div>
         {rentals.length ? (
           <div className="mt-1">
-            {rentals.map((line, index) => <Row key={`${line.label}-${index}`} label={String(line.label || 'Item')}>{peso(line.amount)}</Row>)}
+            {/* Included items (₱0) read "Included" rather than a zero price. */}
+            {rentals.map((line, index) => <Row key={`${line.label}-${index}`} label={String(line.label || 'Item').replace(/\s*[—-]\s*free$/i, '')}>{Number(line.amount) === 0 ? 'Included' : peso(line.amount)}</Row>)}
           </div>
         ) : (
           <div className="mt-2 text-sm text-muted">No rentals: the team brings its own gear.</div>
@@ -215,9 +219,16 @@ export function ReservationChargesSections({ reservation, payments, ownPayments 
           {otherLines.map((line, index) => <Row key={`${line.label}-${index}`} label={String(line.label || '')}>{peso(line.amount)}</Row>)}
           <Row label="Booking total">{peso(reservation.totalAmount)}</Row>
           <Row label={fullOnline ? 'Paid online (full amount)' : split ? 'Online amount (team shares)' : 'Down payment (online)'}>{peso(online)}</Row>
-          <Row label={split ? 'Paid online so far (whole team)' : 'Paid online so far'}>{peso(paid)}</Row>
-          {stillOnline > 0 ? <Row label={split ? 'Still to pay online (teammates)' : 'Still to pay online'}>{peso(stillOnline)}</Row> : null}
-          <Row label="Pay at the counter on game day">{atCounter > 0 ? peso(atCounter) : 'Nothing'}</Row>
+          <Row label={split ? 'Paid so far (whole team)' : 'Paid so far'}>{peso(paid)}</Row>
+          {/* What's still due: online first, then the rest at the counter; or that it's all paid. */}
+          {balance <= 0 ? (
+            <Row label="Balance"><span className="text-success">Fully paid</span></Row>
+          ) : (
+            <>
+              {stillOnline > 0 ? <Row label={split ? 'Still to pay online (teammates)' : 'Still to pay online'}>{peso(stillOnline)}</Row> : null}
+              {atCounter > 0 ? <Row label="Pay at the counter on game day">{peso(atCounter)}</Row> : null}
+            </>
+          )}
           {/* The captain pays for everyone unless the team split it; "To be paid by" until it's in. */}
           {reservation.paymentMode === 'split' ? (
             <Row label="Paid by">Each player pays their share</Row>
@@ -228,15 +239,32 @@ export function ReservationChargesSections({ reservation, payments, ownPayments 
         {payments.length ? (
           <div className="mt-3 text-xs uppercase tracking-widest text-muted">{split && ownPayments ? 'Your payments' : 'Payments'}</div>
         ) : null}
+        {/* One row per payment: how and when on the left (reference underneath), amount and status on the right. */}
         {payments.length ? (
-          <ul className="mt-1 space-y-1 text-xs text-muted">
-            {payments.map((payment, index) => (
-              <li key={index}>
-                {payment.createdAtISO ? new Date(payment.createdAtISO).toLocaleDateString('en-PH', { dateStyle: 'medium' }) : ''} · {payment.paymentMethod || '—'} · {peso(payment.amount)} ·{' '}
-                <span className="capitalize">{payment.paymentStatus || 'pending'}</span>
-                {payment.transactionReference ? ` · Ref ${payment.transactionReference}` : ''}
-              </li>
-            ))}
+          <ul className="mt-1 divide-y divide-white/5 rounded-xl border border-white/10">
+            {payments.map((payment, index) => {
+              const status = String(payment.paymentStatus || 'pending').toLowerCase()
+              const tone = ['paid', 'verified', 'confirmed', 'approved', 'succeeded'].includes(status)
+                ? 'border-success/30 bg-success/10 text-success'
+                : ['failed', 'rejected', 'cancelled'].includes(status)
+                  ? 'border-danger/30 bg-danger/10 text-danger'
+                  : 'border-accent/30 bg-accent/10 text-accent'
+              return (
+                <li key={index} className="flex items-start justify-between gap-3 px-3 py-2">
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold">{payment.paymentMethod || 'Payment'}</div>
+                    <div className="text-[11px] text-muted">
+                      {payment.createdAtISO ? new Date(payment.createdAtISO).toLocaleDateString('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium' }) : ''}
+                      {payment.transactionReference ? <> · <span className="font-mono">Ref {payment.transactionReference}</span></> : null}
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 flex-col items-end gap-1">
+                    <span className="text-sm font-bold">{peso(payment.amount)}</span>
+                    <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold capitalize ${tone}`}>{status}</span>
+                  </div>
+                </li>
+              )
+            })}
           </ul>
         ) : null}
       </section>

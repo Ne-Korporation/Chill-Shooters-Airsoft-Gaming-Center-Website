@@ -45,7 +45,7 @@ export function ForgotPasswordPage() {
         >
           <div className="space-y-3">
             <div className="text-sm font-medium text-accent">Recovery</div>
-            <h1 className="text-3xl font-bold leading-tight lg:text-4xl">Password Reset Protocol</h1>
+            <h1 className="text-3xl font-bold leading-tight lg:text-4xl">Reset your password</h1>
             <p className="text-muted">Submit your email to receive an OTP verification code for reset.</p>
 
             {/* <Card className="p-4">
@@ -63,13 +63,13 @@ export function ForgotPasswordPage() {
 
               <Input
                 label="Account email"
-                placeholder="operator@email.com"
+                placeholder="you@example.com"
                 error={errors.email?.message}
                 {...register('email', { required: 'Email is required' })}
               />
 
               <Button type="submit" disabled={isSubmitting} className="w-full">
-                {isSubmitting ? 'Sending...' : 'Send verification code'}
+                {isSubmitting ? 'Sending…' : 'Send verification code'}
               </Button>
 
               <div className="pt-2 text-xs">

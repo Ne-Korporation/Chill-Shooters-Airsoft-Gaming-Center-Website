@@ -51,12 +51,12 @@ export function OtpVerificationPage() {
         return
       }
       const res = await apiPost<{ message?: string }>('/api/auth/verify-otp', { email, otp: values.otp.trim() })
-      toast.success(res?.message || 'OTP verified.')
+      toast.success(res?.message || 'Email verified.')
       // A brand-new account is greeted as new on the login page, with the email filled in.
       if (flow === 'register') navigate('/login', { state: { newAccount: true, email } })
       else navigate('/login')
     } catch (err: any) {
-      toast.error(err?.message || 'OTP verification failed')
+      toast.error(err?.message || "That code didn't work. Check it and try again.")
     } finally {
       setBusy(false)
     }
@@ -92,8 +92,8 @@ export function OtpVerificationPage() {
           className="grid gap-4 lg:grid-cols-2 lg:gap-6"
         >
           <div className="space-y-3">
-            <div className="text-sm font-medium text-accent">OTP Verification</div>
-            <h1 className="text-3xl font-bold leading-tight lg:text-4xl">Authenticate Transmission</h1>
+            <div className="text-sm font-medium text-accent">Email verification</div>
+            <h1 className="text-3xl font-bold leading-tight lg:text-4xl">Check your email</h1>
             <p className="text-muted">
               Enter the one-time code sent to <span className="text-text font-semibold">{email || 'your email'}</span>.
             </p>
@@ -118,18 +118,18 @@ export function OtpVerificationPage() {
             <form className="space-y-4" onSubmit={handleSubmit(onSubmit)}>
               <div className="space-y-2">
                 <div className="text-xs uppercase tracking-widest text-muted">Enter Code</div>
-                <h2 className="text-xl font-bold">OTP</h2>
+                <h2 className="text-xl font-bold">Verification code</h2>
               </div>
 
               <Input
                 label="One-time code"
                 placeholder="e.g., 123456"
                 error={errors.otp?.message}
-                {...register('otp', { required: 'OTP is required' })}
+                {...register('otp', { required: 'Enter the code from your email' })}
               />
 
               <Button type="submit" disabled={busy} className="w-full">
-                {busy ? 'Verifying...' : 'Verify OTP'}
+                {busy ? 'Verifying…' : 'Verify code'}
               </Button>
 
               <div className="text-xs text-muted pt-2">
@@ -140,7 +140,7 @@ export function OtpVerificationPage() {
                   onClick={handleResend}
                   disabled={resending}
                 >
-                  {resending ? 'Sending...' : 'Resend'}
+                  {resending ? 'Sending…' : 'Resend code'}
                 </button>
               </div>
             </form>

@@ -1,4 +1,4 @@
-import { Navigate, Route, Routes } from 'react-router-dom'
+import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { AppLayout } from './layouts/AppLayout'
 import { RequireAuth } from './routes/RequireAuth'
 import { LandingPage } from './pages/auth/LandingPage'
@@ -44,9 +44,7 @@ import { WalkInsPage } from './pages/operations/WalkInsPage'
 import { PlayerManagementPage } from './pages/admin/PlayerManagementPage'
 
 import { RegistrarDashboardHomePage } from './pages/registrar/RegistrarDashboardHomePage'
-import { RegistrarReservationsPage } from './pages/registrar/RegistrarReservationsPage'
 import { RegistrarOngoingGamesPage, RegistrarArchivedGamesPage } from './pages/registrar'
-import { RegistrarSubmittedWaiversPage } from './pages/registrar/RegistrarSubmittedWaiversPage'
 import { MarshalDashboardHomePage } from './pages/marshal/MarshalDashboardHomePage'
 import { PlayerFeedbackPage } from './pages/players/PlayerFeedbackPage'
 
@@ -75,10 +73,11 @@ function AppHomePage() {
   return <DashboardHomePage />
 }
 
+// Registrars get the same Reservations page as admins (By date, Games, Archived).
 function RegistrarReservationsPageWrapper() {
   return (
     <RequireRole roles={['registrar', 'admin']}>
-      <RegistrarReservationsPage />
+      <AdminReservationsPage />
     </RequireRole>
   )
 }
@@ -95,19 +94,20 @@ function AdminPageWrapper({ children }: { children: React.ReactElement }) {
   return <RequireRole roles={['admin']}>{children}</RequireRole>
 }
 
+// The old Game queue address (and links to one game, ?game=<id>) opens Reservations on its Games tab.
 function RegistrarOngoingGamesPageWrapper() {
-  return (
-    <RequireRole roles={['registrar']}>
-      <RegistrarOngoingGamesPage />
-    </RequireRole>
-  )
+  const { search } = useLocation()
+  const params = new URLSearchParams(search)
+  params.set('tab', 'games')
+  return <Navigate to={`/app/registrar/reservations?${params.toString()}`} replace />
 }
 
 
+// Registrars get the same Waivers page as admins (without editing the waiver text or archiving).
 function RegistrarSubmittedWaiversPageWrapper() {
   return (
     <RequireRole roles={['registrar']}>
-      <RegistrarSubmittedWaiversPage />
+      <AdminWaiversPage />
     </RequireRole>
   )
 }
@@ -160,8 +160,9 @@ export default function App() {
         <Route
           path="games"
           element={
+            // Marshals' Reservations: the same page as admins and registrars.
             <RequireRole roles={['marshal', 'admin']}>
-              <RegistrarOngoingGamesPage />
+              <AdminReservationsPage />
             </RequireRole>
           }
         />
@@ -169,7 +170,7 @@ export default function App() {
           path="games/ongoing"
           element={
             <RequireRole roles={['marshal', 'admin']}>
-              <RegistrarOngoingGamesPage />
+              <AdminReservationsPage defaultTab="games" />
             </RequireRole>
           }
         />
@@ -177,7 +178,7 @@ export default function App() {
           path="games/archived"
           element={
             <RequireRole roles={['marshal', 'admin']}>
-              <RegistrarArchivedGamesPage />
+              <AdminReservationsPage defaultTab="archived" />
             </RequireRole>
           }
         />
@@ -247,6 +248,8 @@ export default function App() {
         <Route path="registrar/availed-packages" element={<Navigate to="/app/counter" replace />} />
         <Route path="registrar/waivers" element={<RegistrarSubmittedWaiversPageWrapper />} />
         <Route path="registrar/players" element={<RequireRole roles={['registrar']}><PlayerManagementPage /></RequireRole>} />
+        {/* Marshals look players up (no ID or discount reviews). */}
+        <Route path="marshal/players" element={<RequireRole roles={['marshal']}><PlayerManagementPage /></RequireRole>} />
         <Route path="registrar/submitted-payments" element={<RegistrarSubmittedPaymentsPageWrapper />} />
 
       </Route>

@@ -87,16 +87,19 @@ export function BookingPlayersSection({ reservationId, detailed = false }: { res
   const slot = String(booking.reservationTime || booking.slot || '').toLowerCase()
   const fields = (booking.fieldIds || []).map(fieldName).join(' + ')
   const roles = bookingRoles(booking.sessionType)
-  const players = booking.walkIn
-    ? [{ name: booking.walkInName || 'Walk-in guest', detail: 'Walk-in' }]
+  // Each player: name, their role on the booking, email, and a note when something's special.
+  type PlayerRow = { name: string; role: string; lead?: boolean; email?: string; note?: string }
+  const players: PlayerRow[] = booking.walkIn
+    ? [{ name: booking.walkInName || 'Walk-in guest', role: 'Walk-in', lead: true }]
     : [
       state.captain === null
         // The booker's account was deleted: show the name saved on the booking, if any.
-        ? { name: booking.bookerName || 'Deleted account', detail: [roles.booker, booking.bookerEmail, 'account deleted'].filter(Boolean).join(' · ') }
-        : { name: state.captain?.name || booking.bookerName || roles.booker, detail: [roles.booker, state.captain?.email || booking.bookerEmail].filter(Boolean).join(' · ') },
+        ? { name: booking.bookerName || 'Deleted account', role: roles.booker, lead: true, email: booking.bookerEmail, note: 'Account deleted' }
+        : { name: state.captain?.name || booking.bookerName || roles.booker, role: roles.booker, lead: true, email: state.captain?.email || booking.bookerEmail },
       ...(booking.teamMembers || []).map((member) => ({
         name: member.name || member.id || roles.member,
-        detail: [member.isMinor ? 'Minor' : roles.member, member.email].filter(Boolean).join(' · '),
+        role: member.isMinor ? 'Minor' : roles.member,
+        email: member.email,
       })),
     ]
   const guests = Math.max(0, Number(booking.numberOfPlayers || 0) - players.length)
@@ -127,14 +130,24 @@ export function BookingPlayersSection({ reservationId, detailed = false }: { res
       </section>
       <section>
         <div className="flex items-center gap-2 text-xs uppercase tracking-widest text-muted"><FiUsers /> Players ({players.length + guests})</div>
-        <ul className="mt-2 max-h-64 space-y-1.5 overflow-y-auto pr-1 text-sm">
+        {/* One row per player; the whole list shows (the window scrolls, not the list). */}
+        <ul className="mt-2 divide-y divide-white/5 rounded-xl border border-white/10">
           {players.map((player, index) => (
-            <li key={`${player.name}-${index}`}>
-              <span className="font-semibold">{player.name}</span>
-              <span className="text-xs text-muted"> · {player.detail}</span>
+            <li key={`${player.name}-${index}`} className="flex items-center gap-2.5 px-3 py-2">
+              <span aria-hidden className={`grid h-8 w-8 shrink-0 place-items-center rounded-full text-xs font-bold ${player.lead ? 'bg-accent/20 text-accent' : 'bg-white/10 text-muted'}`}>
+                {String(player.name || '?').trim().charAt(0).toUpperCase()}
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="truncate text-sm font-semibold" title={player.name}>{player.name}</span>
+                  <span className={`rounded-full border px-1.5 py-px text-[10px] font-semibold ${player.lead ? 'border-accent/30 bg-accent/10 text-accent' : 'border-white/10 text-muted'}`}>{player.role}</span>
+                  {player.note ? <span className="text-[10px] font-semibold text-danger">{player.note}</span> : null}
+                </div>
+                {player.email ? <div className="truncate text-[11px] text-muted" title={player.email}>{player.email}</div> : null}
+              </div>
             </li>
           ))}
-          {guests > 0 ? <li className="text-muted">+ {guests} guest{guests === 1 ? '' : 's'} without an account</li> : null}
+          {guests > 0 ? <li className="px-3 py-2 text-xs text-muted">+ {guests} guest{guests === 1 ? '' : 's'} without an account</li> : null}
         </ul>
       </section>
     </div>

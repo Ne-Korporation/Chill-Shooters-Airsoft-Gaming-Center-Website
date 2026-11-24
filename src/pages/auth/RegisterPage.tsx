@@ -178,7 +178,7 @@ export function RegisterPage() {
         >
           <div className="space-y-3">
             <div className="text-sm font-medium text-accent">Registration</div>
-            <h1 className="text-3xl font-bold leading-tight lg:text-4xl">Create your operator profile</h1>
+            <h1 className="text-3xl font-bold leading-tight lg:text-4xl">Create your account</h1>
             <p className="text-muted">
               Secure onboarding for managing chill shooter reservations, payments, and waivers.
             </p>
@@ -257,7 +257,7 @@ export function RegisterPage() {
               />
               <Input
                 label="Email"
-                placeholder="operator@email.com"
+                placeholder="you@example.com"
                 error={errors.email?.message}
                 {...register('email', { required: 'Email is required' })}
               />
@@ -323,7 +323,7 @@ export function RegisterPage() {
                 </div>
               ) : null}
               <Button type="submit" disabled={isSubmitting} className="w-full">
-                {isSubmitting ? 'Creating...' : 'Create account'}
+                {isSubmitting ? 'Creating account…' : 'Create account'}
               </Button>
 
               <Button type="button" onClick={handleGoogleRegister} className="w-full">

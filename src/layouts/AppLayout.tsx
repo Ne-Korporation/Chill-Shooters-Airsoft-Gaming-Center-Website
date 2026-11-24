@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Outlet, useLocation } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import { FiX } from 'react-icons/fi'
@@ -7,10 +7,38 @@ import { AppSidebar } from '../components/nav/AppSidebar'
 import { TopNav } from '../components/nav/TopNav'
 import { ThemeToggle } from '../components/nav/ThemeToggle'
 
+// Where the desktop sidebar sticks. Short enough to fit: just under the top bar. Taller than the
+// window: it scrolls with the page until its bottom is in view, then stays there, so the whole menu
+// and calendar can always be seen without a scroll box of its own.
+const SIDEBAR_TOP = 96
+const SIDEBAR_BOTTOM_GAP = 24
+function useStickyTop(ref: React.RefObject<HTMLElement | null>) {
+  const [top, setTop] = useState(SIDEBAR_TOP)
+  useEffect(() => {
+    const element = ref.current
+    if (!element) return
+    const update = () => {
+      const height = element.offsetHeight
+      setTop(Math.min(SIDEBAR_TOP, window.innerHeight - height - SIDEBAR_BOTTOM_GAP))
+    }
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(element)
+    window.addEventListener('resize', update)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', update)
+    }
+  }, [ref])
+  return top
+}
+
 export function AppLayout() {
   const { user, logout } = useAuth()
   const [mobileOpen, setMobileOpen] = useState(false)
   const location = useLocation()
+  const sidebarRef = useRef<HTMLDivElement>(null)
+  const sidebarTop = useStickyTop(sidebarRef)
 
   // Close the drawer whenever the page changes (back button, links inside a page, etc.).
   useEffect(() => {
@@ -55,7 +83,7 @@ export function AppLayout() {
         <div className="relative flex gap-6">
           {/* Desktop Sidebar: stays in view while the page scrolls. */}
           <aside className="hidden w-[248px] shrink-0 lg:block">
-            <div className="no-scrollbar sticky top-[96px] max-h-[calc(100vh-120px)] overflow-y-auto">{sidebar}</div>
+            <div ref={sidebarRef} className="sticky" style={{ top: sidebarTop }}>{sidebar}</div>
           </aside>
 
           {/* Mobile Drawer */}

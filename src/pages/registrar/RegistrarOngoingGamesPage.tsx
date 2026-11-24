@@ -2,6 +2,7 @@
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useLiveRefresh } from '../../utils/liveUpdates'
 import { FiArchive, FiCheck, FiChevronDown, FiChevronRight, FiEye, FiFolder, FiFolderMinus, FiMapPin, FiSearch, FiShield, FiX } from 'react-icons/fi'
+import { GiAk47 } from 'react-icons/gi'
 import { toast } from 'react-hot-toast'
 
 import { Card } from '../../components/ui/Card'
@@ -794,8 +795,9 @@ export function RegistrarOngoingGamesPage({ embedded = false }: { embedded?: boo
   )
 }
 
-// One row per player with the weapons and gear they have; pieces booked for the group but not yet
-// handed to anyone at Rentals go in a last "Not handed out yet" row.
+// Who has which weapon and gear in one game. Pieces booked for the group but not handed to anyone
+// yet come first, grouped by model ("M4 Rifle × 6"); then one row per player with what they hold.
+// A player with nothing gets one short line instead of empty columns.
 function GearTable({ gear }: { gear: GameGear | null }) {
   if (gear === null) return <div className="mt-2 text-sm text-muted">Loading…</div>
   const { items, players } = gear
@@ -807,18 +809,19 @@ function GearTable({ gear }: { gear: GameGear | null }) {
   // Handed to someone not on the booking (e.g. a walk-in friend), or not handed out yet.
   const others = items.filter((item) => !listed.has(item.itemId))
   const extraNames = [...new Set(others.map((item) => item.playerName).filter(Boolean))]
+  const waiting = others.filter((item) => !item.playerName)
   const rows = [
     ...players.map((player) => ({ key: player.id || player.name, name: player.name, note: '', items: forPlayer(player) })),
     ...extraNames.map((name) => ({ key: `extra-${name}`, name, note: 'Not on the booking', items: others.filter((item) => item.playerName === name) })),
-    ...(others.some((item) => !item.playerName)
-      ? [{ key: 'unassigned', name: 'Not handed out yet', note: 'Booked for the group', items: others.filter((item) => !item.playerName) }]
-      : []),
   ]
+  const handedOut = items.length - waiting.length
 
-  const chips = (list: GameItem[]) => list.length === 0 ? <span className="text-muted">—</span> : (
+  // One tag per piece, weapons first (a player holds only a few, so the unit number matters).
+  const pieceTags = (list: GameItem[]) => (
     <div className="flex flex-wrap gap-1.5">
-      {list.map((item) => (
+      {[...list].sort((a, b) => (a.collection === b.collection ? 0 : a.collection === 'weapons' ? -1 : 1)).map((item) => (
         <span key={item.itemId} className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-white/5 px-2 py-0.5 text-xs">
+          {item.collection === 'weapons' ? <GiAk47 className="h-3 w-3 text-muted" /> : <FiShield className="h-3 w-3 text-muted" />}
           {item.name}
           {item.source === 'own' ? <span className="text-[10px] font-semibold text-accent">own</span> : null}
           {item.rentalStatus === 'out' ? <span className="text-[10px] text-muted">· out</span> : null}
@@ -827,29 +830,54 @@ function GearTable({ gear }: { gear: GameGear | null }) {
     </div>
   )
 
+  // Waiting pieces grouped by model: "M4 Rifle × 6", with the unit numbers on hover.
+  const groupedTags = (list: GameItem[]) => {
+    const groups = new Map<string, GameItem[]>()
+    for (const item of list) {
+      const model = String(item.name || '').replace(/\s*#\d+$/, '') || 'Item'
+      groups.set(`${item.collection}|${model}`, [...(groups.get(`${item.collection}|${model}`) || []), item])
+    }
+    return (
+      <div className="flex flex-wrap gap-1.5">
+        {[...groups.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([key, pieces]) => (
+          <span key={key} title={pieces.map((piece) => piece.name).join(', ')} className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-white/5 px-2 py-0.5 text-xs">
+            {pieces[0].collection === 'weapons' ? <GiAk47 className="h-3 w-3 text-muted" /> : <FiShield className="h-3 w-3 text-muted" />}
+            {key.split('|')[1]} <span className="font-semibold">× {pieces.length}</span>
+          </span>
+        ))}
+      </div>
+    )
+  }
+
   return (
-    <div className="mt-2 overflow-x-auto rounded-2xl border border-white/10">
-      <table className="w-full min-w-[480px] text-sm">
-        <thead>
-          <tr className="border-b border-white/10 text-left text-[11px] uppercase tracking-wider text-muted">
-            <th className="px-3 py-2 font-semibold">Player</th>
-            <th className="px-3 py-2 font-semibold">Weapons</th>
-            <th className="px-3 py-2 font-semibold">Gear</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-white/5">
+    <div className="mt-2 space-y-3">
+      <div className="text-xs text-muted">
+        {players.length} player{players.length === 1 ? '' : 's'} · {handedOut} of {items.length} piece{items.length === 1 ? '' : 's'} handed out
+      </div>
+
+      {waiting.length ? (
+        <div className="rounded-2xl border border-accent/30 bg-accent/5 p-3">
+          <div className="text-sm font-semibold">Not handed out yet</div>
+          <div className="mb-2 text-[11px] text-muted">Booked for the group; hand them out on the Rentals tab of the Games counter.</div>
+          {groupedTags(waiting)}
+        </div>
+      ) : null}
+
+      {rows.length ? (
+        <ul className="divide-y divide-white/5 rounded-2xl border border-white/10">
           {rows.map((row) => (
-            <tr key={row.key} className="align-top">
-              <td className="px-3 py-2">
-                <div className={`font-semibold ${row.key === 'unassigned' ? 'text-muted' : ''}`}>{row.name}</div>
+            <li key={row.key} className="flex flex-col gap-1.5 px-3 py-2.5 sm:flex-row sm:items-start sm:gap-4">
+              <div className="sm:w-48 sm:shrink-0">
+                <div className="truncate text-sm font-semibold" title={row.name}>{row.name}</div>
                 {row.note ? <div className="text-[11px] text-muted">{row.note}</div> : null}
-              </td>
-              <td className="px-3 py-2">{chips(row.items.filter((item) => item.collection === 'weapons'))}</td>
-              <td className="px-3 py-2">{chips(row.items.filter((item) => item.collection === 'equipments'))}</td>
-            </tr>
+              </div>
+              <div className="min-w-0 flex-1">
+                {row.items.length ? pieceTags(row.items) : <span className="text-xs text-muted">Nothing handed out yet</span>}
+              </div>
+            </li>
           ))}
-        </tbody>
-      </table>
+        </ul>
+      ) : null}
     </div>
   )
 }
@@ -909,30 +937,31 @@ function GameDetailsDialog({
     <Modal eyebrow={`Game ${rowId(doc)}`} title={formatSchedule(doc)} onClose={onClose} footer={actions} confirmDiscard={false}>
       {/* Who is playing, and when: from the booking behind this game. */}
       <BookingPlayersSection reservationId={doc.reservationId} detailed />
-      <div className="mt-5 grid gap-4 md:grid-cols-2">
-        <section>
-          <div className="text-xs uppercase tracking-widest text-muted">Game</div>
-          <div className="mt-1">
-            <DetailRow label="Status"><StatusBadge status={status} /></DetailRow>
-            <DetailRow label="Location">{locationName(doc)}</DetailRow>
-            <DetailRow label="Package">{doc.Package || '—'}</DetailRow>
-            <DetailRow label="Mode">{doc.Mode || '—'}</DetailRow>
-            <DetailRow label="Group">{doc.Group || '—'}</DetailRow>
-          </div>
-        </section>
-        <section>
-          <div className="text-xs uppercase tracking-widest text-muted">Layout and notes</div>
-          <div className="mt-2 space-y-2 text-sm">
-            <div>{doc.LayoutRequest ? <>Layout: {doc.LayoutRequest}</> : <span className="text-muted">No layout request.</span>}</div>
-            {doc.LayoutBlueprintUrl ? (
-              <a href={doc.LayoutBlueprintUrl} target="_blank" rel="noreferrer" className="inline-block text-xs font-semibold text-accent hover:underline">
-                View layout blueprint
-              </a>
-            ) : null}
-            <div>{doc.Notes ? <>Notes: {doc.Notes}</> : <span className="text-muted">No notes.</span>}</div>
-          </div>
-        </section>
-      </div>
+      {/* The game in one section: two columns of rows on wider screens, layout and notes included
+          (empty ones say so in a word instead of taking a column of their own). */}
+      <section className="mt-5">
+        <div className="text-xs uppercase tracking-widest text-muted">Game</div>
+        <div className="mt-1 grid sm:grid-cols-2 sm:gap-x-6">
+          <DetailRow label="Status"><StatusBadge status={status} /></DetailRow>
+          <DetailRow label="Location">{locationName(doc)}</DetailRow>
+          <DetailRow label="Package">{doc.Package || '—'}</DetailRow>
+          <DetailRow label="Mode">{doc.Mode || '—'}</DetailRow>
+          <DetailRow label="Group">{doc.Group ? String(doc.Group).charAt(0).toUpperCase() + String(doc.Group).slice(1) : '—'}</DetailRow>
+          <DetailRow label="Layout">
+            {doc.LayoutRequest || doc.LayoutBlueprintUrl ? (
+              <span className="inline-flex flex-col items-end gap-0.5">
+                {doc.LayoutRequest ? <span>{doc.LayoutRequest}</span> : null}
+                {doc.LayoutBlueprintUrl ? (
+                  <a href={doc.LayoutBlueprintUrl} target="_blank" rel="noreferrer" className="text-xs font-semibold text-accent hover:underline">View blueprint</a>
+                ) : null}
+              </span>
+            ) : <span className="font-normal text-muted">None requested</span>}
+          </DetailRow>
+        </div>
+        <div className="mt-1 text-sm">
+          <DetailRow label="Notes">{doc.Notes ? <span className="whitespace-pre-wrap font-normal">{doc.Notes}</span> : <span className="font-normal text-muted">None</span>}</DetailRow>
+        </div>
+      </section>
 
       <section className="mt-5">
         <div className="text-xs uppercase tracking-widest text-muted">Players' weapons and gear</div>
