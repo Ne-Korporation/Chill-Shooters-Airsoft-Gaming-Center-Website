@@ -6,19 +6,30 @@ import { DashboardPostsPanel } from '../../components/dashboard/DashboardPostsPa
 import { CapacityCalendar } from '../../components/booking/CapacityCalendar'
 import { useAuth } from '../../context/AuthContext'
 import { ActionRow, DashboardHeader, Panel, StatTile } from '../../components/dashboard/DashboardParts'
-import { FiCalendar, FiShield, FiShoppingBag, FiCreditCard, FiZap } from 'react-icons/fi'
+import { FiCalendar, FiPercent, FiShield, FiShoppingBag, FiCreditCard, FiUserCheck, FiZap } from 'react-icons/fi'
 import { apiGet } from '../../utils/apiClient'
 import { useAutoRefresh } from '../../hooks/useAutoRefresh'
 import { WeatherAdvisoryWidget } from '../../components/dashboard/WeatherAdvisoryWidget'
 
+// How many documents match, from the server's total (not just the first page).
+const countOf = (collection: string, filter: object) =>
+  apiGet<{ total?: number }>(`/api/${collection}?q=${encodeURIComponent(JSON.stringify(filter))}&limit=1&withTotal=1`).then((r) => Number(r?.total || 0))
+
+const PAID_STATUSES = ['paid', 'confirmed', 'verified', 'approved', 'succeeded']
+const peso = (n: number) => `₱${Math.round(n).toLocaleString('en-PH')}`
+
 export function RegistrarDashboardHomePage() {
-  const [pendingReservations, setPendingReservations] = useState(0)
-  const [pendingWaivers, setPendingWaivers] = useState(0)
+  // The registrar's own work: payments to verify, IDs to verify (waivers follow from them), waivers
+  // to review and partnership requests; plus the money still due on today's games.
   const [pendingPayments, setPendingPayments] = useState(0)
+  const [pendingIds, setPendingIds] = useState(0)
+  const [pendingWaivers, setPendingWaivers] = useState(0)
+  const [pendingPartnerships, setPendingPartnerships] = useState(0)
+  const [collectToday, setCollectToday] = useState({ amount: 0, bookings: 0 })
   const [loading, setLoading] = useState(true)
   // Bumped when the data shown here changes on the server; re-runs the load below quietly.
   const [liveTick, setLiveTick] = useState(0)
-  useLiveRefresh(['reservations', 'payments', 'waivers'], () => setLiveTick((tick) => tick + 1))
+  useLiveRefresh(['reservations', 'payments', 'waivers', 'accounts'], () => setLiveTick((tick) => tick + 1))
 
   // Bumped every few seconds so new bookings, waivers and payments show without reloading.
   const [refreshTick, setRefreshTick] = useState(0)
@@ -31,23 +42,36 @@ export function RegistrarDashboardHomePage() {
     const load = async () => {
       if (!silent) setLoading(true)
       try {
-        const [reservationsRes, waiversRes, paymentsRes] = await Promise.all([
-          apiGet<{ ok: boolean; data: any[] }>('/api/reservations?limit=200'),
-          apiGet<{ ok: boolean; data: any[] }>('/api/waivers?limit=200'),
-          apiGet<{ ok: boolean; data: any[] }>('/api/payments?limit=200'),
+        const todayISO = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(new Date())
+        const [payments, ids, waivers, partnerships, todayRes] = await Promise.all([
+          countOf('payments', { paymentStatus: { $in: ['pending', 'submitted', 'review'] } }),
+          countOf('user_accounts', { role: 'user', identityVerificationStatus: 'pending_review' }),
+          countOf('waivers', { archived: { $ne: true }, $or: [{ status: 'pending' }, { status: { $exists: false } }, { status: '' }] }),
+          countOf('user_accounts', { role: 'user', partnershipEligibilityStatus: 'pending' }),
+          apiGet<{ ok: boolean; data: any[] }>(`/api/reservations?q=${encodeURIComponent(JSON.stringify({ reservationDate: todayISO, reservationStatus: { $in: ['confirmed', 'approved'] } }))}&limit=200`),
         ])
+        // Still due on today's confirmed games: each booking's total less what's been paid toward it.
+        const today = Array.isArray(todayRes?.data) ? todayRes.data : []
+        const keys = today.flatMap((r: any) => [r.id, r._id && String(r._id)].filter(Boolean))
+        const todayPayments = keys.length
+          ? (await apiGet<{ ok: boolean; data: any[] }>(`/api/payments?q=${encodeURIComponent(JSON.stringify({ reservationId: { $in: keys } }))}&limit=500`)).data || []
+          : []
+        let amount = 0
+        let bookings = 0
+        for (const r of today) {
+          const mine = todayPayments.filter((p: any) => [r.id, r._id && String(r._id)].includes(String(p.reservationId || '')))
+          const paid = mine.filter((p: any) => PAID_STATUSES.includes(String(p.paymentStatus || p.status || '').toLowerCase()))
+            .reduce((sum: number, p: any) => sum + (Number(p.amount) || 0), 0)
+          const due = Math.max(0, (Number(r.totalAmount) || 0) - paid)
+          if (due > 0.5) { amount += due; bookings += 1 }
+        }
 
         if (!active) return
-        const reservations = Array.isArray(reservationsRes?.data) ? reservationsRes.data : []
-        const waivers = Array.isArray(waiversRes?.data) ? waiversRes.data : []
-        const payments = Array.isArray(paymentsRes?.data) ? paymentsRes.data : []
-
-        setPendingReservations(reservations.filter((item) => String(item.reservationStatus || '').toLowerCase() === 'pending').length)
-        setPendingWaivers(waivers.filter((item) => !item.status || String(item.status).toLowerCase() === 'pending').length)
-        setPendingPayments(payments.filter((item) => {
-          const status = String(item.paymentStatus || item.status || '').toLowerCase()
-          return status === 'pending' || status === 'submitted' || status === 'review'
-        }).length)
+        setPendingPayments(payments)
+        setPendingIds(ids)
+        setPendingWaivers(waivers)
+        setPendingPartnerships(partnerships)
+        setCollectToday({ amount, bookings })
       } catch (e: any) {
         if (!silent) toast.error(String(e?.message || e))
       } finally {
@@ -61,15 +85,15 @@ export function RegistrarDashboardHomePage() {
 
   const { user } = useAuth()
   const firstName = String(user?.name || 'there').trim().split(/\s+/)[0]
-  // Pending bookings wait on the player (waiver, payment), so only waivers and payments are work here.
-  const totalQueue = pendingWaivers + pendingPayments
+  // Things only the registrar can clear (pending bookings wait on the player, so they aren't here).
+  const totalQueue = pendingPayments + pendingIds + pendingWaivers + pendingPartnerships
 
   return (
     <div className="space-y-6">
       <DashboardHeader
         eyebrow="Dashboard"
         title={`Welcome back, ${firstName}`}
-        description="Verify waivers and payments; each booking is confirmed once both are done."
+        description="Verify payments and IDs, and collect what's due at the counter."
         actions={
           <Link to="/app/registrar/reservations" className="inline-flex h-10 items-center gap-2 rounded-xl bg-primary px-4 text-sm font-semibold text-white transition hover:brightness-110">
             <FiCalendar /> Reservations
@@ -95,9 +119,9 @@ export function RegistrarDashboardHomePage() {
           <WeatherAdvisoryWidget />
 
           <div className="grid grid-cols-3 gap-2">
-            <StatTile compact label="Pending" value={pendingReservations} hint={pendingReservations > 0 ? 'Unconfirmed' : 'None'} loading={loading} />
-            <StatTile compact label="Waivers" value={pendingWaivers} hint={pendingWaivers > 0 ? 'To review' : 'All clear'} attention={pendingWaivers > 0} loading={loading} />
-            <StatTile compact label="Payments" value={pendingPayments} hint={pendingPayments > 0 ? 'To verify' : 'All clear'} attention={pendingPayments > 0} loading={loading} />
+            <StatTile compact label="Payments" value={pendingPayments} hint={pendingPayments > 0 ? 'To verify' : 'All clear'} attention={pendingPayments > 0} loading={loading} to="/app/registrar/submitted-payments" />
+            <StatTile compact label="IDs" value={pendingIds} hint={pendingIds > 0 ? 'To verify' : 'All clear'} attention={pendingIds > 0} loading={loading} to="/app/registrar/players#id-verifications" />
+            <StatTile compact label="Collect today" value={peso(collectToday.amount)} hint={collectToday.bookings > 0 ? `${collectToday.bookings} booking${collectToday.bookings === 1 ? '' : 's'}` : 'Nothing due'} loading={loading} to="/app/counter?view=today" />
           </div>
 
           <Panel
@@ -107,30 +131,38 @@ export function RegistrarDashboardHomePage() {
           >
             <div className="space-y-0.5">
               <ActionRow
-                to="/app/registrar/reservations"
-                icon={FiCalendar}
-                title="Reservations"
-                description="Bookings by date and their players"
+                to="/app/registrar/submitted-payments"
+                icon={FiCreditCard}
+                title="Submitted payments"
+                description="Check proofs so bookings confirm"
+                badge={loading ? undefined : pendingPayments}
+              />
+              <ActionRow
+                to="/app/registrar/players#id-verifications"
+                icon={FiUserCheck}
+                title="ID verifications"
+                description="Verify IDs; their waivers then approve"
+                badge={loading ? undefined : pendingIds}
               />
               <ActionRow
                 to="/app/registrar/waivers"
                 icon={FiShield}
                 title="Submitted waivers"
-                description="Accept or flag waiver submissions"
+                description="Approve or deny the ones still waiting"
                 badge={loading ? undefined : pendingWaivers}
               />
               <ActionRow
-                to="/app/registrar/submitted-payments"
-                icon={FiCreditCard}
-                title="Submitted payments"
-                description="Check proofs and update payment status"
-                badge={loading ? undefined : pendingPayments}
+                to="/app/registrar/players#partnership-requests"
+                icon={FiPercent}
+                title="Partnership requests"
+                description="Check proof for the member discount"
+                badge={loading ? undefined : pendingPartnerships}
               />
             </div>
             {/* Shortcuts, under the queue so the side column stays about as tall as the calendar. */}
             <div className="divider mt-2 space-y-0.5 border-t pt-2">
-              <ActionRow to="/app/registrar/reservations?tab=games" icon={FiZap} title="Games" description="Ongoing and archived sessions" />
-              <ActionRow to="/app/counter" icon={FiShoppingBag} title="Game counter" description="Check-in, rentals, ammo and payments per game" />
+              <ActionRow to="/app/registrar/reservations" icon={FiCalendar} title="Reservations" description="Games to start, complete and archive" />
+              <ActionRow to="/app/counter?view=today" icon={FiShoppingBag} title="Game counter" description="Check-in, bills and payments for today's games" />
             </div>
             <div className="divider mt-2 border-t pt-2 text-[11px] text-muted">
               Booking flow: <span className="text-text">Waiver</span> → <span className="text-text">Payment</span> →{' '}

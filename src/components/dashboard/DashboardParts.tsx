@@ -39,7 +39,8 @@ export function DashboardHeader({
 }
 
 // A number with a label. Numbers stay neutral; `attention` turns the hint red
-// so colour only shows up when something actually needs action.
+// so colour only shows up when something actually needs action. With `to`, the whole tile is a
+// link to the page behind the number.
 export function StatTile({
   label,
   value,
@@ -48,6 +49,7 @@ export function StatTile({
   attention = false,
   loading = false,
   compact = true,
+  to,
 }: {
   label: string
   value: React.ReactNode
@@ -57,9 +59,11 @@ export function StatTile({
   loading?: boolean
   // Small summary tile (the default); pass compact={false} for the large version.
   compact?: boolean
+  // Where the tile goes when clicked (the list or page behind the number).
+  to?: string
 }) {
-  return (
-    <div className={`surface rounded-2xl ${compact ? 'p-3' : 'p-5'}`}>
+  const body = (
+    <>
       <div className="flex items-center justify-between gap-2">
         <span className={`${compact ? 'text-xs' : 'text-sm'} text-muted`}>{label}</span>
         {Icon ? (
@@ -77,7 +81,15 @@ export function StatTile({
           {hint}
         </div>
       ) : null}
-    </div>
+    </>
+  )
+  const boxClass = `surface block rounded-2xl ${compact ? 'p-3' : 'p-5'}`
+  return to ? (
+    <Link to={to} aria-label={`View ${label.toLowerCase()}`} className={`${boxClass} transition hover:border-accent/40 hover:brightness-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50`}>
+      {body}
+    </Link>
+  ) : (
+    <div className={boxClass}>{body}</div>
   )
 }
 
