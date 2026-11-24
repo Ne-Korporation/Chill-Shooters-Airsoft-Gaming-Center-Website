@@ -4,7 +4,7 @@ import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { FilterTabs } from '../../components/ui/FilterTabs'
 import { apiGet } from '../../utils/apiClient'
-import { equipmentAlerts } from '../../utils/inventoryModels'
+import { equipmentAlerts, modelOf } from '../../utils/inventoryModels'
 import { ReportTrendCharts } from './ReportTrendCharts'
 import { useAuth } from '../../context/AuthContext'
 import { useCauseDays } from '../../utils/causeDays'
@@ -312,11 +312,12 @@ export function AdminReportsPage() {
     const registrations = accounts.filter((account) =>
       String(account.role || 'user').toLowerCase() === 'user' && inRange(dayOf(account.createdAtISO))).length
 
-    // Equipment rentals issued in the period, and which items went out most.
+    // Equipment rentals issued in the period, and which kinds of items went out most. Pieces of the
+    // same type count together ("Rifle #2" and "Rifle #4" are both "Rifle").
     const periodRentals = rentals.filter((rental) => inRange(dayOf(rental.issuedAtISO)))
     const rentalsByItem = new Map<string, number>()
     for (const rental of periodRentals) {
-      const name = rental.itemName || 'Unknown item'
+      const name = modelOf({ name: rental.itemName }) || 'Unknown item'
       rentalsByItem.set(name, (rentalsByItem.get(name) || 0) + 1)
     }
     const topRentals = Array.from(rentalsByItem.entries()).sort((a, b) => b[1] - a[1]).slice(0, 8)
@@ -500,6 +501,13 @@ export function AdminReportsPage() {
         /* The trend charts sit on the first page, side by side. */
         .report-charts { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 6px !important; break-inside: avoid; }
         .report-chart { padding: 4px 8px !important; border-radius: 6px !important; }
+        /* Tables print in full: no scroll box (wide tables shrink to fit the page instead). */
+        .print-area .overflow-x-auto { overflow: visible !important; }
+        .print-area table { table-layout: auto; width: 100% !important; font-size: 10px !important; }
+        .print-area th, .print-area td { padding-top: 3px !important; padding-bottom: 3px !important; }
+        /* A total row prints once, at the end, not again at the bottom of every page. */
+        .print-area tfoot { display: table-row-group; }
+        .print-area tr { break-inside: avoid; }
       }`}</style>
 
       <div className="no-print flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
@@ -729,6 +737,11 @@ export function AdminReportsPage() {
                 </tr>
               </tfoot>
             </table>
+          </div>
+          <div className="mt-2 text-xs text-muted">
+            Reservations and players are counted on the day of the game. Revenue is counted on the day it was paid, so a
+            booking paid ahead shows its money on the payment day and its players on the game day. A blank cell means none
+            that day. Cancelled or expired bookings still count here as reservations made for that day.
           </div>
         </Card>
         ) : null}
