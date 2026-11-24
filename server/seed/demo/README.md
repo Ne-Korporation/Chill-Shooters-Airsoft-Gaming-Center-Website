@@ -37,8 +37,8 @@ Every demo account uses the password **`ChillDemo2026!`**. Emails end in `@demo.
 
 | Role | Email (before `@demo.chillshooters.test`) | Shows |
 |---|---|---|
-| Admin (owner) | `ricardo.villanueva` | Dashboards, reports, REACH fund, expenses |
-| Registrar | `liza.manalo` | Counter, check-in, payment verification, ID and waiver review |
+| Admin (owner) | `ricardo.villanueva` | Dashboards, reports, donation fund, expenses |
+| Registrar | `liza.manalo` | Counter payments, check-in, ID, waiver and CvSU review |
 | Marshal | `jomar.bautista`, `kevin.soriano` | Games board, rentals, FPS checks, repairs |
 | Player (regular) | `juan.delacruz`, `marco.santos` | Long booking history, receipts, feedback |
 | Player (CvSU, verified) | `miguel.ocampo`, `alyssa.dizon`, `renz.manalastas`, `trisha.galang`, `kenneth.sison` | 10% discount; a team split payment in progress |
@@ -46,7 +46,7 @@ Every demo account uses the password **`ChillDemo2026!`**. Emails end in `@demo.
 | Parent with minors | `vincent.tan` (2 children), `grace.torres` (1), `dennis.castillo` (child's waiver pending) | Minors, guardian approvals |
 | Own gear | `paolo.garcia`, `rafael.aquino`, `jerome.salazar` | Registered guns, Hybrid bookings |
 | Account states | `sean.fernandez` (ID waiting for review), `ella.javier` (ID rejected), `louie.panganiban` (waiver and ID expired), `tomas.herrera` (suspended: cannot log in) | Review queues, expiry |
-| New player | `nicole.aguilar` | First booking with a GCash proof waiting for verification |
+| New player | `nicole.aguilar` | First booking, paid online (gateway) |
 
 ## Files
 
@@ -54,7 +54,7 @@ Every demo account uses the password **`ChillDemo2026!`**. Emails end in `@demo.
 - `people.js`: staff, players, children, ID verification, CvSU requests, waivers.
 - `bookings.js`: reservations, payments, games, check-ins, teams, rentals, FPS checks, damage,
   repairs, receipts, feedback. Uses the server's own pricing, split-share and inventory functions.
-- `extras.js`: cause and closed days, expenses, REACH fund, partner loans, announcements,
+- `extras.js`: cause and closed days, expenses, donation fund, partner loans, announcements,
   messages, notifications, weather advisories, audit log.
 - `validate.js`: the consistency checks.
 - `serve.js`: starts the API on the demo database.

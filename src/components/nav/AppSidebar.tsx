@@ -126,7 +126,7 @@ const adminItems: Item[] = [
   { section: 'Players & Partners', label: 'Player feedback', to: '/app/admin/feedback', icon: FiMessageSquare },
   { section: 'Players & Partners', label: 'Partnerships', to: '/app/admin/partnerships', icon: FiBriefcase },
   { section: 'Reports & Records', label: 'Reports', to: '/app/admin/reports', icon: FiBarChart2 },
-  { section: 'Reports & Records', label: 'REACH fund', to: '/app/admin/reach-fund', icon: FiHeart },
+  { section: 'Reports & Records', label: 'Donation fund', to: '/app/admin/reach-fund', icon: FiHeart },
   { section: 'Reports & Records', label: 'Audit logs', to: '/app/admin/audit-logs', icon: FiFileText },
 ]
 

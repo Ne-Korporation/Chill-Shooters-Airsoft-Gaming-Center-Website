@@ -490,7 +490,7 @@ router.post('/reach-fund/allocate', requireAuth, requireRole('admin'), async (re
     const settings = await db.collection('settings').findOne({ _id: REACH_SETTINGS_ID })
     const ratePercent = Number(settings?.ratePercent)
     if (!Number.isFinite(ratePercent) || ratePercent <= 0) {
-      return res.status(400).json({ ok: false, error: 'Set the REACH allocation rate before allocating.' })
+      return res.status(400).json({ ok: false, error: 'Set the donation fund allocation rate before allocating.' })
     }
 
     const ledger = db.collection('reach_fund_ledger')
@@ -567,7 +567,7 @@ router.post('/operating-expenses', requireAuth, requireRole('admin'), async (req
   try {
     const db = await getDb()
     if (await isMonthAllocated(db, dateISO)) {
-      return res.status(409).json({ ok: false, error: `${dateISO.slice(0, 7)} was already allocated to REACH, so its expenses are locked.` })
+      return res.status(409).json({ ok: false, error: `${dateISO.slice(0, 7)} was already allocated to the donation fund, so its expenses are locked.` })
     }
     const doc = {
       id: await nextShortId(db, 'operating_expenses', 'EXP'),
@@ -593,7 +593,7 @@ router.delete('/operating-expenses/:id', requireAuth, requireRole('admin'), asyn
     const expense = await db.collection('operating_expenses').findOne({ id: String(req.params.id) })
     if (!expense) return res.status(404).json({ ok: false, error: 'Expense not found' })
     if (await isMonthAllocated(db, expense.dateISO)) {
-      return res.status(409).json({ ok: false, error: `${expense.dateISO.slice(0, 7)} was already allocated to REACH, so its expenses are locked.` })
+      return res.status(409).json({ ok: false, error: `${expense.dateISO.slice(0, 7)} was already allocated to the donation fund, so its expenses are locked.` })
     }
     await db.collection('operating_expenses').deleteOne({ _id: expense._id })
     return res.json({ ok: true })
@@ -716,7 +716,7 @@ router.post('/reach-fund/entries', requireAuth, requireRole('admin'), async (req
         const sum = (t) => Number(totals.find((x) => x._id === t)?.amount || 0)
         const balance = sum('allocation') + sum('donation') - sum('expenditure')
         if (amount > balance + 0.001) {
-          throw Object.assign(new Error(`The REACH fund only has ₱${balance.toLocaleString()} available.`), { statusCode: 409 })
+          throw Object.assign(new Error(`The donation fund only has ₱${balance.toLocaleString()} available.`), { statusCode: 409 })
         }
       }
       entry = {

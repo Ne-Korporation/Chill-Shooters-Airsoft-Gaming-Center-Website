@@ -54,7 +54,7 @@ function manilaMonth(offset = 0) {
 
 const selectClass = 'w-full rounded-xl border border-white/10 bg-background px-4 py-3 text-sm text-text focus:outline-none focus:ring-2 focus:ring-accent/40 [&>option]:bg-background'
 
-// Monthly REACH allocation from net revenue, and the operating expenses that reduce it.
+// Monthly donation fund allocation from net revenue, and the operating expenses that reduce it.
 export function ReachNetRevenuePanel({ onAllocated }: { onAllocated: () => void }) {
   const [month, setMonth] = useState(manilaMonth(-1))
   const [data, setData] = useState<NetRevenue | null>(null)
@@ -171,7 +171,7 @@ export function ReachNetRevenuePanel({ onAllocated }: { onAllocated: () => void 
                     </tr>
                   ) : null}
                   <tr className="text-base font-bold text-accent">
-                    <td className="py-2 pr-4">REACH share{data.ratePercent != null ? ` (${data.ratePercent}%)` : ''}</td>
+                    <td className="py-2 pr-4">Donation fund share{data.ratePercent != null ? ` (${data.ratePercent}%)` : ''}</td>
                     <td className="py-2 text-right">{formatPHP(locked ? data.allocatedEntry!.amount : data.allocation)}</td>
                   </tr>
                 </>
@@ -189,7 +189,7 @@ export function ReachNetRevenuePanel({ onAllocated }: { onAllocated: () => void 
             ) : !data?.canAllocate ? (
               <div className="text-xs text-muted">This month isn't over yet. It can be allocated from the 1st of next month.</div>
             ) : (
-              <Button onClick={allocate} disabled={saving || !(data.allocation > 0)}>Allocate {formatPHP(data.allocation)} to REACH</Button>
+              <Button onClick={allocate} disabled={saving || !(data.allocation > 0)}>Allocate {formatPHP(data.allocation)} to the donation fund</Button>
             )}
           </div>
         </div>

@@ -76,7 +76,7 @@ const KEEP = {
   weapons: 'business inventory (player-registered guns are replaced); every piece reset to available',
   equipments: 'business inventory; reset to available; BB stock set to a realistic level',
   packages: 'as is',
-  settings: 'slot hours, REACH rate, penalty rules (locks dropped)',
+  settings: 'slot hours, donation fund rate, penalty rules (locks dropped)',
   site_settings: 'waiver text',
   partnerships: 'as is, plus the Cavite State University partner record',
   cause_days: 'future ones only, plus one past demo cause day',
@@ -297,7 +297,7 @@ function printReport(report) {
   for (const e of report.errors.slice(0, 60)) console.log(`  ✖ ${e}`)
   if (report.errors.length > 60) console.log(`  … and ${report.errors.length - 60} more`)
   for (const w of report.warnings.slice(0, 20)) console.log(`  ! ${w}`)
-  if (report.stats?.reachBalance !== undefined) console.log(`  REACH fund balance: ₱${Math.round(report.stats.reachBalance).toLocaleString()}`)
+  if (report.stats?.reachBalance !== undefined) console.log(`  Donation fund balance: ₱${Math.round(report.stats.reachBalance).toLocaleString()}`)
 }
 
 main().catch((err) => {

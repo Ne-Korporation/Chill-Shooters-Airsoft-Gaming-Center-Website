@@ -39,7 +39,7 @@ const STATUS_STYLES: Record<ReachProgram['status'], string> = {
   cancelled: 'border-white/10 text-muted',
 }
 
-// Records of the community outreach activities the REACH fund supports.
+// Records of the community outreach activities the donation fund supports.
 export function ReachProgramsCard({ programs, onChanged }: { programs: ReachProgram[]; onChanged: () => void }) {
   const [form, setForm] = useState(emptyForm)
   const [editingId, setEditingId] = useState<string | null>(null)

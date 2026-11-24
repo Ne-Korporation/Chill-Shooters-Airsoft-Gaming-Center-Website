@@ -4,6 +4,13 @@ function isStaffRole(role?: string) {
   return role === 'admin' || role === 'registrar' || role === 'marshal'
 }
 
+// The games board for this role, opened on one game when the notice names it.
+function gamesBoardRoute(role: string, linkedId?: string) {
+  const base = role === 'registrar' ? '/app/registrar/games' : '/app/games'
+  const id = String(linkedId || '').trim()
+  return id ? `${base}?game=${encodeURIComponent(id)}` : base
+}
+
 export function resolveNotificationRoute(notification: NotificationItem, role?: string, userId?: string) {
   const notificationType = String(notification.type || '').toLowerCase()
   const currentRole = String(role || '').toLowerCase()
@@ -23,9 +30,12 @@ export function resolveNotificationRoute(notification: NotificationItem, role?: 
     if (currentRole === 'registrar') return '/app/registrar/reservations'
     return '/app/my-reservations'
   }
-  if (notificationType === 'own_weapons_incoming') return isStaffRole(currentRole) ? '/app/games' : '/app'
-  // A game just booked: marshals and admins open the games board.
-  if (notificationType === 'game_booked') return isStaffRole(currentRole) ? '/app/games' : '/app'
+  // Notices about one game (booked, confirmed, due to start, own weapons coming) open that game on
+  // the games board: its details pop up and its row is highlighted. The link is the game id, or the
+  // booking id for a game just booked.
+  if (notificationType === 'own_weapons_incoming' || notificationType === 'game_booked' || notificationType === 'game_due_to_start' || notificationType.startsWith('gameplay_')) {
+    return isStaffRole(currentRole) ? gamesBoardRoute(currentRole, notification.linkedResourceId) : '/app'
+  }
 
   // A message from a player opens the admin Inbox.
   if (notificationType === 'contact_message') return currentRole === 'admin' ? '/app/admin/inbox' : null
@@ -53,11 +63,6 @@ export function resolveNotificationRoute(notification: NotificationItem, role?: 
     if (currentRole === 'admin') return '/app/admin/payments'
     if (currentRole === 'registrar') return '/app/registrar/submitted-payments'
     return '/app/payment'
-  }
-
-  if (notificationType.startsWith('gameplay_')) {
-    if (isStaffRole(currentRole)) return '/app/games'
-    return '/app'
   }
 
   if (notificationType.startsWith('weapon_')) {

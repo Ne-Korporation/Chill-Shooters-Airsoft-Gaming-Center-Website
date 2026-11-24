@@ -18,7 +18,7 @@ import { computePenalty, getPenaltyRules } from '../../utils/penaltyRules.js'
 import { getExperienceLevel, getAgeGroup, suggestBalancedTeams } from '../../utils/teamBalancing.js'
 import { waiverCovers } from './people.js'
 import {
-  DAY, DEMO_FLAG, HOUR, actor, addDays, ageOn, atManila, counter, dayOfWeek, fieldPlanSvg, gcashReceiptSvg,
+  DAY, DEMO_FLAG, HOUR, actor, addDays, ageOn, atManila, counter, dayOfWeek, fieldPlanSvg,
   hhmmToMinutes, isWeekend, manilaDay, minutesToHHMM, reservationIdFrom, round2, uuidFrom,
 } from './lib.js'
 
@@ -213,8 +213,8 @@ export async function seedBookings(ctx) {
   const special = [
     // A team splitting the payment, still collecting shares (24-hour window, opened 3 hours ago).
     { date: firstSun, slot: 'morning', loc: 'salawag', group: GROUPS[1], outcome: 'pending_split', createdMs: recent(3), size: 5, overrides: { forceSplit: true, invitePending: 'trisha', unpaid: ['renz'] } },
-    // A GCash proof waiting for the registrar to verify.
-    { date: upcomingWeekends[2] || firstSat, slot: 'afternoon', loc: 'salawag', group: { name: '', members: ['nicole'] }, outcome: 'pending_review', createdMs: recent(5), size: 1 },
+    // A new player's first booking, paid online a few hours ago.
+    { date: upcomingWeekends[2] || firstSat, slot: 'afternoon', loc: 'salawag', group: { name: '', members: ['nicole'] }, outcome: 'upcoming', createdMs: recent(5), size: 1 },
     // Paid, waiting for the guardian's approval of a minor.
     { date: firstSat, slot: 'afternoon', loc: 'salawag', group: GROUPS[8], outcome: 'pending_guardian', createdMs: recent(28), size: 2 },
   ]
@@ -246,8 +246,8 @@ export async function seedBookings(ctx) {
   const PKG = { normal: 'PKG-0001', gel: 'PKG-0004', grenadier: 'PKG-0005', duo: 'PKG-0006' }
 
   const reservationsById = new Map()
-  let rejectedStoryDone = false
-  let rejectedExpiredDone = false
+
+
   let hybridPickDone = false
   let customDone = 0
   let ownAllDone = false
@@ -300,7 +300,7 @@ export async function seedBookings(ctx) {
       ownAllDone = true
     }
 
-    const split = spec.forceSplit || (adultMates.length >= 2 && rng.chance(0.38) && spec.outcome !== 'pending_review')
+    const split = spec.forceSplit || (adultMates.length >= 2 && rng.chance(0.38))
     const paymentPlan = spec.paymentPlan || (split ? 'cash_balance' : rng.chance(0.42) ? 'full' : 'cash_balance')
 
     // Extra reloads, bought per player (a split bills each player's own).
@@ -407,36 +407,17 @@ export async function seedBookings(ctx) {
     const paymentKey = (suffix) => uuidFrom(`payment:${id}:${suffix}`)
     const registrar = () => rng.pick(registrars)
 
-    const onlinePayment = ({ payerId, amount, atMs, method, suffix }) => {
-      const n = nextPaymentNo()
-      if (method === 'demo') {
-        const channel = rng.pick(['GCash', 'QR Ph', 'GCash'])
-        const txn = `DEMO-TXN-${uuidFrom(`txn:${id}:${suffix}`).slice(0, 8).toUpperCase()}`
-        return {
-          id: `PMT-${paymentKey(suffix)}`, reservationId: id, userId: payerId, amount: round2(amount),
-          paymentMethod: `${channel} (demo)`, paymentStatus: 'paid', status: 'paid', kind: 'online',
-          xenditInvoiceId: `demo-inv-${uuidFrom(`inv:${id}:${suffix}`)}`, xenditPaymentId: txn, transactionReference: txn,
-          verifiedBy: 'demo', demo: true, verifiedAtISO: new Date(atMs).toISOString(), createdAtISO: new Date(atMs).toISOString(), ...DEMO_FLAG,
-        }
-      }
-      // GCash proof: the player uploads the receipt with its reference; the registrar verifies it.
-      const reference = `${1000 + (n * 7919) % 9000}${String(100000000 + (n * 104729) % 900000000)}`
-      const sender = `0917${String(1000000 + (n * 6151) % 9000000)}`
-      const proof = files.add({ key: `gcash-${id}-${suffix}`, filename: `gcash-receipt-${reference}.svg`, svg: gcashReceiptSvg({ amount, reference, dateLabel: new Date(atMs + 8 * HOUR).toISOString().slice(0, 16).replace('T', ' '), sender }), uploadedBy: payerId, createdAtISO: new Date(atMs).toISOString() })
+    // Online payments go through the payment gateway (GCash or QR Ph on the demo payment page,
+    // as in routes/xendit.js): verified by the gateway itself, so no staff review.
+    const onlinePayment = ({ payerId, amount, atMs, suffix }) => {
+      const channel = rng.pick(['GCash', 'QR Ph', 'GCash'])
+      const txn = `DEMO-TXN-${uuidFrom(`txn:${id}:${suffix}`).slice(0, 8).toUpperCase()}`
       return {
         id: `PMT-${paymentKey(suffix)}`, reservationId: id, userId: payerId, amount: round2(amount),
-        paymentMethod: 'GCash', paymentStatus: 'pending', status: 'pending', transactionReference: reference,
-        gcashImageUrl: proof, senderNumber: sender, createdAtISO: new Date(atMs).toISOString(), ...DEMO_FLAG,
+        paymentMethod: `${channel} (demo)`, paymentStatus: 'paid', status: 'paid', kind: 'online',
+        xenditInvoiceId: `demo-inv-${uuidFrom(`inv:${id}:${suffix}`)}`, xenditPaymentId: txn, transactionReference: txn,
+        verifiedBy: 'demo', demo: true, verifiedAtISO: new Date(atMs).toISOString(), createdAtISO: new Date(atMs).toISOString(), ...DEMO_FLAG,
       }
-    }
-    const verify = (payment, atMs, by = registrar(), status = 'paid', reason = '') => {
-      const atISO = new Date(atMs).toISOString()
-      Object.assign(payment, {
-        paymentStatus: status, status, updatedAtISO: atISO,
-        verifiedBy: String(by.id), verifiedByRole: by.role, verifiedByName: by.name, verifiedAtISO: atISO,
-        auditTrail: [{ previousStatus: 'pending', status, changedBy: String(by.id), changedByRole: by.role, changedByName: by.name, ...(reason ? { reason } : {}), changedAtISO: atISO }],
-      })
-      return payment
     }
     const onsitePayment = ({ amount, atMs, suffix, payerId = captain.id, note = '' }) => {
       const by = registrar()
@@ -452,7 +433,7 @@ export async function seedBookings(ctx) {
     }
 
     // The online part (deposit, or everything on the "pay in full" plan): each payer pays their share.
-    const payDeposits = ({ skip = [], leavePending = false }) => {
+    const payDeposits = ({ skip = [] }) => {
       let paidSoFar = 0
       let lastMs = spec.createdMs
       payers.forEach((payerId, index) => {
@@ -461,11 +442,9 @@ export async function seedBookings(ctx) {
         paidSoFar = round2(paidSoFar + amount)
         if (skip.includes(payerId)) return
         const atMs = past(spec.createdMs + (index === 0 ? rng.int(3, 20) * 60_000 : rng.int(30, 600) * 60_000), payers.length - index)
-        const method = leavePending ? 'gcash' : rng.chance(0.55) ? 'demo' : 'gcash'
-        const payment = onlinePayment({ payerId, amount, atMs, method, suffix: `dep-${payerId}` })
-        if (payment.paymentStatus === 'pending' && !leavePending) verify(payment, past(atMs + rng.int(20, 300) * 60_000))
+        const payment = onlinePayment({ payerId, amount, atMs, suffix: `dep-${payerId}` })
         payments.push(payment)
-        lastMs = Math.max(lastMs, Date.parse(payment.verifiedAtISO || payment.createdAtISO))
+        lastMs = Math.max(lastMs, Date.parse(payment.verifiedAtISO))
       })
       return lastMs
     }
@@ -478,13 +457,6 @@ export async function seedBookings(ctx) {
     if (outcome === 'expired' || outcome === 'cancelled_staff') {
       // Never fully paid: the slot was released (expired window) or staff cancelled it before payment.
       let cancelMs = spec.createdMs + (split ? 24 : 0.5) * HOUR
-      if (outcome === 'expired' && !rejectedExpiredDone && !split) {
-        // The player sent a GCash proof for the wrong amount; it was rejected and never resent.
-        const p = onlinePayment({ payerId: captain.id, amount: doc.depositAmount, atMs: spec.createdMs + 10 * 60_000, method: 'gcash', suffix: 'dep-rejected' })
-        verify(p, spec.createdMs + 25 * 60_000, registrar(), 'rejected', 'The reference number does not match any GCash transfer received.')
-        payments.push(p)
-        rejectedExpiredDone = true
-      }
       if (outcome === 'cancelled_staff') cancelMs = spec.createdMs + rng.int(1, 6) * HOUR
       const by = outcome === 'cancelled_staff' ? registrar() : null
       const reason = outcome === 'cancelled_staff' ? 'Duplicate booking: the captain booked the same slot twice by mistake.' : 'payment_window_expired'
@@ -497,28 +469,9 @@ export async function seedBookings(ctx) {
     } else if (outcome === 'pending_split') {
       payDeposits({ skip: [...(spec.unpaid || []).map((k) => player(k).id), ...(spec.invitePending ? [player(spec.invitePending).id] : [])] })
       doc.paymentDueAtISO = new Date(spec.createdMs + 24 * HOUR).toISOString()
-    } else if (outcome === 'pending_review') {
-      payDeposits({ leavePending: true })
-      doc.paymentDueAtISO = new Date(spec.createdMs + 0.5 * HOUR).toISOString()
-      doc.forwardedToAdminAtISO = new Date(spec.createdMs + 15 * 60_000).toISOString()
-      doc.paymentFinalizedAtISO = doc.forwardedToAdminAtISO
     } else {
-      // Paid and (usually) confirmed.
-      let lastPaidMs
-      if (!rejectedStoryDone && outcome === 'completed' && !split && spec.date > addDays(historyStart, 20)) {
-        // A rejected GCash proof, then the correct one, verified.
-        const bad = onlinePayment({ payerId: captain.id, amount: doc.depositAmount, atMs: spec.createdMs + 8 * 60_000, method: 'gcash', suffix: 'dep-first-try' })
-        verify(bad, spec.createdMs + 40 * 60_000, registrar(), 'rejected', 'The screenshot shows a transfer to a different account. Please send the receipt for your payment to Chill Shooters.')
-        payments.push(bad)
-        const good = onlinePayment({ payerId: captain.id, amount: doc.depositAmount, atMs: spec.createdMs + 55 * 60_000, method: 'gcash', suffix: 'dep-second-try' })
-        verify(good, spec.createdMs + 120 * 60_000)
-        payments.push(good)
-        lastPaidMs = Date.parse(good.verifiedAtISO)
-        rejectedStoryDone = true
-        out.notes.push(`Rejected-then-resubmitted GCash payment: ${id}`)
-      } else {
-        lastPaidMs = payDeposits({})
-      }
+      // Paid online and (usually) confirmed.
+      const lastPaidMs = payDeposits({})
       doc.paymentDueAtISO = new Date(spec.createdMs + (split ? 24 : 0.5) * HOUR).toISOString()
       if (outcome === 'pending_guardian') {
         status = 'pending'
@@ -864,6 +817,15 @@ export async function seedBookings(ctx) {
         userId, status: 'submitted', createdAtISO: new Date(past(Date.parse(game.completedAtISO) + rng.int(1, 20) * HOUR)).toISOString(), ...DEMO_FLAG,
       })
     }
+  }
+
+  // Staff archive finished days from the board ("Archive day"); the last week stays on it.
+  for (const game of out.gameplay) {
+    if (game.Status !== 'Completed') continue
+    const day = String(game.Schedule).slice(0, 10)
+    if (day >= addDays(todayISO, -7)) continue
+    const atMs = past(atManila(addDays(day, rng.int(1, 3)), '21:00'))
+    Object.assign(game, { Status: 'Archived', archivedAtISO: new Date(atMs).toISOString(), updatedAtISO: new Date(atMs).toISOString() })
   }
 
   // A booking moved by the player (shown in its history and the audit log).

@@ -1,5 +1,5 @@
 // Demo records around the bookings: the calendar (cause days, closed days), the CvSU partnership,
-// money (operating expenses, REACH fund, partner loans), and communication (announcements,
+// money (operating expenses, donation fund, partner loans), and communication (announcements,
 // contact messages, notifications, weather advisories) plus the audit log.
 
 import { computeNetRevenue, paymentDay, isCollected } from '../../utils/reachNetRevenue.js'
@@ -86,7 +86,7 @@ export function buildExpenses({ payments, expenseHints = [], historyStart, today
   return expenses
 }
 
-// The REACH fund: monthly allocations from net revenue (worked out by the server's own
+// The donation fund: monthly allocations from net revenue (worked out by the server's own
 // computeNetRevenue once payments and expenses are in), outside donations, and spending on
 // community programs.
 export async function buildReachFund({ db, ratePercent, historyStart, todayISO, staff }) {
