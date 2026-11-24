@@ -913,12 +913,14 @@ async function reportRentalProblem(db, rental, condition, note, req) {
   // staff don't enter it again; completing the repair bills the booking and settles the report.
   let repair = null
   if (condition !== 'missing' && rental.itemId) {
+    // The item's category, so repair costs group by category (not "Uncategorized").
+    const item = await db.collection(rental.itemCollection).findOne(idFilter(rental.itemId), { projection: { category: 1 } }).catch(() => null)
     repair = {
       id: await nextShortId(db, 'repairs', 'RPR'),
       itemCollection: rental.itemCollection,
       itemId: String(rental.itemId),
       itemName: report.itemName,
-      itemCategory: '',
+      itemCategory: String(item?.category || ''),
       damage: report.description,
       gunsmith: '',
       damageReportId: report.id,
@@ -1348,7 +1350,29 @@ router.get('/repairs/summary', requireAuth, requireRole('admin', 'marshal'), asy
       { $group: { _id: field, repairs: { $sum: 1 }, totalCost: { $sum: { $ifNull: ['$totalCost', 0] } }, open: { $sum: { $cond: [{ $eq: ['$status', 'in_progress'] }, 1, 0] } } } },
       { $sort: { repairs: -1 } },
     ]).toArray()
-    const [byItem, byCategory] = await Promise.all([group('$itemName'), group('$itemCategory')])
+    // By category: repairs saved without one (opened from a damaged return) use their item's category.
+    const categoryRows = async () => {
+      const repairs = await db.collection('repairs').find({}, { projection: { itemCollection: 1, itemId: 1, itemCategory: 1, totalCost: 1, status: 1 } }).toArray()
+      const missing = repairs.filter((r) => !r.itemCategory && r.itemId)
+      const lookup = new Map()
+      for (const collection of RENTAL_COLLECTIONS) {
+        const ids = missing.filter((r) => (r.itemCollection || 'weapons') === collection).map((r) => String(r.itemId))
+        if (!ids.length) continue
+        const docs = await db.collection(collection).find({ id: { $in: ids } }, { projection: { id: 1, category: 1 } }).toArray()
+        for (const doc of docs) lookup.set(`${collection}:${doc.id}`, doc.category)
+      }
+      const rows = new Map()
+      for (const r of repairs) {
+        const name = r.itemCategory || lookup.get(`${r.itemCollection || 'weapons'}:${r.itemId}`) || ''
+        const row = rows.get(name) || { _id: name, repairs: 0, totalCost: 0, open: 0 }
+        row.repairs += 1
+        row.totalCost += Number(r.totalCost || 0)
+        if (r.status === 'in_progress') row.open += 1
+        rows.set(name, row)
+      }
+      return [...rows.values()].sort((a, b) => b.repairs - a.repairs)
+    }
+    const [byItem, byCategory] = await Promise.all([group('$itemName'), categoryRows()])
     return res.json({
       ok: true,
       data: {

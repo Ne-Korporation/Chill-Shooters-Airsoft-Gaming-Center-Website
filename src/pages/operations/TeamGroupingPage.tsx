@@ -6,6 +6,7 @@ import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { apiGet, apiPost } from '../../utils/apiClient'
 import type { CheckInSession } from './FieldCheckInPage'
+import { formatDateTime } from '../../utils/dates'
 
 type RosterPlayer = {
   key: string
@@ -220,7 +221,7 @@ export function SessionTeams({ session, active }: { session: CheckInSession; act
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="text-sm text-muted">
               {roster.length} of {booked} booked player{booked === 1 ? '' : 's'} checked in ·{' '}
-              {savedAt ? `Saved ${new Date(savedAt).toLocaleString()}` : dirty ? 'Unsaved changes' : 'Suggested, not saved yet'}
+              {savedAt ? `Saved ${formatDateTime(savedAt)}` : dirty ? 'Unsaved changes' : 'Suggested, not saved yet'}
             </div>
             <div className="flex flex-wrap gap-2">
               <select

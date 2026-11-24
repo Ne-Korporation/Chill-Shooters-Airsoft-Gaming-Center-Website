@@ -1,17 +1,18 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
-import { FiHeart } from 'react-icons/fi'
+import { FiHeart, FiPlusCircle } from 'react-icons/fi'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
-import { apiGet, apiPost, apiPut } from '../../utils/apiClient'
-import { ReachNetRevenuePanel } from './ReachNetRevenuePanel'
-import { ReachProgramsCard, type ReachProgram } from './ReachProgramsCard'
+import { apiGet, apiPost } from '../../utils/apiClient'
+import { confirmDialog } from '../../components/ui/ConfirmDialog'
 
 type Summary = {
   ratePercent: number | null
   rateUpdatedAtISO: string | null
+  // Monthly allocations from net revenue: how the fund used to be filled, kept as history.
   allocated: number
+  fromCauses: number
   donations: number
   spent: number
   balance: number
@@ -19,11 +20,10 @@ type Summary = {
 
 type LedgerEntry = {
   _id?: string
-  type: 'allocation' | 'donation' | 'expenditure'
+  type: 'allocation' | 'cause_day' | 'donation' | 'expenditure'
   amount: number
   description: string
   donorName?: string
-  programId?: string
   dateISO?: string
   atISO: string
   recordedBy?: { actorEmail?: string }
@@ -33,10 +33,39 @@ function formatPHP(value: number) {
   return `₱${Number(value || 0).toLocaleString('en-PH', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`
 }
 
+// One game for a cause: what it raised from collected payments and how much is in the fund.
+type CauseDayRow = {
+  dateISO: string
+  title: string
+  beneficiary: string
+  donationPercent: number
+  bookings: number
+  players: number
+  collected: number
+  donation: number
+  expected: number
+  added: number
+  toAdd: number
+  finished: boolean
+}
+
 const TYPE_STYLES: Record<LedgerEntry['type'], string> = {
   allocation: 'text-accent',
+  cause_day: 'text-accent',
   donation: 'text-success',
   expenditure: 'text-danger',
+}
+
+const TYPE_LABELS: Record<LedgerEntry['type'], string> = {
+  allocation: 'Allocation (earlier)',
+  cause_day: 'Game for a cause',
+  donation: 'Donation',
+  expenditure: 'Expenditure',
+}
+
+function longDate(dateISO: string) {
+  const date = new Date(`${dateISO}T12:00:00`)
+  return Number.isNaN(date.getTime()) ? dateISO : date.toLocaleDateString('en-PH', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })
 }
 
 export function AdminReachFundPage() {
@@ -44,20 +73,19 @@ export function AdminReachFundPage() {
   const [entries, setEntries] = useState<LedgerEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [rateInput, setRateInput] = useState('')
-  const [entryForm, setEntryForm] = useState({ type: 'expenditure', amount: '', description: '', donorName: '', dateISO: '', programId: '' })
-  const [programs, setPrograms] = useState<ReachProgram[]>([])
+  const [causeDays, setCauseDays] = useState<CauseDayRow[]>([])
+  const [addingDay, setAddingDay] = useState<string | null>(null)
+  const [entryForm, setEntryForm] = useState({ type: 'expenditure', amount: '', description: '', donorName: '', dateISO: '' })
 
   const load = useCallback(async () => {
     try {
-      const [res, programRes] = await Promise.all([
+      const [res, causeRes] = await Promise.all([
         apiGet<{ ok: boolean; summary: Summary; data: LedgerEntry[] }>('/api/reach-fund'),
-        apiGet<{ ok: boolean; data: ReachProgram[] }>('/api/reach-programs'),
+        apiGet<{ ok: boolean; data: CauseDayRow[] }>('/api/reach-fund/cause-days'),
       ])
-      setPrograms(programRes.data || [])
       setSummary(res.summary)
       setEntries(res.data || [])
-      setRateInput(res.summary?.ratePercent == null ? '' : String(res.summary.ratePercent))
+      setCauseDays(causeRes.data || [])
     } catch (err: any) {
       toast.error(err?.message || 'Unable to load the donation fund')
     } finally {
@@ -69,16 +97,23 @@ export function AdminReachFundPage() {
     void load()
   }, [load])
 
-  const saveRate = async () => {
-    setSaving(true)
+  // Moves a finished cause day's donation share (what's not in the fund yet) into the fund.
+  const addCauseDay = async (day: CauseDayRow) => {
+    const ok = await confirmDialog({
+      title: `Add ${formatPHP(day.toAdd)} to the fund?`,
+      message: `${day.donationPercent}% of the ${formatPHP(day.collected)} collected for "${day.title}" on ${longDate(day.dateISO)}${day.added > 0 ? `, on top of the ${formatPHP(day.added)} already added` : ''}.`,
+      confirmLabel: 'Add to fund',
+    })
+    if (!ok) return
+    setAddingDay(day.dateISO)
     try {
-      await apiPut('/api/reach-fund/settings', { ratePercent: Number(rateInput) })
-      toast.success('Allocation rate saved.')
+      await apiPost(`/api/reach-fund/cause-days/${encodeURIComponent(day.dateISO)}/add`, {})
+      toast.success(`${formatPHP(day.toAdd)} added to the donation fund.`)
       await load()
     } catch (err: any) {
-      toast.error(err?.message || 'Unable to save rate')
+      toast.error(err?.message || 'Unable to add it to the fund')
     } finally {
-      setSaving(false)
+      setAddingDay(null)
     }
   }
 
@@ -88,7 +123,7 @@ export function AdminReachFundPage() {
     try {
       await apiPost('/api/reach-fund/entries', { ...entryForm, amount: Number(entryForm.amount) })
       toast.success(entryForm.type === 'donation' ? 'Donation recorded.' : 'Expenditure recorded.')
-      setEntryForm((c) => ({ ...c, amount: '', description: '', donorName: '', programId: '' }))
+      setEntryForm((c) => ({ ...c, amount: '', description: '', donorName: '' }))
       await load()
     } catch (err: any) {
       toast.error(err?.message || 'Unable to record entry')
@@ -100,7 +135,7 @@ export function AdminReachFundPage() {
   const tiles = summary
     ? [
         { label: 'Fund balance', value: formatPHP(summary.balance), tone: 'text-success' },
-        { label: 'Allocated from revenue', value: formatPHP(summary.allocated), tone: 'text-accent' },
+        { label: 'From games for a cause', value: formatPHP(summary.fromCauses), tone: 'text-accent' },
         { label: 'Donations received', value: formatPHP(summary.donations), tone: 'text-success' },
         { label: 'Spent on outreach', value: formatPHP(summary.spent), tone: 'text-danger' },
       ]
@@ -111,7 +146,7 @@ export function AdminReachFundPage() {
       <div>
         <h1 className="flex items-center gap-2 text-3xl font-bold"><FiHeart /> Donation Fund</h1>
         <p className="mt-1 text-sm text-muted">
-          Community outreach fund, kept in its own ledger and never counted as operating revenue. Spending can't exceed the fund balance.
+          Community outreach fund, filled by games for a cause and outside donations. It's kept in its own ledger, and spending can't exceed the fund balance.
         </p>
       </div>
 
@@ -124,32 +159,56 @@ export function AdminReachFundPage() {
         ))}
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card className="p-4 md:p-5">
-          <div className="text-xs uppercase tracking-widest text-muted">Allocation rate</div>
-          <p className="mt-2 text-sm text-muted">
-            The owner-approved percentage of each month's net revenue that goes into the fund.
-          </p>
-          <div className="mt-3 flex flex-wrap items-end gap-2">
-            <div className="w-40">
-              <Input
-                label="Rate (%)"
-                type="number"
-                min={0}
-                max={100}
-                step="0.1"
-                value={rateInput}
-                placeholder="Not set"
-                onChange={(e) => setRateInput(e.target.value)}
-              />
-            </div>
-            <Button variant="secondary" onClick={saveRate} disabled={saving || rateInput === ''}>Save rate</Button>
-          </div>
-          {summary?.ratePercent == null ? (
-            <div className="mt-2 text-xs text-warning">No rate set yet. Enter the percentage approved by the owner.</div>
-          ) : null}
-        </Card>
+      {summary && summary.allocated > 0 ? (
+        <p className="-mt-2 text-xs text-muted">Includes {formatPHP(summary.allocated)} allocated from monthly revenue before the fund moved to games for a cause.</p>
+      ) : null}
 
+      {/* Where the fund's money comes from: each game for a cause, once the day is over. */}
+      <Card className="p-4 md:p-5">
+        <div className="text-xs uppercase tracking-widest text-muted">Games for a cause</div>
+        <p className="mt-1 text-sm text-muted">
+          Each day's donation share of the payments collected for its bookings. Add it to the fund once the day is over; payments collected later can be added the same way.
+        </p>
+        {loading ? (
+          <div className="mt-3 text-sm text-muted">Loading games for a cause…</div>
+        ) : causeDays.length === 0 ? (
+          <div className="mt-3 rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-muted">
+            No games for a cause yet. Mark a day as a game for a cause on the capacity calendar, and its donation shows here after the day.
+          </div>
+        ) : (
+          <ul className="mt-3 divide-y divide-white/5">
+            {causeDays.map((day) => (
+              <li key={day.dateISO} className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold">{day.title}{day.beneficiary ? <span className="font-normal text-muted"> · for {day.beneficiary}</span> : null}</div>
+                  <div className="mt-0.5 text-xs text-muted">
+                    {longDate(day.dateISO)} · {day.bookings} booking{day.bookings === 1 ? '' : 's'}, {day.players} player{day.players === 1 ? '' : 's'} · {day.donationPercent}% of {formatPHP(day.collected)} collected
+                  </div>
+                  {day.expected > day.donation ? (
+                    <div className="mt-0.5 text-[11px] text-warning">{formatPHP(day.expected - day.donation)} more once the remaining balances are paid.</div>
+                  ) : null}
+                </div>
+                <div className="flex shrink-0 flex-col items-start gap-1 sm:items-end">
+                  <div className="text-sm"><span className="font-bold text-accent">{formatPHP(day.donation)}</span> <span className="text-xs text-muted">raised</span></div>
+                  {!day.finished ? (
+                    <span className="text-[11px] text-muted">Today: add it once the day is over</span>
+                  ) : day.toAdd > 0 ? (
+                    <Button size="xs" variant="accent-soft" disabled={addingDay === day.dateISO} onClick={() => void addCauseDay(day)}>
+                      <FiPlusCircle /> {addingDay === day.dateISO ? 'Adding…' : `Add ${formatPHP(day.toAdd)} to fund`}
+                    </Button>
+                  ) : day.donation > 0 ? (
+                    <span className="text-[11px] font-semibold text-success">In the fund</span>
+                  ) : (
+                    <span className="text-[11px] text-muted">Nothing collected</span>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+
+      <div>
         <Card className="p-4 md:p-5">
           <div className="text-xs uppercase tracking-widest text-muted">Record donation or expenditure</div>
           <form className="mt-3 space-y-3" onSubmit={addEntry}>
@@ -170,22 +229,10 @@ export function AdminReachFundPage() {
             </div>
             {entryForm.type === 'donation' ? (
               <Input label="Donor (optional)" value={entryForm.donorName} onChange={(e) => setEntryForm((c) => ({ ...c, donorName: e.target.value }))} />
-            ) : (
-              <label className="block">
-                <div className="mb-2 text-sm font-semibold text-text">Outreach program (optional)</div>
-                <select
-                  value={entryForm.programId}
-                  onChange={(e) => setEntryForm((c) => ({ ...c, programId: e.target.value }))}
-                  className="w-full rounded-xl border border-white/10 bg-background px-4 py-3 text-sm text-text focus:outline-none focus:ring-2 focus:ring-accent/40 [&>option]:bg-background"
-                >
-                  <option value="">Not linked to a program</option>
-                  {programs.map((program) => <option key={program.id} value={program.id}>{program.title} ({program.dateISO})</option>)}
-                </select>
-              </label>
-            )}
+            ) : null}
             <Input
               label="Description"
-              placeholder={entryForm.type === 'donation' ? 'e.g. Sponsor donation for school outreach' : 'e.g. Supplies for barangay outreach day'}
+              placeholder={entryForm.type === 'donation' ? 'e.g. Sponsor donation for the cause' : 'e.g. Relief goods handed to the beneficiary'}
               value={entryForm.description}
               onChange={(e) => setEntryForm((c) => ({ ...c, description: e.target.value }))}
             />
@@ -193,10 +240,6 @@ export function AdminReachFundPage() {
           </form>
         </Card>
       </div>
-
-      <ReachNetRevenuePanel onAllocated={() => void load()} />
-
-      <ReachProgramsCard programs={programs} onChanged={() => void load()} />
 
       <Card className="p-4 md:p-5">
         <div className="text-xs uppercase tracking-widest text-muted">Ledger</div>
@@ -218,12 +261,9 @@ export function AdminReachFundPage() {
               {entries.map((entry, index) => (
                 <tr key={entry._id || index}>
                   <td className="py-2 pr-4">{entry.dateISO || entry.atISO.slice(0, 10)}</td>
-                  <td className={`py-2 pr-4 capitalize ${TYPE_STYLES[entry.type]}`}>{entry.type}</td>
+                  <td className={`py-2 pr-4 ${TYPE_STYLES[entry.type] || ''}`}>{TYPE_LABELS[entry.type] || entry.type}</td>
                   <td className="py-2 pr-4">
                     {entry.description}{entry.donorName ? ` (${entry.donorName})` : ''}
-                    {entry.programId ? (
-                      <div className="text-[11px] text-muted">Program: {programs.find((p) => p.id === entry.programId)?.title || entry.programId}</div>
-                    ) : null}
                   </td>
                   <td className="py-2 pr-4 text-muted">{entry.recordedBy?.actorEmail || '-'}</td>
                   <td className="py-2 text-right">{entry.type === 'expenditure' ? '−' : '+'}{formatPHP(entry.amount)}</td>

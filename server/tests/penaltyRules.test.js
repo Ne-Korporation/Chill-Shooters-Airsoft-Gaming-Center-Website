@@ -39,19 +39,19 @@ test('billing the rule amount needs no reason', () => {
   assert.deepEqual(resolvePenaltyCharge(computed, { requestedAmount: '1320' }), { amount: 1320, overridden: false })
 })
 
-test('billing a different amount needs a reason', () => {
+test('a different amount is billed as entered, with or without a reason', () => {
   const computed = { amount: 1320 }
-  assert.match(resolvePenaltyCharge(computed, { requestedAmount: 1000 }).error, /reason/)
+  assert.deepEqual(resolvePenaltyCharge(computed, { requestedAmount: 1000 }), { amount: 1000, overridden: true, overrideReason: '' })
   assert.deepEqual(
     resolvePenaltyCharge(computed, { requestedAmount: 1000, overrideReason: 'First offense, owner approved' }),
     { amount: 1000, overridden: true, overrideReason: 'First offense, owner approved' },
   )
 })
 
-test('when the rule cannot compute, a manual amount needs a reason', () => {
+test('when the rule cannot compute, the fee entered is billed', () => {
   const computed = { amount: null, missing: 'Set the replacement value.' }
   assert.match(resolvePenaltyCharge(computed, {}).error, /replacement value/)
-  assert.match(resolvePenaltyCharge(computed, { requestedAmount: 500 }).error, /reason/)
+  assert.equal(resolvePenaltyCharge(computed, { requestedAmount: 500 }).amount, 500)
   assert.equal(resolvePenaltyCharge(computed, { requestedAmount: 500, overrideReason: 'Supplier quote' }).amount, 500)
 })
 

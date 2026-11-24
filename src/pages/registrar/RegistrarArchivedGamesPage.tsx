@@ -8,6 +8,7 @@ import { Button } from '../../components/ui/Button'
 import { apiGetAll } from '../../utils/apiClient'
 import { Pagination, usePagination } from '../../components/ui/Pagination'
 import { DAYS_PER_PAGE, folderLabel, gameDayOf, locationName, slotOf } from './RegistrarOngoingGamesPage'
+import { formatDateTime } from '../../utils/dates'
 
 type GameplayStatus = 'Scheduled' | 'Ongoing' | 'Completed' | 'Cancelled' | 'Archived'
 
@@ -225,7 +226,7 @@ export function RegistrarArchivedGamesPage({ embedded = false }: { embedded?: bo
                             </div>
                           </div>
                           <div className="text-xs text-muted sm:text-right">
-                            Archived {doc.archivedAtISO ? new Date(doc.archivedAtISO).toLocaleString() : '—'}
+                            Archived {formatDateTime(doc.archivedAtISO)}
                           </div>
                         </li>
                       ))}

@@ -30,6 +30,8 @@ import { useAuth } from '../../context/AuthContext'
 import { MinorsWaivers } from './MinorsOnAccount'
 import { ageFromBirthDate, isValidBirthDate, maxAdultBirthDate, maxBirthDate } from '../../utils/age'
 import { composeFullName, splitFullName, type NameParts } from '../../utils/names'
+import { formatDateTime } from '../../utils/dates'
+import { shortReservationId } from '../../components/reservations/ReservationIdTag'
 
 type WaiverState = {
   fullName: string
@@ -1074,7 +1076,7 @@ export function WaiverPage({
               </div>
               <div>
                 <div className="text-[11px] uppercase tracking-widest text-slate-500">Submitted</div>
-                <p className="mt-1 font-medium">{submittedWaiver.submittedAtISO ? new Date(submittedWaiver.submittedAtISO).toLocaleString() : '-'}</p>
+                <p className="mt-1 font-medium">{formatDateTime(submittedWaiver.submittedAtISO, '-')}</p>
               </div>
               <div>
                 <div className="text-[11px] uppercase tracking-widest text-slate-500">Player ID</div>
@@ -1090,7 +1092,7 @@ export function WaiverPage({
               <p className="uppercase tracking-widest text-[11px] text-slate-500">Participant details</p>
               <p className="mt-3"><span className="font-semibold">Name:</span> {submittedWaiver.fullName || '-'}</p>
               <p className="mt-2"><span className="font-semibold">Age:</span> {submittedWaiver.age ?? '-'}</p>
-              <p className="mt-2"><span className="font-semibold">Reservation:</span> {submittedWaiver.reservationId || '-'}</p>
+              <p className="mt-2"><span className="font-semibold">Reservation:</span> <span title={submittedWaiver.reservationId || ''}>{submittedWaiver.reservationId ? shortReservationId(submittedWaiver.reservationId) : '-'}</span></p>
               <p className="mt-2"><span className="font-semibold">ID type:</span> {submittedWaiver.idType || '-'}</p>
               {submittedWaiver.idImage ? (
                 <div className="mt-1 inline-block rounded-lg border border-slate-200 bg-white p-2">

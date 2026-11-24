@@ -373,7 +373,7 @@ export function SafetyLogPage({ embedded = false, tab: tabFromPage, onRepairOpen
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-muted">
             <span><span className="font-semibold text-text">Lost:</span> replacement value</span>
             <span><span className="font-semibold text-text">Damaged:</span> repair cost + {handlingFee || 0}% handling fee</span>
-            <span>A different amount needs a written reason.</span>
+            <span>The marshal can bill a different amount.</span>
             {isAdmin ? (
               editingFee ? (
                 <span className="ml-auto flex items-center gap-2">
@@ -460,48 +460,56 @@ export function SafetyLogPage({ embedded = false, tab: tabFromPage, onRepairOpen
 
                   {canSetFee && report.status === 'reported' && review?.id === report.id ? (
                     (
-                      <div className="mt-3 grid gap-2 rounded-xl border border-white/10 bg-white/5 p-3 sm:grid-cols-2">
-                        <div className="text-xs sm:col-span-2">
+                      // The fee form: the rule's suggestion (when it has one), the fee and an optional
+                      // note side by side, then the decision. Waive sits apart from billing.
+                      <div className="mt-3 rounded-xl border border-white/10 bg-white/5 p-3">
+                        <div className="text-xs">
                           {!review.quote ? (
-                            <span className="text-muted">Computing penalty…</span>
+                            <span className="text-muted">Working out the suggested fee…</span>
                           ) : review.quote.amount === null ? (
-                            <span className="text-warning">{review.quote.missing}</span>
+                            <span className="text-muted">No repair cost recorded yet, so enter the fee yourself.</span>
                           ) : (
                             <div className="space-y-0.5">
                               {(review.quote.lines || []).map((line) => (
                                 <div key={line.label} className="flex justify-between text-muted"><span>{line.label}</span><span>₱{line.amount.toLocaleString()}</span></div>
                               ))}
-                              <div className="flex justify-between font-semibold"><span>Rule-based penalty</span><span>₱{review.quote.amount.toLocaleString()}</span></div>
+                              <div className="flex justify-between font-semibold">
+                                <span>Suggested fee</span>
+                                <button type="button" className="text-accent hover:underline" onClick={() => setReview((c) => c && { ...c, amount: String(review.quote?.amount ?? '') })}>
+                                  ₱{review.quote.amount.toLocaleString()} · use this
+                                </button>
+                              </div>
                             </div>
                           )}
                         </div>
-                        <Input
-                          label="Damage fee (₱)"
-                          type="number"
-                          min={1}
-                          value={review.amount}
-                          onChange={(e) => setReview((c) => c && { ...c, amount: e.target.value })}
-                        />
-                        {review.quote && (review.quote.amount === null || (review.amount !== '' && Number(review.amount) !== review.quote.amount)) ? (
+                        <div className="mt-3 grid gap-3 sm:grid-cols-[12rem_minmax(0,1fr)]">
                           <Input
-                            label="Reason for this amount"
-                            value={review.overrideReason}
-                            onChange={(e) => setReview((c) => c && { ...c, overrideReason: e.target.value })}
+                            label="Damage fee (₱)"
+                            type="number"
+                            min={1}
+                            value={review.amount}
+                            placeholder={review.quote?.amount ? String(review.quote.amount) : 'e.g. 300'}
+                            onChange={(e) => setReview((c) => c && { ...c, amount: e.target.value })}
                           />
-                        ) : null}
-                        <Input
-                          label="Note"
-                          value={review.note}
-                          onChange={(e) => setReview((c) => c && { ...c, note: e.target.value })}
-                        />
-                        <div className="flex flex-wrap gap-2 sm:col-span-2">
-                          <Button variant="danger" disabled={saving || !report.reservationId} onClick={() => submitReview('bill')}>Add to player's bill</Button>
-                          <Button variant="secondary" disabled={saving} onClick={() => submitReview('waive')}>Waive</Button>
-                          <Button variant="ghost" disabled={saving} onClick={() => setReview(null)}>Cancel</Button>
+                          <Input
+                            label="Note (optional)"
+                            value={review.note}
+                            placeholder="What was damaged, or why this amount"
+                            onChange={(e) => setReview((c) => c && { ...c, note: e.target.value })}
+                          />
                         </div>
-                        {report.reservationId
-                          ? <div className="text-xs text-muted sm:col-span-2">The fee is added to booking {report.reservationId}'s remaining balance, and the registrar collects it at the counter.</div>
-                          : <div className="text-xs text-warning sm:col-span-2">No reservation linked, so this can only be waived.</div>}
+                        <div className="mt-3 flex flex-wrap items-center gap-2">
+                          <Button variant="primary" disabled={saving || !report.reservationId || !(Number(review.amount) > 0 || (review.amount === '' && review.quote?.amount))} onClick={() => submitReview('bill')}>
+                            {saving ? 'Saving…' : `Add ${Number(review.amount) > 0 ? `₱${Number(review.amount).toLocaleString()} ` : review.quote?.amount ? `₱${review.quote.amount.toLocaleString()} ` : ''}to player's bill`}
+                          </Button>
+                          <Button variant="ghost" disabled={saving} onClick={() => setReview(null)}>Cancel</Button>
+                          <Button variant="danger-soft" className="sm:ml-auto" disabled={saving} onClick={() => submitReview('waive')}>Waive fee</Button>
+                        </div>
+                        <div className={`mt-2 text-xs ${report.reservationId ? 'text-muted' : 'text-warning'}`}>
+                          {report.reservationId
+                            ? `Goes on booking ${report.reservationId}'s remaining balance; the registrar collects it at the counter, even if the game is already done.`
+                            : 'No booking is linked to this report, so the fee can only be waived.'}
+                        </div>
                       </div>
                     )
                   ) : null}

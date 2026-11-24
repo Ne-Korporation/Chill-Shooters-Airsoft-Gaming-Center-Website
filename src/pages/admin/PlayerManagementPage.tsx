@@ -1,7 +1,7 @@
 import React from 'react'
 import { confirmDialog, promptDialog } from '../../components/ui/ConfirmDialog'
 import { useLiveRefresh } from '../../utils/liveUpdates'
-import { FiAlertTriangle, FiCheck, FiCopy, FiEye, FiRotateCcw, FiShield, FiSlash, FiUserX, FiX } from 'react-icons/fi'
+import { FiAlertTriangle, FiCheck, FiCopy, FiEye, FiKey, FiPercent, FiRotateCcw, FiSearch, FiShield, FiSlash, FiUserX, FiX } from 'react-icons/fi'
 import toast from 'react-hot-toast'
 import { ActionGroup, Button } from '../../components/ui/Button'
 import { FilterTabs } from '../../components/ui/FilterTabs'
@@ -39,6 +39,8 @@ async function copyAccountId(id: string) {
 export function PlayerManagementPage() {
   const { user } = useAuth()
   const isAdmin = user?.role === 'admin'
+  // ID checks and partnership discounts are reviewed by admins and registrars; marshals look players up.
+  const canReview = isAdmin || user?.role === 'registrar'
   const location = useLocation()
   const [activeView, setActiveView] = React.useState<'players' | 'staff'>('players')
   const [players, setPlayers] = React.useState<any[]>([])
@@ -74,10 +76,10 @@ export function PlayerManagementPage() {
   const openedFromLink = React.useRef('')
   // Opened from a "Partnership discount to review" notification: show the waiting requests.
   React.useEffect(() => {
-    if (location.hash === '#partnership-requests') setPartnershipRequestsOpen(true)
-  }, [location.hash, location.key])
+    if (canReview && location.hash === '#partnership-requests') setPartnershipRequestsOpen(true)
+  }, [location.hash, location.key, canReview])
   React.useEffect(() => {
-    if (location.hash !== '#id-verifications' || openedFromLink.current === location.key) return
+    if (!canReview || location.hash !== '#id-verifications' || openedFromLink.current === location.key) return
     const playerId = new URLSearchParams(location.search).get('player') || ''
     if (!playerId) {
       openedFromLink.current = location.key
@@ -95,7 +97,7 @@ export function PlayerManagementPage() {
       setSelectedPlayer(null)
       setIdRequestsOpen(true)
     }
-  }, [location.hash, location.search, location.key, players])
+  }, [location.hash, location.search, location.key, players, canReview])
 
   const fetchUsers = React.useCallback(async (silent = false) => {
     if (!silent) setLoading(true)
@@ -190,8 +192,9 @@ export function PlayerManagementPage() {
     finally { setAddingStaff(false) }
   }
 
-  const handleResetPassword = async (staffId: string) => {
-    if (!(await confirmDialog({ title: 'Reset this password?', message: 'They will be emailed a new default password, and their current one stops working.', confirmLabel: 'Reset password', danger: true }))) return
+  // Admins only (staff accounts, and players who can't reset it themselves, e.g. no access to their email).
+  const handleResetPassword = async (staffId: string, name?: string) => {
+    if (!(await confirmDialog({ title: name ? `Reset ${name}'s password?` : 'Reset this password?', message: 'They will be emailed a new default password, and their current one stops working. They are signed out on every device.', confirmLabel: 'Reset password', danger: true }))) return
     setResettingId(staffId)
     try {
       const res = await apiPost<any>('/api/auth/admin/reset-password', { userId: staffId })
@@ -281,7 +284,7 @@ export function PlayerManagementPage() {
     return (
       <>
         {pl.accountStatus === 'active' ? (
-          <Button variant="danger-soft" size={size} disabled={statusChangingId === pl.id} onClick={() => handleSetAccountStatus(pl, 'suspended')}>
+          <Button variant="ghost" size={size} disabled={statusChangingId === pl.id} onClick={() => handleSetAccountStatus(pl, 'suspended')}>
             <FiSlash /> {statusChangingId === pl.id ? 'Updating…' : 'Suspend'}
           </Button>
         ) : (
@@ -318,26 +321,11 @@ export function PlayerManagementPage() {
     <div className="rounded-2xl border border-danger/20 bg-danger/10 px-4 py-3 text-sm text-danger">{error}</div>
   ) : (
     <Paged items={filteredPlayers} resetKey={`${playerSearch}|${playerLevelFilter}|${playerVerificationFilter}|${playerAccountFilter}`}>{(pageItems) => pageItems.map((pl, idx) => (
-      <div key={pl.id || `player-${idx}`} className="flex flex-col gap-3 rounded-2xl border border-white/5 bg-white/5 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
+      <div key={pl.id || `player-${idx}`} className="flex flex-col gap-3 rounded-2xl border border-white/5 bg-white/5 px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="min-w-0">
+          {/* Name and where the account stands, then how to reach and find it. */}
+          <div className="flex flex-wrap items-center gap-2">
           <div className="text-sm font-semibold">{pl.name}</div>
-          <div className="mt-1 text-xs text-muted">{pl.email}</div>
-          {pl.id ? (
-            <div className="mt-1 flex items-center gap-1.5 text-xs text-muted">
-              <span>Account ID:</span>
-              <code className="rounded bg-black/30 px-1.5 py-0.5 font-mono text-[11px] text-text">{pl.id}</code>
-              <button
-                type="button"
-                onClick={() => copyAccountId(String(pl.id))}
-                className="inline-flex items-center rounded p-1 text-muted transition hover:bg-white/10 hover:text-text"
-                title="Copy account ID"
-                aria-label={`Copy account ID for ${pl.name}`}
-              >
-                <FiCopy />
-              </button>
-            </div>
-          ) : null}
-          <div className="mt-2 flex flex-wrap items-center gap-2">
             {pl.erased ? (
               <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] font-semibold text-muted" title={pl.closedReason || undefined}>Closed · data erased</span>
             ) : pl.accountStatus === 'closed' ? (
@@ -345,7 +333,7 @@ export function PlayerManagementPage() {
             ) : pl.accountStatus === 'suspended' ? (
               <span className="rounded-full border border-danger/30 bg-danger/15 px-3 py-1 text-[11px] font-semibold text-danger" title={pl.suspensionReason || undefined}>Suspended</span>
             ) : (
-              <span className="rounded-full border border-accent/30 bg-accent/20 px-3 py-1 text-[11px] font-semibold text-accent">{pl.status}</span>
+              <span className="rounded-full border border-success/30 bg-success/15 px-3 py-1 text-[11px] font-semibold text-success">{pl.status}</span>
             )}
             <span className={`rounded-full border px-3 py-1 text-[11px] font-semibold ${pl.verificationStatus === 'verified' ? 'border-success/30 bg-success/20 text-success' : pl.verificationStatus === 'pending_review' ? 'border-accent/30 bg-accent/20 text-accent' : 'border-white/10 bg-white/5 text-muted'}`}>
               {pl.verificationLabel}
@@ -354,10 +342,27 @@ export function PlayerManagementPage() {
               {pl.level} · {pl.gamesPlayed} {pl.gamesPlayed === 1 ? 'game' : 'games'} played
             </span>
           </div>
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
+            <span className="min-w-0 break-all">{pl.email}</span>
+            {pl.id ? (
+              <span className="inline-flex items-center gap-1">
+                <code className="rounded bg-black/30 px-1.5 py-0.5 font-mono text-[11px] text-text">{pl.id}</code>
+                <button
+                  type="button"
+                  onClick={() => copyAccountId(String(pl.id))}
+                  className="inline-flex items-center rounded p-1 text-muted transition hover:bg-white/10 hover:text-text"
+                  title="Copy account ID"
+                  aria-label={`Copy account ID for ${pl.name}`}
+                >
+                  <FiCopy />
+                </button>
+              </span>
+            ) : null}
+          </div>
         </div>
         <ActionGroup>
           <Button variant="ghost" size="xs" onClick={() => setSelectedPlayer(pl)}><FiEye /> View</Button>
-          {pl.identityDocumentUrl && pl.verificationStatus === 'pending_review' ? (
+          {canReview && pl.identityDocumentUrl && pl.verificationStatus === 'pending_review' ? (
             <>
               <Button variant="success-soft" size="xs" onClick={() => pl.id && handleVerifyPlayer(pl.id)} disabled={verifyingId === pl.id}>
                 <FiCheck /> {verifyingId === pl.id ? 'Verifying…' : 'Verify ID'}
@@ -366,7 +371,7 @@ export function PlayerManagementPage() {
                 <FiX /> {verifyingId === pl.id ? 'Rejecting…' : 'Reject ID'}
               </Button>
             </>
-          ) : pl.identityDocumentUrl && pl.verificationStatus === 'rejected' ? (
+          ) : canReview && pl.identityDocumentUrl && pl.verificationStatus === 'rejected' ? (
             <Button variant="accent-soft" size="xs" onClick={() => pl.id && handleSetPlayerVerification(pl.id, 'pending_review')} disabled={verifyingId === pl.id}>
               <FiRotateCcw /> {verifyingId === pl.id ? 'Updating…' : 'Reopen review'}
             </Button>
@@ -439,7 +444,7 @@ export function PlayerManagementPage() {
         <p className="mt-1 text-sm text-muted">
           {isAdmin
             ? 'Manage players and staff accounts, including marshal, admin, and registrar access.'
-            : "Look up players, and verify the IDs and partnership discounts they submit."}
+            : canReview ? "Look up players, and verify the IDs and partnership discounts they submit." : 'Look up players: their account, ID status, level and games played.'}
         </p>
       </div>
 
@@ -472,12 +477,13 @@ export function PlayerManagementPage() {
       <Card className="p-4">
         {activeView === 'players' || !isAdmin ? (
           <>
-            <div className="flex items-center justify-between gap-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <div className="text-xs uppercase tracking-widest text-muted">Players</div>
-                <div className="mt-2 text-sm text-muted">Review current players and their account status.</div>
+                <div className="mt-1 text-sm text-muted">Look up players, their account status and verification.</div>
               </div>
-              <div className="flex flex-wrap items-center justify-end gap-2">
+              {canReview ? (
+              <div className="flex flex-wrap items-center gap-2 sm:justify-end">
                 {/* ID verifications waiting on staff: the player can't answer their waiver until it's checked. */}
                 <button
                   type="button"
@@ -485,7 +491,7 @@ export function PlayerManagementPage() {
                   className={`inline-flex h-9 items-center gap-2 rounded-xl border px-3 text-sm font-semibold transition ${pendingIdRequests.length > 0 ? 'border-danger/40 bg-danger/15 text-danger hover:bg-danger/25' : 'border-white/10 bg-white/5 text-muted hover:text-text'}`}
                 >
                   <FiShield className="h-4 w-4" />
-                  View ID verifications
+                  ID verifications
                   {pendingIdRequests.length > 0 ? (
                     <span className="grid h-5 min-w-5 place-items-center rounded-full bg-danger px-1.5 text-[11px] font-bold text-white">{pendingIdRequests.length}</span>
                   ) : null}
@@ -496,28 +502,32 @@ export function PlayerManagementPage() {
                   onClick={() => setPartnershipRequestsOpen(true)}
                   className={`inline-flex h-9 items-center gap-2 rounded-xl border px-3 text-sm font-semibold transition ${pendingPartnershipRequests.length > 0 ? 'border-danger/40 bg-danger/15 text-danger hover:bg-danger/25' : 'border-white/10 bg-white/5 text-muted hover:text-text'}`}
                 >
-                  <FiAlertTriangle className="h-4 w-4" />
-                  View partnership requests
+                  <FiPercent className="h-4 w-4" />
+                  Partnership requests
                   {pendingPartnershipRequests.length > 0 ? (
                     <span className="grid h-5 min-w-5 place-items-center rounded-full bg-danger px-1.5 text-[11px] font-bold text-white">{pendingPartnershipRequests.length}</span>
                   ) : null}
                 </button>
               </div>
+              ) : null}
             </div>
 
-            <div className="mt-4 grid gap-3 md:grid-cols-[1fr_1fr] md:items-end">
-              <div className="w-full md:max-w-xs">
-                <label className="block text-xs font-semibold text-muted mb-1">Search Players</label>
-                <input 
-                  value={playerSearch} 
-                  onChange={(e) => setPlayerSearch(e.target.value)} 
-                  className="w-full rounded-xl border border-white/10 bg-transparent px-3 py-2 text-sm text-text" 
-                  placeholder="Search by name or email"
-                />
+            <div className="mt-4 grid gap-3 md:grid-cols-2 lg:grid-cols-[minmax(0,2fr)_repeat(3,minmax(0,1fr))] lg:items-end">
+              <div className="md:col-span-2 lg:col-span-1">
+                <label htmlFor="player-search" className="block text-xs font-semibold text-muted mb-1">Search</label>
+                <div className="relative">
+                  <FiSearch className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
+                  <input
+                    id="player-search"
+                    value={playerSearch}
+                    onChange={(e) => setPlayerSearch(e.target.value)}
+                    className="w-full rounded-xl border border-white/10 bg-transparent py-2 pl-9 pr-3 text-sm text-text"
+                    placeholder="Name, email or account ID"
+                  />
+                </div>
               </div>
-              <div className="grid gap-3 sm:grid-cols-3">
                 <div>
-                  <label className="block text-xs font-semibold text-muted mb-1">Filter by Account</label>
+                  <label className="block text-xs font-semibold text-muted mb-1">Account</label>
                   <select value={playerAccountFilter} onChange={(e) => setPlayerAccountFilter(e.target.value as any)} className="w-full rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm text-text">
                     <option value="all">All accounts</option>
                     <option value="active">Active</option>
@@ -526,18 +536,18 @@ export function PlayerManagementPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-muted mb-1">Filter by Level</label>
+                  <label className="block text-xs font-semibold text-muted mb-1">Level</label>
                   <select value={playerLevelFilter} onChange={(e) => setPlayerLevelFilter(e.target.value as any)} className="w-full rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm text-text">
-                    <option value="all">All Levels</option>
+                    <option value="all">All levels</option>
                     <option value="Beginner">Beginner</option>
                     <option value="Intermediate">Intermediate</option>
                     <option value="Experienced">Experienced</option>
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-muted mb-1">Filter by Verification</label>
+                  <label className="block text-xs font-semibold text-muted mb-1">ID status</label>
                   <select value={playerVerificationFilter} onChange={(e) => setPlayerVerificationFilter(e.target.value as any)} className="w-full rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm text-text">
-                    <option value="all">All verification statuses</option>
+                    <option value="all">All</option>
                     <option value="verified">Verified</option>
                     <option value="pending_review">Pending review</option>
                     <option value="rejected">Rejected</option>
@@ -545,7 +555,6 @@ export function PlayerManagementPage() {
                     <option value="not_submitted">Not submitted</option>
                   </select>
                 </div>
-              </div>
             </div>
 
             <div className="mt-4 space-y-3">{playerList}</div>
@@ -604,7 +613,7 @@ export function PlayerManagementPage() {
 
             <div className="mt-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <div className="w-full md:max-w-xs">
-                <label className="block text-xs font-semibold text-muted mb-1">Search Staff</label>
+                <label className="block text-xs font-semibold text-muted mb-1">Search</label>
                 <input 
                   value={staffSearch} 
                   onChange={(e) => setStaffSearch(e.target.value)} 
@@ -612,7 +621,7 @@ export function PlayerManagementPage() {
                 />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-muted mb-1">Filter by Role</label>
+                <label className="block text-xs font-semibold text-muted mb-1">Role</label>
                 <FilterTabs
                   size="sm"
                   ariaLabel="Filter staff by role"
@@ -684,19 +693,27 @@ export function PlayerManagementPage() {
           ) : (
           <div className="space-y-2">
             {pendingPartnershipRequests.map((p) => (
-              <div key={p.id} className="flex flex-col gap-2 rounded-xl border border-white/10 bg-white/5 p-3 sm:flex-row sm:items-center sm:justify-between">
+              <div key={p.id} className="rounded-xl border border-white/10 bg-white/5 p-3">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <div className="text-sm font-semibold">{p.name} <span className="text-xs text-muted">({p.id})</span></div>
                   <div className="text-xs text-muted">{p.partnershipInstitution}</div>
-                  {p.partnershipProofUrl ? (
-                    <a href={p.partnershipProofUrl} target="_blank" rel="noreferrer" className="text-xs text-accent underline">View school ID</a>
-                  ) : null}
                 </div>
                 <ActionGroup>
                   <Button size="xs" variant="ghost" onClick={() => { setPartnershipRequestsOpen(false); setSelectedPlayer(p) }}><FiEye /> Details</Button>
                   <Button size="xs" variant="success-soft" disabled={verifyingId === p.id} onClick={() => reviewPartnership(p.id, 'verified')}><FiCheck /> Verify</Button>
                   <Button size="xs" variant="danger-soft" disabled={verifyingId === p.id} onClick={() => reviewPartnership(p.id, 'rejected')}><FiX /> Reject</Button>
                 </ActionGroup>
+              </div>
+              {/* The school or membership ID they sent, shown here so it can be checked before deciding. */}
+              {p.partnershipProofUrl ? (
+                <a href={p.partnershipProofUrl} target="_blank" rel="noreferrer" title="Open the school ID in full size" className="mt-3 block">
+                  <img src={p.partnershipProofUrl} alt={`School ID sent by ${p.name}`} className="max-h-64 w-auto max-w-full rounded-xl border border-white/10 object-contain" />
+                  <span className="mt-1 block text-[11px] text-muted">School ID · click to open full size</span>
+                </a>
+              ) : (
+                <div className="mt-3 text-xs text-warning">No school ID image was sent with this request.</div>
+              )}
               </div>
             ))}
           </div>
@@ -705,14 +722,20 @@ export function PlayerManagementPage() {
       ) : null}
       {selectedPlayer ? (
         <div onClick={() => setSelectedPlayer(null)} className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/70 p-3 sm:p-4">
-          <div onClick={(e) => e.stopPropagation()} className="max-h-[90dvh] w-full max-w-3xl overflow-y-auto rounded-3xl border border-white/10 bg-background p-4 shadow-[0_30px_80px_rgba(0,0,0,0.75)]">
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-              <div>
-                <div className="text-lg font-semibold">{selectedPlayer.name}</div>
-                <div className="mt-1 text-sm text-muted">Submitted ID preview</div>
+          <div onClick={(e) => e.stopPropagation()} className="max-h-[90dvh] w-full max-w-3xl overflow-y-auto rounded-3xl border border-white/10 bg-background p-4 text-text shadow-[0_30px_80px_rgba(0,0,0,0.75)]">
+            {/* Header: who it is (with a close X), then the actions in their own row so the name
+                never gets squeezed. The ID check comes first, then the account actions. */}
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-xs uppercase tracking-widest text-muted">Player</div>
+                <div className="mt-0.5 break-words text-xl font-bold leading-tight">{selectedPlayer.name}</div>
+                {selectedPlayer.id ? <div className="mt-0.5 font-mono text-xs text-muted">{selectedPlayer.id}</div> : null}
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                {selectedPlayer.identityDocumentUrl ? (
+              <Button variant="ghost" size="sm" onClick={() => setSelectedPlayer(null)} aria-label="Close" className="w-10 shrink-0 px-0"><FiX /></Button>
+            </div>
+            {/* Hidden when this viewer has no action for this player (e.g. marshals). */}
+            <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-white/10 pt-3 [&:not(:has(button))]:hidden">
+                {canReview && selectedPlayer.identityDocumentUrl ? (
                   selectedPlayer.verificationStatus === 'pending_review' ? (
                     <>
                       <Button
@@ -739,7 +762,7 @@ export function PlayerManagementPage() {
                       onClick={() => selectedPlayer.id && handleSetPlayerVerification(selectedPlayer.id, 'pending_review')}
                       disabled={verifyingId === selectedPlayer.id}
                     >
-                      {verifyingId === selectedPlayer.id ? 'Updating…' : 'Mark Pending Review'}
+                      <FiRotateCcw /> {verifyingId === selectedPlayer.id ? 'Updating…' : 'Mark pending review'}
                     </Button>
                   ) : selectedPlayer.verificationStatus === 'rejected' ? (
                     <Button
@@ -752,9 +775,16 @@ export function PlayerManagementPage() {
                     </Button>
                   ) : null
                 ) : null}
+                {/* Account actions on the right, away from the ID check. */}
+                <span className="flex flex-wrap items-center gap-2 sm:ml-auto">
+                {/* Admins: reset a player's password (a new one is emailed to them and shown here once). */}
+                {isAdmin && selectedPlayer.id && !selectedPlayer.erased && selectedPlayer.accountStatus !== 'closed' ? (
+                  <Button variant="ghost" size="sm" disabled={resettingId === selectedPlayer.id} onClick={() => void handleResetPassword(String(selectedPlayer.id), selectedPlayer.name)}>
+                    <FiKey /> {resettingId === selectedPlayer.id ? 'Resetting…' : 'Reset password'}
+                  </Button>
+                ) : null}
                 {accountButton(selectedPlayer, 'sm')}
-                <Button variant="ghost" size="sm" onClick={() => setSelectedPlayer(null)}>Close</Button>
-              </div>
+                </span>
             </div>
             <div className="mt-4 grid gap-4 md:grid-cols-[1fr_1fr]">
               <div>
@@ -795,7 +825,7 @@ export function PlayerManagementPage() {
                   ) : null}
                 </div>
               ) : (
-                <div className="text-sm text-muted">No submitted ID image is available for this player.</div>
+                <div className="text-sm text-muted">{canReview ? 'No submitted ID image is available for this player.' : 'ID photos are only shown to admins and registrars.'}</div>
               )}
             </div>
             {/* The partnership discount request: the organization, where it stands, and the proof
@@ -811,14 +841,14 @@ export function PlayerManagementPage() {
                       {({ pending: 'Waiting for review', verified: 'Verified', rejected: 'Rejected' } as Record<string, string>)[selectedPlayer.partnershipEligibilityStatus] || 'Not reviewed'}
                     </div>
                   </div>
-                  {selectedPlayer.partnershipEligibilityStatus === 'pending' && selectedPlayer.id ? (
+                  {canReview && selectedPlayer.partnershipEligibilityStatus === 'pending' && selectedPlayer.id ? (
                     <ActionGroup>
                       <Button size="sm" variant="success-soft" disabled={verifyingId === selectedPlayer.id} onClick={() => reviewPartnership(selectedPlayer.id, 'verified')}><FiCheck /> Verify discount</Button>
                       <Button size="sm" variant="danger-soft" disabled={verifyingId === selectedPlayer.id} onClick={() => reviewPartnership(selectedPlayer.id, 'rejected')}><FiX /> Reject</Button>
                     </ActionGroup>
                   ) : null}
                 </div>
-                {selectedPlayer.partnershipProofUrl ? (
+                {!canReview ? null : selectedPlayer.partnershipProofUrl ? (
                   <figure className="mt-3 text-center">
                     <a href={selectedPlayer.partnershipProofUrl} target="_blank" rel="noreferrer" title="Open the proof in full size">
                       <img src={selectedPlayer.partnershipProofUrl} alt="Partnership proof (school or membership ID)" className="mx-auto max-h-[420px] w-auto rounded-3xl object-contain" />

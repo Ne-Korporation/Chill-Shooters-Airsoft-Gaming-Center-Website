@@ -134,7 +134,7 @@ export function PlayerProfilePage() {
       } catch (e: any) {
         if (!alive) return
         setPlayer(null)
-        if (String(e?.message || e).includes('not found')) {
+        if (e?.status === 404 || String(e?.message || e).includes('not found')) {
           setError(null)
         } else {
           setError(String(e?.message || e))
@@ -762,7 +762,7 @@ export function PlayerProfilePage() {
       {mounted && cameraActive
         ? createPortal(
             <div className="fixed inset-0 z-[100002] flex items-center justify-center bg-black/90 p-4 backdrop-blur-sm">
-              <div className="max-h-[90dvh] overflow-y-auto overscroll-contain w-full max-w-4xl rounded-3xl border border-white/10 bg-background p-4 shadow-[0_0_0_1px_rgba(255,255,255,0.05),0_30px_80px_rgba(0,0,0,0.65)]">
+              <div className="max-h-[90dvh] overflow-y-auto overscroll-contain w-full max-w-4xl rounded-3xl border border-white/10 bg-background p-4 text-text shadow-[0_0_0_1px_rgba(255,255,255,0.05),0_30px_80px_rgba(0,0,0,0.65)]">
                 <div className="mb-3 flex items-center justify-between">
                   <div>
                     <div className="text-sm font-semibold">Capture the {captureSide} of your {idTypeChoice || 'ID'}</div>

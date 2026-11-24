@@ -5,6 +5,7 @@ import { SlotHoursCard } from '../../components/reservations/SlotHoursCard'
 import { FieldObstaclesCard } from '../../components/reservations/FieldObstaclesCard'
 import { FilterTabs } from '../../components/ui/FilterTabs'
 import { InfoDropdown, type InfoItem } from '../../components/ui/InfoDropdown'
+import { useAuth } from '../../context/AuthContext'
 import { RegistrarArchivedGamesPage, RegistrarOngoingGamesPage } from '../registrar'
 
 type ReservationsTab = 'games' | 'archived'
@@ -20,15 +21,19 @@ const INFO: InfoItem[] = [
   { label: 'Confirmation', text: 'A booking confirms itself once its payment is verified, by Xendit or by staff on the Payments page.' },
 ]
 
-// One admin page for reservations: confirmed bookings as games to start and complete (Games), and
-// finished games (Archived). Each game's details hold everything about its booking (players,
-// rentals, charges and payments), so there is no separate list of reservations. The tab is kept in
-// the address (?tab=archived) so it can be linked to and survives a refresh. Bookings confirm
-// themselves once their payment is verified (by Xendit, or by staff on the Payments page).
-export function AdminReservationsPage() {
+// Reservations for admins, registrars and marshals: the same page for all three. Confirmed
+// bookings as games to start and complete (Games), and finished games (Archived). Each game's
+// details hold everything about its booking. The tab is kept in the address (?tab=archived) so it
+// can be linked to and survives a refresh. Only admins see the slot hours and field layout settings.
+export function AdminReservationsPage({ defaultTab = 'games' }: { defaultTab?: ReservationsTab } = {}) {
+  const { user } = useAuth()
+  const isAdmin = user?.role === 'admin'
   const [params, setParams] = useSearchParams()
-  const tab: ReservationsTab = params.get('tab') === 'archived' ? 'archived' : 'games'
-  const setTab = (next: ReservationsTab) => setParams(next === 'games' ? {} : { tab: next }, { replace: true })
+  const asked = params.get('tab')
+  const tab: ReservationsTab = asked === 'games' || asked === 'archived'
+    ? asked
+    : params.get('game') ? 'games' : defaultTab
+  const setTab = (next: ReservationsTab) => setParams(next === defaultTab ? {} : { tab: next }, { replace: true })
 
   return (
     <div className="space-y-4">
@@ -41,8 +46,12 @@ export function AdminReservationsPage() {
 
       {tab === 'games' ? (
         <>
-          <SlotHoursCard />
-          <FieldObstaclesCard />
+          {isAdmin ? (
+            <>
+              <SlotHoursCard />
+              <FieldObstaclesCard />
+            </>
+          ) : null}
           <RegistrarOngoingGamesPage embedded />
         </>
       ) : (

@@ -98,10 +98,13 @@ const SESSION_CHECKLIST = [
 // Game day first (the games running now, then the full game queue), then the inventory they keep.
 const marshalItems: Item[] = [
   { label: 'Dashboard', to: '/app', icon: FiGrid },
+  // The same Reservations page as admins and registrars (Games, Archived), then the game-day counter.
+  { label: 'Reservations', to: '/app/games', icon: FiCalendar },
   { label: 'Games', to: '/app/counter', icon: FiZap },
-  { label: 'Game queue', to: '/app/games', icon: FiList },
   { label: 'Weapons', to: '/app/admin/weapons', icon: GiAk47 },
   { label: 'Gear', to: '/app/admin/equipment', icon: FiTool },
+  // Look players up (account, ID status, level); ID and discount reviews stay with registrars.
+  { label: 'Players', to: '/app/marshal/players', icon: FiUsers },
 ]
 
 // Grouped by the job the admin is doing, in the order a game day runs: messages to answer,
@@ -147,13 +150,14 @@ const SECTION_ICONS: Record<string, IconType> = {
 const registrarItems: Item[] = [
   { label: 'Dashboard', to: '/app', icon: FiGrid },
   { label: 'Reservations', to: '/app/registrar/reservations', icon: FiCalendar },
+  // The game-day counter, right under the reservations it runs.
+  { label: 'Games', to: '/app/counter', icon: FiZap },
   { label: 'Payments', to: '/app/registrar/submitted-payments', icon: FiCreditCard },
   { label: 'Waivers', to: '/app/registrar/waivers', icon: FiShield },
   // Players' accounts, and the IDs they submit for verification.
   { label: 'Players', to: '/app/registrar/players', icon: FiUsers },
   { label: 'Walk-ins', to: '/app/walk-ins', icon: FiUserPlus },
-  { label: 'Games', to: '/app/counter', icon: FiZap },
-  { label: 'Game queue', to: '/app/registrar/games', icon: FiList },
+  // The list of games to start, complete and archive is the Games tab of Reservations.
 ]
 
 // Unread player messages, for the Inbox badge (admins only).

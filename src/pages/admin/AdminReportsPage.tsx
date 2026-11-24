@@ -8,6 +8,7 @@ import { equipmentAlerts, modelOf } from '../../utils/inventoryModels'
 import { ReportTrendCharts } from './ReportTrendCharts'
 import { useAuth } from '../../context/AuthContext'
 import { useCauseDays } from '../../utils/causeDays'
+import { shortReservationId } from '../../components/reservations/ReservationIdTag'
 
 type Metric = { label: string; value: string; tone: 'accent' | 'success' | 'danger' }
 
@@ -766,7 +767,7 @@ export function AdminReportsPage() {
                   <tr key={payment.id || index}>
                     <td className="py-2 pr-4">{dayOf(payment.createdAtISO || payment.createdAt)}</td>
                     <td className="py-2 pr-4">{payment.id || '-'}</td>
-                    <td className="py-2 pr-4">{payment.reservationId || '-'}</td>
+                    <td className="py-2 pr-4 font-mono text-xs" title={payment.reservationId || ''}>{payment.reservationId ? shortReservationId(payment.reservationId) : '-'}</td>
                     <td className="py-2 pr-4">{payment.paymentMethod || '-'}</td>
                     <td className="py-2 pr-4 capitalize">{paymentStatusOf(payment)}</td>
                     <td className="py-2 text-right">{formatCurrency(paymentAmount(payment))}</td>

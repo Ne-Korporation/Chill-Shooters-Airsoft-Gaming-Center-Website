@@ -271,7 +271,7 @@ export function FieldLayoutDesigner({
   const selected = items.find((item) => item.id === selectedId)
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-3" role="dialog" aria-modal="true" aria-labelledby="layout-designer-title">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-3 text-text" role="dialog" aria-modal="true" aria-labelledby="layout-designer-title">
       <Card className="flex max-h-[95dvh] w-full max-w-5xl flex-col overflow-hidden p-4 md:p-5">
         <div className="flex items-start justify-between gap-3">
           <div>

@@ -247,6 +247,15 @@ export function CapacityCalendar({
               const best = capacity && location === ALL ? leastFull(capacity) : undefined
               const shown = best || capacity
               const tone = shown && !closed ? fillTone(shown.booked, shown.capacity) : null
+              // Staff looking back: what a finished day actually had (players on a public day, booked
+              // groups on a private day). Players and visitors still just see "Done".
+              const pastPlayers = past && showCounts && capacity ? (location === ALL ? capacity.booked : shown?.booked || 0) : 0
+              const pastGroups = past && showCounts && privateDay ? day?.groups || 0 : 0
+              const pastHadGames = pastPlayers > 0 || pastGroups > 0
+              const pastLabel = !showCounts ? 'Done'
+                : pastPlayers > 0 ? `${pastPlayers.toLocaleString()} played`
+                : pastGroups > 0 ? `${pastGroups} game${pastGroups === 1 ? '' : 's'}`
+                : 'No bookings'
               // Past days open only for staff, to look back (read-only). Private days open for info unless fully booked.
               const clickable = (!past || showCounts) && !notOpenYet && Boolean(
                 capacity || cause || closed || editable
@@ -255,12 +264,13 @@ export function CapacityCalendar({
               const hint = notOpenYet ? 'Not open for booking yet (bookings open 1 year ahead)' : closed ? closedDayMessage(closed) : [
                 cause ? causeDayMessage(cause) : '',
                 capacity
-                  ? !showCounts
+                  ? past && showCounts ? `Public game · ${pastPlayers ? `${pastPlayers} played` : 'no bookings'}`
+                  : !showCounts
                     ? `Public game · ${capacity.locations.some((entry) => entry.booked < entry.capacity) ? 'spots available' : 'fully booked'}`
                     : location === ALL
                     ? `Public game · ${capacity.locations.map((entry) => `${locationLabel(entry)} ${Math.max(0, entry.capacity - entry.booked)} available`).join(', ')}`
                     : `Public game · ${capacity.booked} of ${capacity.capacity} spots booked`
-                  : privateDone ? 'Private games · done'
+                  : privateDone ? (showCounts ? `Private games · ${pastGroups ? `${pastGroups} booked` : 'no bookings'}` : 'Private games · done')
                   : privateFull ? 'Private games · fully booked'
                   : privateGroups ? (showCounts ? `Private games · ${privateGroups} booked` : 'Private games · some slots booked') : 'Private games · open to book',
               ].filter(Boolean).join(' · ')
@@ -282,7 +292,7 @@ export function CapacityCalendar({
                       : privateGroups ? 'border-accent/30 bg-accent/10'
                       : 'border-[rgba(var(--text),0.06)] text-muted',
                     dateISO === todayISO ? 'ring-2 ring-accent/60' : '',
-                    past || notOpenYet ? 'opacity-50' : '',
+                    (past && !pastHadGames) || notOpenYet ? 'opacity-50' : '',
                     clickable ? 'cursor-pointer hover:border-accent/50' : 'cursor-default',
                   ].join(' ')}
                 >
@@ -293,7 +303,7 @@ export function CapacityCalendar({
                         if (closed && !past) return <FiSlash className="mt-0.5 h-2.5 w-2.5 text-muted" aria-label="No games" />
                         // Players: green while spots are available, red when full (no "filling up" levels).
                         const publicDot = showCounts ? tone?.bar : shown && shown.booked >= shown.capacity ? 'bg-danger' : 'bg-success'
-                        const dot = past ? '' : cause ? 'bg-rose-500' : capacity ? publicDot : privateFull ? 'bg-danger' : privateGroups ? 'bg-accent' : ''
+                        const dot = past ? (pastHadGames ? 'bg-accent' : '') : cause ? 'bg-rose-500' : capacity ? publicDot : privateFull ? 'bg-danger' : privateGroups ? 'bg-accent' : ''
                         return dot ? <span className={`mt-1 h-1.5 w-1.5 rounded-full ${dot}`} /> : null
                       })()}
                     </>
@@ -310,18 +320,18 @@ export function CapacityCalendar({
                   ) : capacity ? (
                     <span className="mt-auto">
                       {/* Players and visitors see only Available / Full; staff see the numbers and fill bar. */}
-                      <span className={`block truncate text-[10px] font-semibold ${past ? 'text-muted' : showCounts ? tone?.text : availabilityText(shown?.booked || 0, shown?.capacity || 0)}`}>
+                      <span className={`block truncate text-[10px] font-semibold ${past ? (pastHadGames ? 'text-accent' : 'text-muted') : showCounts ? tone?.text : availabilityText(shown?.booked || 0, shown?.capacity || 0)}`}>
                         {/* The mini (sidebar) calendar's cells are too narrow for the word: the number alone. */}
-                        {past ? 'Done'
+                        {past ? pastLabel
                           : !showCounts ? availabilityLabel(shown?.booked || 0, shown?.capacity || 0)
                           : best ? tone?.label : `${Math.max(0, capacity.capacity - capacity.booked).toLocaleString()}${mini ? '' : ' available'}`}
                       </span>
-                      {shown && showCounts ? <Bar booked={shown.booked} capacity={shown.capacity} className="mt-0.5 h-1" /> : null}
+                      {shown && showCounts && !past ? <Bar booked={shown.booked} capacity={shown.capacity} className="mt-0.5 h-1" /> : null}
                     </span>
                   ) : cause ? (
                     <span className="mt-auto truncate text-[10px] font-semibold text-rose-500">Cause</span>
                   ) : privateDone ? (
-                    <span className="mt-auto truncate text-[10px] font-semibold text-muted">Done</span>
+                    <span className={`mt-auto truncate text-[10px] font-semibold ${pastHadGames ? 'text-accent' : 'text-muted'}`}>{pastLabel}</span>
                   ) : privateFull ? (
                     <span className="mt-auto truncate text-[10px] font-semibold text-danger">Full</span>
                   ) : privateGroups ? (

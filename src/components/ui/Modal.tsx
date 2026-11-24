@@ -65,7 +65,7 @@ export function Modal({
   return createPortal(
     <div className="fixed inset-0 z-[9999] flex items-end justify-center bg-black/70 p-0 sm:items-center sm:p-4" style={zIndex ? { zIndex } : undefined} role="dialog" aria-modal="true" aria-labelledby={titleId} onClick={requestClose}>
       <div
-        className={`relative flex max-h-[92dvh] w-full ${width} flex-col overflow-hidden rounded-t-3xl border sm:max-h-[90dvh] sm:rounded-3xl border-white/10 bg-background shadow-soft`}
+        className={`relative flex max-h-[92dvh] w-full ${width} flex-col overflow-hidden rounded-t-3xl border sm:max-h-[90dvh] sm:rounded-3xl border-white/10 bg-background text-text shadow-soft`}
         onClick={(event) => event.stopPropagation()}
         onInputCapture={markEdited}
         onChangeCapture={markEdited}

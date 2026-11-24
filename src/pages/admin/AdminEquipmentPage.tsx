@@ -211,20 +211,8 @@ export function AdminEquipmentPage() {
 
   const nameRef = React.useRef<HTMLInputElement | null>(null)
 
-  const [partners, setPartners] = React.useState<Array<{ id: string; name: string }>>([])
-
   const { user } = useAuth()
   const isAdmin = user?.role === 'admin'
-  React.useEffect(() => {
-    // Only admins can read partnerships; other roles just see center-owned items, so they
-    // don't ask (asking only got a "Forbidden" error).
-    if (!isAdmin) return
-    apiGet<{ ok: boolean; data: any[] }>('/api/partnerships?limit=200')
-      .then((res) => setPartners((res.data || [])
-        .filter((p: any) => p.type === 'equipment_partner')
-        .map((p: any) => ({ id: String(p.id || p._id), name: String(p.name || 'Partner') }))))
-      .catch(() => setPartners([]))
-  }, [isAdmin])
 
   React.useEffect(() => {
     if (selectedItemId) {
@@ -697,22 +685,6 @@ export function AdminEquipmentPage() {
                 {BRANCHES.map((branch) => <option key={branch.id} value={branch.id}>{branch.label}</option>)}
               </select>
               <div className="mt-1 text-xs text-muted">Each branch rents out only its own pieces.{selectedItemId ? ' Applies to this piece only.' : ''}</div>
-            </label>
-            ) : null}
-            {partners.length > 0 ? (
-            <label className="mt-3 block">
-              <div className="block text-sm font-semibold text-text">Owned by partner</div>
-              <select
-                value={form.partnerId}
-                onChange={(event) => setForm((prev) => ({ ...prev, partnerId: event.target.value }))}
-                className="mt-2 w-full rounded-xl border border-white/10 bg-background px-4 py-3 text-sm text-text [&>option]:bg-background"
-              >
-                <option value="">Center-owned</option>
-                {partners.map((partner) => (
-                  <option key={partner.id} value={partner.id}>{partner.name}</option>
-                ))}
-              </select>
-              <div className="mt-1 text-xs text-muted">Partner-owned items count toward that partner's income share.</div>
             </label>
             ) : null}
 

@@ -10,6 +10,8 @@ import { listDiscountInstitutions } from '../utils/bookingPricing.js'
 import { PENALTY_RULES_ID, computePenalty, getPenaltyRules, resolvePenaltyCharge } from '../utils/penaltyRules.js'
 import { computeNetRevenue, computePartnerIncome } from '../utils/reachNetRevenue.js'
 import { OWN_GUN_PREFIX } from '../utils/fpsChecks.js'
+import { CAUSE_DAY_ENTRY, listCauseDayDonations } from '../utils/causeDayDonations.js'
+import { manilaDateISO } from '../utils/reminders.js'
 
 // Field-operations records that don't fit the generic CRUD routes: chronograph
 // (FPS) safety logs, damage reports and penalty billing, the REACH outreach fund
@@ -441,16 +443,20 @@ async function reachSummary(db) {
     { $group: { _id: '$type', amount: { $sum: '$amount' }, count: { $sum: 1 } } },
   ]).toArray()
   const sum = (type) => Number(totals.find((t) => t._id === type)?.amount || 0)
+  // Monthly allocations from net revenue are how the fund used to be filled; they stay in the
+  // balance as history. It is now filled by games for a cause, plus donations recorded by hand.
   const allocated = sum('allocation')
+  const fromCauses = sum(CAUSE_DAY_ENTRY)
   const donations = sum('donation')
   const spent = sum('expenditure')
   return {
     ratePercent: settings?.ratePercent ?? null,
     rateUpdatedAtISO: settings?.updatedAtISO || null,
     allocated,
+    fromCauses,
     donations,
     spent,
-    balance: Math.round((allocated + donations - spent) * 100) / 100,
+    balance: Math.round((allocated + fromCauses + donations - spent) * 100) / 100,
   }
 }
 
@@ -707,6 +713,54 @@ router.put('/reach-programs/:id', requireAuth, requireRole('admin'), async (req,
   }
 })
 
+// GET /api/reach-fund/cause-days — every game for a cause so far: what it raised from collected
+// payments, what's already in the fund, and what can still be added.
+router.get('/reach-fund/cause-days', requireAuth, requireRole('admin'), async (_req, res) => {
+  try {
+    const db = await getDb()
+    return res.json({ ok: true, data: await listCauseDayDonations(db, manilaDateISO()) })
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: String(err) })
+  }
+})
+
+// POST /api/reach-fund/cause-days/:dateISO/add — moves a finished cause day's donation share into
+// the fund: what it raised minus what was already added (payments collected later top it up).
+router.post('/reach-fund/cause-days/:dateISO/add', requireAuth, requireRole('admin'), async (req, res) => {
+  const dateISO = String(req.params.dateISO || '')
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateISO)) return res.status(400).json({ ok: false, error: 'Choose a game for a cause.' })
+  const db = await getDb()
+  const session = startDbSession()
+  try {
+    let entry
+    await session.withTransaction(async () => {
+      // Same lock as other fund entries, so two clicks can't add the same money twice.
+      await db.collection('settings').updateOne({ _id: `${REACH_SETTINGS_ID}_lock` }, { $inc: { version: 1 } }, { upsert: true, session })
+      const today = manilaDateISO()
+      const day = (await listCauseDayDonations(db, today)).find((row) => row.dateISO === dateISO)
+      if (!day) throw Object.assign(new Error('That game for a cause was not found.'), { statusCode: 404 })
+      if (!day.finished) throw Object.assign(new Error('Add it once the day is over, so every game is finished.'), { statusCode: 409 })
+      if (!(day.toAdd > 0)) throw Object.assign(new Error('Everything collected for this day is already in the fund.'), { statusCode: 409 })
+      entry = {
+        type: CAUSE_DAY_ENTRY,
+        periodKey: dateISO,
+        amount: day.toAdd,
+        description: `Game for a cause: ${day.title}${day.beneficiary ? ` (for ${day.beneficiary})` : ''}, ${day.donationPercent}% of ₱${day.collected.toLocaleString()} collected${day.added > 0 ? ' (top-up)' : ''}`,
+        dateISO,
+        atISO: new Date().toISOString(),
+        recordedBy: actorOf(req),
+      }
+      await db.collection('reach_fund_ledger').insertOne(entry, { session })
+    })
+    return res.status(201).json({ ok: true, data: entry, summary: await reachSummary(db) })
+  } catch (err) {
+    if (err?.statusCode) return res.status(err.statusCode).json({ ok: false, error: err.message })
+    return res.status(500).json({ ok: false, error: String(err) })
+  } finally {
+    await session.endSession()
+  }
+})
+
 // POST /api/reach-fund/entries { type: 'donation' | 'expenditure', amount, description, dateISO? }
 router.post('/reach-fund/entries', requireAuth, requireRole('admin'), async (req, res) => {
   const body = req.body || {}
@@ -739,7 +793,7 @@ router.post('/reach-fund/entries', requireAuth, requireRole('admin'), async (req
           { $group: { _id: '$type', amount: { $sum: '$amount' } } },
         ], { session }).toArray()
         const sum = (t) => Number(totals.find((x) => x._id === t)?.amount || 0)
-        const balance = sum('allocation') + sum('donation') - sum('expenditure')
+        const balance = sum('allocation') + sum(CAUSE_DAY_ENTRY) + sum('donation') - sum('expenditure')
         if (amount > balance + 0.001) {
           throw Object.assign(new Error(`The donation fund only has ₱${balance.toLocaleString()} available.`), { statusCode: 409 })
         }

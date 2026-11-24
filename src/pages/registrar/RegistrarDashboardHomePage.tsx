@@ -90,11 +90,12 @@ export function RegistrarDashboardHomePage() {
           <div className="lg:hidden"><CapacityCalendar /></div>
         </div>
 
-        <aside className="order-first space-y-3 lg:order-none">
+        {/* On desktop the side column stays in view while the announcements scroll (like the menu on the left). */}
+        <aside className="no-scrollbar order-first space-y-3 lg:sticky lg:top-[96px] lg:order-none lg:max-h-[calc(100vh-120px)] lg:overflow-y-auto">
           <WeatherAdvisoryWidget />
 
           <div className="grid grid-cols-3 gap-2">
-            <StatTile compact label="Pending" value={pendingReservations} hint={pendingReservations > 0 ? 'Not confirmed yet' : 'None'} loading={loading} />
+            <StatTile compact label="Pending" value={pendingReservations} hint={pendingReservations > 0 ? 'Unconfirmed' : 'None'} loading={loading} />
             <StatTile compact label="Waivers" value={pendingWaivers} hint={pendingWaivers > 0 ? 'To review' : 'All clear'} attention={pendingWaivers > 0} loading={loading} />
             <StatTile compact label="Payments" value={pendingPayments} hint={pendingPayments > 0 ? 'To verify' : 'All clear'} attention={pendingPayments > 0} loading={loading} />
           </div>
@@ -102,7 +103,7 @@ export function RegistrarDashboardHomePage() {
           <Panel
             compact
             title="Work queue"
-            description={loading ? undefined : totalQueue > 0 ? `${totalQueue} items to process` : 'Nothing waiting right now'}
+            description={loading ? undefined : totalQueue > 0 ? `${totalQueue} item${totalQueue === 1 ? '' : 's'} to process` : 'Nothing waiting right now'}
           >
             <div className="space-y-0.5">
               <ActionRow
@@ -128,7 +129,7 @@ export function RegistrarDashboardHomePage() {
             </div>
             {/* Shortcuts, under the queue so the side column stays about as tall as the calendar. */}
             <div className="divider mt-2 space-y-0.5 border-t pt-2">
-              <ActionRow to="/app/registrar/games" icon={FiZap} title="Games" description="Ongoing and archived sessions" />
+              <ActionRow to="/app/registrar/reservations?tab=games" icon={FiZap} title="Games" description="Ongoing and archived sessions" />
               <ActionRow to="/app/counter" icon={FiShoppingBag} title="Game counter" description="Check-in, rentals, ammo and payments per game" />
             </div>
             <div className="divider mt-2 border-t pt-2 text-[11px] text-muted">

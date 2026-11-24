@@ -138,7 +138,9 @@ function CompleteRepairForm({ repair, onDone }: { repair: Repair; onDone: () => 
 // The gunsmith's log: open a repair (pulls the item from rental), record parts and cost when
 // it's fixed, and see which models break most and what they cost.
 // `embedded`: shown as the Repairs tab of the Weapons page, which supplies the title.
-export function RepairsPage({ embedded = false }: { embedded?: boolean } = {}) {
+// `section`: on the Weapons page's Damage & repairs tab the repairs and their costs are separate
+// sub-tabs, so it shows one of them; on its own page it shows both.
+export function RepairsPage({ embedded = false, section = 'all' }: { embedded?: boolean; section?: 'all' | 'repairs' | 'costs' } = {}) {
   const [repairs, setRepairs] = useState<Repair[]>([])
   const [summary, setSummary] = useState<{ byItem: SummaryRow[]; byCategory: SummaryRow[] }>({ byItem: [], byCategory: [] })
   const [inventory, setInventory] = useState<InventoryOption[]>([])
@@ -235,6 +237,7 @@ export function RepairsPage({ embedded = false }: { embedded?: boolean } = {}) {
         </div>
       ) : null}
 
+      {section !== 'costs' ? (<>
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h2 className="flex items-center gap-2 text-lg font-bold"><FiTool /> Repairs</h2>
@@ -302,7 +305,7 @@ export function RepairsPage({ embedded = false }: { embedded?: boolean } = {}) {
       </Card>
 
       <Card className="p-4 md:p-5">
-        <div className="text-sm font-bold">Repair history ({done.length})</div>
+        <div className="text-sm font-bold">Completed repairs ({done.length})</div>
         <ul className="mt-3 space-y-2">
           {done.length === 0 ? <li className="text-sm text-muted">No completed repairs yet.</li> : done.map((repair) => (
             <li key={repair.id} className="flex flex-col gap-1 rounded-xl border border-white/10 bg-white/5 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
@@ -321,6 +324,9 @@ export function RepairsPage({ embedded = false }: { embedded?: boolean } = {}) {
         </ul>
       </Card>
 
+      </>) : null}
+
+      {section !== 'repairs' ? (
       <Card className="p-4 md:p-5">
         <div className="flex items-end justify-between gap-3">
           <div>
@@ -337,6 +343,7 @@ export function RepairsPage({ embedded = false }: { embedded?: boolean } = {}) {
           <SummaryTable title="By item" rows={summary.byItem} />
         </div>
       </Card>
+      ) : null}
     </div>
   )
 }

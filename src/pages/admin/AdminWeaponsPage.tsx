@@ -1,11 +1,12 @@
 import React from 'react'
 import { confirmDialog, promptDialog } from '../../components/ui/ConfirmDialog'
-import { FiAlertTriangle, FiCheck, FiCrosshair, FiEdit2, FiPlus, FiTool, FiTrash2 } from 'react-icons/fi'
+import { FiAlertTriangle, FiCheck, FiCrosshair, FiEdit2, FiMinus, FiPlus, FiTool, FiTrash2 } from 'react-icons/fi'
 import { useSearchParams } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
 import toast from 'react-hot-toast'
 import { ActionGroup, Button } from '../../components/ui/Button'
 import { FilterTabs } from '../../components/ui/FilterTabs'
+import { InfoDropdown } from '../../components/ui/InfoDropdown'
 import { BRANCHES, branchLabel } from '../../utils/branches'
 import { Card } from '../../components/ui/Card'
 import { Modal } from '../../components/ui/Modal'
@@ -123,7 +124,7 @@ function DamageDetails({ info, compact = false }: { info: DamageInfo; compact?: 
 // The center's weapons in one table: a row per model, a column per field (plus pieces not assigned
 // to a field, when there are any) with "available / total", the total across fields, and the price.
 // Follows the Category and Branch filters. Player-owned guns aren't the center's inventory.
-function WeaponInventoryTable({ weapons, category, branch }: { weapons: WeaponItem[]; category: WeaponCategory | 'all'; branch: string }) {
+function WeaponInventoryTable({ weapons, category, branch, onEdit }: { weapons: WeaponItem[]; category: WeaponCategory | 'all'; branch: string; onEdit?: (model: string, pieces: WeaponItem[]) => void }) {
   const known = new Set<string>(BRANCHES.map((entry) => entry.id))
   const fieldOf = (weapon: WeaponItem) => (known.has(String(weapon.locationId || '')) ? String(weapon.locationId) : 'none')
   const own = weapons.filter((weapon) => weapon.source !== 'player' && (category === 'all' || weapon.category === category))
@@ -158,6 +159,7 @@ function WeaponInventoryTable({ weapons, category, branch }: { weapons: WeaponIt
             {columns.map((column) => <th key={column.id} className="px-3 py-2 text-right font-semibold">{column.label}</th>)}
             {showTotal ? <th className="px-3 py-2 text-right font-semibold">All fields</th> : null}
             <th className="px-3 py-2 text-right font-semibold">Price</th>
+            {onEdit ? <th className="px-3 py-2"><span className="sr-only">Edit</span></th> : null}
           </tr>
         </thead>
         <tbody className="divide-y divide-white/5">
@@ -170,12 +172,174 @@ function WeaponInventoryTable({ weapons, category, branch }: { weapons: WeaponIt
               {columns.map((column) => <td key={column.id} className="px-3 py-2 text-right">{cell(items.filter((weapon) => fieldOf(weapon) === column.id))}</td>)}
               {showTotal ? <td className="px-3 py-2 text-right">{cell(items)}</td> : null}
               <td className="whitespace-nowrap px-3 py-2 text-right text-muted">₱{Number(items[0].price || 0).toLocaleString()} each</td>
+              {onEdit ? (
+                <td className="px-3 py-2 text-right">
+                  <Button size="xs" variant="ghost" onClick={() => onEdit(model, items)} aria-label={`Edit ${model}`}><FiEdit2 /> Edit</Button>
+                </td>
+              ) : null}
             </tr>
           ))}
         </tbody>
       </table>
-      <div className="border-t border-white/5 px-3 py-2 text-[11px] text-muted">Available / total pieces at each field.</div>
+      <div className="border-t border-white/5 px-3 py-2 text-[11px] text-muted">Available / total pieces at each field.{onEdit ? ' Edit a model to change its price, add pieces at a field, or move pieces between fields.' : ''}</div>
     </div>
+  )
+}
+
+// Admin edit for one model from the inventory table: the price for every piece, new pieces at a
+// field, and moving available pieces between fields. Rented and flagged pieces stay where they are.
+function ModelStockDialog({ model, pieces, onClose, onChanged }: { model: string; pieces: WeaponItem[]; onClose: () => void; onChanged: () => Promise<void> | void }) {
+  const first = pieces[0]
+  const known = new Set<string>(BRANCHES.map((entry) => entry.id))
+  const fieldOf = (weapon: WeaponItem) => (known.has(String(weapon.locationId || '')) ? String(weapon.locationId) : 'none')
+  const fields = [
+    ...BRANCHES.map((entry) => ({ id: entry.id as string, label: entry.label as string })),
+    ...(pieces.some((piece) => fieldOf(piece) === 'none') ? [{ id: 'none', label: 'Unassigned' }] : []),
+  ]
+  const [price, setPrice] = React.useState(String(first?.price ?? ''))
+  const [replacementValue, setReplacementValue] = React.useState(first?.replacementValue ? String(first.replacementValue) : '')
+  const [addCounts, setAddCounts] = React.useState<Record<string, string>>({})
+  const [moves, setMoves] = React.useState<Record<string, { count: string; to: string }>>({})
+  const [busy, setBusy] = React.useState<string | null>(null)
+
+  const savePrice = async () => {
+    const value = Number(price)
+    if (!Number.isFinite(value) || value < 0) return toast.error('Enter a price of ₱0 or more.')
+    setBusy('price')
+    try {
+      await apiPut('/api/inventory/weapons/models', { model, price: value, replacementValue: Number(replacementValue) || 0 })
+      toast.success(`Price updated on all ${pieces.length} ${model} piece${pieces.length === 1 ? '' : 's'}.`)
+      await onChanged()
+    } catch (e: any) {
+      toast.error(String(e?.message || e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const addPieces = async (fieldId: string, count: number) => {
+    if (!Number.isInteger(count) || count < 1 || count > 200) return toast.error('Add between 1 and 200 pieces at a time.')
+    setBusy(`add-${fieldId}`)
+    try {
+      // New pieces copy the model's shared details, at the chosen field.
+      await apiPost('/api/inventory/weapons/pieces', {
+        model,
+        count,
+        category: first?.category,
+        status: 'available',
+        price: Number(first?.price) || 0,
+        replacementValue: Number(first?.replacementValue) || 0,
+        description: first?.description || '',
+        note: first?.description || 'Added from the inventory table.',
+        locationId: fieldId === 'none' ? '' : fieldId,
+        fpsClass: first?.fpsClass || '',
+        fpsLimit: Number(first?.fpsLimit) || 0,
+      })
+      toast.success(`Added ${count} ${model} piece${count === 1 ? '' : 's'} at ${fields.find((x) => x.id === fieldId)?.label}.`)
+      setAddCounts((current) => ({ ...current, [fieldId]: '1' }))
+      await onChanged()
+    } catch (e: any) {
+      toast.error(String(e?.message || e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const movePieces = async (fromId: string) => {
+    const move = moves[fromId] || { count: '', to: '' }
+    const count = Number(move.count)
+    const movable = pieces.filter((piece) => fieldOf(piece) === fromId && piece.status === 'available')
+      .sort((a, b) => (b.unitNumber || 0) - (a.unitNumber || 0))
+    if (!move.to) return toast.error('Choose the field to move them to.')
+    if (!Number.isInteger(count) || count < 1) return toast.error('Enter how many pieces to move.')
+    if (count > movable.length) return toast.error(`Only ${movable.length} available piece${movable.length === 1 ? '' : 's'} can be moved from here.`)
+    setBusy(`move-${fromId}`)
+    try {
+      const nowISO = new Date().toISOString()
+      for (const piece of movable.slice(0, count)) {
+        await apiPut(`/api/weapons/${encodeURIComponent(piece.id)}`, { locationId: move.to === 'none' ? '' : move.to, updatedAtISO: nowISO })
+      }
+      toast.success(`Moved ${count} ${model} piece${count === 1 ? '' : 's'} to ${fields.find((x) => x.id === move.to)?.label || 'the new field'}.`)
+      setMoves((current) => ({ ...current, [fromId]: { count: '', to: '' } }))
+      await onChanged()
+    } catch (e: any) {
+      toast.error(String(e?.message || e))
+      await onChanged()
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  return (
+    <Modal eyebrow={`Weapons · ${categoryLabel(first?.category || '')}`} title={model} size="lg" confirmDiscard={false} onClose={onClose}>
+      <div className="space-y-5">
+        <section>
+          <div className="text-xs font-semibold uppercase tracking-widest text-muted">Price for every piece</div>
+          <div className="mt-2 flex flex-wrap items-end gap-2">
+            <div className="w-36"><Input label="Rental price (₱)" type="number" min={0} value={price} onChange={(e) => setPrice(e.target.value)} /></div>
+            <div className="w-44"><Input label="Replacement value (₱)" type="number" min={0} value={replacementValue} onChange={(e) => setReplacementValue(e.target.value)} placeholder="Optional" /></div>
+            <Button size="sm" variant="secondary" disabled={busy === 'price'} onClick={() => void savePrice()}>{busy === 'price' ? 'Saving…' : 'Save price'}</Button>
+          </div>
+        </section>
+
+        <section>
+          <div className="text-xs font-semibold uppercase tracking-widest text-muted">Pieces at each field</div>
+          {/* One card per field: the count, then two labelled actions side by side (add new pieces, move
+              available ones), each with its own button. */}
+          <div className="mt-2 space-y-2">
+            {fields.map((field) => {
+              const here = pieces.filter((piece) => fieldOf(piece) === field.id)
+              const available = here.filter((piece) => piece.status === 'available').length
+              const move = moves[field.id] || { count: '', to: '' }
+              const addValue = addCounts[field.id] ?? '1'
+              const step = (delta: number) => setAddCounts((c) => ({ ...c, [field.id]: String(Math.min(200, Math.max(1, (Number(c[field.id] ?? '1') || 1) + delta))) }))
+              const labelClass = 'mb-1 block text-[11px] font-semibold uppercase tracking-wider text-muted'
+              return (
+                <div key={field.id} className="rounded-xl border border-white/10 bg-white/5 p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-sm font-bold">{field.label}</div>
+                    <div className="text-xs text-muted"><span className="font-semibold text-text">{available}</span> available of {here.length}</div>
+                  </div>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                    {field.id !== 'none' ? (
+                      <div>
+                        <span className={labelClass}>Add new pieces</span>
+                        <div className="flex items-center gap-2">
+                          <div className="flex items-center rounded-xl border border-white/10">
+                            <button type="button" aria-label="One fewer" onClick={() => step(-1)} className="grid h-9 w-9 place-items-center text-muted hover:text-text"><FiMinus /></button>
+                            <input type="number" min={1} max={200} aria-label={`Pieces to add at ${field.label}`} value={addValue} onChange={(e) => setAddCounts((c) => ({ ...c, [field.id]: e.target.value }))} className="h-9 w-12 bg-transparent text-center text-sm font-semibold text-text outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none" />
+                            <button type="button" aria-label="One more" onClick={() => step(1)} className="grid h-9 w-9 place-items-center text-muted hover:text-text"><FiPlus /></button>
+                          </div>
+                          <Button size="sm" variant="accent-soft" disabled={busy === `add-${field.id}` || !(Number(addValue) >= 1)} onClick={() => void addPieces(field.id, Number(addValue))}>
+                            {busy === `add-${field.id}` ? 'Adding…' : 'Add'}
+                          </Button>
+                        </div>
+                      </div>
+                    ) : null}
+                    <div>
+                      <span className={labelClass}>Move available pieces</span>
+                      {available > 0 ? (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <input type="number" min={1} max={available} aria-label={`Pieces to move from ${field.label}`} placeholder="How many" value={move.count} onChange={(e) => setMoves((c) => ({ ...c, [field.id]: { ...move, count: e.target.value } }))} className="h-9 w-24 rounded-xl border border-white/10 bg-transparent px-3 text-sm text-text" />
+                          <select aria-label={`Move from ${field.label} to`} value={move.to} onChange={(e) => setMoves((c) => ({ ...c, [field.id]: { ...move, to: e.target.value } }))} className="h-9 min-w-0 flex-1 rounded-xl border border-white/10 bg-background px-2 text-sm text-text [&>option]:bg-background">
+                            <option value="">To field…</option>
+                            {BRANCHES.filter((b) => b.id !== field.id).map((b) => <option key={b.id} value={b.id}>{b.label}</option>)}
+                          </select>
+                          <Button size="sm" variant="secondary" disabled={busy === `move-${field.id}` || !move.count || !move.to} onClick={() => void movePieces(field.id)}>{busy === `move-${field.id}` ? 'Moving…' : 'Move'}</Button>
+                        </div>
+                      ) : (
+                        <div className="text-xs text-muted">No available pieces here to move.</div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+          <p className="mt-2 text-[11px] text-muted">Only available pieces move; rented and flagged ones stay where they are. To remove a piece for good, use Remove on it in the list below.</p>
+        </section>
+      </div>
+    </Modal>
   )
 }
 
@@ -221,21 +385,11 @@ function WeaponInventory() {
   const [formOpen, setFormOpen] = React.useState(false)
   const nameRef = React.useRef<HTMLInputElement | null>(null)
 
-  const [partners, setPartners] = React.useState<Array<{ id: string; name: string }>>([])
-
   const { user } = useAuth()
   const isAdmin = user?.role === 'admin'
-  React.useEffect(() => {
-    // Only admins can read partnerships; other roles just see center-owned items, so they
-    // don't ask (asking only got a "Forbidden" error).
-    if (!isAdmin) return
-    apiGet<{ ok: boolean; data: any[] }>('/api/partnerships?limit=200')
-      .then((res) => setPartners((res.data || [])
-        .filter((p: any) => p.type === 'equipment_partner')
-        .map((p: any) => ({ id: String(p.id || p._id), name: String(p.name || 'Partner') }))))
-      .catch(() => setPartners([]))
-  }, [isAdmin])
 
+  // The model open in the inventory-table editor (admins).
+  const [editingModel, setEditingModel] = React.useState<string | null>(null)
   const [damageReports, setDamageReports] = React.useState<any[]>([])
   const [repairs, setRepairs] = React.useState<any[]>([])
   const refresh = React.useCallback(async () => {
@@ -662,7 +816,7 @@ function WeaponInventory() {
         </div>
 
         {/* Each model's pieces per field, with the price. */}
-        <WeaponInventoryTable weapons={weapons} category={category} branch={branchFilter} />
+        <WeaponInventoryTable weapons={weapons} category={category} branch={branchFilter} onEdit={isAdmin ? (model) => setEditingModel(model) : undefined} />
 
         {/* Filters and the select/update/add toolbar sit right above the list they act on, after the model summary. */}
         <div className="mt-4 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
@@ -814,6 +968,10 @@ function WeaponInventory() {
         <Pagination page={page} pageCount={pageCount} total={total} onPageChange={setPage} />
 
       </Card>
+      {editingModel ? (() => {
+        const pieces = weapons.filter((weapon) => weapon.source !== 'player' && modelOf(weapon) === editingModel)
+        return pieces.length ? <ModelStockDialog model={editingModel} pieces={pieces} onClose={() => setEditingModel(null)} onChanged={refresh} /> : null
+      })() : null}
       {fpsFor ? (
         <Modal eyebrow="FPS check" title={`${fpsFor.name}${fpsFor.unitNumber && !fpsFor.name.includes('#') ? ` #${fpsFor.unitNumber}` : ''}`} onClose={() => setFpsFor(null)}>
           <div className="text-sm text-muted">
@@ -988,22 +1146,6 @@ function WeaponInventory() {
                 />
               </label>
             </div>
-            {partners.length > 0 ? (
-          <label className="mt-3 block">
-            <div className="mb-2 text-sm font-semibold text-text">Owned by partner</div>
-            <select
-              value={form.partnerId}
-              onChange={(event) => setForm((prev) => ({ ...prev, partnerId: event.target.value }))}
-              className="w-full rounded-xl border border-white/10 bg-background px-4 py-3 text-sm text-text [&>option]:bg-background"
-            >
-              <option value="">Center-owned</option>
-              {partners.map((partner) => (
-                <option key={partner.id} value={partner.id}>{partner.name}</option>
-              ))}
-            </select>
-            <div className="mt-1 text-xs text-muted">Partner-owned items count toward that partner's income share.</div>
-          </label>
-            ) : null}
           </div>
           <div className="mt-4">
             {selectedWeaponId ? (
@@ -1038,6 +1180,24 @@ export function AdminWeaponsPage() {
   const fromLink = (linked === 'damage' ? 'repairs' : linked) as WeaponsView | null
   const [view, setView] = React.useState<WeaponsView>(fromLink && WEAPON_VIEWS.includes(fromLink) ? fromLink : 'inventory')
   const [repairsVersion, setRepairsVersion] = React.useState(0)
+  // Damage & repairs sub-tab, and the counts on it: reports waiting for a fee decision, repairs still open.
+  const [repairsSection, setRepairsSection] = React.useState<'reports' | 'repairs' | 'costs'>('reports')
+  const [repairCounts, setRepairCounts] = React.useState({ reports: 0, open: 0 })
+  React.useEffect(() => {
+    if (view !== 'repairs') return
+    let alive = true
+    Promise.all([
+      apiGet<{ data: any[] }>('/api/damage-reports?limit=200').catch(() => ({ data: [] as any[] })),
+      apiGet<{ data: any[] }>('/api/repairs').catch(() => ({ data: [] as any[] })),
+    ]).then(([reports, repairs]) => {
+      if (!alive) return
+      setRepairCounts({
+        reports: (reports.data || []).filter((r: any) => r?.status === 'reported').length,
+        open: (repairs.data || []).filter((r: any) => r?.status === 'in_progress').length,
+      })
+    })
+    return () => { alive = false }
+  }, [view, repairsVersion, repairsSection])
 
   const changeView = (next: WeaponsView) => {
     setView(next)
@@ -1066,28 +1226,33 @@ export function AdminWeaponsPage() {
       {view === 'inventory' ? (
         <WeaponInventory />
       ) : view === 'repairs' ? (
-        <div className="space-y-8">
-          {/* How a broken or lost item moves through this tab. */}
-          <ol className="grid gap-2 sm:grid-cols-3">
-            {[
-              { icon: FiAlertTriangle, title: 'File a report', text: 'Damaged items open a repair automatically. Lost items get a loss report only.' },
-              { icon: FiTool, title: 'Gunsmith repairs it', text: 'Mark the repair done with the parts and labor cost.' },
-              { icon: FiCheck, title: 'Bill or waive', text: "The charge goes on the player's booking, or is waived." },
-            ].map((step, index) => (
-              <li key={step.title} className="flex gap-3 rounded-xl border border-white/10 bg-white/5 p-3">
-                <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-accent/15 text-xs font-bold text-accent">{index + 1}</span>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-1.5 text-sm font-semibold"><step.icon className="h-3.5 w-3.5 text-muted" /> {step.title}</div>
-                  <div className="mt-0.5 text-xs text-muted">{step.text}</div>
-                </div>
-              </li>
-            ))}
-          </ol>
-          <SafetyLogPage embedded tab="damage" onRepairOpened={() => setRepairsVersion((v) => v + 1)} />
-          <div className="border-t border-white/10 pt-6">
-            {/* Remounted when a damage report opens a repair, so the new one shows up. */}
-            <RepairsPage key={repairsVersion} embedded />
-          </div>
+        <div className="space-y-4">
+          {/* How a broken or lost item moves through this tab, folded away until needed. */}
+          <InfoDropdown
+            title="How damage and repairs work"
+            items={[
+              { label: '1. File a report', text: 'Damaged items open a repair automatically. Lost items get a loss report only.' },
+              { label: '2. Gunsmith repairs it', text: 'Mark the repair done with the parts and labor cost.' },
+              { label: '3. Bill or waive', text: "Set the damage fee on the report (it goes on the player's booking for the registrar), or waive it." },
+            ]}
+          />
+          {/* One part at a time: the reports, the repairs, or what repairs cost. */}
+          <FilterTabs
+            ariaLabel="Damage and repairs"
+            value={repairsSection}
+            onChange={setRepairsSection}
+            options={[
+              { value: 'reports', label: <><FiAlertTriangle /> Damage reports{repairCounts.reports ? <span className="ml-1 rounded-full bg-danger px-1.5 text-[10px] font-bold text-white">{repairCounts.reports}</span> : null}</> },
+              { value: 'repairs', label: <><FiTool /> Repairs{repairCounts.open ? <span className="ml-1 rounded-full bg-accent/20 px-1.5 text-[10px] font-bold text-accent">{repairCounts.open} open</span> : null}</> },
+              { value: 'costs', label: 'Repair costs' },
+            ]}
+          />
+          {repairsSection === 'reports' ? (
+            <SafetyLogPage embedded tab="damage" onRepairOpened={() => { setRepairsVersion((v) => v + 1) }} />
+          ) : (
+            // Remounted when a damage report opens a repair, so the new one shows up.
+            <RepairsPage key={`${repairsVersion}-${repairsSection}`} embedded section={repairsSection === 'costs' ? 'costs' : 'repairs'} />
+          )}
         </div>
       ) : (
         <SafetyLogPage embedded tab="fps" />

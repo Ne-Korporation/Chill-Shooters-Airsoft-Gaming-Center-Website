@@ -414,7 +414,7 @@ useEffect(() => {
 
       {canManage && isComposerOpen ? (
         <div className="fixed inset-0 z-[99999] grid place-items-center bg-black/70 px-3 py-4 backdrop-blur-sm sm:px-4 sm:py-6" role="dialog" aria-modal="true" aria-labelledby="dashboard-post-composer-title">
-          <div className="max-h-[90dvh] overflow-y-auto overscroll-contain w-full max-w-3xl rounded-[1.75rem] border border-white/10 bg-background p-4 shadow-2xl md:p-6">
+          <div className="max-h-[90dvh] overflow-y-auto overscroll-contain w-full max-w-3xl rounded-[1.75rem] border border-white/10 bg-background p-4 text-text shadow-2xl md:p-6">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <div id="dashboard-post-composer-title" className="text-lg font-semibold text-text">

@@ -17,6 +17,7 @@ import { FpsCheckPanel, loadFpsStatus, type FpsStatus } from './FpsCheckPanel'
 import { TeamCheckIn, fetchCheckInTeams, type CheckInSession, type CheckInTeam } from './FieldCheckInPage'
 import { SessionTeams } from './TeamGroupingPage'
 import { categoryLabel, formatDateTime, formatPHP, manilaTodayISO, selectClass } from './shared'
+import { BRANCHES } from '../../utils/branches'
 import { formatClock, formatSlotRange, slotHasEnded, useSlotHours, type SlotName } from '../../utils/slotHours'
 import { confirmDialog } from '../../components/ui/ConfirmDialog'
 
@@ -838,11 +839,28 @@ export function CounterPage() {
     return /\(([^)]+)\)\s*$/.exec(full)?.[1] || full
   }
 
+  // Which field a game is at (its location id or name, e.g. "Chill Shooters (Biñan)"), or '' if unknown.
+  const fieldOf = (game: GameDoc) => {
+    const text = `${game.LocationId || ''} ${game.Location || ''}`.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    return BRANCHES.find((branch) => text.includes(branch.id))?.id || ''
+  }
+  // The field filter: all fields, or one.
+  const [field, setField] = useState<string>('all')
+  const fieldGames = React.useMemo(() => (field === 'all' ? games : games.filter((game) => fieldOf(game) === field)), [games, field])
+  const fieldCounts = React.useMemo(() => {
+    const counts: Record<string, number> = {}
+    for (const game of games) {
+      const id = fieldOf(game)
+      if (id) counts[id] = (counts[id] || 0) + 1
+    }
+    return counts
+  }, [games])
+
   // Bookings in the same session (date + slot + field) share one header, so the schedule and
   // field aren't repeated on every card. Games come sorted by schedule, so order is kept.
   const sessionGroups = React.useMemo(() => {
     const groups = new Map<string, { key: string; type: string; games: GameDoc[] }>()
-    for (const game of games) {
+    for (const game of fieldGames) {
       const key = `${game.Schedule || ''}|${game.LocationId || game.Location || ''}`
       const group = groups.get(key) || { key, type: '', games: [] }
       group.games.push(game)
@@ -853,7 +871,7 @@ export function CounterPage() {
       group.type = types.size === 1 ? [...types][0] : ''
     }
     return [...groups.values()]
-  }, [games])
+  }, [fieldGames])
 
   // The card title names the booking (team or captain); "public"/"private" is the game type, shown on the session header.
   const gameTitle = (game: GameDoc) => {
@@ -969,10 +987,32 @@ export function CounterPage() {
         {view !== 'out' ? <Button size="sm" variant="ghost" onClick={() => void load()} aria-label="Refresh"><FiRefreshCw /></Button> : null}
       </div>
 
+      {/* Field filter: one field's games, with how many each field has in this view. */}
+      {view !== 'out' ? (
+        <div role="group" aria-label="Field" className="flex flex-wrap gap-1.5">
+          {[{ id: 'all', label: 'All fields', count: games.length }, ...BRANCHES.map((branch) => ({ id: branch.id as string, label: branch.label as string, count: fieldCounts[branch.id] || 0 }))].map((option) => (
+            <button
+              key={option.id}
+              type="button"
+              aria-pressed={field === option.id}
+              onClick={() => setField(option.id)}
+              className={`inline-flex h-9 items-center gap-1.5 rounded-full border px-3 text-xs font-semibold transition ${field === option.id ? 'border-accent/40 bg-accent/15 text-accent' : 'border-white/10 bg-white/5 text-muted hover:text-text'}`}
+            >
+              <FiMapPin className="h-3.5 w-3.5" /> {option.label}
+              {!loading ? <span className="rounded-full bg-black/20 px-1.5 text-[10px]">{option.count}</span> : null}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
       {view === 'out' ? (
         <StillOutPanel onCountChange={setStillOut} />
       ) : loading ? (
         <Card className="p-6 text-sm text-muted">Loading games…</Card>
+      ) : games.length > 0 && fieldGames.length === 0 ? (
+        <Card className="p-6 text-sm text-muted">
+          No games at {BRANCHES.find((branch) => branch.id === field)?.label || 'this field'} in this view. <button type="button" className="font-semibold text-accent hover:underline" onClick={() => setField('all')}>Show all fields</button>
+        </Card>
       ) : games.length === 0 ? (
         <Card className="p-6 text-sm text-muted">
           {view === 'ongoing' ? "No games are in progress. Games appear here once they're started."

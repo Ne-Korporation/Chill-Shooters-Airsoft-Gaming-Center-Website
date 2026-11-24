@@ -48,16 +48,45 @@ function endSuspendedSession(status: number, json: any) {
   if (!window.location.pathname.startsWith('/login')) window.location.assign('/login')
 }
 
+// What people see when a request fails: the server's own message when it wrote one for people,
+// otherwise a plain sentence. Server crashes (a stack or "SomethingError: ...") and missing
+// messages never reach the screen as code; they stay in the browser console for debugging.
+function friendlyError(json: any, status: number, path: string) {
+  const message = String(json?.error || json?.message || '').trim()
+  const technical = !message || /^\w*(Error|Exception)\b|^\[object |\bat \S+ \(|Mongo|ECONN|ETIMEDOUT/.test(message)
+  if (!technical) return message
+  if (message) console.warn(`API ${status} on ${path}: ${message}`)
+  if (status === 401) return 'Your session has ended. Please sign in again.'
+  if (status === 403) return "You don't have access to this."
+  if (status === 404) return "That item couldn't be found. It may have been removed."
+  if (status === 413) return 'That file is too large. Choose a smaller one.'
+  if (status === 429) return 'Too many tries. Wait a moment and try again.'
+  if (status >= 500) return 'Something went wrong on our side. Please try again in a moment.'
+  return 'That didn\'t work. Please check what you entered and try again.'
+}
+
+// fetch that turns "no connection" into a sentence people understand (fetch itself only says
+// "Failed to fetch"). A cancelled request (AbortError) is passed on unchanged.
+async function request(path: string, init?: RequestInit) {
+  try {
+    return await fetch(`${apiBase}${path}`, init)
+  } catch (err: any) {
+    if (err?.name === 'AbortError') throw err
+    console.warn(`Network error on ${path}`, err)
+    throw new ApiError("Can't reach the server. Check your internet connection and try again.", 0, null)
+  }
+}
+
 export function getApiAuthHeaders() {
   return buildHeaders()
 }
 
 export async function apiGet<T>(path: string) {
-  const res = await fetch(`${apiBase}${path}`, { headers: buildHeaders() })
+  const res = await request(path, { headers: buildHeaders() })
   const json = await res.json().catch(() => null)
   if (!res.ok) {
     endSuspendedSession(res.status, json)
-    throw new ApiError(json?.error || json?.message || `GET ${path} failed`, res.status, json)
+    throw new ApiError(friendlyError(json, res.status, `GET ${path}`), res.status, json)
   }
   return json as T
 }
@@ -91,7 +120,7 @@ export class ApiError extends Error {
 
 // `signal` lets the caller cancel the request (e.g. a Stop button); fetch then rejects with an AbortError.
 export async function apiPost<T>(path: string, body: unknown, options: { signal?: AbortSignal } = {}) {
-  const res = await fetch(`${apiBase}${path}`, {
+  const res = await request(path, {
     method: 'POST',
     headers: buildHeaders(true),
     body: JSON.stringify(body),
@@ -100,13 +129,13 @@ export async function apiPost<T>(path: string, body: unknown, options: { signal?
   const json = await res.json().catch(() => null)
   if (!res.ok) {
     endSuspendedSession(res.status, json)
-    throw new ApiError(json?.error || json?.message || `POST ${path} failed`, res.status, json)
+    throw new ApiError(friendlyError(json, res.status, `POST ${path}`), res.status, json)
   }
   return json as T
 }
 
 export async function apiPut<T>(path: string, body: unknown) {
-  const res = await fetch(`${apiBase}${path}`, {
+  const res = await request(path, {
     method: 'PUT',
     headers: buildHeaders(true),
     body: JSON.stringify(body),
@@ -114,20 +143,20 @@ export async function apiPut<T>(path: string, body: unknown) {
   const json = await res.json().catch(() => null)
   if (!res.ok) {
     endSuspendedSession(res.status, json)
-    throw new Error(json?.error || json?.message || `PUT ${path} failed`)
+    throw new Error(friendlyError(json, res.status, `PUT ${path}`))
   }
   return json as T
 }
 
 export async function apiDelete<T>(path: string) {
-  const res = await fetch(`${apiBase}${path}`, {
+  const res = await request(path, {
     method: 'DELETE',
     headers: buildHeaders(),
   })
   const json = await res.json().catch(() => null)
   if (!res.ok) {
     endSuspendedSession(res.status, json)
-    throw new Error(json?.error || json?.message || `DELETE ${path} failed`)
+    throw new Error(friendlyError(json, res.status, `DELETE ${path}`))
   }
   return json as T
 }

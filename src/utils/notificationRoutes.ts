@@ -6,9 +6,13 @@ function isStaffRole(role?: string) {
 
 // The games board for this role, opened on one game when the notice names it.
 function gamesBoardRoute(role: string, linkedId?: string) {
-  const base = role === 'registrar' ? '/app/registrar/games' : '/app/games'
+  // Registrars: the Games tab of Reservations.
+  if (role === 'registrar') {
+    const id = String(linkedId || '').trim()
+    return `/app/registrar/reservations?tab=games${id ? `&game=${encodeURIComponent(id)}` : ''}`
+  }
   const id = String(linkedId || '').trim()
-  return id ? `${base}?game=${encodeURIComponent(id)}` : base
+  return id ? `/app/games?game=${encodeURIComponent(id)}` : '/app/games'
 }
 
 export function resolveNotificationRoute(notification: NotificationItem, role?: string, userId?: string) {

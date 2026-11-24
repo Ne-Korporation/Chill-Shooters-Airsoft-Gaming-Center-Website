@@ -1,5 +1,6 @@
 import { signedWaiverText, type WaiverText } from './waiverText'
 import { formatPhPhone } from './phone'
+import { formatDateTime } from './dates'
 
 export type PrintableWaiver = {
   id?: string
@@ -27,10 +28,12 @@ export type PrintableWaiver = {
 const esc = (v: unknown) =>
   String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string))
 
-export function buildWaiverPrintHtml(w: PrintableWaiver) {
+// `preview`: shown inside the app (a pop-up) rather than printed. The page then fits the width it's
+// given instead of the fixed A4 width, so nothing is cut off; printing keeps the A4 layout.
+export function buildWaiverPrintHtml(w: PrintableWaiver, { preview = false }: { preview?: boolean } = {}) {
   const T = signedWaiverText(w)
   const name = esc(w.fullName || '-')
-  const submitted = w.submittedAtISO ? esc(new Date(w.submittedAtISO).toLocaleString()) : '-'
+  const submitted = esc(formatDateTime(w.submittedAtISO, '-'))
   const guardian = w.isMinor
     ? `<div class="guardian"><b>${esc(T.guardianTitle)}</b><p>${esc(T.guardianCertification)}</p>
        <p><b>Guardian:</b> ${esc(w.guardianName || '-')} &nbsp; ${w.guardianPhone ? `<b>Phone:</b> ${esc(formatPhPhone(w.guardianPhone))} &nbsp; ` : ''}<b>Consent:</b> ${w.guardianConsent ? 'Yes' : 'No'}</p></div>`
@@ -56,9 +59,10 @@ export function buildWaiverPrintHtml(w: PrintableWaiver) {
 
   return `<!doctype html><html><head><meta charset="utf-8"><title>Waiver ${esc(w.id || w._id || '')}</title>
 <style>
-  @page { size: A4; margin: 0; }
+  /* The 15mm margin is the page's, so every printed page gets it (not only the top of the first). */
+  @page { size: A4; margin: 15mm; }
   html, body { margin: 0; padding: 0; background: #fff; color: #000; font-family: Arial, Helvetica, sans-serif; }
-  body { width: 210mm; padding: 15mm; box-sizing: border-box; }
+  body { width: 180mm; padding: 0; box-sizing: border-box; }
   .sheet { width: 180mm; font-size: 13px; line-height: 1.4; }
   h1 { font-size: 1.5em; margin: 0 0 4px; text-align: center; }
   .meta { display: flex; flex-wrap: wrap; gap: 2px 18px; font-size: .95em; border-top: 1px solid #000; border-bottom: 1px solid #000; padding: 4px 0; margin-bottom: 6px; }
@@ -66,14 +70,24 @@ export function buildWaiverPrintHtml(w: PrintableWaiver) {
   ol { margin: 0 0 5px; padding-left: 18px; }
   li { margin-bottom: 3px; text-align: justify; }
   .guardian { margin-top: 4px; }
-  .ids { display: flex; gap: 12px; margin-top: 6px; }
-  .id img { display: block; height: 52px; max-width: 120px; object-fit: contain; border: 1px solid #999; }
-  .id .cap { font-size: .8em; margin-top: 1px; }
+  /* IDs print at real card size (about 86 x 54 mm), two side by side, never split across pages. */
+  .idsec { margin-top: 8mm; page-break-inside: avoid; break-inside: avoid; }
+  .idsec h2 { font-size: 1em; margin: 0 0 3mm; padding-bottom: 2px; border-bottom: 1px solid #000; }
+  .ids { display: flex; flex-wrap: wrap; gap: 6mm; page-break-inside: avoid; break-inside: avoid; }
+  .id { page-break-inside: avoid; break-inside: avoid; }
+  .id img { display: block; width: 86mm; height: 54mm; object-fit: contain; border: 1px solid #999; background: #fff; }
+  .id .cap { font-size: .85em; margin-top: 3px; }
   .sig { margin-top: 10px; page-break-inside: avoid; display: flex; gap: 24px; align-items: flex-end; }
   .sigcol { width: 240px; }
   .sigcol .name { font-size: 1.2em; font-weight: bold; }
   .sigcol img { display: block; height: 60px; max-width: 240px; object-fit: contain; margin-top: 2px; }
   .sigcol .line { border-top: 1px solid #000; width: 240px; margin-top: 2px; font-size: .85em; padding-top: 2px; }
+${preview ? `  body { width: auto; padding: 20px; overflow: hidden; }
+  .sheet { width: auto; max-width: 180mm; margin: 0 auto; }
+  .sig { flex-wrap: wrap; }
+  .ids { flex-wrap: wrap; }
+  .id { max-width: 100%; }
+  .id img { width: 86mm; max-width: 100%; height: auto; aspect-ratio: 86 / 54; }` : ''}
 </style></head><body><div class="sheet" id="sheet">
   <h1>${esc(T.title)}</h1>
   <div class="meta">
@@ -89,7 +103,7 @@ export function buildWaiverPrintHtml(w: PrintableWaiver) {
   <p><b>${esc(T.closing)}</b></p>
   ${guardian}
   <div class="sig">${signatures}</div>
-  ${ids ? `<div class="ids">${ids}</div>` : ''}
+  ${ids ? `<div class="idsec"><h2>Identification</h2><div class="ids">${ids}</div></div>` : ''}
 </div></body></html>`
 }
 
