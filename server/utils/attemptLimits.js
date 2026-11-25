@@ -25,6 +25,34 @@ export const LIMITS = {
 
 export const OTP_MAX_ATTEMPTS = 5
 
+// Password reset codes per email: the first code plus 3 resends, at least a minute apart. After
+// the 3rd resend the next code can be asked for 10 minutes later. Counted per email whether or
+// not it has an account, so the limit never shows who is registered.
+// `waitMs`: the wait after the 3rd resend; 10 quiet minutes also start a fresh round.
+// `windowMs`: how long sends are kept, long enough to cover a whole round.
+export const RESET_SENDS = { max: 4, waitMs: 10 * MINUTE, gapMs: MINUTE, windowMs: 45 * MINUTE }
+export const resetSendKey = (email) => `reset:send:${email}`
+
+// How long until another reset code can be sent, given when the earlier ones were (Dates or ms).
+// The sends form rounds: a round ends 10 minutes after its last code, and holds at most `max`.
+// `limit`: the round is full (3 resends used); `gap`: one was sent less than a minute ago.
+// `sent`: codes in the current round; `resendsLeft`: resends still allowed in it.
+export function resetSendWait(sentTimes, now = Date.now(), rule = RESET_SENDS) {
+  const times = sentTimes.map((t) => new Date(t).getTime()).filter((t) => t <= now && t > now - rule.windowMs).sort((a, b) => a - b)
+  let sent = 0
+  let last = null
+  for (const t of times) {
+    if (last !== null && t - last >= rule.waitMs) sent = 0
+    sent += 1
+    last = t
+  }
+  if (last !== null && now - last >= rule.waitMs) sent = 0
+  const resendsLeft = Math.max(0, rule.max - Math.max(1, sent))
+  if (sent >= rule.max) return { waitMs: last + rule.waitMs - now, reason: 'limit', sent, resendsLeft: 0 }
+  if (sent && now - last < rule.gapMs) return { waitMs: last + rule.gapMs - now, reason: 'gap', sent, resendsLeft }
+  return { waitMs: 0, reason: null, sent, resendsLeft }
+}
+
 export const loginKeys = (email, address) => ({
   pair: `login:pair:${email}:${address}`,
   address: `login:address:${address}`,
@@ -59,6 +87,12 @@ export function createAttemptStore(getCollection) {
     async count(key, { windowMs }, now = Date.now()) {
       const col = await collection()
       return col.countDocuments({ key, at: { $gt: new Date(now - windowMs) } })
+    },
+    // When the attempts for `key` within its window were made.
+    async times(key, { windowMs }, now = Date.now()) {
+      const col = await collection()
+      const docs = await col.find({ key, at: { $gt: new Date(now - windowMs) } }, { projection: { at: 1 } }).toArray()
+      return docs.map((doc) => doc.at)
     },
     // Records attempts for several keys at once (before the password or code is checked, so a
     // burst of guesses sent together is counted) and returns their ids, to give back on success.

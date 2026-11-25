@@ -188,7 +188,10 @@ async function main() {
   const resetPiece = (d) => {
     const { maintenanceReason, ...rest } = d
     void maintenanceReason
-    return String(rest.category || '').toLowerCase() === 'ammo' ? rest : { ...rest, status: 'available' }
+    if (String(rest.category || '').toLowerCase() === 'ammo') return rest
+    // Every rental piece belongs to one branch (the app no longer allows "any branch").
+    const branch = ['salawag', 'langkaan', 'binan'].includes(String(rest.locationId || '')) ? rest.locationId : 'salawag'
+    return { ...rest, locationId: branch, status: 'available' }
   }
   await copy('weapons', { source: { $ne: 'player' } }, resetPiece)
   await copy('equipments', { source: { $ne: 'player' } }, resetPiece)
@@ -215,6 +218,29 @@ async function main() {
   const { buildPeople } = await import('./people.js')
   const waiverText = siteSettings.find((s) => s.key === 'waiver_text')?.text
   const people = await buildPeople({ now, todayISO, rng, files, keptStaff, waiverText })
+  // An archived waiver to open in Waivers → Archived: Juan's first waiver was sent back (the
+  // signature was cut off), and was archived when he signed again.
+  const juanWaiver = people.waivers.find((w) => String(w.email || '').startsWith('juan.delacruz@') && w.status === 'approved')
+  if (juanWaiver) {
+    const firstMs = Date.parse(juanWaiver.submittedAtISO) - 6 * lib.HOUR
+    const archivedISO = new Date(Date.parse(juanWaiver.submittedAtISO) - 5 * 60_000).toISOString()
+    const { approvedAtISO, validUntilISO, autoApproved, reviewedBy, reviewerNote, ...rest } = juanWaiver
+    void approvedAtISO; void validUntilISO; void autoApproved; void reviewedBy; void reviewerNote
+    people.waivers.push({
+      ...rest,
+      id: `WAIV-${firstMs}`,
+      status: 'denied',
+      submittedAtISO: new Date(firstMs).toISOString(),
+      createdAtISO: new Date(firstMs).toISOString(),
+      reviewedAtISO: new Date(firstMs + 2 * lib.HOUR).toISOString(),
+      reviewedBy: { id: String(keptStaff.find((s) => s.role === 'registrar')?.id || 'registrar'), role: 'registrar', name: 'Front desk' },
+      reviewerNote: 'The signature is cut off at the edge. Please sign again inside the box.',
+      archived: true,
+      archivedReason: 'resubmitted',
+      archivedAtISO: archivedISO,
+      supersededBy: juanWaiver.id,
+    })
+  }
   await target.collection('user_accounts').insertMany(people.accounts)
   await target.collection('waivers').insertMany(people.waivers)
   await target.collection('weapons').insertMany(people.ownWeapons)
@@ -236,6 +262,41 @@ async function main() {
   const { seedBookings } = await import('./bookings.js')
   const slotHours = (await getSlotHours(target)).hours
   const b = await seedBookings({ db: target, rng, now, todayISO, slotHours, people, staff, files, historyStart })
+  // One payment in Payments → Needs review: Xendit charged ₱50 more than was due, so it is held for
+  // staff instead of counting toward the booking. Taken on an upcoming unpaid booking (charged
+  // more, so it counts as paid and doesn't expire), or else on a team booking whose captain has
+  // paid (such a booking never expires) by a teammate who hadn't paid their share yet.
+  {
+    const { getPaymentProgress } = await import('../../utils/paymentRules.js')
+    const paidBy = (r) => new Set(b.payments.filter((p) => p.reservationId === r.id).map((p) => String(p.userId)))
+    const upcomingOpen = b.reservations.filter((r) => !r.walkIn && r.reservationStatus === 'pending' && r.reservationDate > todayISO && Number(r.depositAmount) > 0)
+    const self = upcomingOpen
+      .filter((r) => String(r.paymentMode || 'self') === 'self' && r.paymentState === 'awaiting' && paidBy(r).size === 0)
+      .sort((x, y) => String(y.paymentDueAtISO).localeCompare(String(x.paymentDueAtISO)))[0]
+    const team = self ? null : upcomingOpen.find((r) => r.paymentMode === 'split' && r.paymentState === 'partial' && paidBy(r).has(String(r.userId))
+      && Object.keys(r.splitShares || {}).some((id) => !paidBy(r).has(id)))
+    const held = self || team
+    if (held) {
+      const payerId = self ? String(held.userId) : Object.keys(held.splitShares).find((id) => !paidBy(held).has(id))
+      const due = self ? Number(held.depositAmount) : Number(held.splitShares[payerId])
+      const charged = Math.round((due + 50) * 100) / 100
+      const atISO = new Date(Math.min(now - 20 * 60_000, Date.parse(held.paymentDueAtISO) - 10 * 60_000)).toISOString()
+      const txn = `DEMO-TXN-${lib.uuidFrom(`txn:${held.id}:review`).slice(0, 8).toUpperCase()}`
+      const payment = {
+        id: `PMT-${lib.uuidFrom(`payment:${held.id}:review`)}`, reservationId: held.id, userId: payerId, amount: charged,
+        paymentMethod: 'GCash (demo)', paymentStatus: 'review', status: 'review', kind: 'online',
+        xenditInvoiceId: `demo-inv-${lib.uuidFrom(`inv:${held.id}:review`)}`, xenditPaymentId: txn, transactionReference: txn,
+        reviewReason: `Xendit charged ₱${charged.toLocaleString('en-PH')} but ₱${due.toLocaleString('en-PH')} was due.`,
+        verifiedBy: 'demo', demo: true, verifiedAtISO: atISO, createdAtISO: atISO, demoSeed: true,
+      }
+      b.payments.push(payment)
+      const progress = getPaymentProgress(held, b.payments.filter((p) => p.reservationId === held.id))
+      Object.assign(held, { paymentState: progress.state, paymentSubmittedAmount: progress.submitted, paymentVerifiedAmount: progress.verified })
+      b.notes.push(`Needs review: ${payment.id} on ${held.id} (${payment.reviewReason})`)
+    } else {
+      b.notes.push('Needs review: no upcoming unpaid booking to hold a payment on (none seeded).')
+    }
+  }
   const insert = async (name, docs) => { if (docs.length) await target.collection(name).insertMany(docs) }
   await insert('reservations', b.reservations)
   await insert('payments', b.payments)

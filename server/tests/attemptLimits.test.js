@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { LIMITS, codeAddressKey, createAttemptStore, loginKeys, minutesLeft } from '../utils/attemptLimits.js'
+import { LIMITS, RESET_SENDS, codeAddressKey, createAttemptStore, loginKeys, minutesLeft, resetSendWait } from '../utils/attemptLimits.js'
 
 // Just enough of a MongoDB collection for the attempt store.
 function fakeCollection() {
@@ -82,4 +82,34 @@ test('one stranger guessing does not touch the owner from another address', asyn
 test('minutes left rounds up', () => {
   assert.equal(minutesLeft(NOW + 61 * 1000, NOW), 2)
   assert.equal(minutesLeft(NOW, NOW), 1)
+})
+
+// Password reset codes: the first code plus 3 resends, a minute apart, then a 10-minute wait.
+test('reset codes: 3 resends a minute apart, then 10 minutes', () => {
+  const MIN = 60 * 1000
+  const sent = []
+  // The first code goes straight away.
+  assert.equal(resetSendWait(sent, NOW).waitMs, 0)
+  sent.push(NOW)
+  // A resend within the minute waits for the rest of it.
+  const soon = resetSendWait(sent, NOW + 20 * 1000)
+  assert.equal(soon.reason, 'gap')
+  assert.equal(soon.waitMs, 40 * 1000)
+  assert.equal(soon.resendsLeft, 3)
+  // Three resends, each a minute later, all go.
+  for (let i = 1; i <= 3; i += 1) {
+    const at = NOW + i * MIN
+    assert.equal(resetSendWait(sent, at).waitMs, 0, `resend ${i}`)
+    sent.push(at)
+  }
+  // A 4th resend waits 10 minutes from the 3rd one.
+  const blocked = resetSendWait(sent, NOW + 5 * MIN)
+  assert.equal(blocked.reason, 'limit')
+  assert.equal(blocked.resendsLeft, 0)
+  assert.equal(blocked.waitMs, 3 * MIN + RESET_SENDS.waitMs - 5 * MIN)
+  assert.equal(resetSendWait(sent, NOW + 3 * MIN + RESET_SENDS.waitMs - 1).reason, 'limit')
+  // 10 minutes after the 3rd resend, a new code can be sent (and 3 more resends after it).
+  const later = resetSendWait(sent, NOW + 3 * MIN + RESET_SENDS.waitMs)
+  assert.equal(later.waitMs, 0)
+  assert.equal(later.resendsLeft, 3)
 })

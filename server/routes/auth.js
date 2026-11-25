@@ -13,7 +13,7 @@ import { ageFromBirthDate } from '../utils/age.js'
 import { emailWelcome } from '../services/notificationEmails.js'
 import { publicAppUrl } from '../utils/appUrl.js'
 import {
-  ATTEMPTS_COLLECTION, LIMITS, OTP_MAX_ATTEMPTS, clientAddress, codeAddressKey, createAttemptStore, loginKeys,
+  ATTEMPTS_COLLECTION, LIMITS, OTP_MAX_ATTEMPTS, RESET_SENDS, clientAddress, codeAddressKey, createAttemptStore, loginKeys, resetSendKey, resetSendWait,
 } from '../utils/attemptLimits.js'
 
 const router = express.Router()
@@ -819,7 +819,6 @@ router.post('/send-otp', async (req, res) => {
 const RESET_CODE_TTL_MS = 10 * 60 * 1000
 const RESET_PASS_TTL_MS = 15 * 60 * 1000
 const RESET_CODE_MAX_ATTEMPTS = 5
-const RESET_CODE_RESEND_MS = 60 * 1000
 const RESET_SENT_MESSAGE = 'If an account uses this email, we sent it a 6-digit code. It expires in 10 minutes.'
 const RESET_INVALID_MESSAGE = 'That code is wrong or has expired. Each code allows 5 tries; request a new code if you need one.'
 
@@ -850,11 +849,27 @@ router.post('/forgot-password', async (req, res) => {
     return res.status(400).json({ ok: false, error: 'Enter a valid email address.' })
   }
   try {
+    // The first code plus 3 resends, a minute apart; then a 10-minute wait (utils/attemptLimits.js).
+    const key = resetSendKey(email)
+    const wait = resetSendWait(await attempts.times(key, RESET_SENDS))
+    if (wait.waitMs > 0) {
+      const minutes = Math.ceil(wait.waitMs / 60_000)
+      const seconds = Math.ceil(wait.waitMs / 1000)
+      return res.status(429).json({
+        ok: false,
+        error: wait.reason === 'limit'
+          ? `You've asked for a new code 3 times. You can ask again in ${minutes} minute${minutes === 1 ? '' : 's'}.`
+          : `A code was just sent. You can ask for another in ${seconds} second${seconds === 1 ? '' : 's'}.`,
+        retryAfterSeconds: seconds,
+        resendsLeft: wait.resendsLeft,
+        limitReached: wait.reason === 'limit',
+      })
+    }
+    await attempts.record([{ key, limit: RESET_SENDS }])
+    const sentNow = wait.sent + 1
     const userAccounts = await getUserAccountsCollection()
     const user = await userAccounts.findOne(sameEmailFilter(email))
-    // A code sent less than a minute ago is still on its way: don't flood the inbox.
-    const lastSent = user?.resetCodeSentAtISO ? new Date(user.resetCodeSentAtISO).getTime() : 0
-    if (user && Date.now() - lastSent >= RESET_CODE_RESEND_MS) {
+    if (user) {
       const code = generateOtp()
       const nowISO = new Date().toISOString()
       await userAccounts.updateOne(
@@ -868,7 +883,14 @@ router.post('/forgot-password', async (req, res) => {
       await sendResetCodeEmail(user.email, code, user.firstName || user.name || 'there')
         .catch((mailErr) => console.error('Failed to send password reset code', mailErr?.message || mailErr))
     }
-    return res.json({ ok: true, message: RESET_SENT_MESSAGE })
+    // What the code screen shows: resends left, and when the next one can be asked for.
+    const resendsLeft = Math.max(0, RESET_SENDS.max - sentNow)
+    return res.json({
+      ok: true,
+      message: RESET_SENT_MESSAGE,
+      resendsLeft,
+      retryAfterSeconds: Math.round((resendsLeft ? RESET_SENDS.gapMs : RESET_SENDS.waitMs) / 1000),
+    })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
   }
