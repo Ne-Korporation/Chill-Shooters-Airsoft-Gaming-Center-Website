@@ -28,7 +28,9 @@ const time = (iso: string | null) => (iso ? new Date(iso).toLocaleTimeString('en
 // guns) gets a reading today. A rental gun that fails is pulled from rentals by the server and
 // has to be swapped on the Rentals tab; an own gun that fails can't be used. Marshals (and
 // admins) take the readings; everyone else sees the results.
-export function FpsCheckPanel({ reservationId, gameplayId, active = true, onChange, onGoToRentals }: {
+// `readOnly`: the game is completed; its readings are shown but no new ones are taken.
+export function FpsCheckPanel({ reservationId, gameplayId, active = true, onChange, onGoToRentals, readOnly = false }: {
+  readOnly?: boolean
   reservationId: string
   gameplayId?: string
   active?: boolean
@@ -36,7 +38,7 @@ export function FpsCheckPanel({ reservationId, gameplayId, active = true, onChan
   onGoToRentals?: () => void
 }) {
   const { user } = useAuth()
-  const canTest = user?.role === 'admin' || user?.role === 'marshal'
+  const canTest = !readOnly && (user?.role === 'admin' || user?.role === 'marshal')
   const [status, setStatus] = useState<FpsStatus | null>(null)
   const [readings, setReadings] = useState<Record<string, string>>({})
   // A bad reading is shown under that gun's row (keyed by weapon id).
@@ -96,7 +98,7 @@ export function FpsCheckPanel({ reservationId, gameplayId, active = true, onChan
       </div>
       <p className="mt-1 text-xs text-muted">
         Every gun in this game needs a passing chronograph reading today before the game can start.
-        {canTest ? '' : ' Marshals take the readings.'}
+        {readOnly ? ' The game is completed, so no new readings are taken.' : canTest ? '' : ' Marshals take the readings.'}
       </p>
 
       {status.items.length === 0 ? (

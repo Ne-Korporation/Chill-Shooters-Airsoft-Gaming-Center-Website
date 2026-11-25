@@ -63,6 +63,21 @@ function sendError(res, err) {
 // played before the system existed (stored as experienceAdjustment, set by an admin).
 // ---------------------------------------------------------------------------
 
+// A completed or archived game is closed: its check-in, teams and extra charges can't change any
+// more (an unpaid balance can still be collected, and a rental still out can still be checked in).
+const FINISHED_GAME = /^(compl|arch)/i
+export const GAME_CLOSED_ERROR = 'This game is completed, so it can no longer be changed.'
+// True when every one of these reservations has a game and each of those games is finished.
+async function gamesFinished(db, reservationIds) {
+  const ids = [...new Set(reservationIds.map(String).filter(Boolean))]
+  if (!ids.length) return false
+  const games = await db.collection('gameplay').find({ reservationId: { $in: ids } }, { projection: { reservationId: 1, Status: 1, status: 1 } }).toArray()
+  return ids.every((id) => {
+    const mine = games.filter((game) => String(game.reservationId) === id)
+    return mine.length > 0 && mine.every((game) => FINISHED_GAME.test(String(game.Status || game.status || '')))
+  })
+}
+
 // Counts completed games per player: the captain and every registered teammate of each
 // reservation whose game was completed or archived.
 async function getGamesAtField(db, userIds) {
@@ -373,6 +388,7 @@ router.post('/team-grouping', requireAuth, requireRole(...STAFF), async (req, re
     const present = new Map(roster.map((player) => [player.key, player]))
     const absent = [...seen].filter((key) => !present.has(key))
     if (absent.length) return res.status(400).json({ ok: false, error: 'Only players checked in for this session can be put on a team. Reload the session.' })
+    if (await gamesFinished(db, roster.map((player) => player.reservationId))) return res.status(409).json({ ok: false, error: GAME_CLOSED_ERROR })
     // The list of who was present is saved with the teams, so it stays on record after the day.
     const presentPlayers = roster.map((player) => ({
       key: player.key,
@@ -460,6 +476,7 @@ router.put('/field-checkin', requireAuth, requireRole('admin', 'registrar', 'mar
     if (!player) {
       return res.status(404).json({ ok: false, error: 'That player is not booked for this session.' })
     }
+    if (await gamesFinished(db, [player.reservationId])) return res.status(409).json({ ok: false, error: GAME_CLOSED_ERROR })
     const nowISO = new Date().toISOString()
     const checkingIn = req.body?.checkedIn === true
     const update = checkingIn
@@ -708,6 +725,7 @@ router.post('/reservations/:id/charges', requireAuth, requireRole(...STAFF), asy
     const db = await getDb()
     const reservation = await findById(db, 'reservations', req.params.id)
     if (!reservation) return res.status(404).json({ ok: false, error: 'Reservation not found' })
+    if (await gamesFinished(db, [reservation.id])) return res.status(409).json({ ok: false, error: GAME_CLOSED_ERROR })
     const amount = Math.round(quantity * unitPrice * 100) / 100
     const label = `${type === 'other' ? note : config[type].label}${quantity > 1 ? ` × ${quantity}` : ''}`
     const nowISO = new Date().toISOString()
@@ -749,6 +767,7 @@ router.post('/reservations/:id/add-gun', requireAuth, requireRole(...GEAR), asyn
     const db = await getDb()
     const reservation = await findById(db, 'reservations', req.params.id)
     if (!reservation) return res.status(404).json({ ok: false, error: 'Reservation not found' })
+    if (await gamesFinished(db, [reservation.id])) return res.status(409).json({ ok: false, error: GAME_CLOSED_ERROR })
     const gun = await findById(db, 'weapons', body.itemId)
     if (!gun || gun.source === 'player') return res.status(404).json({ ok: false, error: 'Gun not found' })
     if (String(gun.status || 'available').toLowerCase() !== 'available') return res.status(409).json({ ok: false, error: `${gun.name} is not available.` })
@@ -817,6 +836,7 @@ router.post('/reservations/:id/charges/:chargeId/remove', requireAuth, requireRo
     const charge = charges.find((c) => c.id === req.params.chargeId)
     if (!charge) return res.status(404).json({ ok: false, error: 'That charge is no longer on the bill.' })
     if (!canRemoveChargeType(req.user.role, charge.type)) return res.status(403).json({ ok: false, error: 'Only the registrar can take this charge off the bill.' })
+    if (await gamesFinished(db, [reservation.id])) return res.status(409).json({ ok: false, error: GAME_CLOSED_ERROR })
     // A damage fee is settled through its damage report, not removed from the bill here.
     if (charge.type === 'damage') return res.status(409).json({ ok: false, error: 'A damage fee can\'t be taken off the bill. It was set on the damage report.' })
 
