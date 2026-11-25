@@ -41,7 +41,7 @@ import { createWalkInAccount } from './auth.js'
 import { fpsBlockReason, gameFpsStatus } from '../utils/fpsChecks.js'
 import { checkAmmoStock } from '../utils/ammoStock.js'
 import { buildInvites, latestInvite, playingFilter, resolveNewBookingConflicts } from '../utils/teamInvites.js'
-import { emailGuardianWaiverSubmitted, emailIdentityDecision, emailReservationEvent, emailSplitShareRequest, emailTeamAdded } from '../services/notificationEmails.js'
+import { emailGuardianWaiverSubmitted, emailIdentityDecision, emailReservationEvent, emailSplitShareRequest, emailTeamAdded, emailWaiverRenewal } from '../services/notificationEmails.js'
 import { unpaidStartReason } from '../utils/bookingBalance.js'
 import {
   paymentWindowMsFor,
@@ -312,9 +312,10 @@ router.get('/packages/booking-counts', requireAuth, requireRole('admin'), async 
 })
 
 // New waiver text: every current waiver expires now and each player (a parent, for their children)
-// is told to answer the new one. Returns how many waivers expired.
+// is told to answer the new one, in the app and by email. Returns how many waivers expired.
 async function renewWaiversForNewText(db) {
-  const expired = await expireWaiversForNewText(db)
+  const changedAtISO = new Date().toISOString()
+  const expired = await expireWaiversForNewText(db, changedAtISO)
   // One notice per account: a child's waiver goes to their parent.
   const byAccount = new Map()
   for (const waiver of expired) {
@@ -335,6 +336,15 @@ async function renewWaiversForNewText(db) {
       message: `Chill Shooters updated its waiver, so ${whose} must be answered again before your next game. Open the Waivers page to submit the new one.`,
     })
   }
+  // The emails go out after the response, one account at a time, so a big player list doesn't
+  // hold up the admin's save. Each is logged (email_log) and sent once per account per change.
+  void (async () => {
+    for (const [accountId, { own, children }] of byAccount) {
+      const whose = [own ? 'your waiver' : '', children.length ? `the waiver${children.length > 1 ? 's' : ''} of ${children.join(', ')}` : '']
+        .filter(Boolean).join(' and ')
+      await emailWaiverRenewal(db, accountId, { whose, changeKey: changedAtISO }).catch(() => null)
+    }
+  })()
   return expired.length
 }
 

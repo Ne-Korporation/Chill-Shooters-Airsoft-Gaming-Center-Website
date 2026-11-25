@@ -104,8 +104,35 @@ const SKIP = [
   /^\/(upload-image|upload-document|scan-id|uploads)\b/,
   /^\/(package-recommendations|inventory-check|weather-advisories\/check|test-email)\b/,
   /^\/auth\/admin\/package-suggestions\b/,
-  /^\/xendit\/webhook\b/,
   /^\/notifications\/[^/]+$/, // marking a notification read
+]
+
+// Changes made without signing in: through an emailed link, or by the payment provider calling
+// back. Who did it is named here; the link's token is never stored, and only the listed fields of
+// the request are kept.
+const PUBLIC_RULES = [
+  [/^\/guardian-approvals\/[^/]+$/, {
+    module: 'waiver',
+    label: (b) => (b?.decision === 'declined' ? 'Guardian declined a game (emailed link)' : 'Guardian approved a game (emailed link)'),
+    severity: 'warning',
+    actor: { id: 'guardian-link', role: 'guardian', name: 'Guardian (emailed link)' },
+    fields: ['decision', 'note'],
+  }],
+  [/^\/guardian-confirmations\/[^/]+$/, {
+    module: 'player',
+    label: 'Guardian confirmed a child profile (emailed link)',
+    severity: 'info',
+    actor: { id: 'guardian-link', role: 'guardian', name: 'Guardian (emailed link)' },
+    fields: [],
+  }],
+  [/^\/xendit\/webhook$/, {
+    module: 'payment',
+    label: (b) => `Online payment ${String(b?.status || 'update').toLowerCase()} (payment provider)`,
+    severity: 'warning',
+    actor: { id: 'xendit', role: 'payment provider', name: 'Xendit (payment provider)' },
+    fields: ['id', 'external_id', 'status', 'amount', 'paid_amount', 'payment_method', 'payment_channel'],
+    resourceId: (b) => String(b?.external_id || b?.id || ''),
+  }],
 ]
 
 const SECRET_KEY = /pass(word)?|token|secret|otp|code$|signature|image|photo|document|qr|scan/i
@@ -176,16 +203,28 @@ async function actorDetails(db, user) {
   return value
 }
 
+// Emailed-link paths carry a secret token: never store it.
+const redactPath = (path) => path.replace(/\/(guardian-approvals|guardian-confirmations)\/(?!.*\/in-person$)[^/]+/, '/$1/[link]')
+
 const clientIp = (req) => String(req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '').split(',')[0].trim()
 
 /**
  * Writes one audit entry. Never throws: a failed audit write is logged, the action still stands.
  * `req` gives the actor and marks the request as audited so `auditRequests` skips it.
  */
-export async function logAudit(db, req, { module = 'other', action, label = '', severity = 'info', resourceType = '', resourceId = '', summary = '', details = {}, before, after } = {}) {
+export async function logAudit(db, req, { module = 'other', action, label = '', severity = 'info', resourceType = '', resourceId = '', summary = '', details = {}, before, after, actor: actorOverride } = {}) {
   if (req) req.auditLogged = true
   try {
-    const actor = req?.user ? await actorDetails(db, req.user) : { actorName: 'System', actorEmail: '' }
+    // Without a signed-in user: the server itself (a scheduled job), or whoever `actor` names
+    // (a guardian using an emailed link, the payment provider).
+    const who = req?.user
+      ? { actorId: String(req.user.id), actorRole: String(req.user.role || ''), ...(await actorDetails(db, req.user)) }
+      : {
+        actorId: String(actorOverride?.id || 'system'),
+        actorRole: String(actorOverride?.role || 'system'),
+        actorName: String(actorOverride?.name || 'System (automatic)'),
+        actorEmail: String(actorOverride?.email || ''),
+      }
     await db.collection('audit_logs').insertOne({
       module,
       action: action || label,
@@ -194,11 +233,9 @@ export async function logAudit(db, req, { module = 'other', action, label = '', 
       resourceType,
       resourceId: String(resourceId || ''),
       summary,
-      actorId: String(req?.user?.id || 'system'),
-      actorRole: String(req?.user?.role || 'system'),
-      ...actor,
-      method: req?.method || '',
-      path: req ? String(req.originalUrl || '').split('?')[0] : '',
+      ...who,
+      method: req?.method || 'SYSTEM',
+      path: req ? redactPath(String(req.originalUrl || '').split('?')[0]) : '',
       details: sanitizeForAudit(details),
       ...(before !== undefined ? { before: sanitizeForAudit(before) } : {}),
       ...(after !== undefined ? { after: sanitizeForAudit(after) } : {}),
@@ -228,8 +265,29 @@ export function auditRequests(req, res, next) {
   const path = String(req.originalUrl || '').split('?')[0].replace(/^\/api/, '')
   if (!path || SKIP.some((pattern) => pattern.test(path))) return next()
 
-  const rule = describeRequest(req.method, path, req.body)
   const body = req.body
+  const publicRule = req.method === 'POST' ? PUBLIC_RULES.find(([pattern]) => pattern.test(path))?.[1] : null
+  if (publicRule) {
+    res.on('finish', () => {
+      if (res.statusCode >= 400 || req.auditLogged) return
+      const label = typeof publicRule.label === 'function' ? publicRule.label(body) : publicRule.label
+      const resourceId = publicRule.resourceId ? publicRule.resourceId(body) : ''
+      void getDb().then((db) => logAudit(db, req, {
+        module: publicRule.module,
+        action: label,
+        label,
+        severity: publicRule.severity,
+        resourceType: path.split('/')[1] || '',
+        resourceId,
+        summary: `${label}${resourceId ? ` (${resourceId})` : ''}`,
+        details: Object.fromEntries(publicRule.fields.map((key) => [key, body?.[key]])),
+        actor: publicRule.actor,
+      })).catch((err) => console.error('Failed to audit request', err))
+    })
+    return next()
+  }
+
+  const rule = describeRequest(req.method, path, req.body)
   // Generic record edits and deletes: keep the record's values before the change.
   const generic = (req.method === 'PUT' || req.method === 'PATCH' || req.method === 'DELETE') && COLLECTION_MODULES[rule.resourceType] && rule.resourceId
   const beforePromise = generic

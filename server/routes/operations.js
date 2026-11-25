@@ -1111,18 +1111,34 @@ router.put('/partner-loans/:id/return', requireAuth, requireRole('admin'), async
 })
 
 // --- Audit trail (admins) ---
-// Entries written before modules existed get one worked out from their action, once.
-const LEGACY_SEVERITY = [[/erased|closed|staff_/, 'critical'], [/suspended|removed|reopened|rescheduled/, 'warning']]
+// Entries written before the audit trail existed (by the few routes that logged themselves) get a
+// module, label, severity, readable summary and the actor's name, once. LEGACY_VERSION marks it.
+const LEGACY_VERSION = 2
+const LEGACY_SEVERITY = [
+  [/data_erased|account_closed|staff_account/, 'critical'],
+  [/suspended|removed|reopened|rescheduled|closed_day/, 'warning'],
+]
 async function upgradeOldAuditEntries(db) {
-  const old = await db.collection('audit_logs').find({ module: { $exists: false } }).limit(500).toArray()
+  const old = await db.collection('audit_logs')
+    .find({ method: { $exists: false }, legacyVersion: { $ne: LEGACY_VERSION } })
+    .limit(500).toArray()
+  if (!old.length) return
+  const ids = [...new Set(old.map((entry) => String(entry.actorId || '')).filter(Boolean))]
+  const accounts = await db.collection('user_accounts').find({ id: { $in: ids } }, { projection: { id: 1, name: 1, email: 1 } }).toArray()
+  const byId = new Map(accounts.map((account) => [String(account.id), account]))
   for (const entry of old) {
     const action = String(entry.action || '')
+    const label = labelOfEntry({ action })
+    const reason = String(entry.details?.reason || '').trim()
+    const actor = byId.get(String(entry.actorId || ''))
     await db.collection('audit_logs').updateOne({ _id: entry._id }, {
       $set: {
-        module: moduleOfEntry(entry),
-        label: labelOfEntry(entry),
-        severity: entry.severity || LEGACY_SEVERITY.find(([pattern]) => pattern.test(action))?.[1] || 'info',
-        summary: entry.summary || [labelOfEntry(entry), entry.resourceId ? `(${entry.resourceId})` : '', entry.details?.reason ? `: ${entry.details.reason}` : ''].filter(Boolean).join(' '),
+        module: moduleOfEntry({ action }),
+        label,
+        severity: LEGACY_SEVERITY.find(([pattern]) => pattern.test(action))?.[1] || 'info',
+        summary: `${label}${entry.resourceId ? ` (${entry.resourceId})` : ''}${reason ? `: ${reason}` : ''}`,
+        ...(actor ? { actorName: actor.name || '', actorEmail: actor.email || '' } : {}),
+        legacyVersion: LEGACY_VERSION,
       },
     })
   }

@@ -1,5 +1,6 @@
 import { ObjectId } from 'mongodb'
 import { manilaDateISO } from './reminders.js'
+import { logAudit } from './audit.js'
 
 // The game's day from its Schedule ("2026-11-07 • afternoon"), or '' when it has none.
 export function gameDateOf(game) {
@@ -47,5 +48,18 @@ export async function closePastGames(db, { todayISO = manilaDateISO(), now = new
     )
     return result.modifiedCount
   }
-  return { completed: await close('Completed', byStatus.Completed), cancelled: await close('Cancelled', byStatus.Cancelled) }
+  const completed = await close('Completed', byStatus.Completed)
+  const cancelled = await close('Cancelled', byStatus.Cancelled)
+  if (completed || cancelled) {
+    const ids = past.map((game) => String(game.reservationId || game._id))
+    await logAudit(db, null, {
+      module: 'operations',
+      action: 'past_games_closed_automatically',
+      label: 'Past games closed automatically',
+      resourceType: 'gameplay',
+      summary: `Games left open after their day were closed: ${completed} completed, ${cancelled} cancelled (booking was cancelled)`,
+      details: { completed, cancelled, reservations: ids },
+    })
+  }
+  return { completed, cancelled }
 }

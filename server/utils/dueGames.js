@@ -4,6 +4,7 @@ import { getSlotHours, slotHasStarted } from './slotHours.js'
 import { getReservationPayments, notifyRole } from './paymentProgress.js'
 import { unpaidStartReason } from './bookingBalance.js'
 import { notifyGameStatus } from './playerNotices.js'
+import { logAudit } from './audit.js'
 
 // Today's games whose slot has begun but that are still Scheduled. Each one is started
 // automatically when its booking balance is paid and every gun in it has passed today's
@@ -49,6 +50,16 @@ export async function startDueGames(db, {
       )
       if (started.modifiedCount) {
         result.started.push(String(game.id || game._id))
+        await logAudit(db, null, {
+          module: 'operations',
+          action: 'game_started_automatically',
+          label: 'Game started automatically',
+          resourceType: 'gameplay',
+          resourceId: String(game.id || game._id),
+          summary: `Game ${game.id || game._id}${game.reservationId ? ` (${game.reservationId})` : ''} started at slot time: balance paid and every gun passed the FPS check`,
+          before: { Status: 'Scheduled' },
+          after: { Status: 'Ongoing' },
+        })
         // Everyone on the booking is told their game has started.
         if (reservation) await notifyGameStatus(db, reservation, 'ongoing').catch(() => null)
       }

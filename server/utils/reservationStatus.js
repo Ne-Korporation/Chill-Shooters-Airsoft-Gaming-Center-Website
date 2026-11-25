@@ -2,6 +2,7 @@ import { releaseBookingInventory } from './inventoryHolds.js'
 import { normalizeLocationId, syncPublicGrounds } from './bookingSlots.js'
 import { getPaymentProgress } from './paymentRules.js'
 import { getActorName } from './actors.js'
+import { logAudit } from './audit.js'
 
 const CANCELLABLE_PAYMENT_STATUSES = ['pending', 'submitted', 'review', 'needs review']
 
@@ -17,6 +18,7 @@ export async function updateReservationStatusAtomically({
   const actorName = actor?.role === 'system' ? '' : await getActorName(db, actor).catch(() => '')
   const session = startSession()
   let updatedReservation
+  let previousStatus = ''
   try {
     await session.withTransaction(async () => {
       await db.collection('reservation_status_locks').updateOne(
@@ -109,6 +111,7 @@ export async function updateReservationStatusAtomically({
           { session },
         )
       }
+      previousStatus = String(current.reservationStatus || '')
       updatedReservation = {
         ...current,
         reservationStatus: nextStatus,
@@ -118,6 +121,23 @@ export async function updateReservationStatusAtomically({
     })
   } finally {
     await session.endSession()
+  }
+  // Changes made by staff or players are recorded with their request; automatic ones are recorded
+  // here, under "System (automatic)".
+  if (updatedReservation && actor?.role === 'system') {
+    const why = ({ payment_window_expired: 'the payment window ran out', account_closed: "the captain's account was closed" })[reason] || String(reason || '').replace(/_/g, ' ')
+    await logAudit(db, null, {
+      module: 'reservation',
+      action: `reservation_${nextStatus}_automatically`,
+      label: `Reservation ${nextStatus} automatically`,
+      severity: nextStatus === 'cancelled' ? 'warning' : 'info',
+      resourceType: 'reservations',
+      resourceId: String(reservationId || updatedReservation.id || ''),
+      summary: `Reservation ${reservationId} ${nextStatus} automatically${why ? ` because ${why}` : ''}`,
+      details: { reason },
+      ...(previousStatus ? { before: { reservationStatus: previousStatus } } : {}),
+      after: { reservationStatus: nextStatus },
+    })
   }
   return updatedReservation
 }

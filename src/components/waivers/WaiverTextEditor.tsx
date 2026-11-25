@@ -44,7 +44,7 @@ export function WaiverTextEditor() {
       await reload()
       setDraft(null)
       const expired = Number(res?.waiversExpired) || 0
-      toast.success(`${body.reset ? 'Waiver text reset to the official version.' : 'Waiver text saved.'}${expired ? ` ${expired} current waiver${expired === 1 ? '' : 's'} expired; those players were told to answer the new one.` : ''}`)
+      toast.success(`${body.reset ? 'Waiver text reset to the official version.' : 'Waiver text saved.'}${expired ? ` ${expired} current waiver${expired === 1 ? '' : 's'} expired; those players were notified and emailed to answer the new one.` : ''}`)
     } catch (e: any) {
       toast.error(String(e?.message || 'Could not save the waiver text.'))
     } finally {
