@@ -1,6 +1,9 @@
 import React from 'react'
 import { confirmDialog } from '../../components/ui/ConfirmDialog'
-import { FiEdit2, FiPlus, FiTrash2 } from 'react-icons/fi'
+import { FiEdit2, FiPlus, FiTool, FiTrash2 } from 'react-icons/fi'
+import { useSearchParams } from 'react-router-dom'
+import { FilterTabs } from '../../components/ui/FilterTabs'
+import { DamageRepairsPanel } from '../../components/inventory/DamageRepairsPanel'
 import toast from 'react-hot-toast'
 import { ActionGroup, Button } from '../../components/ui/Button'
 import { BRANCHES, branchLabel } from '../../utils/branches'
@@ -13,7 +16,7 @@ import { useAuth } from '../../context/AuthContext'
 import { Pagination, usePagination } from '../../components/ui/Pagination'
 import { ModelSummaryStrip } from '../../components/inventory/ModelSummaryStrip'
 import { BulkUpdateModal, InventoryToolbar, SelectBox, forEachPiece, type BulkChange } from '../../components/inventory/BulkActionBar'
-import { DEFAULT_LOW_STOCK_GRAMS, ammoLowLevel, isAmmo, isLowOnAmmo, modelOf, summarizeModels } from '../../utils/inventoryModels'
+import { DEFAULT_LOW_STOCK_GRAMS, ammoLowLevel, isAmmo, isLowOnAmmo, modelOf } from '../../utils/inventoryModels'
 
 // Rental gear is only masks, vests, and ammo.
 type EquipmentCategory = 'masks' | 'vests' | 'ammo'
@@ -72,7 +75,42 @@ const AMMO_PRICE_PER_REFILL = '50'
 
 const emptyForm = () => ({ name: '', description: '', pieces: '1', grams: '', lowGrams: '', applyToModel: true, price: '0', replacementValue: '', status: 'available' as EquipmentStatus, category: 'masks' as EquipmentCategory, partnerId: '', locationId: '' })
 
+type GearView = 'inventory' | 'repairs'
+const GEAR_VIEWS: GearView[] = ['inventory', 'repairs']
+
+// Gear: the inventory, and "Damage & repairs" for gear (reports, the repair log and repair costs),
+// laid out like the Weapons page. ?view=repairs opens that tab directly.
 export function AdminEquipmentPage() {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const linked = searchParams.get('view') as GearView | null
+  const [view, setView] = React.useState<GearView>(linked && GEAR_VIEWS.includes(linked) ? linked : 'inventory')
+  const changeView = (next: GearView) => {
+    setView(next)
+    setSearchParams(next === 'inventory' ? {} : { view: next }, { replace: true })
+  }
+  return (
+    <div className="space-y-4">
+      <div>
+        <h1 className="text-3xl font-bold">Gear</h1>
+        {view === 'inventory' ? (
+          <p className="mt-1 text-sm text-muted">Track inventory by category, condition, and ownership source.</p>
+        ) : null}
+      </div>
+      <FilterTabs
+        ariaLabel="Gear section"
+        value={view}
+        onChange={changeView}
+        options={[
+          { value: 'inventory', label: 'Inventory' },
+          { value: 'repairs', label: <><FiTool /> Damage &amp; repairs</> },
+        ]}
+      />
+      {view === 'inventory' ? <GearInventory /> : <DamageRepairsPanel kind="equipment" />}
+    </div>
+  )
+}
+
+function GearInventory() {
   const [activeCategory, setActiveCategory] = React.useState<EquipmentCategory | 'all'>('all')
   const [status, setStatus] = React.useState<EquipmentStatus | 'all'>('all')
   const [branchFilter, setBranchFilter] = React.useState<string>('all')
@@ -143,7 +181,6 @@ export function AdminEquipmentPage() {
   const totalInStock = inventory.length
   // BB ammo below its warning level (center stock only).
   const lowAmmo = inventory.filter((item) => isLowOnAmmo(item))
-  const models = summarizeModels(inventory)
   const maintenanceCount = inventory.filter((item) => item.status === 'maintenance').length
   const rentedCount = inventory.filter((item) => item.status === 'rented').length
 
@@ -343,12 +380,6 @@ export function AdminEquipmentPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-        <div>
-          <h1 className="text-3xl font-bold">Gear</h1>
-          <p className="mt-1 text-sm text-muted">Track inventory by category, condition, and ownership source.</p>
-        </div>
-      </div>
 
       {lowAmmo.length > 0 ? (
         <Card className="border-danger/30 p-4">
@@ -458,7 +489,7 @@ export function AdminEquipmentPage() {
           </div>
         </div>
 
-        <ModelSummaryStrip models={models} unit="piece" />
+        <ModelSummaryStrip items={inventory} category={activeCategory} branch={branchFilter} />
 
         {bulkOpen ? (
           <BulkUpdateModal
@@ -724,23 +755,6 @@ export function AdminEquipmentPage() {
             </div>
           </Modal>
         ) : null}
-
-        <div className="mt-4">
-          <Card className="p-4 bg-white/5/60">
-            <div className="text-xs uppercase tracking-widest text-muted">Reservation impact</div>
-            <div className="mt-2 text-sm text-muted">This category is currently supporting the next three scheduled sessions.</div>
-            <div className="mt-4 space-y-3">
-              <div className="rounded-xl border border-white/5 bg-white/5 px-3 py-3">
-                <div className="text-[11px] uppercase tracking-widest text-muted">Upcoming demand</div>
-                <div className="mt-1 text-sm font-semibold">High for weekend package reservations</div>
-              </div>
-              <div className="rounded-xl border border-white/5 bg-white/5 px-3 py-3">
-                <div className="text-[11px] uppercase tracking-widest text-muted">Next review</div>
-                <div className="mt-1 text-sm font-semibold">Maintenance check scheduled tomorrow at 10:00 AM</div>
-              </div>
-            </div>
-          </Card>
-        </div>
       </Card>
     </div>
   )

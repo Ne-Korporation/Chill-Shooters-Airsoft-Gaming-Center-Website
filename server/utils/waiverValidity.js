@@ -1,3 +1,5 @@
+import { logAudit } from './audit.js'
+
 // Approved waivers are valid for 12 months. After that the player answers the waiver again;
 // the old record is kept as "expired" so its history isn't lost.
 export const WAIVER_VALID_DAYS = 365
@@ -32,10 +34,20 @@ export async function expireOldWaivers(db, { force = false } = {}) {
   }
 
   const nowISO = new Date(now).toISOString()
+  const due = await waivers.find({ ...approved, validUntilISO: { $lt: nowISO } }, { projection: { id: 1, fullName: 1 } }).toArray()
+  if (!due.length) return
   await waivers.updateMany(
-    { ...approved, validUntilISO: { $lt: nowISO } },
+    { _id: { $in: due.map((waiver) => waiver._id) } },
     { $set: { status: 'expired', expiredAtISO: nowISO } },
   )
+  await logAudit(db, null, {
+    module: 'waiver',
+    action: 'waivers_expired_yearly',
+    label: 'Waivers expired (12 months old)',
+    resourceType: 'waivers',
+    summary: `${due.length} approved waiver${due.length === 1 ? '' : 's'} reached 12 months and expired: ${due.slice(0, 5).map((w) => w.fullName || w.id).join(', ')}${due.length > 5 ? '…' : ''}`,
+    details: { waivers: due.map((w) => w.id) },
+  })
 }
 
 // The admin changed the waiver text: every current waiver (approved or waiting for review) was
@@ -53,6 +65,15 @@ export async function expireWaiversForNewText(db, nowISO = new Date().toISOStrin
       { _id: { $in: affected.map((waiver) => waiver._id) } },
       { $set: { status: 'expired', expiredAtISO: nowISO, expiredReason: 'waiver_text_changed' } },
     )
+    await logAudit(db, null, {
+      module: 'waiver',
+      action: 'waivers_expired_new_text',
+      label: 'Waivers expired (waiver text changed)',
+      severity: 'warning',
+      resourceType: 'waivers',
+      summary: `${affected.length} current waiver${affected.length === 1 ? '' : 's'} expired because the waiver text changed; the players were notified and emailed`,
+      details: { waivers: affected.map((w) => w.id) },
+    })
   }
   return affected
 }

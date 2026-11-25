@@ -154,6 +154,8 @@ export function PlayerManagementPage() {
             name: doc.name || doc.fullName || 'Unnamed staff',
             role: label, email: doc.email || 'No email',
             badge: role === 'admin' ? 'Full access' : role === 'marshal' ? 'Operations' : 'Reservations',
+            closed: String(doc.status || '').toLowerCase() === 'closed',
+            closedReason: doc.closedReason || '',
           }
         })
       setPlayers(normalizedPlayers)
@@ -281,6 +283,37 @@ export function PlayerManagementPage() {
     }
   }
 
+  // Staff accounts: closing stops the login and ends every session; reopening gives access back.
+  const handleStaffStatus = async (staff: any, status: 'closed' | 'active') => {
+    let reason = ''
+    if (status === 'closed') {
+      const answer = await promptDialog({
+        title: `Close ${staff.name}'s account?`,
+        message: "They won't be able to log in, and they're signed out on every device. Nothing is deleted, and you can reopen the account later.",
+        label: 'Reason (kept in the audit log)',
+        placeholder: 'e.g. No longer working at Chill Shooters',
+        confirmLabel: 'Close account',
+        danger: true,
+        required: true,
+        multiline: true,
+      })
+      if (!answer) return
+      reason = answer
+    } else if (!(await confirmDialog({ title: `Reopen ${staff.name}'s account?`, message: `They can log in again with their ${staff.role.toLowerCase()} access.`, confirmLabel: 'Reopen' }))) {
+      return
+    }
+    setStatusChangingId(staff.id)
+    try {
+      await apiPut<any>(`/api/auth/admin/staff/${encodeURIComponent(staff.id)}/status`, { status, reason })
+      toast.success(status === 'closed' ? `${staff.name}'s account was closed.` : `${staff.name}'s account was reopened.`)
+      await fetchUsers()
+    } catch (e: any) {
+      toast.error(String(e?.message || e))
+    } finally {
+      setStatusChangingId(null)
+    }
+  }
+
   // Suspend / reinstate, plus closing the account (accounts on bookings are closed, never deleted)
   // and erasing a closed account's personal data on request. An erased account has no actions left.
   const accountButton = (pl: any, size: 'xs' | 'sm' = 'xs') => {
@@ -400,17 +433,38 @@ export function PlayerManagementPage() {
       })}
       resetKey={`${staffSearch}|${staffFilter}`}
     >{(pageItems) => pageItems.map((u, idx) => (
-      <div key={u.id || `staff-${idx}`} className="flex items-center justify-between gap-3 rounded-2xl border border-white/5 bg-white/5 px-4 py-3">
-        <div>
-          <div className="text-sm font-semibold">{u.role} &mdash; {u.name}</div>
-          <div className="mt-1 text-xs text-muted">{u.email}</div>
-          <div className="flex items-center gap-2">
-            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] font-semibold text-text">{u.badge}</span>
-            <Button variant="accent-soft" size="xs" onClick={() => u.id && handleResetPassword(u.id)} disabled={resettingId === u.id}>
-              {resettingId === u.id ? 'Resetting…' : 'Reset password'}
-            </Button>
+      <div key={u.id || `staff-${idx}`} className={`flex flex-col gap-3 rounded-2xl border border-white/5 bg-white/5 px-4 py-3 sm:flex-row sm:items-center sm:justify-between ${u.closed ? 'opacity-70' : ''}`}>
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-semibold">{u.name}</span>
+            <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-0.5 text-[11px] font-semibold text-text">{u.role} · {u.badge}</span>
+            {u.closed ? (
+              <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-0.5 text-[11px] font-semibold text-muted" title={u.closedReason || undefined}>Closed</span>
+            ) : null}
           </div>
+          <div className="mt-1 break-all text-xs text-muted">{u.email}</div>
+          {u.closed && u.closedReason ? <div className="mt-1 text-xs text-muted">Closed: {u.closedReason}</div> : null}
         </div>
+        {isAdmin && u.id ? (
+          <ActionGroup>
+            {!u.closed ? (
+              <Button variant="accent-soft" size="xs" onClick={() => handleResetPassword(u.id, u.name)} disabled={resettingId === u.id}>
+                <FiKey /> {resettingId === u.id ? 'Resetting…' : 'Reset password'}
+              </Button>
+            ) : null}
+            {u.closed ? (
+              <Button variant="accent-soft" size="xs" disabled={statusChangingId === u.id} onClick={() => handleStaffStatus(u, 'active')}>
+                <FiRotateCcw /> {statusChangingId === u.id ? 'Updating…' : 'Reopen'}
+              </Button>
+            ) : String(u.id) !== String(user?.id || '') ? (
+              <Button variant="danger-soft" size="xs" disabled={statusChangingId === u.id} onClick={() => handleStaffStatus(u, 'closed')}>
+                <FiUserX /> {statusChangingId === u.id ? 'Updating…' : 'Close account'}
+              </Button>
+            ) : (
+              <span className="text-[11px] text-muted">This is you</span>
+            )}
+          </ActionGroup>
+        ) : null}
       </div>
     ))}</Paged>
   )

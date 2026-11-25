@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
-import { FiAlertTriangle, FiCrosshair, FiPlus } from 'react-icons/fi'
+import { FiAlertTriangle, FiBookmark, FiCalendar, FiCrosshair, FiInfo, FiPlus, FiTool, FiUser } from 'react-icons/fi'
 import { Card } from '../../components/ui/Card'
 import { FilterTabs } from '../../components/ui/FilterTabs'
 import { Modal } from '../../components/ui/Modal'
@@ -77,7 +77,8 @@ function toItems(docs: any[]): InventoryItem[] {
 // Chronograph checks and damage reports. Shown on the Weapons page (`embedded`), which supplies
 // the title and picks the tab.
 // `onRepairOpened`: filing a damage report opens its repair automatically; the page refreshes its repair list.
-export function SafetyLogPage({ embedded = false, tab: tabFromPage, onRepairOpened }: { embedded?: boolean; tab?: 'fps' | 'damage'; onRepairOpened?: () => void } = {}) {
+// `itemType`: only weapons' or only gear's damage reports (the Weapons and Equipment pages each show their own).
+export function SafetyLogPage({ embedded = false, tab: tabFromPage, onRepairOpened, itemType }: { embedded?: boolean; tab?: 'fps' | 'damage'; onRepairOpened?: () => void; itemType?: 'weapon' | 'equipment' } = {}) {
   const { user } = useAuth()
   const isAdmin = user?.role === 'admin'
   // Marshals inspect the damage, so they set the fee too; it goes on the booking's bill for the registrar.
@@ -140,7 +141,7 @@ export function SafetyLogPage({ embedded = false, tab: tabFromPage, onRepairOpen
       ])
       setFpsLogs(fpsRes.data || [])
       if (fpsRes.limits) setLimits(fpsRes.limits)
-      setReports(damageRes.data || [])
+      setReports((damageRes.data || []).filter((r) => !itemType || (itemType === 'weapon' ? r.itemType === 'weapon' : r.itemType !== 'weapon')))
       setWeapons(toItems(weaponRes.data || []))
       setEquipment(toItems(equipmentRes.data || []))
     } catch (err: any) {
@@ -148,7 +149,7 @@ export function SafetyLogPage({ embedded = false, tab: tabFromPage, onRepairOpen
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [itemType])
 
   useEffect(() => {
     void load()
@@ -362,7 +363,7 @@ export function SafetyLogPage({ embedded = false, tab: tabFromPage, onRepairOpen
               <h2 className="flex items-center gap-2 text-lg font-bold"><FiAlertTriangle /> Damage &amp; loss reports</h2>
               <p className="mt-0.5 text-xs text-muted">
                 {reportCounts.reported > 0
-                  ? <><span className="font-semibold text-warning">{reportCounts.reported} waiting for a charge decision</span> · {reports.length} total</>
+                  ? <><span className="font-semibold text-warning">{reportCounts.reported} report{reportCounts.reported === 1 ? ' needs' : 's need'} a fee decision</span> · {reports.length} total</>
                   : `${reports.length} report${reports.length === 1 ? '' : 's'}, none waiting for a decision`}
               </p>
             </div>
@@ -371,6 +372,7 @@ export function SafetyLogPage({ embedded = false, tab: tabFromPage, onRepairOpen
 
           {/* Penalty rules in one line; admins can change the handling fee in place. */}
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-muted">
+            <span className="inline-flex items-center gap-1 font-semibold text-text"><FiInfo /> How fees are set</span>
             <span><span className="font-semibold text-text">Lost:</span> replacement value</span>
             <span><span className="font-semibold text-text">Damaged:</span> repair cost + {handlingFee || 0}% handling fee</span>
             <span>The marshal can bill a different amount.</span>
@@ -411,7 +413,7 @@ export function SafetyLogPage({ embedded = false, tab: tabFromPage, onRepairOpen
 
           {damageFormOpen ? (
           <Modal title="File a damage or loss report" eyebrow="Weapons & gear" size="md" onClose={() => setDamageFormOpen(false)}>
-            <DamageReportForm weapons={weapons} equipment={equipment} onFiled={handleReportFiled} />
+            <DamageReportForm weapons={weapons} equipment={equipment} onFiled={handleReportFiled} defaultItemType={itemType} />
           </Modal>
           ) : null}
 
@@ -423,40 +425,52 @@ export function SafetyLogPage({ embedded = false, tab: tabFromPage, onRepairOpen
                   {reportFilter === 'reported' ? 'Nothing waiting for a decision.' : reportFilter === 'all' ? 'No damage or loss reports yet.' : `No ${reportFilter} reports.`}
                 </div>
               ) : null}
-              <Paged items={visibleReports} resetKey={reportFilter}>{(pageItems) => pageItems.map((report) => (
-                <div key={report.id} className="px-2 py-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
+              <Paged items={visibleReports} resetKey={reportFilter}>{(pageItems) => pageItems.map((report) => {
+                const pending = report.status === 'reported'
+                const reviewing = review?.id === report.id
+                return (
+                <div
+                  key={report.id}
+                  className={`my-2 rounded-xl border-l-4 px-3 py-3 first:mt-0 last:mb-0 ${pending ? 'border-l-warning bg-warning/[0.04]' : report.status === 'billed' ? 'border-l-danger/60' : 'border-l-success/60'}`}
+                >
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-sm font-semibold">{report.itemName}</span>
+                        <span className="text-base font-semibold">{report.itemName}</span>
                         <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${report.kind === 'loss' ? 'border-danger/30 bg-danger/10 text-danger' : 'border-white/10 bg-white/5 text-muted'}`}>
                           {report.kind === 'loss' ? 'Lost' : 'Damaged'} · {report.itemType === 'weapon' ? 'Weapon' : 'Gear'}
                         </span>
                       </div>
-                      <div className="mt-1 text-sm text-muted">{report.description}</div>
-                      <div className="mt-1 flex flex-wrap gap-x-2 text-[11px] text-muted">
-                        <span>{report.id}</span>
-                        <span>· {formatDateTime(report.reportedAtISO)}</span>
-                        <span>· {report.reservationId ? `Booking ${report.reservationId}` : 'No booking linked'}</span>
-                        {report.playerName ? <span>· {report.playerName}</span> : null}
-                        {report.repairId ? <span>· <span className="font-semibold text-accent">Repair {report.repairId}</span></span> : null}
+                      <div className="mt-1.5 text-sm text-text/90">{report.description}</div>
+                      {/* Who, when and which booking, each with an icon so it scans quickly. */}
+                      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
+                        {report.playerName ? <span className="inline-flex items-center gap-1"><FiUser /> {report.playerName}</span> : null}
+                        <span className="inline-flex items-center gap-1"><FiCalendar /> {formatDateTime(report.reportedAtISO)}</span>
+                        <span className={`inline-flex items-center gap-1 ${report.reservationId ? '' : 'text-warning'}`}>
+                          <FiBookmark /> {report.reservationId ? `Booking ${report.reservationId}` : 'No booking linked'}
+                        </span>
+                        {report.repairId ? <span className="inline-flex items-center gap-1 font-semibold text-accent"><FiTool /> Repair {report.repairId}</span> : null}
+                        <span className="text-muted/70">{report.id}</span>
                       </div>
-                      {report.reviewNote ? <div className="mt-1 text-xs text-muted">Review: {report.reviewNote}</div> : null}
+                      {report.reviewNote ? <div className="mt-2 text-xs text-muted"><span className="font-semibold text-text">Note:</span> {report.reviewNote}</div> : null}
                       {report.penalty?.overridden ? (
                         <div className="mt-1 text-xs text-warning">
-                          Override{report.penalty.computedAmount != null ? ` (rule gave ₱${report.penalty.computedAmount.toLocaleString()})` : ''}: {report.penalty.overrideReason}
+                          Custom amount{report.penalty.computedAmount != null ? ` (the rule suggested ₱${report.penalty.computedAmount.toLocaleString()})` : ''}: {report.penalty.overrideReason}
                         </div>
                       ) : null}
                     </div>
-                    <div className="flex shrink-0 flex-col items-end gap-2">
+                    <div className="flex shrink-0 flex-row items-center gap-2 sm:flex-col sm:items-end">
                       <span className={`rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${report.status === 'billed' ? 'border-danger/30 bg-danger/10 text-danger' : report.status === 'waived' ? 'border-success/30 bg-success/10 text-success' : 'border-amber-400/30 bg-amber-400/10 text-warning'}`}>
-                        {report.status === 'reported' ? 'Needs decision' : report.status === 'billed' ? `Billed ₱${report.chargeAmount.toLocaleString()}` : 'Waived'}
+                        {pending ? 'Needs decision' : report.status === 'billed' ? `Billed ₱${report.chargeAmount.toLocaleString()}` : 'Waived · no charge'}
                       </span>
-                      {canSetFee && report.status === 'reported' && review?.id !== report.id ? (
-                        <Button size="xs" variant="secondary" onClick={() => void openReview(report)}>Set damage fee</Button>
+                      {canSetFee && pending && !reviewing ? (
+                        <Button size="sm" onClick={() => void openReview(report)}>Decide fee</Button>
                       ) : null}
                     </div>
                   </div>
+                  {canSetFee && pending && !reviewing ? (
+                    <div className="mt-2 text-[11px] text-muted">Bill the player for the damage, or waive it.</div>
+                  ) : null}
 
                   {canSetFee && report.status === 'reported' && review?.id === report.id ? (
                     (
@@ -514,7 +528,8 @@ export function SafetyLogPage({ embedded = false, tab: tabFromPage, onRepairOpen
                     )
                   ) : null}
                 </div>
-              ))}</Paged>
+                )
+              })}</Paged>
             </div>
           </Card>
         </section>

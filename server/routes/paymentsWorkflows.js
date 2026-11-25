@@ -2,6 +2,7 @@ import express from 'express'
 import { getDb, startDbSession, toObjectId } from '../db/mongo.js'
 import Stripe from 'stripe'
 import { requireAuth, requireRole } from '../middleware/auth.js'
+import { logAudit } from '../utils/audit.js'
 import {
   buildPaymentStatusUpdate,
   hasActivePayment,
@@ -336,6 +337,20 @@ router.put('/payments/:id/verify', requireAuth, requireRole('admin', 'registrar'
       $or: [{ id: reservationId }, ...(reservationObjectId ? [{ _id: reservationObjectId }] : [])],
     })
     await syncReservationPaymentState(db, reservation)
+
+    const decision = nextStatus === 'failed' ? 'Payment rejected' : ['pending', 'review'].includes(nextStatus) ? 'Payment sent back for review' : 'Payment verified'
+    await logAudit(db, req, {
+      module: 'payment',
+      action: `payment_${nextStatus}`,
+      label: decision,
+      severity: nextStatus === 'failed' ? 'critical' : 'warning',
+      resourceType: 'payments',
+      resourceId: updated.id || String(updated._id),
+      summary: `${decision}: ₱${Number(updated.amount || 0).toLocaleString('en-PH')} via ${updated.paymentMethod || 'unknown method'} on ${reservationId || 'no reservation'}${reason ? ` (${reason})` : ''}`,
+      details: { reservationId, amount: updated.amount, paymentMethod: updated.paymentMethod, reference: updated.transactionReference || '', reason },
+      before: { paymentStatus: payment.paymentStatus || payment.status || '' },
+      after: { paymentStatus: updated.paymentStatus || updated.status || nextStatus },
+    })
 
     void emailPaymentEvent(db, updated, nextStatus, reason)
     void notifyPaymentDecision(db, updated, nextStatus, reason).catch(() => null)

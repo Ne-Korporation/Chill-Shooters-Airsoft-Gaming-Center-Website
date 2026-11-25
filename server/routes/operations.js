@@ -12,6 +12,7 @@ import { computeNetRevenue, computePartnerIncome } from '../utils/reachNetRevenu
 import { OWN_GUN_PREFIX } from '../utils/fpsChecks.js'
 import { CAUSE_DAY_ENTRY, listCauseDayDonations } from '../utils/causeDayDonations.js'
 import { manilaDateISO } from '../utils/reminders.js'
+import { labelOfEntry, logAudit, moduleOfEntry } from '../utils/audit.js'
 
 // Field-operations records that don't fit the generic CRUD routes: chronograph
 // (FPS) safety logs, damage reports and penalty billing, the REACH outreach fund
@@ -425,6 +426,23 @@ router.put('/damage-reports/:id/review', requireAuth, requireRole('admin', 'mars
         message: `${updated.kind === 'loss' ? 'Loss' : 'Damage'} fee for ${updated.itemName}${updated.playerName ? ` (${updated.playerName})` : ''} was added to booking ${updated.reservationId}. Collect it with the balance at the counter.`,
         linkedResourceId: String(updated.reservationId || ''),
       }).catch(() => null)
+    }
+    if (updated) {
+      const billed = updated.status === 'billed'
+      await logAudit(db, req, {
+        module: 'payment',
+        action: billed ? 'damage_fee_billed' : 'damage_fee_waived',
+        label: billed ? 'Damage fee billed' : 'Damage fee waived',
+        severity: billed && updated.penalty?.overridden ? 'critical' : 'warning',
+        resourceType: 'damage_reports',
+        resourceId: updated.id,
+        summary: billed
+          ? `Damage fee billed for ${updated.itemName}: ₱${Number(updated.chargeAmount || 0).toLocaleString('en-PH')} on ${updated.reservationId}${updated.penalty?.overridden ? ` (custom amount; rule gave ₱${Number(updated.penalty.computedAmount || 0).toLocaleString('en-PH')}: ${updated.penalty.overrideReason})` : ''}`
+          : `Damage fee waived for ${updated.itemName}${updated.playerName ? ` (${updated.playerName})` : ''}`,
+        details: { reservationId: updated.reservationId, itemName: updated.itemName, playerName: updated.playerName, chargeAmount: updated.chargeAmount, note, overridden: Boolean(updated.penalty?.overridden), overrideReason: updated.penalty?.overrideReason || '' },
+        before: { status: 'reported' },
+        after: { status: updated.status, chargeAmount: updated.chargeAmount },
+      })
     }
     return res.json({ ok: true, data: updated })
   } catch (err) {
@@ -1087,6 +1105,113 @@ router.put('/partner-loans/:id/return', requireAuth, requireRole('admin'), async
       }
     }
     return res.json({ ok: true, data: updated })
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: String(err) })
+  }
+})
+
+// --- Audit trail (admins) ---
+// Entries written before the audit trail existed (by the few routes that logged themselves) get a
+// module, label, severity, readable summary and the actor's name, once. LEGACY_VERSION marks it.
+const LEGACY_VERSION = 2
+const LEGACY_SEVERITY = [
+  [/data_erased|account_closed|staff_account/, 'critical'],
+  [/suspended|removed|reopened|rescheduled|closed_day/, 'warning'],
+]
+async function upgradeOldAuditEntries(db) {
+  const old = await db.collection('audit_logs')
+    .find({ method: { $exists: false }, legacyVersion: { $ne: LEGACY_VERSION } })
+    .limit(500).toArray()
+  if (!old.length) return
+  const ids = [...new Set(old.map((entry) => String(entry.actorId || '')).filter(Boolean))]
+  const accounts = await db.collection('user_accounts').find({ id: { $in: ids } }, { projection: { id: 1, name: 1, email: 1 } }).toArray()
+  const byId = new Map(accounts.map((account) => [String(account.id), account]))
+  for (const entry of old) {
+    const action = String(entry.action || '')
+    const label = labelOfEntry({ action })
+    const reason = String(entry.details?.reason || '').trim()
+    const actor = byId.get(String(entry.actorId || ''))
+    await db.collection('audit_logs').updateOne({ _id: entry._id }, {
+      $set: {
+        module: moduleOfEntry({ action }),
+        label,
+        severity: LEGACY_SEVERITY.find(([pattern]) => pattern.test(action))?.[1] || 'info',
+        summary: `${label}${entry.resourceId ? ` (${entry.resourceId})` : ''}${reason ? `: ${reason}` : ''}`,
+        ...(actor ? { actorName: actor.name || '', actorEmail: actor.email || '' } : {}),
+        legacyVersion: LEGACY_VERSION,
+      },
+    })
+  }
+}
+
+// A Manila calendar day (YYYY-MM-DD) as the UTC instant it starts at.
+const manilaDayStartISO = (day) => new Date(`${day}T00:00:00+08:00`).toISOString()
+const escapeRegex = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+// GET /api/audit-logs?module=&severity=&actorId=&q=&from=YYYY-MM-DD&to=YYYY-MM-DD&page=1&limit=50
+// Newest first, with counts for the summary cards and the people who appear in the log.
+router.get('/audit-logs', requireAuth, requireRole('admin'), async (req, res) => {
+  try {
+    const db = await getDb()
+    await upgradeOldAuditEntries(db)
+    const filter = {}
+    const module = String(req.query.module || '')
+    if (module && module !== 'all') filter.module = module
+    const severity = String(req.query.severity || '')
+    if (['info', 'warning', 'critical'].includes(severity)) filter.severity = severity
+    const actorId = String(req.query.actorId || '')
+    if (actorId && actorId !== 'all') filter.actorId = actorId
+    const from = String(req.query.from || '')
+    const to = String(req.query.to || '')
+    const range = {}
+    if (/^\d{4}-\d{2}-\d{2}$/.test(from)) range.$gte = manilaDayStartISO(from)
+    if (/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+      const next = new Date(`${to}T00:00:00+08:00`)
+      next.setUTCDate(next.getUTCDate() + 1)
+      range.$lt = next.toISOString()
+    }
+    if (Object.keys(range).length) filter.createdAtISO = range
+    const q = String(req.query.q || '').trim().slice(0, 100)
+    if (q) {
+      const pattern = new RegExp(escapeRegex(q), 'i')
+      filter.$or = [{ label: pattern }, { summary: pattern }, { resourceId: pattern }, { actorName: pattern }, { actorEmail: pattern }, { action: pattern }]
+    }
+    const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 50))
+    const page = Math.max(1, Number(req.query.page) || 1)
+
+    const logs = db.collection('audit_logs')
+    const todayStart = manilaDayStartISO(manilaDateISO())
+    const [data, total, critical, today, byModule, actors] = await Promise.all([
+      logs.find(filter).sort({ createdAtISO: -1 }).skip((page - 1) * limit).limit(limit).toArray(),
+      logs.countDocuments(filter),
+      logs.countDocuments({ ...filter, severity: 'critical' }),
+      logs.countDocuments({ ...filter, createdAtISO: { ...(filter.createdAtISO || {}), $gte: todayStart > (range.$gte || '') ? todayStart : range.$gte } }),
+      logs.aggregate([{ $group: { _id: '$module', count: { $sum: 1 } } }]).toArray(),
+      logs.aggregate([
+        { $sort: { createdAtISO: -1 } },
+        { $group: { _id: '$actorId', name: { $first: '$actorName' }, email: { $first: '$actorEmail' }, role: { $first: '$actorRole' } } },
+        { $limit: 200 },
+      ]).toArray(),
+    ])
+    const lastEntry = await logs.find({}, { projection: { createdAtISO: 1 } }).sort({ createdAtISO: -1 }).limit(1).next()
+    return res.json({
+      ok: true,
+      data: data.map(({ _id, ...entry }) => ({ id: String(_id), ...entry })),
+      total,
+      page,
+      limit,
+      counts: {
+        total,
+        critical,
+        today,
+        lastAtISO: lastEntry?.createdAtISO || null,
+        byModule: Object.fromEntries(byModule.map((row) => [row._id || 'other', row.count])),
+      },
+      actors: actors
+        .filter((row) => row._id)
+        .map((row) => ({ id: row._id, name: row.name || row.email || row._id, role: row.role || '' }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })
   }

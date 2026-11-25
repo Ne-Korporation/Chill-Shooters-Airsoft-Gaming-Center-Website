@@ -43,7 +43,11 @@ export function isVerifiedPayment(payment: ReceiptPayment) {
 const esc = (v: unknown) =>
   String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string))
 
-const php = (value: unknown) => `₱${Number(value || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+// Discounts print as "−₱395.00", not "₱-395.00".
+const php = (value: unknown) => {
+  const n = Number(value || 0)
+  return `${n < 0 ? '−' : ''}₱${Math.abs(n).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
 
 // Who made a payment: payments with no payer recorded are the captain's.
 export function payerIdOf(payment: ReceiptPayment, reservation?: ReceiptReservation | null) {
@@ -103,35 +107,53 @@ export function buildReceiptHtml(
   return `<!doctype html><html><head><meta charset="utf-8"><title>${record ? 'Payment record' : 'Receipt'} ${esc(receiptNo)}</title>
 <style>
   @page { size: A5; margin: 12mm; }
+  * { box-sizing: border-box; }
+  html, body { background: #fff; }
   body { font-family: Arial, Helvetica, sans-serif; color: #000; font-size: 12px; margin: 0; }
+  /* Centred with its own side padding, so nothing is cut off at the page edges even when the print
+     dialog's margins are set to "None" or "Minimum". */
+  .sheet { width: 100%; max-width: 124mm; margin: 0 auto; padding: 0 2mm; }
   h1 { font-size: 18px; margin: 0; }
   .muted { color: #555; }
-  .head { display: flex; justify-content: space-between; border-bottom: 2px solid #000; padding-bottom: 6px; margin-bottom: 10px; }
-  table { width: 100%; border-collapse: collapse; margin: 6px 0 12px; }
-  th, td { text-align: left; padding: 4px 2px; border-bottom: 1px solid #ddd; }
-  th { font-size: 10px; text-transform: uppercase; color: #555; }
-  .r { text-align: right; }
-  .totals td { border: 0; font-weight: bold; }
+  .head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; border-bottom: 2px solid #000; padding-bottom: 6px; margin-bottom: 10px; }
+  .head .r { white-space: nowrap; }
+  .info { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin-bottom: 4px; }
+  .info .k { color: #555; }
+  table { width: 100%; border-collapse: collapse; margin: 8px 0 12px; }
+  th, td { text-align: left; padding: 4px 4px; border-bottom: 1px solid #ddd; vertical-align: top; }
+  th:first-child, td:first-child { padding-left: 0; }
+  th:last-child, td:last-child { padding-right: 0; }
+  th { font-size: 10px; text-transform: uppercase; color: #555; border-bottom: 1px solid #000; }
+  .r { text-align: right; white-space: nowrap; }
+  .totals { margin-left: auto; width: 60%; }
+  .totals td { border: 0; padding-top: 2px; padding-bottom: 2px; }
+  .totals tr:last-child td { font-weight: bold; font-size: 14px; border-top: 2px solid #000; padding-top: 6px; }
+  .note { font-size: 11px; margin: 0 0 8px; }
+  .foot { border-top: 1px solid #ccc; padding-top: 6px; margin-top: 12px; font-size: 10px; }
   @media screen { body { padding: 16px; } }
   .stamp { border: 2px solid #b45309; color: #b45309; padding: 6px 8px; margin-bottom: 10px; font-weight: bold; }
-</style></head><body>
+</style></head><body><div class="sheet">
   <div class="head">
     <div><h1>Chill Shooters</h1><div class="muted">Airsoft Game Center · ${record ? 'Payment record' : 'Official payment receipt'}</div></div>
-    <div class="r"><b>${esc(receiptNo)}</b><div class="muted">Printed ${esc(new Date().toLocaleString())}</div></div>
+    <div class="r"><b>${esc(receiptNo)}</b><div class="muted">Printed ${esc(new Date().toLocaleString('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short' }))}</div></div>
   </div>
   ${record ? '<div class="stamp">Not an official receipt: this payment has not been verified yet.</div>' : ''}
-  <div><b>Received from:</b> ${esc(payerName || '-')}</div>
-  <div><b>Reservation:</b> ${esc(reservationId)} · ${esc(reservation.reservationDate || '-')} (${esc(reservation.reservationTime || '-')})
-    · ${esc(reservation.locationName || reservation.locationId || '-')} · ${esc(reservation.sessionType || '-')} · ${esc(reservation.numberOfPlayers ?? '-')} players</div>
-  <div><b>Package:</b> ${esc(reservation.packageName || 'Custom selection')}</div>
+  <div class="info">
+    <span class="k">Received from</span><b>${esc(payerName || '-')}</b>
+    <span class="k">Reservation</span><span>${esc(reservationId)}</span>
+    <span class="k">Game</span><span>${esc(reservation.reservationDate || '-')}${reservation.reservationTime ? ` · ${esc(reservation.reservationTime.charAt(0).toUpperCase() + reservation.reservationTime.slice(1))}` : ''}</span>
+    <span class="k">Field</span><span>${esc(reservation.locationName || reservation.locationId || '-')}</span>
+    <span class="k">Players</span><span>${esc(reservation.numberOfPlayers ?? '-')}${reservation.sessionType ? ` · ${esc(reservation.sessionType)}` : ''}</span>
+    <span class="k">Package</span><span>${esc(reservation.packageName || 'Custom selection')}</span>
+  </div>
   <table><thead><tr><th>Charges</th><th class="r">Amount</th></tr></thead><tbody>${lines || '<tr><td colspan="2">-</td></tr>'}</tbody></table>
   <table><thead><tr><th>Date</th><th>Method</th><th>Reference</th>${record ? '<th>Status</th>' : ''}<th class="r">${record ? 'Amount' : 'Paid'}</th></tr></thead><tbody>${paymentRows || `<tr><td colspan="${record ? 5 : 4}">-</td></tr>`}</tbody></table>
-  ${split ? `<div class="muted">Split payment: this receipt covers only what ${esc(payerName || 'this player')} paid toward the reservation total of ${php(total)}.</div>` : ''}
+  ${split ? `<p class="note muted">Split payment: this receipt covers only what ${esc(payerName || 'this player')} paid toward the reservation total of ${php(total)}.</p>` : ''}
   <table class="totals">
     ${totals}
   </table>
-  <div class="muted">${record ? 'Only verified payments count toward the total paid.' : 'Only payments verified by Chill Shooters staff or the payment processor are listed.'}</div>
-</body></html>`
+  <div class="foot muted">${record ? 'Only verified payments count toward the total paid.' : 'Only payments verified by Chill Shooters staff or the payment processor are listed.'}</div>
+</div></body></html>`
 }
 
 // The receipt number is issued and saved by the server, so reprinting the same payments
@@ -146,7 +168,8 @@ export async function fetchReceiptNo(reservation: ReceiptReservation, payerId = 
 // Opens the browser's print dialog for a receipt; "Save as PDF" there downloads it as a PDF.
 export function printReceiptHtml(html: string) {
   const iframe = document.createElement('iframe')
-  iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden'
+  // Off-screen at A5 width rather than zero-width, so the receipt lays out at its real size.
+  iframe.style.cssText = 'position:fixed;left:-10000px;top:0;width:148mm;height:210mm;border:0;visibility:hidden'
   document.body.appendChild(iframe)
   const win = iframe.contentWindow
   if (!win) return

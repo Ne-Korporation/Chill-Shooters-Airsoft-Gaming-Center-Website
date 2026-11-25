@@ -62,13 +62,17 @@ export function buildWaiverPrintHtml(w: PrintableWaiver, { preview = false }: { 
   /* The 15mm margin is the page's, so every printed page gets it (not only the top of the first). */
   @page { size: A4; margin: 15mm; }
   html, body { margin: 0; padding: 0; background: #fff; color: #000; font-family: Arial, Helvetica, sans-serif; }
-  body { width: 180mm; padding: 0; box-sizing: border-box; }
-  .sheet { width: 180mm; font-size: 13px; line-height: 1.4; }
+  /* The sheet is centred on the page, so when the print dialog's margins are set to "None" or
+     "Minimum" (which overrides @page) the text still sits 15mm in from both edges instead of being
+     cut off on the left. */
+  body { width: auto; padding: 0; box-sizing: border-box; }
+  .sheet { width: 180mm; max-width: 100%; margin: 0 auto; box-sizing: border-box; font-size: 13px; line-height: 1.4; }
   h1 { font-size: 1.5em; margin: 0 0 4px; text-align: center; }
   .meta { display: flex; flex-wrap: wrap; gap: 2px 18px; font-size: .95em; border-top: 1px solid #000; border-bottom: 1px solid #000; padding: 4px 0; margin-bottom: 6px; }
   p { margin: 0 0 5px; }
-  ol { margin: 0 0 5px; padding-left: 18px; }
-  li { margin-bottom: 3px; text-align: justify; }
+  /* Room for two-digit numbers ("10.") inside the sheet. */
+  ol { margin: 0 0 5px; padding-left: 2em; }
+  li { margin-bottom: 3px; text-align: justify; padding-left: 2px; }
   .guardian { margin-top: 4px; }
   /* IDs print at real card size (about 86 x 54 mm), two side by side, never split across pages. */
   .idsec { margin-top: 8mm; page-break-inside: avoid; break-inside: avoid; }
@@ -109,7 +113,9 @@ ${preview ? `  body { width: auto; padding: 20px; overflow: hidden; }
 
 export function printWaiverDocument(w: PrintableWaiver) {
   const iframe = document.createElement('iframe')
-  iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden'
+  // Off-screen but full A4 width, so the page is laid out (and measured below) at its real size
+  // rather than squeezed into a zero-width frame.
+  iframe.style.cssText = 'position:fixed;left:-10000px;top:0;width:210mm;height:297mm;border:0;visibility:hidden'
   document.body.appendChild(iframe)
 
   const win = iframe.contentWindow

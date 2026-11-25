@@ -580,7 +580,6 @@ export function AdminRentalPackagesPage() {
 
   // Every player gets one of each weapon picked.
   const pickedWeaponCount = form.weaponIds.length
-  const effectiveWeaponCount = pickedWeaponCount
 
   // Calculate total price from selected inventory items (prices come from weapons/equipment modules)
   const totalItemPrice = React.useMemo(() => {
@@ -753,7 +752,7 @@ export function AdminRentalPackagesPage() {
 
         {(isAdding || selectedPackage) && (
         <Modal
-          size="lg"
+          size="xl"
           eyebrow={isAdding ? 'Add package' : `Manage package · ${selectedPackage?.id}`}
           title={isAdding ? (form.name.trim() || 'New package') : (selectedPackage?.name || 'Package')}
           onClose={closeEditor}
@@ -794,185 +793,86 @@ export function AdminRentalPackagesPage() {
             </div>
           )}
         >
-        <div className="grid gap-4">
-          <div>
-            <Card className="p-4 bg-white/5/60">
-              <div className="text-sm text-muted">{isAdding ? 'Set up the new package, its players, settled amount and weapons.' : 'Fine-tune the package name, players, settled amount, discount, and weapons.'}</div>
+        {/* Left: the package, set up in order (basics, players, what's included, pricing).
+            Right: what players will pay and what's in it, kept in view while editing. */}
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+          <div className="grid gap-4">
 
-              <div className="mt-4 grid gap-3">
-                <label className="block">
-                  <div className="mb-2 text-sm font-semibold text-text">Package name</div>
-                  <input
-                    value={form.name}
-                    onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
-                    className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-text"
-                  />
-                  {errors.name ? <div className="mt-2 text-xs text-danger">{errors.name}</div> : null}
-                </label>
-                <label className="block">
-                  <div className="mb-2 text-sm font-semibold text-text">Discount rule</div>
-                  <p className="mb-3 text-xs text-muted">
-                    Percent off reduces the selected target by a percentage. Fixed amount off subtracts the peso value entered below from the selected target.
-                    Settled amount sets the entire package price.
-                  </p>
-                  <div className="grid gap-3 md:grid-cols-2">
+              <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                <div className="flex items-center gap-2">
+                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-accent/15 text-xs font-bold text-accent">1</span>
+                  <div className="text-sm font-bold text-text">Basics</div>
+                </div>
+                <p className="mt-1 text-xs text-muted">The name and description players see when booking.</p>
+                <div className="mt-3 grid gap-3">
                     <label className="block">
-                      <div className="mb-2 text-[11px] uppercase tracking-widest text-muted">Mode</div>
-                      <select
-                        value={form.discountMode}
-                        onChange={(event) => {
-                          const nextMode = event.target.value as PackageDiscountMode
-                          setForm((prev) => ({
-                            ...prev,
-                            discountMode: nextMode,
-                            discountValue: nextMode === 'settled'
-                              ? (prev.settledAmount !== '0' ? prev.settledAmount : '0')
-                              : prev.discountMode === 'settled' ? '0' : prev.discountValue,
-                            settledAmount: nextMode === 'settled' ? prev.settledAmount : '0',
-                            discountTargets: nextMode === 'settled' ? ['package_total'] : prev.discountTargets,
-                          }))
-                        }}
+                      <div className="mb-2 text-sm font-semibold text-text">Package name</div>
+                      <input
+                        value={form.name}
+                        onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
                         className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-text"
-                      >
-                        <option value="percent">Percent off</option>
-                        <option value="amount">Fixed amount off</option>
-                        <option value="settled">Settled amount</option>
-                      </select>
+                      />
+                      {errors.name ? <div className="mt-2 text-xs text-danger">{errors.name}</div> : null}
                     </label>
                     <label className="block">
-                      <div className="mb-2 text-[11px] uppercase tracking-widest text-muted">
-                        {form.discountMode === 'percent' ? 'Percentage to take off (%)' : form.discountMode === 'amount' ? 'Fixed amount to take off (₱)' : 'Entire package price (₱)'}
-                      </div>
+                      <div className="mb-2 text-sm font-semibold text-text">Description</div>
+                      <textarea
+                        rows={3}
+                        value={form.description}
+                        onChange={(event) => setForm((prev) => ({ ...prev, description: event.target.value }))}
+                        className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-text"
+                      />
+                    </label>
+
+                </div>
+              </section>
+
+              <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                <div className="flex items-center gap-2">
+                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-accent/15 text-xs font-bold text-accent">2</span>
+                  <div className="text-sm font-bold text-text">Players</div>
+                </div>
+                <p className="mt-1 text-xs text-muted">How many players the package is for.</p>
+                <div className="mt-3 grid gap-3">
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <label className="block">
+                      <div className="mb-2 text-sm font-semibold text-text">Min players</div>
+                      <input
+                        type="number"
+                        min="1"
+                        value={form.minPlayers}
+                        onChange={(event) => setForm((prev) => ({ ...prev, minPlayers: event.target.value }))}
+                        className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-text"
+                      />
+                    </label>
+                    <label className="block">
+                      <div className="mb-2 text-sm font-semibold text-text">Number of players</div>
                       <input
                         type="number"
                         min="0"
-                        value={form.discountValue}
-                        onChange={(event) => setForm((prev) => ({
-                          ...prev,
-                          discountValue: event.target.value,
-                          settledAmount: prev.discountMode === 'settled' ? event.target.value : prev.settledAmount,
-                        }))}
+                        step="1"
+                        value={form.players}
+                        onChange={(event) => setForm((prev) => ({ ...prev, players: event.target.value }))}
                         className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-text"
                       />
                     </label>
                   </div>
-                  <div className="mt-4">
-                    <div className="mb-2 text-[11px] uppercase tracking-widest text-muted">Number of players</div>
-                    <input
-                      type="number"
-                      min="0"
-                      step="1"
-                      value={form.players}
-                      onChange={(event) => setForm((prev) => ({ ...prev, players: event.target.value }))}
-                      className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-text"
-                    />
-                  </div>
 
-                  <div className="mt-3">
-                    <div className="mb-2 text-[11px] uppercase tracking-widest text-muted">Applies to</div>
-                    <div className="grid gap-2 md:grid-cols-2">
-                      {DISCOUNT_TARGET_OPTIONS.map((option) => {
-                        const checked = form.discountTargets.includes(option.value)
-                        const packageTotalSelected = form.discountTargets.includes('package_total')
-                        const disabled = form.discountMode === 'settled' || (option.value !== 'package_total' && packageTotalSelected)
-                        return (
-                          <label key={option.value} className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-sm ${checked ? 'border-accent/40 bg-accent/10' : 'border-white/10 bg-white/5'} ${disabled ? 'cursor-not-allowed opacity-50' : ''}`}>
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              disabled={disabled}
-                              onChange={() => setForm((prev) => {
-                                const isCurrentlyChecked = prev.discountTargets.includes(option.value)
-                                if (option.value === 'package_total') {
-                                  return {
-                                    ...prev,
-                                    discountTargets: isCurrentlyChecked ? [] : ['package_total'],
-                                  }
-                                }
-
-                                if (prev.discountTargets.includes('package_total')) {
-                                  return prev
-                                }
-
-                                const nextTargets = isCurrentlyChecked
-                                  ? prev.discountTargets.filter((target) => target !== option.value)
-                                  : [...prev.discountTargets, option.value]
-
-                                if (nextTargets.includes('weapons') && nextTargets.includes('equipment') && nextTargets.includes('entrance')) {
-                                  return {
-                                    ...prev,
-                                    discountTargets: ['package_total'],
-                                  }
-                                }
-
-                                return {
-                                  ...prev,
-                                  discountTargets: nextTargets,
-                                }
-                              })}
-                              className="h-4 w-4 rounded border-white/20 bg-transparent accent-accent"
-                            />
-                            <span>{option.label}</span>
-                          </label>
-                        )
-                      })}
-                    </div>
-                    <div className="mt-2 text-[11px] text-muted">
-                      {form.discountMode === 'settled'
-                        ? 'Settled amount is the entire package price. Discount targets are disabled, while selected weapons and gear remain included in the package.'
-                        : 'Package total applies to the full reservation total. When it is selected, the other targets stay visible but cannot be changed.'}
-                    </div>
-                  </div>
-
-                  {errors.discountValue ? <div className="mt-2 text-xs text-danger">{errors.discountValue}</div> : null}
-                </label>
-
-                <div className="grid gap-3 md:grid-cols-2">
-                  <label className="block">
-                    <div className="mb-2 text-sm font-semibold text-text">Min players</div>
-                    <input
-                      type="number"
-                      min="1"
-                      value={form.minPlayers}
-                      onChange={(event) => setForm((prev) => ({ ...prev, minPlayers: event.target.value }))}
-                      className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-text"
-                    />
-                  </label>
-                  <div className="block">
-                    <div className="mb-2 text-sm font-semibold text-text">Weapons per player</div>
-                    <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-text">{pickedWeaponCount}</div>
-                    <div className="mt-1 text-[11px] text-muted">
-                      Every player gets one of each weapon picked below. A booking for 10 players needs 10 of each in stock.
-                    </div>
-                  </div>
                 </div>
+              </section>
 
-                <label className="block">
-                  <div className="mb-2 text-sm font-semibold text-text">BB reload per refill (grams)</div>
-                  <input
-                    type="number"
-                    min="0"
-                    step="1"
-                    value={form.bbReloadGrams}
-                    onChange={(event) => setForm((prev) => ({ ...prev, bbReloadGrams: event.target.value }))}
-                    className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-text"
-                  />
-                  <div className="mt-1 text-[11px] text-muted">How many grams of BBs a player gets each time they refill. Each booking takes players × refills × these grams out of the ammo stock (given back if cancelled). Leave at 0 to not show it or use up stock.</div>
-                  {errors.bbReloadGrams ? <div className="mt-1 text-xs text-danger">{errors.bbReloadGrams}</div> : null}
-                </label>
-
-                <label className="block">
-                  <div className="mb-2 text-sm font-semibold text-text">Description</div>
-                  <textarea
-                    rows={3}
-                    value={form.description}
-                    onChange={(event) => setForm((prev) => ({ ...prev, description: event.target.value }))}
-                    className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-text"
-                  />
-                </label>
-              </div>
-
-              <div className="mt-4">
+              <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                <div className="flex items-center gap-2">
+                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-accent/15 text-xs font-bold text-accent">3</span>
+                  <div className="text-sm font-bold text-text">What's included</div>
+                </div>
+                <p className="mt-1 text-xs text-muted">Every player gets one of each weapon and the gear picked here. A booking for 10 players needs 10 of each in stock.</p>
+                <div className="mt-3 grid gap-3">
+                  <div className="flex items-center justify-between rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs">
+                    <span className="text-muted">Weapons per player</span>
+                    <span className="font-semibold text-text">{pickedWeaponCount}</span>
+                  </div>
+              <div>
                 <div className="mb-2 text-sm font-semibold text-text">Weapons ({form.weaponIds.length} selected)</div>
                 {inventoryLoading ? (
                   <div className="text-xs text-muted">Loading weapons inventory...</div>
@@ -1010,8 +910,7 @@ export function AdminRentalPackagesPage() {
                   </div>
                 )}
               </div>
-
-              <div className="mt-4">
+              <div>
                 <div className="mb-2 text-sm font-semibold text-text">Gear ({form.equipmentIds.length} selected)</div>
                 {inventoryLoading ? (
                   <div className="text-xs text-muted">Loading gear inventory...</div>
@@ -1065,188 +964,250 @@ export function AdminRentalPackagesPage() {
                   </div>
                 )}
               </div>
+                  <label className="block">
+                    <div className="mb-2 text-sm font-semibold text-text">BB reload per refill (grams)</div>
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={form.bbReloadGrams}
+                      onChange={(event) => setForm((prev) => ({ ...prev, bbReloadGrams: event.target.value }))}
+                      className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-text"
+                    />
+                    <div className="mt-1 text-[11px] text-muted">How many grams of BBs a player gets each time they refill. Each booking takes players × refills × these grams out of the ammo stock (given back if cancelled). Leave at 0 to not show it or use up stock.</div>
+                    {errors.bbReloadGrams ? <div className="mt-1 text-xs text-danger">{errors.bbReloadGrams}</div> : null}
+                  </label>
 
-            </Card>
+                </div>
+              </section>
+
+              <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                <div className="flex items-center gap-2">
+                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-accent/15 text-xs font-bold text-accent">4</span>
+                  <div className="text-sm font-bold text-text">Pricing</div>
+                </div>
+                <p className="mt-1 text-xs text-muted">Percent off or a fixed amount off takes money off the parts you pick. A settled amount sets the whole package price.</p>
+                <div className="mt-3 grid gap-3">
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <label className="block">
+                      <div className="mb-2 text-[11px] uppercase tracking-widest text-muted">Mode</div>
+                      <select
+                        value={form.discountMode}
+                        onChange={(event) => {
+                          const nextMode = event.target.value as PackageDiscountMode
+                          setForm((prev) => ({
+                            ...prev,
+                            discountMode: nextMode,
+                            discountValue: nextMode === 'settled'
+                              ? (prev.settledAmount !== '0' ? prev.settledAmount : '0')
+                              : prev.discountMode === 'settled' ? '0' : prev.discountValue,
+                            settledAmount: nextMode === 'settled' ? prev.settledAmount : '0',
+                            discountTargets: nextMode === 'settled' ? ['package_total'] : prev.discountTargets,
+                          }))
+                        }}
+                        className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-text"
+                      >
+                        <option value="percent">Percent off</option>
+                        <option value="amount">Fixed amount off</option>
+                        <option value="settled">Settled amount</option>
+                      </select>
+                    </label>
+                    <label className="block">
+                      <div className="mb-2 text-[11px] uppercase tracking-widest text-muted">
+                        {form.discountMode === 'percent' ? 'Percentage to take off (%)' : form.discountMode === 'amount' ? 'Fixed amount to take off (₱)' : 'Entire package price (₱)'}
+                      </div>
+                      <input
+                        type="number"
+                        min="0"
+                        value={form.discountValue}
+                        onChange={(event) => setForm((prev) => ({
+                          ...prev,
+                          discountValue: event.target.value,
+                          settledAmount: prev.discountMode === 'settled' ? event.target.value : prev.settledAmount,
+                        }))}
+                        className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-text"
+                      />
+                    </label>
+                  </div>
+                <div>
+                  <div className="mb-2 text-[11px] uppercase tracking-widest text-muted">Applies to</div>
+                  <div className="grid gap-2 md:grid-cols-2">
+                    {DISCOUNT_TARGET_OPTIONS.map((option) => {
+                      const checked = form.discountTargets.includes(option.value)
+                      const packageTotalSelected = form.discountTargets.includes('package_total')
+                      const disabled = form.discountMode === 'settled' || (option.value !== 'package_total' && packageTotalSelected)
+                      return (
+                        <label key={option.value} className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-sm ${checked ? 'border-accent/40 bg-accent/10' : 'border-white/10 bg-white/5'} ${disabled ? 'cursor-not-allowed opacity-50' : ''}`}>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            disabled={disabled}
+                            onChange={() => setForm((prev) => {
+                              const isCurrentlyChecked = prev.discountTargets.includes(option.value)
+                              if (option.value === 'package_total') {
+                                return {
+                                  ...prev,
+                                  discountTargets: isCurrentlyChecked ? [] : ['package_total'],
+                                }
+                              }
+
+                              if (prev.discountTargets.includes('package_total')) {
+                                return prev
+                              }
+
+                              const nextTargets = isCurrentlyChecked
+                                ? prev.discountTargets.filter((target) => target !== option.value)
+                                : [...prev.discountTargets, option.value]
+
+                              if (nextTargets.includes('weapons') && nextTargets.includes('equipment') && nextTargets.includes('entrance')) {
+                                return {
+                                  ...prev,
+                                  discountTargets: ['package_total'],
+                                }
+                              }
+
+                              return {
+                                ...prev,
+                                discountTargets: nextTargets,
+                              }
+                            })}
+                            className="h-4 w-4 rounded border-white/20 bg-transparent accent-accent"
+                          />
+                          <span>{option.label}</span>
+                        </label>
+                      )
+                    })}
+                  </div>
+                  <div className="mt-2 text-[11px] text-muted">
+                    {form.discountMode === 'settled'
+                      ? 'Settled amount is the entire package price. Discount targets are disabled, while selected weapons and gear remain included in the package.'
+                      : 'Package total applies to the full reservation total. When it is selected, the other targets stay visible but cannot be changed.'}
+                  </div>
+                </div>
+                {errors.discountValue ? <div className="mt-2 text-xs text-danger">{errors.discountValue}</div> : null}
+
+                </div>
+              </section>
           </div>
 
-          <Card className="p-4 bg-white/5/60">
-            <div className="text-xs uppercase tracking-widest text-muted">Included items</div>
-            <div className="mt-2 text-sm text-muted">This bundle includes the following weapons and gear from inventory.</div>
-            <div className="mt-4 rounded-xl border border-white/5 bg-white/5 p-3">
-              <div className="text-[11px] uppercase tracking-widest text-muted">Selected package</div>
-              <div className="mt-1 text-sm font-semibold">{form.name.trim() || selectedPackage?.name || (isAdding ? '(New package)' : '—')}</div>
-
-              {/* Player-facing price preview */}
-              <div className="mt-3 rounded-lg border border-accent/20 bg-accent/5 px-3 py-3">
-                <div className="text-[11px] uppercase tracking-widest text-muted">What players will spend</div>
-                {settledPreview ? (
-                  <div className="mt-2 space-y-1 text-xs">
-                    <div className="flex items-center justify-between text-muted">
-                      <span>Settled amount ({settledPreview.players} players)</span>
-                      <span>₱{settledPreview.settled.toLocaleString()}</span>
-                    </div>
-                    {settledPreview.discount > 0 ? (
-                      <div className="flex items-center justify-between text-success">
-                        <span>
-                          Discount ({form.discountMode === 'percent' ? `${Number(form.discountValue) || 0}%` : `₱${Math.round(Number(form.discountValue) || 0).toLocaleString()}`})
-                        </span>
-                        <span>− ₱{settledPreview.discount.toLocaleString()}</span>
-                      </div>
-                    ) : null}
-                    <div className="flex items-center justify-between text-muted">
-                      <span>Per player</span>
-                      <span>₱{settledPreview.perPlayer.toLocaleString()}</span>
-                    </div>
-                    <div className="flex items-center justify-between border-t border-white/10 pt-2 text-sm font-bold text-accent">
-                      <span>Total</span>
-                      <span>₱{settledPreview.total.toLocaleString()}</span>
-                    </div>
-                    <div className="pt-1 text-[11px] text-muted">Entrance fee is included. Holds as long as the player count stays at {settledPreview.players}.</div>
-                  </div>
-                ) : (
-                  <div className="mt-2 space-y-1 text-xs">
-                    {/* Computed pricing: what one player pays before discounts. The standard full
-                        package is ₱150 entrance + ₱500 rifle (2 mags, 600 BBs) + ₱50 mask + ₱50 vest = ₱750. */}
-                    <div className="flex items-center justify-between text-muted">
-                      <span>Package base fee</span>
-                      <span>₱{(Number(form.basePrice) || 0).toLocaleString()}</span>
-                    </div>
-                    <div className="flex items-center justify-between text-muted">
-                      <span>Included weapons &amp; gear</span>
-                      <span>₱{Math.round(totalItemPrice).toLocaleString()}</span>
-                    </div>
-                    <div className="flex items-center justify-between text-muted">
-                      <span>Entrance fee</span>
-                      <span>₱150</span>
-                    </div>
-                    <div className="flex items-center justify-between border-t border-white/10 pt-2 text-sm font-bold text-accent">
-                      <span>Per player (before discount)</span>
-                      <span>₱{Math.round((Number(form.basePrice) || 0) + totalItemPrice + 150).toLocaleString()}</span>
-                    </div>
-                    <div className="pt-1 text-[11px] text-muted">
-                      Full package standard: ₱150 entrance + ₱500 rifle (2 magazines, 600 BBs) + ₱50 mask + ₱50 vest = ₱750 per player. Or set a settled amount for a fixed group price.
-                    </div>
-                  </div>
-                )}
+          {/* Summary, kept in view on large screens. */}
+          <aside className="lg:sticky lg:top-0 lg:self-start">
+            <div className="grid gap-3 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+              <div>
+                <div className="text-[11px] uppercase tracking-widest text-muted">Summary</div>
+                <div className="mt-1 text-sm font-semibold">{form.name.trim() || selectedPackage?.name || (isAdding ? 'New package' : '—')}</div>
               </div>
-
-              {/* The discount players see: the package price against renting the same items at inventory prices. */}
-              {inventoryComparison ? (
-                <div className="mt-3 rounded-lg border border-white/10 bg-white/5 px-3 py-3 text-xs">
-                  <div className="text-[11px] uppercase tracking-widest text-muted">Discount players see</div>
-                  <div className="mt-2 flex items-center justify-between text-muted">
-                    <span>Rented separately (inventory prices)</span>
-                    <span className={inventoryComparison.savings > 0 ? 'line-through' : ''}>₱{inventoryComparison.regularPerPlayer.toLocaleString()} per player</span>
+            <div className="mt-3 rounded-xl border border-accent/20 bg-accent/5 px-3 py-3">
+              <div className="text-[11px] uppercase tracking-widest text-muted">What players will spend</div>
+              {settledPreview ? (
+                <div className="mt-2 space-y-1 text-xs">
+                  <div className="flex items-center justify-between text-muted">
+                    <span>Settled amount ({settledPreview.players} players)</span>
+                    <span>₱{settledPreview.settled.toLocaleString()}</span>
                   </div>
-                  <div className="mt-1 flex items-center justify-between text-muted">
-                    <span>This package</span>
-                    <span className="font-semibold text-text">₱{inventoryComparison.packagePerPlayer.toLocaleString()} per player</span>
-                  </div>
-                  {inventoryComparison.savings > 0 ? (
-                    <div className="mt-2 border-t border-white/10 pt-2 font-semibold text-success">
-                      Players save ₱{inventoryComparison.savings.toLocaleString()} per player. The crossed-out price shows on the landing and booking pages.
-                    </div>
-                  ) : inventoryComparison.savings < 0 ? (
-                    <div className="mt-2 border-t border-white/10 pt-2 font-semibold text-warning">
-                      This package costs ₱{Math.abs(inventoryComparison.savings).toLocaleString()} more per player than renting the same items separately, so no discount is shown. Lower the price, or tick "Every player gets all the weapons" if each player gets every weapon listed.
-                    </div>
-                  ) : (
-                    <div className="mt-2 border-t border-white/10 pt-2 text-muted">Same as renting separately, so no discount is shown.</div>
-                  )}
-                </div>
-              ) : null}
-
-              {/* Weapons section */}
-              <div className="mt-4">
-                <div className="flex items-center justify-between">
-                  <div className="text-[11px] uppercase tracking-widest text-muted">Weapons</div>
-                  <div className="text-[11px] font-semibold text-text">{effectiveWeaponCount} weapon{effectiveWeaponCount === 1 ? '' : 's'} offered</div>
-                </div>
-                <div className="mt-2 space-y-2">
-                  {form.weaponIds.length === 0 ? (
-                    <div className="rounded-lg border border-white/5 bg-white/5 px-3 py-2 text-sm text-muted">
-                      No weapons selected
-                    </div>
-                  ) : (
-                    form.weaponIds.map((wid) => {
-                      const weapon = getWeaponById(wid)
-                      return (
-                        <div key={wid} className="rounded-lg border border-white/5 bg-white/5 px-3 py-2">
-                          <div className="flex items-center justify-between">
-                            <div className="text-sm font-semibold text-text">{weapon ? modelOf(weapon) : wid}</div>
-                            <div className="text-[10px] text-muted">{weapon?.category || '—'}</div>
-                          </div>
-                          <div className="mt-1 flex items-center justify-between">
-                            <div className="text-[11px] text-muted">ID: {wid} • Status: {weapon?.status || '—'}</div>
-                            {weapon?.price !== undefined && (
-                              <div className="text-[11px] font-semibold text-accent">₱{weapon.price}</div>
-                            )}
-                          </div>
-                        </div>
-                      )
-                    })
-                  )}
-                </div>
-              </div>
-
-              {/* Equipment section */}
-              <div className="mt-4">
-                <div className="text-[11px] uppercase tracking-widest text-muted">Gear</div>
-                <div className="mt-2 space-y-2">
-                  {form.equipmentIds.length === 0 ? (
-                    <div className="rounded-lg border border-white/5 bg-white/5 px-3 py-2 text-sm text-muted">
-                      No gear selected
-                    </div>
-                  ) : (
-                    form.equipmentIds.map((eid) => {
-                      const eq = getEquipmentById(eid)
-                      return (
-                        <div key={eid} className="rounded-lg border border-white/5 bg-white/5 px-3 py-2">
-                          <div className="flex items-center justify-between">
-                            <div className="text-sm font-semibold text-text">{eq ? modelOf(eq) : eid}</div>
-                            <div className="text-[10px] text-muted">{eq?.category || '—'}</div>
-                          </div>
-                          <div className="mt-1 flex items-center justify-between">
-                            <div className="text-[11px] text-muted">{eq ? `${equipmentModels.find((g) => g.model === modelOf(eq))?.total ?? 0} pieces in inventory` : `ID: ${eid}`}</div>
-                            {eq?.price !== undefined && (
-                              <div className="text-[11px] font-semibold text-accent">₱{eq.price} × {packageEquipmentQty(form, eid)} {isAmmo(eq) ? 'refill(s) ' : ''}per player</div>
-                            )}
-                          </div>
-                        </div>
-                      )
-                    })
-                  )}
-                </div>
-              </div>
-
-              {/* Always-included extras */}
-              <div className="mt-4">
-                <div className="text-[11px] uppercase tracking-widest text-muted">Also included</div>
-                <div className="mt-2 space-y-2">
-                  <div className="rounded-lg border border-white/5 bg-white/5 px-3 py-2 text-sm text-text">Entrance fee</div>
-                  {Number(form.bbReloadGrams) > 0 ? (
-                    <div className="rounded-lg border border-white/5 bg-white/5 px-3 py-2 text-sm text-text">
-                      BB reload: {Math.round(Number(form.bbReloadGrams))}g per refill
+                  {settledPreview.discount > 0 ? (
+                    <div className="flex items-center justify-between text-success">
+                      <span>
+                        Discount ({form.discountMode === 'percent' ? `${Number(form.discountValue) || 0}%` : `₱${Math.round(Number(form.discountValue) || 0).toLocaleString()}`})
+                      </span>
+                      <span>− ₱{settledPreview.discount.toLocaleString()}</span>
                     </div>
                   ) : null}
+                  <div className="flex items-center justify-between text-muted">
+                    <span>Per player</span>
+                    <span>₱{settledPreview.perPlayer.toLocaleString()}</span>
+                  </div>
+                  <div className="flex items-center justify-between border-t border-white/10 pt-2 text-sm font-bold text-accent">
+                    <span>Total</span>
+                    <span>₱{settledPreview.total.toLocaleString()}</span>
+                  </div>
+                  <div className="pt-1 text-[11px] text-muted">Entrance fee is included. Holds as long as the player count stays at {settledPreview.players}.</div>
                 </div>
+              ) : (
+                <div className="mt-2 space-y-1 text-xs">
+                  {/* Computed pricing: what one player pays before discounts. The standard full
+                      package is ₱150 entrance + ₱500 rifle (2 mags, 600 BBs) + ₱50 mask + ₱50 vest = ₱750. */}
+                  <div className="flex items-center justify-between text-muted">
+                    <span>Package base fee</span>
+                    <span>₱{(Number(form.basePrice) || 0).toLocaleString()}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-muted">
+                    <span>Included weapons &amp; gear</span>
+                    <span>₱{Math.round(totalItemPrice).toLocaleString()}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-muted">
+                    <span>Entrance fee</span>
+                    <span>₱150</span>
+                  </div>
+                  <div className="flex items-center justify-between border-t border-white/10 pt-2 text-sm font-bold text-accent">
+                    <span>Per player (before discount)</span>
+                    <span>₱{Math.round((Number(form.basePrice) || 0) + totalItemPrice + 150).toLocaleString()}</span>
+                  </div>
+                  <div className="pt-1 text-[11px] text-muted">
+                    Full package standard: ₱150 entrance + ₱500 rifle (2 magazines, 600 BBs) + ₱50 mask + ₱50 vest = ₱750 per player. Or set a settled amount for a fixed group price.
+                  </div>
+                </div>
+              )}
+            </div>
+            {/* The discount players see: the package price against renting the same items at inventory prices. */}
+            {inventoryComparison ? (
+              <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-3 text-xs">
+                <div className="text-[11px] uppercase tracking-widest text-muted">Discount players see</div>
+                <div className="mt-2 flex items-center justify-between text-muted">
+                  <span>Rented separately (inventory prices)</span>
+                  <span className={inventoryComparison.savings > 0 ? 'line-through' : ''}>₱{inventoryComparison.regularPerPlayer.toLocaleString()} per player</span>
+                </div>
+                <div className="mt-1 flex items-center justify-between text-muted">
+                  <span>This package</span>
+                  <span className="font-semibold text-text">₱{inventoryComparison.packagePerPlayer.toLocaleString()} per player</span>
+                </div>
+                {inventoryComparison.savings > 0 ? (
+                  <div className="mt-2 border-t border-white/10 pt-2 font-semibold text-success">
+                    Players save ₱{inventoryComparison.savings.toLocaleString()} per player. The crossed-out price shows on the landing and booking pages.
+                  </div>
+                ) : inventoryComparison.savings < 0 ? (
+                  <div className="mt-2 border-t border-white/10 pt-2 font-semibold text-warning">
+                    This package costs ₱{Math.abs(inventoryComparison.savings).toLocaleString()} more per player than renting the same items separately, so no discount is shown. Lower the price, or tick "Every player gets all the weapons" if each player gets every weapon listed.
+                  </div>
+                ) : (
+                  <div className="mt-2 border-t border-white/10 pt-2 text-muted">Same as renting separately, so no discount is shown.</div>
+                )}
               </div>
-
-              {/* Summary */}
-              <div className="mt-4 pt-3 border-t border-white/5">
-                <div className="flex items-center justify-between text-xs text-muted">
-                  <span>Total items</span>
-                  <span className="font-semibold text-text">
-                    {form.weaponIds.length + form.equipmentIds.length} items
-                  </span>
-                </div>
-                <div className="flex items-center justify-between text-xs text-muted mt-2">
-                  <span>Total included item value</span>
+            ) : null}
+              <div>
+                <div className="text-[11px] uppercase tracking-widest text-muted">In the package</div>
+                <ul className="mt-2 space-y-1 text-xs">
+                  {form.weaponIds.map((wid) => {
+                    const weapon = getWeaponById(wid)
+                    return (
+                      <li key={wid} className="flex items-center justify-between gap-2">
+                        <span className="truncate text-text">{weapon ? modelOf(weapon) : wid}</span>
+                        {weapon?.price !== undefined ? <span className="shrink-0 text-muted">₱{weapon.price}</span> : null}
+                      </li>
+                    )
+                  })}
+                  {form.equipmentIds.map((eid) => {
+                    const eq = getEquipmentById(eid)
+                    return (
+                      <li key={eid} className="flex items-center justify-between gap-2">
+                        <span className="truncate text-text">{eq ? modelOf(eq) : eid} <span className="text-muted">× {packageEquipmentQty(form, eid)}{eq && isAmmo(eq) ? ' refill(s)' : ''}</span></span>
+                        {eq?.price !== undefined ? <span className="shrink-0 text-muted">₱{eq.price}{eq && isAmmo(eq) ? '/refill' : ''}</span> : null}
+                      </li>
+                    )
+                  })}
+                  {form.weaponIds.length + form.equipmentIds.length === 0 ? <li className="text-muted">No weapons or gear picked yet.</li> : null}
+                  <li className="flex items-center justify-between gap-2 text-muted"><span>Entrance fee</span><span>included</span></li>
+                  {Number(form.bbReloadGrams) > 0 ? (
+                    <li className="flex items-center justify-between gap-2 text-muted"><span>BB reload</span><span>{Math.round(Number(form.bbReloadGrams))} g per refill</span></li>
+                  ) : null}
+                </ul>
+                <div className="mt-2 flex items-center justify-between border-t border-white/10 pt-2 text-xs">
+                  <span className="text-muted">Item value per player</span>
                   <span className="font-semibold text-accent">₱{totalItemPrice.toLocaleString()}</span>
                 </div>
               </div>
             </div>
-          </Card>
+          </aside>
         </div>
         </Modal>
         )}

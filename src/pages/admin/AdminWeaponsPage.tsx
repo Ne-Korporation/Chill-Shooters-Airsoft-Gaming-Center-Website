@@ -6,7 +6,6 @@ import { useAuth } from '../../context/AuthContext'
 import toast from 'react-hot-toast'
 import { ActionGroup, Button } from '../../components/ui/Button'
 import { FilterTabs } from '../../components/ui/FilterTabs'
-import { InfoDropdown } from '../../components/ui/InfoDropdown'
 import { BRANCHES, branchLabel } from '../../utils/branches'
 import { Card } from '../../components/ui/Card'
 import { Modal } from '../../components/ui/Modal'
@@ -15,7 +14,7 @@ import { Pagination, usePagination } from '../../components/ui/Pagination'
 import { BulkUpdateModal, InventoryToolbar, SelectBox, forEachPiece, type BulkChange } from '../../components/inventory/BulkActionBar'
 import { modelOf } from '../../utils/inventoryModels'
 import { SafetyLogPage } from '../marshal/SafetyLogPage'
-import { RepairsPage } from '../operations/RepairsPage'
+import { DamageRepairsPanel } from '../../components/inventory/DamageRepairsPanel'
 import { Input } from '../../components/ui/Input'
 import { FieldError, errorBorder, useFieldErrors } from '../../components/ui/FieldError'
 
@@ -1216,26 +1215,6 @@ export function AdminWeaponsPage() {
   const linked = searchParams.get('view')
   const fromLink = (linked === 'damage' ? 'repairs' : linked) as WeaponsView | null
   const [view, setView] = React.useState<WeaponsView>(fromLink && WEAPON_VIEWS.includes(fromLink) ? fromLink : 'inventory')
-  const [repairsVersion, setRepairsVersion] = React.useState(0)
-  // Damage & repairs sub-tab, and the counts on it: reports waiting for a fee decision, repairs still open.
-  const [repairsSection, setRepairsSection] = React.useState<'reports' | 'repairs' | 'costs'>('reports')
-  const [repairCounts, setRepairCounts] = React.useState({ reports: 0, open: 0 })
-  React.useEffect(() => {
-    if (view !== 'repairs') return
-    let alive = true
-    Promise.all([
-      apiGet<{ data: any[] }>('/api/damage-reports?limit=200').catch(() => ({ data: [] as any[] })),
-      apiGet<{ data: any[] }>('/api/repairs').catch(() => ({ data: [] as any[] })),
-    ]).then(([reports, repairs]) => {
-      if (!alive) return
-      setRepairCounts({
-        reports: (reports.data || []).filter((r: any) => r?.status === 'reported').length,
-        open: (repairs.data || []).filter((r: any) => r?.status === 'in_progress').length,
-      })
-    })
-    return () => { alive = false }
-  }, [view, repairsVersion, repairsSection])
-
   const changeView = (next: WeaponsView) => {
     setView(next)
     setSearchParams(next === 'inventory' ? {} : { view: next }, { replace: true })
@@ -1263,34 +1242,7 @@ export function AdminWeaponsPage() {
       {view === 'inventory' ? (
         <WeaponInventory />
       ) : view === 'repairs' ? (
-        <div className="space-y-4">
-          {/* How a broken or lost item moves through this tab, folded away until needed. */}
-          <InfoDropdown
-            title="How damage and repairs work"
-            items={[
-              { label: '1. File a report', text: 'Damaged items open a repair automatically. Lost items get a loss report only.' },
-              { label: '2. Gunsmith repairs it', text: 'Mark the repair done with the parts and labor cost.' },
-              { label: '3. Bill or waive', text: "Set the damage fee on the report (it goes on the player's booking for the registrar), or waive it." },
-            ]}
-          />
-          {/* One part at a time: the reports, the repairs, or what repairs cost. */}
-          <FilterTabs
-            ariaLabel="Damage and repairs"
-            value={repairsSection}
-            onChange={setRepairsSection}
-            options={[
-              { value: 'reports', label: <><FiAlertTriangle /> Damage reports{repairCounts.reports ? <span className="ml-1 rounded-full bg-danger px-1.5 text-[10px] font-bold text-white">{repairCounts.reports}</span> : null}</> },
-              { value: 'repairs', label: <><FiTool /> Repairs{repairCounts.open ? <span className="ml-1 rounded-full bg-accent/20 px-1.5 text-[10px] font-bold text-accent">{repairCounts.open} open</span> : null}</> },
-              { value: 'costs', label: 'Repair costs' },
-            ]}
-          />
-          {repairsSection === 'reports' ? (
-            <SafetyLogPage embedded tab="damage" onRepairOpened={() => { setRepairsVersion((v) => v + 1) }} />
-          ) : (
-            // Remounted when a damage report opens a repair, so the new one shows up.
-            <RepairsPage key={`${repairsVersion}-${repairsSection}`} embedded section={repairsSection === 'costs' ? 'costs' : 'repairs'} />
-          )}
-        </div>
+        <DamageRepairsPanel kind="weapon" />
       ) : (
         <SafetyLogPage embedded tab="fps" />
       )}

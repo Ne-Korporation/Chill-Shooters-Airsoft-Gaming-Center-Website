@@ -10,6 +10,7 @@ import { requireAuth, requireRole } from './middleware/auth.js'
 import { configuredAppUrl, rememberAppOrigin } from './utils/appUrl.js'
 import { signFileLinksForSignedIn } from './utils/fileLinks.js'
 import { bumpTopics, changeSnapshot, trackChanges } from './utils/changeFeed.js'
+import { auditRequests, logAudit } from './utils/audit.js'
 import { corsPolicy, errorHandler, hideServerErrors, noStoreForAuthenticated, rateLimit, securityHeaders } from './middleware/security.js'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -73,6 +74,8 @@ app.use(express.json({ limit: '10mb' }))
 app.use(signFileLinksForSignedIn)
 // Open pages poll this to refresh themselves when data changes (see utils/changeFeed.js).
 app.use(trackChanges)
+// Every successful change by a signed-in user goes into the audit trail (see utils/audit.js).
+app.use(auditRequests)
 app.get('/api/changes', (_req, res) => {
   res.set('Cache-Control', 'no-store')
   return res.json({ ok: true, data: changeSnapshot() })
@@ -100,7 +103,17 @@ setInterval(() => {
       if (expired > 0) bumpTopics('reservations', 'slots', 'notifications')
       // Team invites: reminders at 12h and 3h left, void after 24h, open spots moved to the field.
       const invites = await sweepTeamInvites(db, { force: true })
-      if (invites.voided || invites.movedOnsite) bumpTopics('reservations', 'notifications')
+      if (invites.voided || invites.movedOnsite) {
+        bumpTopics('reservations', 'notifications')
+        await logAudit(db, null, {
+          module: 'reservation',
+          action: 'team_invites_expired',
+          label: 'Team invites expired automatically',
+          resourceType: 'reservations',
+          summary: `${invites.voided || 0} unanswered team invite${invites.voided === 1 ? '' : 's'} voided after 24 hours${invites.movedOnsite ? `; ${invites.movedOnsite} open spot${invites.movedOnsite === 1 ? '' : 's'} moved to pay at the field` : ''}`,
+          details: { voided: invites.voided || 0, movedOnsite: invites.movedOnsite || 0 },
+        })
+      }
       // One "waiting for payment" email for bookings left unpaid a few minutes.
       await sendUnpaidReservationEmails(db)
       await expireOldIdentities(db)

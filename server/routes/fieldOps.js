@@ -16,6 +16,7 @@ import { getSlotHours, slotHasEnded } from '../utils/slotHours.js'
 import { bookingBalances } from '../utils/bookingBalance.js'
 import { assignGearOnCheckIn, releaseAutoGear } from '../utils/autoGearAssign.js'
 import { manilaDateISO } from '../utils/reminders.js'
+import { logAudit } from '../utils/audit.js'
 
 // Field-side operations from the manuscript scope that sit outside the booking flow:
 // player experience and balanced team grouping, onsite/balance payments and extra
@@ -681,6 +682,16 @@ router.post('/payments/onsite', requireAuth, requireRole('admin', 'registrar'), 
       }
     }
     const payments = await getReservationPayments(db, reservation)
+    await logAudit(db, req, {
+      module: 'payment',
+      action: 'payment_onsite_recorded',
+      label: 'Onsite payment recorded',
+      severity: 'warning',
+      resourceType: 'payments',
+      resourceId: payment.id,
+      summary: `Onsite payment recorded: ₱${amount.toLocaleString('en-PH')} ${payment.paymentMethod} on ${payment.reservationId}${reference ? ` (ref ${reference})` : ''}`,
+      details: { reservationId: payment.reservationId, amount, paymentMethod: payment.paymentMethod, reference, gameCompleted },
+    })
     return res.status(201).json({ ok: true, data: payment, gameCompleted, ledger: buildLedger(reservation, payments) })
   } catch (err) {
     return sendError(res, err)
@@ -750,6 +761,18 @@ router.post('/reservations/:id/charges', requireAuth, requireRole(...STAFF), asy
     )
     const updated = await db.collection('reservations').findOne({ _id: reservation._id })
     const payments = await getReservationPayments(db, updated)
+    await logAudit(db, req, {
+      module: 'payment',
+      action: 'charge_added',
+      label: 'Charge added to a bill',
+      severity: 'warning',
+      resourceType: 'reservations',
+      resourceId: keyOf(reservation),
+      summary: `Charge added to ${keyOf(reservation)}: ${label}, ₱${amount.toLocaleString('en-PH')}`,
+      details: { chargeId: charge.id, type, label, quantity, unitPrice, amount, note },
+      before: { totalAmount: reservation.totalAmount },
+      after: { totalAmount: updated?.totalAmount },
+    })
     return res.status(201).json({ ok: true, data: charge, ledger: buildLedger(updated, payments) })
   } catch (err) {
     return sendError(res, err)
@@ -897,6 +920,18 @@ router.post('/reservations/:id/charges/:chargeId/remove', requireAuth, requireRo
     }
 
     const updated = await db.collection('reservations').findOne({ _id: reservation._id })
+    await logAudit(db, req, {
+      module: 'payment',
+      action: 'charge_removed',
+      label: 'Charge removed from a bill',
+      severity: 'critical',
+      resourceType: 'reservations',
+      resourceId: keyOf(reservation),
+      summary: `Charge removed from ${keyOf(reservation)}: ${charge.label}${removeQty < quantity ? ` (${removeQty} of ${quantity})` : ''}, −₱${amount.toLocaleString('en-PH')}`,
+      details: { chargeId: charge.id, type: charge.type, label: charge.label, removedQuantity: removeQty, removedAmount: amount },
+      before: { totalAmount: reservation.totalAmount },
+      after: { totalAmount: updated?.totalAmount },
+    })
     return res.json({ ok: true, ledger: buildLedger(updated, await getReservationPayments(db, updated)) })
   } catch (err) {
     return sendError(res, err)
@@ -1377,10 +1412,20 @@ router.put('/inventory/:collection/models', requireAuth, requireRole('admin', 'm
 // Gunsmith repair log
 // ---------------------------------------------------------------------------
 
-router.get('/repairs', requireAuth, requireRole('admin', 'marshal'), async (_req, res) => {
+// ?collection=weapons|equipments narrows repairs to one kind of item (older repairs without a
+// collection were weapons).
+function repairCollectionFilter(query) {
+  const collection = String(query?.collection || '')
+  if (!RENTAL_COLLECTIONS.includes(collection)) return {}
+  return collection === 'weapons'
+    ? { $or: [{ itemCollection: 'weapons' }, { itemCollection: { $in: [null, ''] } }] }
+    : { itemCollection: collection }
+}
+
+router.get('/repairs', requireAuth, requireRole('admin', 'marshal'), async (req, res) => {
   try {
     const db = await getDb()
-    const data = await db.collection('repairs').find({}).sort({ openedAtISO: -1 }).limit(500).toArray()
+    const data = await db.collection('repairs').find(repairCollectionFilter(req.query)).sort({ openedAtISO: -1 }).limit(500).toArray()
     return res.json({ ok: true, data })
   } catch (err) {
     return sendError(res, err)
@@ -1388,16 +1433,18 @@ router.get('/repairs', requireAuth, requireRole('admin', 'marshal'), async (_req
 })
 
 // GET /api/repairs/summary — repair counts and spend per item and per model/category.
-router.get('/repairs/summary', requireAuth, requireRole('admin', 'marshal'), async (_req, res) => {
+router.get('/repairs/summary', requireAuth, requireRole('admin', 'marshal'), async (req, res) => {
   try {
     const db = await getDb()
+    const match = repairCollectionFilter(req.query)
     const group = (field) => db.collection('repairs').aggregate([
+      { $match: match },
       { $group: { _id: field, repairs: { $sum: 1 }, totalCost: { $sum: { $ifNull: ['$totalCost', 0] } }, open: { $sum: { $cond: [{ $eq: ['$status', 'in_progress'] }, 1, 0] } } } },
       { $sort: { repairs: -1 } },
     ]).toArray()
     // By category: repairs saved without one (opened from a damaged return) use their item's category.
     const categoryRows = async () => {
-      const repairs = await db.collection('repairs').find({}, { projection: { itemCollection: 1, itemId: 1, itemCategory: 1, totalCost: 1, status: 1 } }).toArray()
+      const repairs = await db.collection('repairs').find(match, { projection: { itemCollection: 1, itemId: 1, itemCategory: 1, totalCost: 1, status: 1 } }).toArray()
       const missing = repairs.filter((r) => !r.itemCategory && r.itemId)
       const lookup = new Map()
       for (const collection of RENTAL_COLLECTIONS) {

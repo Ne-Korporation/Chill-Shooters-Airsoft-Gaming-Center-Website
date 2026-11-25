@@ -1,5 +1,6 @@
 import { validUntilFrom } from './waiverValidity.js'
 import { notifyUser } from './paymentProgress.js'
+import { logAudit } from './audit.js'
 
 // A verified ID counts for 12 months, like the waiver it fills in. After that the player submits
 // their ID again from their profile.
@@ -90,6 +91,16 @@ export async function expireOldIdentities(db, { force = false } = {}) {
         message: 'Your ID verification is a year old and has expired. Submit your ID again on your profile so you can keep signing waivers and joining teams.',
       })
     }
+  }
+  if (due.length) {
+    await logAudit(db, null, {
+      module: 'player',
+      action: 'ids_expired_yearly',
+      label: 'ID verifications expired (12 months old)',
+      resourceType: 'user_accounts',
+      summary: `${due.length} player ID verification${due.length === 1 ? '' : 's'} reached 12 months and expired; the players were asked to submit their ID again`,
+      details: { accounts: due.map((account) => account.id) },
+    })
   }
   // A newer ID still waiting for review once the previous one has run out: nothing left to count.
   await accounts.updateMany(

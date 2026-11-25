@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
-import { FiPlus, FiTool } from 'react-icons/fi'
+import { FiPlus, FiPrinter, FiTool } from 'react-icons/fi'
 
 import { Card } from '../../components/ui/Card'
 import { Modal } from '../../components/ui/Modal'
@@ -31,6 +31,68 @@ type Repair = {
 }
 
 type SummaryRow = { name: string; repairs: number; totalCost: number; open: number }
+
+const escapeHtml = (value: unknown) =>
+  String(value ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch] as string))
+
+// Opens the repair-cost summary as a plain black-on-white report and the browser's print dialog
+// (where it can also be saved as a PDF). Prints every row, not just the top ones shown on screen.
+function printRepairCosts(summary: { byItem: SummaryRow[]; byCategory: SummaryRow[] }, totalSpend: number) {
+  const peso = (n: number) => escapeHtml(formatPHP(Number(n || 0)))
+  const label = (name: string) => {
+    const clean = String(name || '').replace(/_/g, ' ')
+    return escapeHtml(clean.charAt(0).toUpperCase() + clean.slice(1))
+  }
+  const table = (title: string, rows: SummaryRow[]) => `
+  <h2>${escapeHtml(title)}</h2>
+  <table>
+    <thead><tr><th>Name</th><th class="num">Repairs</th><th class="num">Open</th><th class="num">Spend</th></tr></thead>
+    <tbody>
+      ${rows.length === 0 ? '<tr><td colspan="4" class="muted">No repairs yet.</td></tr>' : rows.map((r) => `
+      <tr><td>${label(r.name)}</td><td class="num">${escapeHtml(r.repairs)}</td><td class="num">${escapeHtml(r.open || 0)}</td><td class="num">${peso(r.totalCost)}</td></tr>`).join('')}
+    </tbody>
+    ${rows.length ? `<tfoot><tr><td>Total</td><td class="num">${rows.reduce((s, r) => s + Number(r.repairs || 0), 0)}</td><td class="num">${rows.reduce((s, r) => s + Number(r.open || 0), 0)}</td><td class="num">${peso(rows.reduce((s, r) => s + Number(r.totalCost || 0), 0))}</td></tr></tfoot>` : ''}
+  </table>`
+
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Repair costs</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: Arial, Helvetica, sans-serif; color: #000; background: #fff; margin: 0; padding: 24px; font-size: 13px; }
+  .sheet { max-width: 720px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0; }
+  h2 { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; margin: 20px 0 6px; }
+  .muted { color: #555; }
+  .head { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid #000; padding-bottom: 10px; }
+  .spend { text-align: right; }
+  .spend b { font-size: 18px; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-size: 11px; border-bottom: 1px solid #000; padding: 4px 0; }
+  td { padding: 4px 0; border-bottom: 1px dotted #bbb; }
+  .num { text-align: right; white-space: nowrap; padding-left: 12px; }
+  tfoot td { font-weight: bold; border-top: 2px solid #000; border-bottom: none; }
+  .foot { margin-top: 20px; border-top: 1px solid #000; padding-top: 8px; font-size: 11px; }
+  @media print { body { padding: 0; } @page { margin: 12mm; } }
+</style></head><body><div class="sheet">
+  <div class="head">
+    <div><h1>Chill Shooters Airsoft</h1><div class="muted">Repair costs report</div></div>
+    <div class="spend"><div class="muted">Total spend (completed repairs)</div><b>${peso(totalSpend)}</b></div>
+  </div>
+  ${table('By model / category', summary.byCategory)}
+  ${table('By item', summary.byItem)}
+  <div class="foot muted">Printed ${escapeHtml(new Date().toLocaleString('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short' }))}.</div>
+</div>
+<script>window.onload = function () { window.focus(); window.print(); };</script>
+</body></html>`
+
+  const win = window.open('', '_blank', 'width=800,height=900')
+  if (!win) {
+    toast.error('Allow pop-ups for this site to print the report.')
+    return
+  }
+  win.document.open()
+  win.document.write(html)
+  win.document.close()
+}
 
 function CompleteRepairForm({ repair, onDone }: { repair: Repair; onDone: () => void }) {
   const [form, setForm] = useState({
@@ -141,7 +203,9 @@ function CompleteRepairForm({ repair, onDone }: { repair: Repair; onDone: () => 
 // `embedded`: shown as the Repairs tab of the Weapons page, which supplies the title.
 // `section`: on the Weapons page's Damage & repairs tab the repairs and their costs are separate
 // sub-tabs, so it shows one of them; on its own page it shows both.
-export function RepairsPage({ embedded = false, section = 'all' }: { embedded?: boolean; section?: 'all' | 'repairs' | 'costs' } = {}) {
+// `collection`: only weapons' or only gear's repairs (the Weapons and Equipment pages each show their own).
+export function RepairsPage({ embedded = false, section = 'all', collection }: { embedded?: boolean; section?: 'all' | 'repairs' | 'costs'; collection?: 'weapons' | 'equipments' } = {}) {
+  const scope = collection ? `?collection=${collection}` : ''
   const [repairs, setRepairs] = useState<Repair[]>([])
   const [summary, setSummary] = useState<{ byItem: SummaryRow[]; byCategory: SummaryRow[] }>({ byItem: [], byCategory: [] })
   const [inventory, setInventory] = useState<InventoryOption[]>([])
@@ -159,22 +223,25 @@ export function RepairsPage({ embedded = false, section = 'all' }: { embedded?: 
   const load = useCallback(async () => {
     try {
       const [list, sum] = await Promise.all([
-        apiGet<{ data: Repair[] }>('/api/repairs'),
-        apiGet<{ data: { byItem: SummaryRow[]; byCategory: SummaryRow[] } }>('/api/repairs/summary'),
+        apiGet<{ data: Repair[] }>(`/api/repairs${scope}`),
+        apiGet<{ data: { byItem: SummaryRow[]; byCategory: SummaryRow[] } }>(`/api/repairs/summary${scope}`),
       ])
       setRepairs(list.data)
       setSummary(sum.data)
     } catch (e: any) {
       toast.error(e?.message || 'Could not load repairs')
     }
-  }, [])
+  }, [scope])
 
   useEffect(() => {
     void load()
     Promise.all([apiGetAll<any>('weapons').then((data) => ({ ok: true, data })), apiGetAll<any>('equipments').then((data) => ({ ok: true, data }))])
-      .then(([w, e]) => setInventory([...toInventoryOptions(w.data || [], 'weapons'), ...toInventoryOptions(e.data || [], 'equipments')]))
+      .then(([w, e]) => setInventory([
+        ...(collection === 'equipments' ? [] : toInventoryOptions(w.data || [], 'weapons')),
+        ...(collection === 'weapons' ? [] : toInventoryOptions(e.data || [], 'equipments')),
+      ]))
       .catch(() => null)
-  }, [load])
+  }, [load, collection])
 
   const [itemError, setItemError] = useState('')
   const open = async (event: React.FormEvent) => {
@@ -336,9 +403,14 @@ export function RepairsPage({ embedded = false, section = 'all' }: { embedded?: 
             <div className="text-sm font-bold">Repair costs</div>
             <div className="text-xs text-muted">Which models and items break most, and what they cost.</div>
           </div>
-          <div className="text-right">
-            <div className="text-xs text-muted">Total spend</div>
-            <div className="text-lg font-bold text-gold">{formatPHP(totalSpend)}</div>
+          <div className="flex items-end gap-3">
+            <div className="text-right">
+              <div className="text-xs text-muted">Total spend</div>
+              <div className="text-lg font-bold text-gold">{formatPHP(totalSpend)}</div>
+            </div>
+            <Button size="sm" variant="ghost" type="button" onClick={() => printRepairCosts(summary, totalSpend)}>
+              <FiPrinter /> Print
+            </Button>
           </div>
         </div>
         <div className="mt-3 grid gap-4 md:grid-cols-2">

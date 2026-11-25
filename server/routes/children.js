@@ -159,6 +159,7 @@ router.delete('/children/:id', requireAuth, requireRole('user'), async (req, res
         },
       },
     )
+    req.auditLogged = true
     await db.collection('audit_logs').insertOne({
       action: 'minor_removed_by_guardian',
       resourceType: 'user_accounts',

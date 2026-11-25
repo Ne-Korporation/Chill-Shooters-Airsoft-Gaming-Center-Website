@@ -90,6 +90,9 @@ async function ensureUniqueEmails(db) {
 
 async function ensureInventoryIndexes(db) {
   await db.collection('inventory_holds').createIndex({ status: 1, reservationDate: 1, reservationTime: 1 })
+  await db.collection('audit_logs').createIndex({ createdAtISO: -1 })
+  await db.collection('audit_logs').createIndex({ module: 1, createdAtISO: -1 })
+  await db.collection('audit_logs').createIndex({ actorId: 1, createdAtISO: -1 })
   await db.collection('inventory_holds').createIndex({ reservationId: 1 })
 }
 

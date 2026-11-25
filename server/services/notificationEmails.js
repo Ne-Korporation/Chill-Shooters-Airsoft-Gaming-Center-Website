@@ -520,6 +520,24 @@ export function emailWaiverReminder(db, reservation, userId, sentOn = '') {
   })
 }
 
+// The admin changed the waiver text, so the account's current waivers expired. `whose` says which
+// ("your waiver", "the waiver of Ana", or both). `changeKey` (the time of the change) keeps it to
+// one email per account per change.
+export function emailWaiverRenewal(db, userId, { whose, changeKey }) {
+  if (!userId) return Promise.resolve({ skipped: 'missing data' })
+  return sendLogged(db, {
+    key: `waiver-renewal:${changeKey}:${userId}`,
+    userId,
+    subject: 'Chill Shooters updated its waiver: please answer it again',
+    title: 'Please answer the updated waiver',
+    lines: [
+      `Chill Shooters updated its waiver, so ${escapeHtml(whose)} must be answered again before your next game.`,
+      'Log in, open <b>Online Waiver</b>, read the new terms and sign. It only takes a few minutes.',
+      button(`${appUrl()}/app/waiver`, 'Answer the new waiver'),
+    ],
+  })
+}
+
 // Weather advisory for a booked game. `key` keeps an automatic advisory to one email per
 // player, reservation and date; manual advisories carry their own advisory id.
 export function emailWeatherAdvisory(db, reservation, userId, { key, title, message }) {
