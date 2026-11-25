@@ -40,6 +40,10 @@ const RULES = [
   ['POST', /^\/reservations\/([^/]+)\/members\/[^/]+\/remove$/, 'reservation', 'Player removed from a team', 'warning'],
   ['POST', /^\/reservations\/([^/]+)\/open-slots\/[^/]+\/(cover|invite)$/, 'reservation', 'Open team spot filled', 'info'],
   ['POST', /^\/walk-ins$/, 'reservation', 'Walk-in booked', 'info'],
+  // Saved team rosters
+  ['POST', /^\/my-teams$/, 'player', 'Saved team created', 'info'],
+  ['PUT', /^\/my-teams\/([^/]+)$/, 'player', (b) => (b?.used === true && b?.name === undefined && b?.memberIds === undefined ? 'Saved team used for a booking' : 'Saved team updated'), 'info'],
+  ['DELETE', /^\/my-teams\/([^/]+)$/, 'player', 'Saved team deleted', 'info'],
   // Accounts
   ['POST', /^\/auth\/admin\/add-staff$/, 'staff', 'Staff account created', 'critical'],
   ['POST', /^\/auth\/admin\/add-player$/, 'player', 'Player account created at the counter', 'info'],
