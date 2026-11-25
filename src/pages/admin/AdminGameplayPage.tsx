@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { confirmDialog } from '../../components/ui/ConfirmDialog'
-import { FiCheck, FiChevronRight, FiArchive, FiX } from 'react-icons/fi'
+import { FiCheck, FiChevronRight, FiArchive, FiEye, FiX } from 'react-icons/fi'
+import { GameDetailsDialog, loadGameGear } from '../registrar/RegistrarOngoingGamesPage'
 import { toast } from 'react-hot-toast'
 
 import { Card } from '../../components/ui/Card'
@@ -113,6 +114,15 @@ export function AdminGameplayPage() {
 
   const canArchive = (status: GameplayStatus) => status === 'Completed'
 
+  // Read-only details of one game (archived games included): the booking, players and gear.
+  const [detail, setDetail] = useState<GameplayDoc | null>(null)
+  const [gear, setGear] = useState<React.ComponentProps<typeof GameDetailsDialog>['gear']>(null)
+  const openDetails = (doc: GameplayDoc) => {
+    setDetail(doc)
+    setGear(null)
+    void loadGameGear(doc.reservationId).then(setGear)
+  }
+
   const statusOptions: GameplayStatus[] = ['Scheduled', 'Ongoing', 'Completed', 'Cancelled', 'Archived']
 
   const updateStatus = async (doc: GameplayDoc, status: GameplayStatus) => {
@@ -207,6 +217,9 @@ export function AdminGameplayPage() {
                       </div>
                       <div className="stack-wide col-span-3 text-right">
                         <ActionGroup>
+                          <Button size="xs" variant="ghost" onClick={() => openDetails(doc)}>
+                            <FiEye /> Details
+                          </Button>
                           <select
                             value={st}
                             onChange={(e) => updateStatus(doc, e.target.value as GameplayStatus)}
@@ -239,6 +252,8 @@ export function AdminGameplayPage() {
           </div>
         </div>
       </Card>
+
+      {detail ? <GameDetailsDialog doc={detail} gear={gear} onClose={() => setDetail(null)} /> : null}
     </div>
   )
 }

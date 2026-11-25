@@ -13,6 +13,7 @@ import { apiGet, apiPut } from '../../utils/apiClient'
 import { Pagination } from '../../components/ui/Pagination'
 import { LOCATIONS } from '../operations/shared'
 import { BookingPlayersSection } from '../../components/reservations/BookingPlayersSection'
+import { formatDateTime } from '../../utils/dates'
 
 type GameplayStatus = 'Scheduled' | 'Ongoing' | 'Completed' | 'Cancelled' | 'Archived'
 
@@ -31,6 +32,7 @@ type GameplayDoc = {
   LayoutBlueprintUrl?: string
   Notes?: string
   Status?: GameplayStatus | string
+  archivedAtISO?: string
   createdAtISO?: string
   updatedAtISO?: string
   // Set by the server when the slot began (server/utils/dueGames.js): started automatically, or
@@ -198,7 +200,7 @@ function buildGameQuery(filters: GameFilters) {
   return { q: { $and: and }, sort }
 }
 
-function rowId(doc: GameplayDoc) {
+export function rowId(doc: GameplayDoc) {
   // Priority: gameplay's own `id` (GP-XXXXX) → MongoDB `_id` → reservationId
   // The `id` field is the most reliable for API lookups since crud.js first
   // tries findOne({ id: ... }) which matches the gameplay's own id string.
@@ -893,7 +895,20 @@ function DetailRow({ label, children }: { label: string; children: React.ReactNo
 
 // Everything about one game: the booking behind it (players, rentals, charges and payments),
 // package, mode, group, layout, the status actions, and who has which weapon and gear.
-function GameDetailsDialog({
+// Players and gear of one game (the booking behind it); empty when the game has no booking.
+export async function loadGameGear(reservationId?: string): Promise<GameGear> {
+  if (!reservationId) return { items: [], players: [] }
+  try {
+    const res = await apiGet<{ ok: boolean; data: GameGear }>(`/api/reservations/${encodeURIComponent(reservationId)}/game-items`)
+    return { items: res?.data?.items || [], players: res?.data?.players || [] }
+  } catch (e: any) {
+    toast.error(String(e?.message || e))
+    return { items: [], players: [] }
+  }
+}
+
+// The status actions are left out where the game can no longer change (the archive).
+export function GameDetailsDialog({
   doc,
   gear,
   onStart,
@@ -903,9 +918,9 @@ function GameDetailsDialog({
 }: {
   doc: GameplayDoc
   gear: GameGear | null
-  onStart: () => void
-  onComplete: () => void
-  onArchive: () => void
+  onStart?: () => void
+  onComplete?: () => void
+  onArchive?: () => void
   onClose: () => void
 }) {
   const status = normalizeStatus(doc.Status)
@@ -914,18 +929,18 @@ function GameDetailsDialog({
 
   const actions = (
     <>
-      {status === 'Scheduled' && beforeGameDay ? <span className="self-center text-xs text-muted">Starts on {formatSchedule(doc).split(' · ')[0]}</span> : null}
-      {status === 'Scheduled' && !beforeGameDay ? (
+      {status === 'Scheduled' && beforeGameDay && onStart ? <span className="self-center text-xs text-muted">Starts on {formatSchedule(doc).split(' · ')[0]}</span> : null}
+      {status === 'Scheduled' && !beforeGameDay && onStart ? (
         <Button variant="primary" onClick={onStart}>
           Start <FiChevronRight />
         </Button>
       ) : null}
-      {status === 'Ongoing' ? (
+      {status === 'Ongoing' && onComplete ? (
         <Button variant="ghost" onClick={onComplete}>
           Complete <FiCheck />
         </Button>
       ) : null}
-      {status === 'Completed' ? (
+      {status === 'Completed' && onArchive ? (
         <Button variant="ghost" className="border-accent/30 text-accent" onClick={onArchive}>
           <FiArchive /> Archive
         </Button>
@@ -943,6 +958,7 @@ function GameDetailsDialog({
         <div className="text-xs uppercase tracking-widest text-muted">Game</div>
         <div className="mt-1 grid sm:grid-cols-2 sm:gap-x-6">
           <DetailRow label="Status"><StatusBadge status={status} /></DetailRow>
+          {doc.archivedAtISO ? <DetailRow label="Archived">{formatDateTime(doc.archivedAtISO)}</DetailRow> : null}
           <DetailRow label="Location">{locationName(doc)}</DetailRow>
           <DetailRow label="Package">{doc.Package || '—'}</DetailRow>
           <DetailRow label="Mode">{doc.Mode || '—'}</DetailRow>
