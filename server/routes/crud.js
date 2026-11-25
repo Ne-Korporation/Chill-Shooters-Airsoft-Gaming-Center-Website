@@ -26,6 +26,7 @@ import { listActiveCauseDays, weekendDatesInMonth } from '../utils/causeDays.js'
 import { closedDayError, findClosedDay, listClosedDays } from '../utils/closedDays.js'
 import { countAccountBookings } from '../utils/accountClosure.js'
 import { roleNotificationFilter } from '../utils/roleNotifications.js'
+import { modelFilter, modelOf } from '../utils/inventoryPieces.js'
 import { withSplitShares } from '../utils/splitShares.js'
 import { billedPlayers, fieldCountMinimum } from '../utils/privateGames.js'
 import { hasValidIdentity, identityVerifiedFields, validIdentityFilter, verifiedIdDocument } from '../utils/identityValidity.js'
@@ -1969,6 +1970,17 @@ router.post('/:collection', requireAuth, async (req, res) => {
   }
   const payload = { ...(req.body || {}) }
   let paymentReservationId = ''
+  // Rental prices are set by admins only: a marshal's new piece takes its model's current price
+  // (₱0 for a model new to the shop, until an admin prices it).
+  if (req.user.role === 'marshal' && (collection === 'weapons' || collection === 'equipments')) {
+    try {
+      const db = await getDb()
+      const same = await db.collection(collection).findOne(modelFilter(modelOf(payload)), { projection: { price: 1 } })
+      payload.price = same ? Math.max(0, Number(same.price) || 0) : 0
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: String(err?.message || err) })
+    }
+  }
   if (collection === 'user_accounts') {
     const email = normalizeEmail(payload.email)
     if (!email) return res.status(400).json({ ok: false, error: 'email is required' })
@@ -2835,6 +2847,19 @@ router.put('/:collection/:id', requireAuth, async (req, res) => {
       const changes = payload.$set || payload
       if (Object.keys(payload).some((field) => field.startsWith('$') && field !== '$set')) {
         return res.status(400).json({ ok: false, error: 'Inventory updates support direct fields or $set only.' })
+      }
+      // Every rental piece belongs to one branch (only BB ammo, stocked in grams, is shared), so a
+      // piece can be moved to another branch but not left without one.
+      if (changes.locationId !== undefined && !String(changes.locationId || '').trim()
+        && String(changes.category ?? existing.category ?? '').toLowerCase() !== 'ammo' && existing.source !== 'player') {
+        return res.status(400).json({ ok: false, error: 'Choose the branch this piece belongs to.' })
+      }
+      // Only admins change a rental price; an unchanged price sent along with other edits is dropped.
+      if (updateRole !== 'admin' && changes.price !== undefined) {
+        if (Number(changes.price) !== Math.max(0, Number(existing.price) || 0)) {
+          return res.status(403).json({ ok: false, error: 'Only admins can change prices.' })
+        }
+        delete changes.price
       }
       // Every weapon and piece of gear is its own record ("Vest #4"), so a piece counts as 1
       // unless it carries an older quantity field. (Ammo holds grams, not pieces: its holds have

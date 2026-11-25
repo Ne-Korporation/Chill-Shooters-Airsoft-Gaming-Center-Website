@@ -3,6 +3,7 @@ import toast from 'react-hot-toast'
 import { FiAlertTriangle, FiCheck, FiCrosshair, FiX } from 'react-icons/fi'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
+import { FieldError, errorBorder, useFieldErrors } from '../../components/ui/FieldError'
 import { apiGet, apiPost } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
 
@@ -38,6 +39,8 @@ export function FpsCheckPanel({ reservationId, gameplayId, active = true, onChan
   const canTest = user?.role === 'admin' || user?.role === 'marshal'
   const [status, setStatus] = useState<FpsStatus | null>(null)
   const [readings, setReadings] = useState<Record<string, string>>({})
+  // A bad reading is shown under that gun's row (keyed by weapon id).
+  const { errors: readingErrors, fail: failReading, clear: clearReading } = useFieldErrors<string>()
   const [saving, setSaving] = useState('')
 
   const load = useCallback(() => {
@@ -52,7 +55,7 @@ export function FpsCheckPanel({ reservationId, gameplayId, active = true, onChan
 
   const save = async (gun: FpsGun) => {
     const fps = Number(readings[gun.weaponId])
-    if (!Number.isFinite(fps) || fps <= 0) return toast.error('Enter the chronograph reading in FPS.')
+    if (!Number.isFinite(fps) || fps <= 0) return failReading(gun.weaponId, 'Enter the chronograph reading in FPS.')
     setSaving(gun.weaponId)
     try {
       const res = await apiPost<{ data: { result: string; limit: number }; weaponPulled?: boolean }>('/api/fps-logs', {
@@ -103,7 +106,7 @@ export function FpsCheckPanel({ reservationId, gameplayId, active = true, onChan
       ) : (
         <ul className="mt-3 divide-y divide-white/5">
           {status.items.map((gun) => (
-            <li key={gun.weaponId} className="flex flex-col gap-2 py-2.5 sm:flex-row sm:items-center">
+            <li key={gun.weaponId} className="flex flex-col gap-2 py-2.5 sm:flex-row sm:flex-wrap sm:items-center">
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2 text-sm">
                   <span className="font-semibold">{gun.name}</span>
@@ -129,11 +132,11 @@ export function FpsCheckPanel({ reservationId, gameplayId, active = true, onChan
                       min={1}
                       inputMode="numeric"
                       value={readings[gun.weaponId] || ''}
-                      onChange={(e) => setReadings((r) => ({ ...r, [gun.weaponId]: e.target.value }))}
+                      onChange={(e) => { setReadings((r) => ({ ...r, [gun.weaponId]: e.target.value })); clearReading(gun.weaponId) }}
                       onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void save(gun) } }}
                       placeholder="FPS"
                       aria-label={`FPS reading for ${gun.name}`}
-                      className="h-9 w-20 rounded-xl border border-white/10 bg-white/5 px-2 text-sm outline-none focus:border-accent/40"
+                      className={`h-9 w-20 rounded-xl border border-white/10 bg-white/5 px-2 text-sm outline-none focus:border-accent/40${errorBorder(readingErrors[gun.weaponId])}`}
                     />
                     <Button size="sm" disabled={saving === gun.weaponId || !readings[gun.weaponId]} onClick={() => void save(gun)}>
                       {gun.status === 'fail' ? 'Retest' : 'Save'}
@@ -141,6 +144,7 @@ export function FpsCheckPanel({ reservationId, gameplayId, active = true, onChan
                   </>
                 ) : null}
               </div>
+              <FieldError className="sm:basis-full sm:text-right">{readingErrors[gun.weaponId]}</FieldError>
             </li>
           ))}
         </ul>

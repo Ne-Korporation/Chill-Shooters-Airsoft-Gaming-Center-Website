@@ -36,6 +36,7 @@ export function ResetPasswordPage() {
     register,
     handleSubmit,
     watch,
+    setError,
     formState: { errors },
   } = useForm<FormValues>({ defaultValues: { password: '', confirmPassword: '' } })
 
@@ -58,16 +59,17 @@ export function ResetPasswordPage() {
   )
 
   async function onSubmit(values: FormValues) {
+    // Shown under the field, not as a pop-up.
+    if (!allRequirementsMet) {
+      setError('password', { message: 'Meet every password requirement below.' })
+      return
+    }
+    if (values.password !== values.confirmPassword) {
+      setError('confirmPassword', { message: 'Passwords do not match.' })
+      return
+    }
     setBusy(true)
     try {
-      if (!allRequirementsMet) {
-        toast.error('Please meet all password requirements.')
-        return
-      }
-      if (values.password !== values.confirmPassword) {
-        toast.error('Passwords do not match.')
-        return
-      }
       if (token) {
         const res = await apiPost<{ message?: string; email?: string }>('/api/auth/set-password', { token, password: values.password })
         toast.success(res?.message || 'Password set. You can sign in now.')

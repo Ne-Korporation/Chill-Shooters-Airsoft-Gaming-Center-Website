@@ -198,7 +198,7 @@ export function AdminDashboardPage() {
         <aside className="space-y-3">
           <WeatherAdvisoryWidget />
           <div className="grid grid-cols-3 gap-2">
-            <StatTile compact label="Bookings" value={dashboard.reservations} hint="All" loading={loading} to="/app/admin/reservations" />
+            <StatTile compact label="Reservations" value={dashboard.reservations} hint="All" loading={loading} to="/app/admin/reservations" />
             <StatTile compact label="Players" value={dashboard.players} hint="Accounts" loading={loading} to="/app/admin/player-management" />
             <StatTile compact label="Payments" value={dashboard.payments} hint="Submitted" loading={loading} to="/app/admin/payments" />
           </div>

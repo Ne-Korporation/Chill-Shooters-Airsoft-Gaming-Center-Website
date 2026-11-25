@@ -19,6 +19,7 @@ import {
 import { Card } from '../../components/ui/Card'
 
 import { Button } from '../../components/ui/Button'
+import { FieldError } from '../../components/ui/FieldError'
 import { Input } from '../../components/ui/Input'
 import { IdUpload } from './IdUpload'
 import { SignaturePad } from './SignaturePad'
@@ -1555,7 +1556,6 @@ export function WaiverPage({
                 onClick={() => {
                   if (!canSubmit) {
                     setShowErrors(true)
-                    toast.error("Please complete the highlighted fields.")
                     return
                   }
                   void onSubmit()
@@ -1573,6 +1573,7 @@ export function WaiverPage({
 
 
             </div>
+            {showErrors && !canSubmit ? <FieldError>Complete the fields marked in red above.</FieldError> : null}
 
             {submitted ? (
               <motion.div

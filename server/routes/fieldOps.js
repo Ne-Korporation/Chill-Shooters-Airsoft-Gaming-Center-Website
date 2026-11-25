@@ -1282,6 +1282,16 @@ function readPieceFields(body) {
   return fields
 }
 
+// Rental prices are set by admins only. Marshals keep the inventory (add pieces, change status,
+// category, FPS rules) but can't change what players are charged.
+const canSetPrice = (req) => req.user?.role === 'admin'
+
+// The price the pieces of a model already carry, or null for a model not in stock yet.
+async function currentModelPrice(db, collection, model) {
+  const piece = await db.collection(collection).findOne(modelFilter(model), { projection: { price: 1 } })
+  return piece ? Math.max(0, Number(piece.price) || 0) : null
+}
+
 // POST /api/inventory/:collection/pieces { model, count, price, category, ... } — "Mask × 5" creates
 // five separate masks, each with its own ID and number.
 router.post('/inventory/:collection/pieces', requireAuth, requireRole('admin', 'marshal'), async (req, res) => {
@@ -1293,10 +1303,18 @@ router.post('/inventory/:collection/pieces', requireAuth, requireRole('admin', '
   if (!Number.isInteger(count) || count < 1 || count > 200) return res.status(400).json({ ok: false, error: 'Add between 1 and 200 pieces at a time.' })
   try {
     const db = await getDb()
+    const fields = readPieceFields(req.body || {})
+    // Every rental piece belongs to one branch (only BB ammo, stocked in grams, is shared).
+    if (!fields.locationId && String(fields.category || '').toLowerCase() !== 'ammo') {
+      return res.status(400).json({ ok: false, error: 'Choose the branch these pieces belong to.' })
+    }
+    // A marshal's new pieces take the model's current price; a model new to the shop starts at
+    // ₱0 until an admin prices it.
+    if (!canSetPrice(req)) fields.price = (await currentModelPrice(db, collection, model)) ?? 0
     const pieces = await createPieces(db, collection, {
       model,
       count,
-      fields: { status: 'available', ...readPieceFields(req.body || {}), createdBy: actorOf(req) },
+      fields: { status: 'available', ...fields, createdBy: actorOf(req) },
     })
     return res.status(201).json({ ok: true, data: pieces })
   } catch (err) {
@@ -1318,9 +1336,16 @@ router.put('/inventory/:collection/models', requireAuth, requireRole('admin', 'm
   } catch (err) {
     return sendError(res, err)
   }
-  if (!Object.keys(fields).length) return res.status(400).json({ ok: false, error: 'Nothing to update.' })
   try {
     const db = await getDb()
+    // Only admins change a price; the unchanged price a marshal's form sends along is dropped.
+    if (fields.price !== undefined && !canSetPrice(req)) {
+      if (fields.price !== await currentModelPrice(db, collection, model)) {
+        return res.status(403).json({ ok: false, error: 'Only admins can change prices.' })
+      }
+      delete fields.price
+    }
+    if (!Object.keys(fields).length) return res.status(400).json({ ok: false, error: 'Nothing to update.' })
     const result = await db.collection(collection).updateMany(modelFilter(model), { $set: { ...fields, updatedAtISO: new Date().toISOString() } })
     return res.json({ ok: true, updated: result.modifiedCount })
   } catch (err) {

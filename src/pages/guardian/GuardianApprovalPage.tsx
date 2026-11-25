@@ -5,6 +5,7 @@ import { FiCheckCircle, FiShield, FiXCircle } from 'react-icons/fi'
 
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
+import { FieldError } from '../../components/ui/FieldError'
 import { apiGet, apiPost } from '../../utils/apiClient'
 import { signedWaiverText, type WaiverText } from '../../utils/waiverText'
 import { formatPhPhone } from '../../utils/phone'
@@ -58,6 +59,7 @@ export function GuardianApprovalPage() {
   const [error, setError] = useState<string | null>(null)
   const [note, setNote] = useState('')
   const [confirmed, setConfirmed] = useState(false)
+  const [confirmError, setConfirmError] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
   useEffect(() => {
@@ -68,7 +70,7 @@ export function GuardianApprovalPage() {
 
   const decide = async (decision: 'approved' | 'declined') => {
     if (decision === 'approved' && !confirmed) {
-      toast.error('Please confirm the details above first.')
+      setConfirmError('Tick the box above to confirm the details first.')
       return
     }
     setSubmitting(true)
@@ -164,9 +166,10 @@ export function GuardianApprovalPage() {
             {data.status === 'pending' ? (
               <Card className="space-y-4 p-5">
                 <label className="flex items-start gap-2 text-sm">
-                  <input type="checkbox" className="mt-1 h-4 w-4" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} />
+                  <input type="checkbox" className="mt-1 h-4 w-4" checked={confirmed} onChange={(e) => { setConfirmed(e.target.checked); setConfirmError('') }} />
                   <span>I am {data.minor.fullName || 'this player'}'s parent or guardian, the details above are correct, and I allow them to play in this booking.</span>
                 </label>
+                <FieldError className="-mt-2">{confirmError}</FieldError>
                 <label className="block">
                   <div className="mb-2 text-sm font-semibold">Note (optional)</div>
                   <textarea

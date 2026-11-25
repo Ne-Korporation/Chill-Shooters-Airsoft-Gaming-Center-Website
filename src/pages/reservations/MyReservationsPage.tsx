@@ -6,6 +6,7 @@ import toast from 'react-hot-toast'
 import { FiAlertCircle, FiCalendar, FiCheck, FiCheckCircle, FiClock, FiCreditCard, FiEye, FiFileText, FiInfo, FiRefreshCw, FiUserPlus, FiUsers, FiXCircle } from 'react-icons/fi'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
+import { FieldError } from '../../components/ui/FieldError'
 import { apiDelete, apiGet, apiPost } from '../../utils/apiClient'
 import { SPLIT_PAYMENTS_CHANGED_EVENT, TeamPaymentTable, useSplitPayments, type SplitPaymentItem } from '../payments/SplitPaymentPage'
 import { FILL_SPOT_EVENT, InvitationsSection, OPEN_BOOKING_EVENT } from './InvitationsSection'
@@ -212,6 +213,8 @@ export function MyReservationsPage() {
   const [loading, setLoading] = useState(true)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [newDate, setNewDate] = useState('')
+  // Why the picked date can't be used, shown under the calendar.
+  const [dateError, setDateError] = useState('')
   const [newSlot, setNewSlot] = useState<string>('morning')
   const [reason, setReason] = useState('')
   const [saving, setSaving] = useState(false)
@@ -520,24 +523,25 @@ export function MyReservationsPage() {
     setEditingId(reservationIdOf(reservation))
     // The player picks from the calendar, which only offers open dates of the same kind.
     setNewDate('')
+    setDateError('')
     setNewSlot(slotOf(reservation) || 'morning')
     setReason('')
   }
 
   const submitReschedule = async (reservation: ReservationDoc) => {
     if (!newDate || newDate <= today) {
-      toast.error('Pick a new date from the calendar.')
+      setDateError('Pick a new date from the calendar.')
       return
     }
     const originalDate = dateOf(reservation)
     if (originalDate && isWeekdayISO(originalDate) !== isWeekdayISO(newDate)) {
-      toast.error(isWeekdayISO(originalDate)
+      setDateError(isWeekdayISO(originalDate)
         ? 'This reservation was booked on a weekday, so it can only move to another weekday.'
         : 'This reservation was booked on a weekend, so it can only move to another Saturday or Sunday.')
       return
     }
     if (isWeekdayISO(newDate) && String(reservation.sessionType || '').toLowerCase() !== 'private') {
-      toast.error('Weekday dates are for private sessions only. Choose a Saturday or Sunday.')
+      setDateError('Weekday dates are for private sessions only. Choose a Saturday or Sunday.')
       return
     }
     const sentBack = Boolean(reservation.sentBack) && statusOf(reservation) === 'needs review'
@@ -926,8 +930,10 @@ export function MyReservationsPage() {
                     onChange={(next) => {
                       setNewDate(next.date)
                       setNewSlot(next.slot)
+                      setDateError('')
                     }}
                   />
+                  <FieldError>{dateError}</FieldError>
                 </div>
                 {/* One-click reschedule: just pick the new date and slot. A booking staff sent back
                     can carry an optional note for them. */}

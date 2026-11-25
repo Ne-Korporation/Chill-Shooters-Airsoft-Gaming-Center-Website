@@ -6,6 +6,7 @@ import { ActionGroup, Button } from '../../components/ui/Button'
 import { BRANCHES, branchLabel } from '../../utils/branches'
 import { Card } from '../../components/ui/Card'
 import { Input } from '../../components/ui/Input'
+import { FieldError, errorBorder, useFieldErrors } from '../../components/ui/FieldError'
 import { Modal } from '../../components/ui/Modal'
 import { apiGet, apiGetAll, apiPost, apiPut, apiDelete } from '../../utils/apiClient'
 import { useAuth } from '../../context/AuthContext'
@@ -79,6 +80,8 @@ export function AdminEquipmentPage() {
   const [loading, setLoading] = React.useState(true)
   const [saving, setSaving] = React.useState(false)
   const [form, setForm] = React.useState(emptyForm())
+  // Problems with the add/edit form, shown under the field they are about.
+  const { errors: formErrors, fail: failField, clear: clearField } = useFieldErrors<'name' | 'grams' | 'pieces' | 'locationId'>()
   const [selectedItemId, setSelectedItemId] = React.useState<string | null>(null)
   // The add/edit form opens in a pop-up.
   const [formOpen, setFormOpen] = React.useState(false)
@@ -146,22 +149,18 @@ export function AdminEquipmentPage() {
 
   // Each physical item is its own record: adding 5 masks creates Mask #1 … #5 with their own IDs.
   const handleCreate = async () => {
-    if (!form.name.trim()) {
-      toast.error('Item name is required')
-      return
-    }
     const ammo = isAmmo(form)
     const grams = Number(form.grams)
-    if (ammo && (!Number.isFinite(grams) || grams <= 0)) {
-      toast.error('Enter the grams of BBs in stock.')
-      return
-    }
     // Ammo is a single record holding its grams; everything else is one record per piece.
     const count = ammo ? 1 : Number(form.pieces)
-    if (!Number.isInteger(count) || count < 1 || count > 200) {
-      toast.error('Add between 1 and 200 pieces at a time.')
-      return
-    }
+    // Every problem shows under its field at once.
+    let ok = true
+    if (!form.name.trim()) ok = failField('name', 'Enter the item name.')
+    if (ammo && (!Number.isFinite(grams) || grams <= 0)) ok = failField('grams', 'Enter the grams of BBs in stock.')
+    // Every piece belongs to one branch; BB ammo stock is shared by all branches.
+    if (!ammo && !form.locationId) ok = failField('locationId', 'Choose the branch these pieces belong to.')
+    if (!Number.isInteger(count) || count < 1 || count > 200) ok = failField('pieces', 'Add between 1 and 200 pieces at a time.')
+    if (!ok) return
 
     setSaving(true)
     try {
@@ -170,7 +169,8 @@ export function AdminEquipmentPage() {
         count,
         category: form.category,
         status: form.status,
-        price: Number(form.price) || 0,
+        // Only admins set prices; a marshal's pieces take the model's current price on the server.
+        ...(isAdmin ? { price: Number(form.price) || 0 } : {}),
         replacementValue: Number(form.replacementValue) || 0, 
         ...(ammo ? { stockGrams: Math.round(grams), lowStockGrams: Math.max(0, Math.round(Number(form.lowGrams) || 0)) } : {}),
         description: form.description.trim(),
@@ -191,6 +191,7 @@ export function AdminEquipmentPage() {
   }
 
   const handleSelect = (item: InventoryItem) => {
+    clearField()
     setSelectedItemId(item.id)
     setFormOpen(true)
     setForm({
@@ -285,10 +286,10 @@ export function AdminEquipmentPage() {
     const piece = inventory.find((item) => item.id === selectedItemId)
     const ammo = isAmmo(form)
     const grams = Number(form.grams)
-    if (ammo && (!Number.isFinite(grams) || grams < 0)) {
-      toast.error('Enter the grams of BBs in stock.')
-      return
-    }
+    let ok = true
+    if (ammo && (!Number.isFinite(grams) || grams < 0)) ok = failField('grams', 'Enter the grams of BBs in stock.')
+    if (!ammo && !form.locationId) ok = failField('locationId', 'Choose the branch this piece belongs to.')
+    if (!ok) return
     setSaving(true)
     try {
       // Status and notes belong to this one piece.
@@ -299,14 +300,14 @@ export function AdminEquipmentPage() {
         description: form.description.trim(),
         note: form.description.trim() || 'Updated from admin inventory.',
         ...(ammo ? { stockGrams: Math.round(grams), lowStockGrams: Math.max(0, Math.round(Number(form.lowGrams) || 0)) } : {}),
-        ...(form.applyToModel ? {} : { price: Number(form.price) || 0, replacementValue: Number(form.replacementValue) || 0, category: form.category, partnerId: form.partnerId }),
+        ...(form.applyToModel ? {} : { ...(isAdmin ? { price: Number(form.price) || 0 } : {}), replacementValue: Number(form.replacementValue) || 0, category: form.category, partnerId: form.partnerId }),
         updatedAtISO: new Date().toISOString(),
       })
       // Price, category, and owner are shared by every piece of the model.
       if (form.applyToModel && piece) {
         await apiPut<any>('/api/inventory/equipments/models', {
           model: piece.model,
-          price: Number(form.price) || 0,
+          ...(isAdmin ? { price: Number(form.price) || 0 } : {}),
           replacementValue: Number(form.replacementValue) || 0, 
           category: form.category,
           partnerId: form.partnerId,
@@ -327,6 +328,7 @@ export function AdminEquipmentPage() {
   const resetForm = () => {
     setSelectedItemId(null)
     setForm(emptyForm())
+    clearField()
   }
 
   const openAddForm = () => {
@@ -546,7 +548,8 @@ export function AdminEquipmentPage() {
                 label="Item name"
                 value={form.name}
                 readOnly={Boolean(selectedItemId)}
-                onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
+                error={formErrors.name}
+                onChange={(event) => { setForm((prev) => ({ ...prev, name: event.target.value })); clearField('name') }}
                 placeholder="e.g. Mask"
               />
               {selectedItemId ? (
@@ -558,7 +561,7 @@ export function AdminEquipmentPage() {
                     className="mt-0.5 h-4 w-4 accent-[var(--color-accent)]"
                   />
                   <span>
-                    Apply price, category, and owner to every {inventory.find((item) => item.id === selectedItemId)?.model || 'matching'} piece
+                    Apply {isAdmin ? 'price, ' : ''}category, and owner to every {inventory.find((item) => item.id === selectedItemId)?.model || 'matching'} piece
                     <span className="block text-xs text-muted">Status and notes change only this piece.</span>
                   </span>
                 </label>
@@ -568,7 +571,8 @@ export function AdminEquipmentPage() {
                   type="number"
                   min="1"
                   value={form.grams}
-                  onChange={(event) => setForm((prev) => ({ ...prev, grams: event.target.value }))}
+                  error={formErrors.grams}
+                  onChange={(event) => { setForm((prev) => ({ ...prev, grams: event.target.value })); clearField('grams') }}
                   placeholder="e.g. 5000"
                 />
               ) : (
@@ -578,7 +582,8 @@ export function AdminEquipmentPage() {
                   min="1"
                   max="200"
                   value={form.pieces}
-                  onChange={(event) => setForm((prev) => ({ ...prev, pieces: event.target.value }))}
+                  error={formErrors.pieces}
+                  onChange={(event) => { setForm((prev) => ({ ...prev, pieces: event.target.value })); clearField('pieces') }}
                 />
               )}
             </div>
@@ -590,7 +595,8 @@ export function AdminEquipmentPage() {
                   type="number"
                   min="0"
                   value={form.grams}
-                  onChange={(event) => setForm((prev) => ({ ...prev, grams: event.target.value }))}
+                  error={formErrors.grams}
+                  onChange={(event) => { setForm((prev) => ({ ...prev, grams: event.target.value })); clearField('grams') }}
                   placeholder="e.g. 5000"
                 />
               </div>
@@ -611,14 +617,30 @@ export function AdminEquipmentPage() {
 
             <div className="mt-3">
               <label className="block text-sm font-semibold text-text">{isAmmo(form) ? 'Price per refill (₱)' : 'Price (₱)'}</label>
-              <input
-                type="number"
-                min="0"
-                value={form.price}
-                onChange={(event) => setForm((prev) => ({ ...prev, price: event.target.value }))}
-                placeholder="e.g. 200"
-                className="mt-2 w-full rounded-xl border border-white/10 bg-transparent px-4 py-3 text-sm text-text placeholder:text-muted"
-              />
+              {isAdmin ? (
+                <input
+                  type="number"
+                  min="0"
+                  value={form.price}
+                  onChange={(event) => setForm((prev) => ({ ...prev, price: event.target.value }))}
+                  placeholder="e.g. 200"
+                  className="mt-2 w-full rounded-xl border border-white/10 bg-transparent px-4 py-3 text-sm text-text placeholder:text-muted"
+                />
+              ) : (() => {
+                // Marshals see the price but don't set it: new pieces of a model in stock take its
+                // price, and a model new to the shop waits for an admin to price it.
+                const sameModel = selectedItemId
+                  ? inventory.find((item) => item.id === selectedItemId)
+                  : inventory.find((item) => modelOf(item) === form.name.trim())
+                return (
+                  <>
+                    <div className="mt-2 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm">
+                      {sameModel ? <>₱{Number(sameModel.price || 0).toLocaleString()}{isAmmo(form) ? ' per refill' : ' each'}</> : <span className="text-muted">Set by an admin after adding</span>}
+                    </div>
+                    <div className="mt-1 text-xs text-muted">Only admins change prices.</div>
+                  </>
+                )
+              })()}
             </div>
 
             <div className="mt-3">
@@ -678,12 +700,13 @@ export function AdminEquipmentPage() {
               <div className="block text-sm font-semibold text-text">Branch</div>
               <select
                 value={form.locationId}
-                onChange={(event) => setForm((prev) => ({ ...prev, locationId: event.target.value }))}
-                className="mt-2 w-full rounded-xl border border-white/10 glass px-4 py-3 text-sm text-text"
+                onChange={(event) => { setForm((prev) => ({ ...prev, locationId: event.target.value })); clearField('locationId') }}
+                className={`mt-2 w-full rounded-xl border border-white/10 glass px-4 py-3 text-sm text-text${errorBorder(formErrors.locationId)}`}
               >
-                <option value="">Unassigned (any branch can rent it)</option>
+                <option value="" disabled>Choose a branch…</option>
                 {BRANCHES.map((branch) => <option key={branch.id} value={branch.id}>{branch.label}</option>)}
               </select>
+              <FieldError>{formErrors.locationId}</FieldError>
               <div className="mt-1 text-xs text-muted">Each branch rents out only its own pieces.{selectedItemId ? ' Applies to this piece only.' : ''}</div>
             </label>
             ) : null}
