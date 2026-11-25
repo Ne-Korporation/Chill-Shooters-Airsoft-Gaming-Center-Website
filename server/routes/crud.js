@@ -1224,6 +1224,7 @@ router.post('/reservations/:id/reschedule', requireAuth, requireRole('user', 'ad
         { $set: { Schedule: `${newDate} • ${newTime}`, updatedAtISO: nowISO } },
       )
 
+      req.auditLogged = true
       await db.collection('audit_logs').insertOne({
         action: 'reservation_rescheduled',
         resourceType: 'reservations',

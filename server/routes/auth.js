@@ -4,6 +4,7 @@ import { createHash, randomBytes, randomInt } from 'crypto'
 import transporter from '../services/mailService.js'
 import { getDb, getUserAccountsCollection, startDbSession, USER_ACCOUNTS_COLLECTION } from '../db/mongo.js'
 import { closeAccount, previewAccountClosure, summarizePlan } from '../utils/accountClosure.js'
+import { logAudit } from '../utils/audit.js'
 import { SUSPENDED_ACCOUNT_ERROR, createAuthToken, forgetAccount, forgetSuspension, isSuspendedAccount, requireAuth, requireRole, revokeSessionsFields } from '../middleware/auth.js'
 import { nextShortId } from '../utils/shortIds.js'
 import { canonicalEmail, normalizeEmail, sameEmailFilter } from '../utils/emails.js'
@@ -396,6 +397,16 @@ router.post('/admin/add-staff', requireAuth, requireRole('admin'), async (req, r
     }
 
     const result = await userAccounts.insertOne(newDoc)
+    await logAudit(db, req, {
+      module: 'staff',
+      action: 'staff_account_created',
+      label: 'Staff account created',
+      severity: 'critical',
+      resourceType: 'user_accounts',
+      resourceId: newDoc.id,
+      summary: `Staff account created: ${newDoc.name} (${normalizedRole}, ${normalizedEmail})`,
+      details: { name: newDoc.name, email: normalizedEmail, role: normalizedRole },
+    })
 
     // Send email with password
     try {
@@ -470,6 +481,16 @@ router.post('/admin/reset-password', requireAuth, requireRole('admin', 'marshal'
       { $set: { password: hashedPassword, updatedAtISO: new Date().toISOString(), ...revokeSessionsFields() } },
     )
     forgetAccount(user.id || user._id)
+    await logAudit(await getDb(), req, {
+      module: targetRole === 'user' ? 'player' : 'staff',
+      action: 'password_reset_by_staff',
+      label: 'Password reset by staff',
+      severity: targetRole === 'user' ? 'warning' : 'critical',
+      resourceType: 'user_accounts',
+      resourceId: String(user.id || user._id),
+      summary: `Password reset for ${user.name || user.email} (${targetRole === 'user' ? 'player' : targetRole}); signed out everywhere`,
+      details: { name: user.name || '', email: user.email || '', role: targetRole },
+    })
 
     // Send email with new password
     try {
@@ -546,6 +567,7 @@ router.put('/admin/players/:id/status', requireAuth, requireRole('admin'), async
       },
     )
     forgetSuspension(player.id)
+    req.auditLogged = true
     await db.collection('audit_logs').insertOne({
       action: nextStatus === 'suspended' ? 'player_suspended' : 'player_reinstated',
       resourceType: 'user_accounts',
@@ -614,6 +636,7 @@ router.post('/admin/players/:id/close', requireAuth, requireRole('admin'), async
       startSession: startDbSession,
     })
     forgetSuspension(player.id)
+    req.auditLogged = true
     await db.collection('audit_logs').insertOne({
       action: erase ? 'player_data_erased' : 'player_account_closed',
       resourceType: 'user_accounts',
@@ -627,6 +650,68 @@ router.post('/admin/players/:id/close', requireAuth, requireRole('admin'), async
     return res.json({ ok: true, data: result })
   } catch (err) {
     return res.status(err?.statusCode || 500).json({ ok: false, error: err?.message || String(err) })
+  }
+})
+
+// --- Admin: close / reopen a staff account ---
+// Staff have no bookings to settle, so closing just stops the account: no logins, and every open
+// session ends at once. Nothing is deleted (their name stays on the records they touched), and the
+// account can be reopened. An admin can't close their own account or the last open admin.
+// PUT /api/auth/admin/staff/:id/status { status: 'closed' | 'active', reason }
+router.put('/admin/staff/:id/status', requireAuth, requireRole('admin'), async (req, res) => {
+  const nextStatus = String(req.body?.status || '').toLowerCase()
+  if (!['closed', 'active'].includes(nextStatus)) {
+    return res.status(400).json({ ok: false, error: "status must be 'closed' or 'active'" })
+  }
+  const reason = String(req.body?.reason || '').trim().slice(0, 300)
+  if (nextStatus === 'closed' && !reason) return res.status(400).json({ ok: false, error: 'Give a reason for closing the account.' })
+  try {
+    const db = await getDb()
+    const userAccounts = await getUserAccountsCollection()
+    const staff = await userAccounts.findOne({ id: String(req.params.id) })
+    if (!staff) return res.status(404).json({ ok: false, error: 'Staff account not found' })
+    const role = String(staff.role || '').toLowerCase()
+    if (!['admin', 'marshal', 'registrar'].includes(role)) {
+      return res.status(400).json({ ok: false, error: 'Only staff accounts can be closed here.' })
+    }
+    if (nextStatus === 'closed') {
+      if (String(staff.id) === String(req.user.id)) {
+        return res.status(400).json({ ok: false, error: "You can't close your own account. Ask another admin." })
+      }
+      if (role === 'admin') {
+        const openAdmins = await userAccounts.countDocuments({ role: 'admin', status: { $nin: ['closed', 'suspended'] }, id: { $ne: staff.id } })
+        if (openAdmins === 0) return res.status(400).json({ ok: false, error: "This is the last open admin account, so it can't be closed." })
+      }
+    }
+
+    const nowISO = new Date().toISOString()
+    await userAccounts.updateOne(
+      { _id: staff._id },
+      nextStatus === 'closed'
+        ? {
+          $set: { status: 'closed', closedAtISO: nowISO, closedReason: reason, closedBy: String(req.user.id), updatedAtISO: nowISO, ...revokeSessionsFields() },
+          $push: { statusHistory: { status: 'closed', reason, actorId: String(req.user.id), atISO: nowISO } },
+        }
+        : {
+          $set: { status: 'active', updatedAtISO: nowISO },
+          $unset: { closedAtISO: '', closedReason: '', closedBy: '' },
+          $push: { statusHistory: { status: 'active', reason, actorId: String(req.user.id), atISO: nowISO } },
+        },
+    )
+    forgetAccount(staff.id)
+    req.auditLogged = true
+    await db.collection('audit_logs').insertOne({
+      action: nextStatus === 'closed' ? 'staff_account_closed' : 'staff_account_reopened',
+      resourceType: 'user_accounts',
+      resourceId: String(staff.id),
+      actorId: String(req.user.id),
+      actorRole: req.user.role,
+      details: { reason, staffName: staff.name || '', staffEmail: staff.email || '', staffRole: role },
+      createdAtISO: nowISO,
+    }).catch((err) => console.error('Failed to write staff closure audit log', err))
+    return res.json({ ok: true, data: { id: staff.id, status: nextStatus } })
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: String(err) })
   }
 })
 

@@ -139,7 +139,8 @@ export async function requireAuth(req, res, next) {
     if (account.validAfter && Number(payload.iat || 0) < account.validAfter) return sessionEnded(res)
     // The stored role always wins over the one written in the token.
     req.user.role = account.role
-    if (account.role === 'user' && account.suspended) {
+    // Suspended or closed players, and closed staff accounts, are refused.
+    if (account.suspended) {
       return res.status(403).json({ ok: false, error: SUSPENDED_ACCOUNT_ERROR, suspended: true })
     }
   } catch (err) {

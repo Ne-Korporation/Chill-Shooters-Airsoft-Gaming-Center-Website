@@ -53,10 +53,12 @@ function gameLabel(game: Game) {
 //   2. the broken or lost item, from the weapons and gear used in that game,
 //   3. the responsible player, filled in from whoever the item is bound to.
 // An item that isn't listed can still be picked from the inventory, with the player chosen from the game.
-export function DamageReportForm({ weapons, equipment, onFiled }: {
+export function DamageReportForm({ weapons, equipment, onFiled, defaultItemType = 'weapon' }: {
   weapons: InventoryItem[]
   equipment: InventoryItem[]
   onFiled: (result: FiledReport) => void
+  // Which kind of item a hand-typed report starts on (gear when filed from the Equipment page).
+  defaultItemType?: 'weapon' | 'equipment'
 }) {
   // 1. Game
   const [todaysGames, setTodaysGames] = useState<Game[]>([])
@@ -71,7 +73,7 @@ export function DamageReportForm({ weapons, equipment, onFiled }: {
   // 2–3. Item and player
   const [itemKey, setItemKey] = useState('')
   const [manualItem, setManualItem] = useState(false)
-  const [itemType, setItemType] = useState<'weapon' | 'equipment'>('weapon')
+  const [itemType, setItemType] = useState<'weapon' | 'equipment'>(defaultItemType)
   const [itemId, setItemId] = useState('')
   const [itemName, setItemName] = useState('')
   const [playerName, setPlayerName] = useState('')

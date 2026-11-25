@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import toast from 'react-hot-toast'
@@ -13,7 +12,6 @@ import {
   FiPrinter,
   FiShield,
   FiUser,
-  FiX,
 } from 'react-icons/fi'
 
 import { Card } from '../../components/ui/Card'
@@ -25,14 +23,13 @@ import { IdUpload } from './IdUpload'
 import { SignaturePad } from './SignaturePad'
 import { apiGet, apiPost, apiPut } from '../../utils/apiClient'
 import { formatPhPhone, isValidPhPhone, PH_PHONE_PLACEHOLDER, toStoredPhPhone } from '../../utils/phone'
-import { signedWaiverText, useCurrentWaiverText, type WaiverText } from '../../utils/waiverText'
-import { printWaiverDocument } from '../../utils/waiverPrint'
+import { useCurrentWaiverText, type WaiverText } from '../../utils/waiverText'
+import { buildWaiverPrintHtml, printWaiverDocument } from '../../utils/waiverPrint'
+import { Modal } from '../../components/ui/Modal'
 import { useAuth } from '../../context/AuthContext'
 import { MinorsWaivers } from './MinorsOnAccount'
 import { ageFromBirthDate, isValidBirthDate, maxAdultBirthDate, maxBirthDate } from '../../utils/age'
 import { composeFullName, splitFullName, type NameParts } from '../../utils/names'
-import { formatDateTime } from '../../utils/dates'
-import { shortReservationId } from '../../components/reservations/ReservationIdTag'
 
 type WaiverState = {
   fullName: string
@@ -1043,140 +1040,54 @@ export function WaiverPage({
         </div>
       ) : null}
 
-      {viewWaiverOpen && submittedWaiver ? createPortal(
-        <div className="waiver-print-overlay fixed inset-0 z-[9999] grid place-items-center bg-black/60 p-3 sm:p-4">
-          <div className="waiver-print-sheet flex max-h-[90dvh] w-full max-w-5xl flex-col overflow-hidden bg-white text-slate-950 shadow-2xl">
-            {/* The title row sits above the scrolling area, so the close button stays in reach and no text slides under it. */}
-            <div className="flex shrink-0 flex-col gap-4 border-b border-slate-200/70 bg-white px-6 pb-4 pt-6 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <div className="text-xs uppercase tracking-widest text-slate-500">Waiver document</div>
-                <h2 id="waiver-details-title" className="mt-1 text-2xl font-semibold">{submittedWaiver.fullName || 'Unnamed player'}</h2>
-                <p className="mt-2 text-sm text-slate-600">This is your submitted waiver record.</p>
-              </div>
-              <div className="waiver-print-controls flex shrink-0 items-center gap-2 self-start sm:self-auto">
-                <Button variant="secondary" onClick={printWaiver}>
-                  <FiPrinter />
-                  Print waiver
-                </Button>
-                <button
-                  type="button"
-                  onClick={() => setViewWaiverOpen(false)}
-                  className="shrink-0 rounded-lg p-2 text-slate-600 hover:bg-slate-100"
-                  aria-label="Close waiver view"
-                >
-                  <FiX />
-                </button>
-              </div>
-            </div>
-
-            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 pb-6">
-            <div className="grid gap-4 sm:grid-cols-2 pt-5 text-sm leading-relaxed text-slate-700">
-              <div>
-                <div className="text-[11px] uppercase tracking-widest text-slate-500">Waiver ID</div>
-                <p className="mt-1 font-medium">{submittedWaiver.id || submittedWaiver._id || '-'}</p>
-              </div>
-              <div>
-                <div className="text-[11px] uppercase tracking-widest text-slate-500">Submitted</div>
-                <p className="mt-1 font-medium">{formatDateTime(submittedWaiver.submittedAtISO, '-')}</p>
-              </div>
-              <div>
-                <div className="text-[11px] uppercase tracking-widest text-slate-500">Player ID</div>
-                <p className="mt-1 font-medium">{submittedWaiver.userId || 'Guest submission'}</p>
-              </div>
-              <div>
-                <div className="text-[11px] uppercase tracking-widest text-slate-500">Status</div>
-                <p className="mt-1 font-medium">{submittedWaiver.status || 'pending'}</p>
-              </div>
-            </div>
-
-            <div className="waiver-print-body pt-6 text-sm leading-relaxed text-slate-700">
-              <p className="uppercase tracking-widest text-[11px] text-slate-500">Participant details</p>
-              <p className="mt-3"><span className="font-semibold">Name:</span> {submittedWaiver.fullName || '-'}</p>
-              <p className="mt-2"><span className="font-semibold">Age:</span> {submittedWaiver.age ?? '-'}</p>
-              <p className="mt-2"><span className="font-semibold">Reservation:</span> <span title={submittedWaiver.reservationId || ''}>{submittedWaiver.reservationId ? shortReservationId(submittedWaiver.reservationId) : '-'}</span></p>
-              <p className="mt-2"><span className="font-semibold">ID type:</span> {submittedWaiver.idType || '-'}</p>
-              {submittedWaiver.idImage ? (
-                <div className="mt-1 inline-block rounded-lg border border-slate-200 bg-white p-2">
-                  <img src={submittedWaiver.idImage} alt="Your ID" className="block h-24 object-contain" />
-                </div>
+      {/* The player's own waiver, shown the same way staff see it: the signed document as it prints
+          (text, signatures and IDs), fitted to the window so only the window scrolls. */}
+      {viewWaiverOpen && submittedWaiver ? (
+        <Modal
+          eyebrow={`Waiver ${submittedWaiver.id || submittedWaiver._id || ''}`}
+          title={`${submittedWaiver.fullName || 'Unnamed player'}${submittedWaiver.age != null ? ` (Age ${submittedWaiver.age})` : ''}`}
+          size="lg"
+          confirmDiscard={false}
+          onClose={() => setViewWaiverOpen(false)}
+          footer={
+            <>
+              <Button variant="ghost" className="flex-1 sm:flex-none" onClick={() => setViewWaiverOpen(false)}>Close</Button>
+              <Button className="flex-1 sm:flex-none" onClick={printWaiver}><FiPrinter /> Print waiver</Button>
+            </>
+          }
+        >
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 font-semibold capitalize ${
+                String(submittedWaiver.status || '').toLowerCase() === 'approved'
+                  ? 'border-success/30 bg-success/10 text-success'
+                  : String(submittedWaiver.status || '').toLowerCase() === 'denied'
+                    ? 'border-danger/30 bg-danger/10 text-danger'
+                    : 'border-warning/30 bg-warning/10 text-warning'
+              }`}>
+                {String(submittedWaiver.status || 'pending')}
+              </span>
+              {submittedWaiver.validUntilISO ? (
+                <span className="text-muted">Valid until {new Date(submittedWaiver.validUntilISO).toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric' })}</span>
               ) : null}
-
-              <p className="mt-6 uppercase tracking-widest text-[11px] text-slate-500">Guardian information</p>
-              {submittedWaiver.isMinor ? (
-                <>
-                  <p className="mt-3"><span className="font-semibold">Guardian name:</span> {submittedWaiver.guardianName || '-'}</p>
-                  <p className="mt-2"><span className="font-semibold">Guardian consent:</span> {submittedWaiver.guardianConsent ? 'Yes' : 'No'}</p>
-                  {submittedWaiver.guardianPhone ? <p className="mt-2"><span className="font-semibold">Guardian phone:</span> {formatPhPhone(submittedWaiver.guardianPhone)}</p> : null}
-                  <p className="mt-2"><span className="font-semibold">Guardian ID type:</span> {submittedWaiver.guardianIdType || '-'}</p>
-                  <div className="mt-2 flex flex-wrap gap-4">
-                    {submittedWaiver.guardianIdImage ? (
-                      <div>
-                        <span className="font-semibold">Guardian ID:</span>
-                        <div className="mt-1 inline-block rounded-lg border border-slate-200 bg-white p-2">
-                          <img src={submittedWaiver.guardianIdImage} alt="Guardian ID" className="block h-24 object-contain" />
-                        </div>
-                      </div>
-                    ) : null}
-                    {submittedWaiver.guardianSignatureImage ? (
-                      <div>
-                        <span className="font-semibold">Guardian signature:</span>
-                        <div className="mt-1 inline-block rounded-lg border border-slate-200 bg-white p-2">
-                          <img src={submittedWaiver.guardianSignatureImage} alt="Guardian signature" className="block h-24 object-contain" />
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
-                </>
-              ) : (
-                <p className="mt-3">Not required for participants 18 or older.</p>
-              )}
-
-              <p className="mt-6 uppercase tracking-widest text-[11px] text-slate-500">Consent summary</p>
-              <ul className="mt-3 list-disc space-y-2 pl-5">
-                <li>Terms accepted: {submittedWaiver.termsAccepted ? 'Yes' : 'No'}</li>
-                <li>Participation consent: {submittedWaiver.consent ? 'Yes' : 'No'}</li>
-                <li>Signature captured: {submittedWaiver.hasSignature ? 'Yes' : 'No'}</li>
-              </ul>
-
-              <p className="mt-6 uppercase tracking-widest text-[11px] text-slate-500">{signedWaiverText(submittedWaiver).title}</p>
-              <div className="waiver-print-terms mt-3">
-                <WaiverTermsBody
-                  text={signedWaiverText(submittedWaiver)}
-                  isMinor={Boolean(submittedWaiver.isMinor)}
-                  textClass="text-slate-700"
-                  headingClass="text-slate-500"
-                />
-              </div>
-
-              <div className="mt-6 border-t border-slate-200/70 pt-4">
-                <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500">Signature</p>
-                {submittedWaiver.signatureImage ? (
-                  <div className="mt-2 inline-block rounded-lg border border-slate-200 bg-white p-2">
-                    <img src={submittedWaiver.signatureImage} alt="Participant signature" className="h-20 object-contain" />
-                  </div>
-                ) : (
-                  <div className="mt-2 text-xs text-slate-500">No signature image submitted.</div>
-                )}
-                <p className="mt-2 text-sm font-semibold text-slate-900">{submittedWaiver.fullName || '-'}</p>
-              </div>
             </div>
-
-            <div className="mt-8 border-t border-slate-200/70 pt-4 text-sm text-slate-500">
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <p><span className="font-semibold text-slate-700">Document reference:</span> {submittedWaiver.id || submittedWaiver._id || '-'}</p>
-                  <p className="mt-2"><span className="font-semibold text-slate-700">Displayed as:</span> waiver document view</p>
-                </div>
-                <Button variant="ghost" onClick={printWaiver}>
-                  <FiPrinter />
-                  Print waiver
-                </Button>
-              </div>
-            </div>
-            </div>
+            <iframe
+              title={`Waiver ${submittedWaiver.id || submittedWaiver._id || ''}`}
+              srcDoc={buildWaiverPrintHtml(submittedWaiver, { preview: true })}
+              scrolling="no"
+              onLoad={(event) => {
+                const frame = event.currentTarget
+                const fit = () => {
+                  const body = frame.contentDocument?.body
+                  if (body) frame.style.height = `${body.scrollHeight}px`
+                }
+                fit()
+                frame.contentDocument?.querySelectorAll('img').forEach((img) => img.addEventListener('load', fit))
+              }}
+              className="block min-h-[50vh] w-full rounded-xl border border-white/10 bg-white"
+            />
           </div>
-        </div>,
-        document.body,
+        </Modal>
       ) : null}
 
       {approvedOwn ? (

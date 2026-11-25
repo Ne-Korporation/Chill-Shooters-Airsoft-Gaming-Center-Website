@@ -51,6 +51,7 @@ router.put('/cause-days/:dateISO', requireAuth, requireRole('admin'), async (req
       },
       { upsert: true },
     )
+    req.auditLogged = true
     await db.collection('audit_logs').insertOne({
       action: isNew ? 'cause_day_set' : 'cause_day_edited',
       resourceType: CAUSE_DAYS,
@@ -86,6 +87,7 @@ router.post('/cause-days/:dateISO/remove', requireAuth, requireRole('admin'), as
         $push: { history: { action: 'removed', atISO: nowISO, by: actorOf(req) } },
       },
     )
+    req.auditLogged = true
     await db.collection('audit_logs').insertOne({
       action: 'cause_day_removed',
       resourceType: CAUSE_DAYS,
@@ -147,6 +149,7 @@ router.put('/closed-days/:dateISO', requireAuth, requireRole('admin'), async (re
       },
       { upsert: true },
     )
+    req.auditLogged = true
     await db.collection('audit_logs').insertOne({
       action: isNew ? 'closed_day_set' : 'closed_day_edited',
       resourceType: CLOSED_DAYS,
@@ -178,6 +181,7 @@ router.post('/closed-days/:dateISO/remove', requireAuth, requireRole('admin'), a
         $push: { history: { action: 'reopened', atISO: nowISO, by: actorOf(req) } },
       },
     )
+    req.auditLogged = true
     await db.collection('audit_logs').insertOne({
       action: 'closed_day_reopened',
       resourceType: CLOSED_DAYS,

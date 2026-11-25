@@ -10,6 +10,7 @@ import { requireAuth, requireRole } from './middleware/auth.js'
 import { configuredAppUrl, rememberAppOrigin } from './utils/appUrl.js'
 import { signFileLinksForSignedIn } from './utils/fileLinks.js'
 import { bumpTopics, changeSnapshot, trackChanges } from './utils/changeFeed.js'
+import { auditRequests } from './utils/audit.js'
 import { corsPolicy, errorHandler, hideServerErrors, noStoreForAuthenticated, rateLimit, securityHeaders } from './middleware/security.js'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -73,6 +74,8 @@ app.use(express.json({ limit: '10mb' }))
 app.use(signFileLinksForSignedIn)
 // Open pages poll this to refresh themselves when data changes (see utils/changeFeed.js).
 app.use(trackChanges)
+// Every successful change by a signed-in user goes into the audit trail (see utils/audit.js).
+app.use(auditRequests)
 app.get('/api/changes', (_req, res) => {
   res.set('Cache-Control', 'no-store')
   return res.json({ ok: true, data: changeSnapshot() })
