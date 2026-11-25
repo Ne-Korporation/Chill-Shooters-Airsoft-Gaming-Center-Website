@@ -32,11 +32,12 @@ function WalkInForm({ disabled, onCreated }: { disabled: boolean; onCreated: (re
   // Walk-ins must bring their own complete gear: players who need rentals reserve online.
   const [ownGearConfirmed, setOwnGearConfirmed] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [contactError, setContactError] = useState('')
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault()
     if (form.contact && !isValidPhPhone(form.contact)) {
-      toast.error('Enter the contact number as 09XX XXX XXXX, or leave it blank.')
+      setContactError('Enter the contact number as 09XX XXX XXXX, or leave it blank.')
       return
     }
     setSaving(true)
@@ -74,7 +75,7 @@ function WalkInForm({ disabled, onCreated }: { disabled: boolean; onCreated: (re
         <fieldset disabled={disabled} className={`space-y-3 ${disabled ? 'opacity-50' : ''}`}>
         <div className="grid gap-3 sm:grid-cols-2">
           <Input label="Name" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
-          <Input label="Contact number (optional)" inputMode="tel" placeholder={PH_PHONE_PLACEHOLDER} value={form.contact} onChange={(e) => setForm((f) => ({ ...f, contact: formatPhPhone(e.target.value) }))} />
+          <Input label="Contact number (optional)" inputMode="tel" placeholder={PH_PHONE_PLACEHOLDER} value={form.contact} error={contactError} onChange={(e) => { setForm((f) => ({ ...f, contact: formatPhPhone(e.target.value) })); setContactError('') }} />
         </div>
         <div>
           <Input

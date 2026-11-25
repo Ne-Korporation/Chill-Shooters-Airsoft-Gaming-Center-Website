@@ -6,6 +6,7 @@ import { Card } from '../../components/ui/Card'
 import { Modal } from '../../components/ui/Modal'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
+import { FieldError } from '../../components/ui/FieldError'
 import { ItemCombobox } from '../../components/ui/ItemCombobox'
 import { apiGet, apiPost, apiPut, apiGetAll } from '../../utils/apiClient'
 import { formatDateTime, formatPHP, manilaTodayISO, toInventoryOptions, type InventoryOption } from './shared'
@@ -175,10 +176,11 @@ export function RepairsPage({ embedded = false, section = 'all' }: { embedded?: 
       .catch(() => null)
   }, [load])
 
+  const [itemError, setItemError] = useState('')
   const open = async (event: React.FormEvent) => {
     event.preventDefault()
     const item = inventory.find((i) => `${i.collection}:${i.id}` === form.itemKey)
-    if (!item) return toast.error('Choose the item.')
+    if (!item) return setItemError('Choose the item.')
     setSaving(true)
     try {
       await apiPost('/api/repairs', {
@@ -258,8 +260,9 @@ export function RepairsPage({ embedded = false, section = 'all' }: { embedded?: 
               placeholder="Type a weapon or gear name, or pick one"
               items={itemOptions}
               selectedKey={form.itemKey}
-              onSelect={(item) => setForm((f) => ({ ...f, itemKey: item?.key || '' }))}
+              onSelect={(item) => { setForm((f) => ({ ...f, itemKey: item?.key || '' })); setItemError('') }}
             />
+            <FieldError className="-mt-1">{itemError}</FieldError>
             <Input label="Damage" value={form.damage} onChange={(e) => setForm((f) => ({ ...f, damage: e.target.value }))} placeholder="e.g. Cracked gearbox" />
             <div className="grid gap-3 sm:grid-cols-2">
               <Input label="Gunsmith" value={form.gunsmith} onChange={(e) => setForm((f) => ({ ...f, gunsmith: e.target.value }))} />

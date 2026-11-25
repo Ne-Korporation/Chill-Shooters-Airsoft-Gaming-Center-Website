@@ -7,6 +7,7 @@ import { ActionGroup, Button } from '../../components/ui/Button'
 import { FilterTabs } from '../../components/ui/FilterTabs'
 import { Card } from '../../components/ui/Card'
 import { Modal } from '../../components/ui/Modal'
+import { FieldError, errorBorder, useFieldErrors } from '../../components/ui/FieldError'
 import { apiGet, apiGetAll, apiPost, apiPut } from '../../utils/apiClient'
 import { Paged } from '../../components/ui/Pagination'
 import { PlayerStatsCard } from '../../components/players/PlayerStatsCard'
@@ -52,6 +53,7 @@ export function PlayerManagementPage() {
   const [showAddStaffForm, setShowAddStaffForm] = React.useState(false)
   const [newStaffName, setNewStaffName] = React.useState('')
   const [newStaffEmail, setNewStaffEmail] = React.useState('')
+  const { errors: staffErrors, fail: failStaff, clear: clearStaff } = useFieldErrors<'name' | 'email'>()
   const [newStaffRole, setNewStaffRole] = React.useState('Marshal')
   const [addingStaff, setAddingStaff] = React.useState(false)
 
@@ -171,8 +173,10 @@ export function PlayerManagementPage() {
   const handleAddStaff = async () => {
     const trimmedName = newStaffName.trim()
     const trimmedEmail = newStaffEmail.trim()
-    if (!trimmedName) { toast.error('Staff name is required'); return }
-    if (!trimmedEmail) { toast.error('Staff email is required'); return }
+    let ok = true
+    if (!trimmedName) ok = failStaff('name', "Enter the staff member's full name.")
+    if (!trimmedEmail) ok = failStaff('email', "Enter the staff member's email address.")
+    if (!ok) return
     setAddingStaff(true)
     try {
       const res = await apiPost<any>('/api/auth/admin/add-staff', { name: trimmedName, email: trimmedEmail, role: newStaffRole.toLowerCase() })
@@ -578,18 +582,20 @@ export function PlayerManagementPage() {
                     <label className="block text-xs font-semibold text-muted mb-1">Full Name</label>
                     <input 
                       value={newStaffName} 
-                      onChange={(e) => setNewStaffName(e.target.value)} 
-                      className="w-full rounded-xl border border-white/10 bg-transparent px-3 py-2 text-sm text-text" 
+                      onChange={(e) => { setNewStaffName(e.target.value); clearStaff('name') }}
+                      className={`w-full rounded-xl border border-white/10 bg-transparent px-3 py-2 text-sm text-text${errorBorder(staffErrors.name)}`}
                     />
+                    <FieldError className="mt-1">{staffErrors.name}</FieldError>
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-muted mb-1">Email Address</label>
                     <input 
                       value={newStaffEmail} 
-                      onChange={(e) => setNewStaffEmail(e.target.value)} 
-                      type="email" 
-                      className="w-full rounded-xl border border-white/10 bg-transparent px-3 py-2 text-sm text-text" 
+                      onChange={(e) => { setNewStaffEmail(e.target.value); clearStaff('email') }}
+                      type="email"
+                      className={`w-full rounded-xl border border-white/10 bg-transparent px-3 py-2 text-sm text-text${errorBorder(staffErrors.email)}`}
                     />
+                    <FieldError className="mt-1">{staffErrors.email}</FieldError>
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-muted mb-1">Role</label>

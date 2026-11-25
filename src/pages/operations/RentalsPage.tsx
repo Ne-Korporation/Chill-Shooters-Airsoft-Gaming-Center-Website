@@ -6,6 +6,7 @@ import { FiAlertTriangle, FiCheck, FiLogOut, FiX } from 'react-icons/fi'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
+import { FieldError } from '../../components/ui/FieldError'
 import { apiGet, apiGetAll, apiPost, apiPut } from '../../utils/apiClient'
 import { Paged } from '../../components/ui/Pagination'
 import { ItemCombobox, type ComboItem } from '../../components/ui/ItemCombobox'
@@ -173,6 +174,8 @@ export function RentalsPanel({ reservationId, active = true, finished = false }:
   const [form, setForm] = useState({ playerName: '', playerId: '' })
   // The piece picked in each slot ("" = nothing to hand out for that slot).
   const [picks, setPicks] = useState<Record<Slot, string>>({ gun: '', vest: '', mask: '' })
+  const [picksError, setPicksError] = useState('')
+  useEffect(() => setPicksError(''), [picks])
   const [busy, setBusy] = useState(false)
   const [inventoryState, setInventoryState] = useState<'loading' | 'ready' | 'error'>('loading')
 
@@ -255,7 +258,7 @@ export function RentalsPanel({ reservationId, active = true, finished = false }:
     const items = SLOTS
       .map(({ slot }) => inventory.find((i) => `${i.collection}:${i.id}` === picks[slot]))
       .filter((item): item is InventoryOption => Boolean(item))
-    if (!items.length) return toast.error('Pick a gun, vest or mask.')
+    if (!items.length) return setPicksError('Pick a gun, vest or mask.')
     setBusy(true)
     const given: string[] = []
     for (const item of items) {
@@ -516,6 +519,7 @@ export function RentalsPanel({ reservationId, active = true, finished = false }:
               <p className="text-xs text-muted">Filled in with their suggested gun and the next free vest and mask. Clear any slot they don't need.</p>
             </div>
           ) : null}
+          <FieldError className="">{picksError}</FieldError>
           <Button type="submit" className="w-full" disabled={busy || !form.playerName.trim() || !SLOTS.some(({ slot }) => picks[slot])}>
             {busy ? 'Saving…' : `Issue ${SLOTS.filter(({ slot }) => picks[slot]).map(({ label }) => label.toLowerCase()).join(', ') || 'gear'}`}
           </Button>

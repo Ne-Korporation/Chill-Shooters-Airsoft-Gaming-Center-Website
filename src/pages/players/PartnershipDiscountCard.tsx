@@ -2,6 +2,7 @@ import React from 'react'
 import toast from 'react-hot-toast'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
+import { FieldError } from '../../components/ui/FieldError'
 import { apiBase, apiGet, apiPost, getApiAuthHeaders } from '../../utils/apiClient'
 
 type Institution = { name: string; discountPercent: number }
@@ -27,12 +28,13 @@ export function PartnershipDiscountCard({ institution, status, reviewReason, onS
       .catch(() => setInstitutions([]))
   }, [])
   const [file, setFile] = React.useState<File | null>(null)
+  const [fileError, setFileError] = React.useState('')
   const [saving, setSaving] = React.useState(false)
   const normalized = String(status || '').toLowerCase()
 
   const submit = async () => {
     if (!file) {
-      toast.error('Attach a photo of your school ID.')
+      setFileError('Attach a photo of your school ID.')
       return
     }
     setSaving(true)
@@ -105,9 +107,10 @@ export function PartnershipDiscountCard({ institution, status, reviewReason, onS
             <input
               type="file"
               accept="image/*"
-              onChange={(e) => setFile(e.target.files?.[0] || null)}
+              onChange={(e) => { setFile(e.target.files?.[0] || null); setFileError('') }}
               className="block w-full text-sm text-muted file:mr-3 file:rounded-lg file:border-0 file:bg-white/10 file:px-3 file:py-2 file:text-text"
             />
+            <FieldError>{fileError}</FieldError>
           </label>
           <Button type="button" className="w-full" onClick={submit} disabled={saving || !file || !selected}>
             {saving ? 'Submitting…' : 'Request discount'}

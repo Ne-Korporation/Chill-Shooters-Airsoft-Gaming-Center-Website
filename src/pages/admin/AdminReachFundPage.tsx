@@ -1,11 +1,16 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
-import { FiHeart, FiPlusCircle } from 'react-icons/fi'
+import { FiHeart, FiPlusCircle, FiPrinter } from 'react-icons/fi'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { apiGet, apiPost } from '../../utils/apiClient'
 import { confirmDialog } from '../../components/ui/ConfirmDialog'
+import { Modal } from '../../components/ui/Modal'
+import { FieldError } from '../../components/ui/FieldError'
+import { useAuth } from '../../context/AuthContext'
+import { buildDonationFundReportHtml } from '../../utils/donationFundPrint'
+import { printReceiptHtml } from '../../utils/receiptPrint'
 
 type Summary = {
   ratePercent: number | null
@@ -76,6 +81,37 @@ export function AdminReachFundPage() {
   const [causeDays, setCauseDays] = useState<CauseDayRow[]>([])
   const [addingDay, setAddingDay] = useState<string | null>(null)
   const [entryForm, setEntryForm] = useState({ type: 'expenditure', amount: '', description: '', donorName: '', dateISO: '' })
+  const { user } = useAuth()
+
+  // Printed report for a period (both dates optional: empty prints everything).
+  const [reportOpen, setReportOpen] = useState(false)
+  const [reportRange, setReportRange] = useState({ from: '', to: '' })
+  const [reportError, setReportError] = useState('')
+  const [printing, setPrinting] = useState(false)
+  const printReport = async () => {
+    const { from, to } = reportRange
+    if (from && to && from > to) return setReportError('The start date must be on or before the end date.')
+    setPrinting(true)
+    try {
+      // The whole ledger: the page only lists the latest entries, and the running balance needs all of them.
+      const [res, causeRes] = await Promise.all([
+        apiGet<{ ok: boolean; data: LedgerEntry[] }>('/api/reach-fund?all=1'),
+        apiGet<{ ok: boolean; data: CauseDayRow[] }>('/api/reach-fund/cause-days'),
+      ])
+      printReceiptHtml(buildDonationFundReportHtml({
+        entries: res.data || [],
+        causeDays: causeRes.data || [],
+        from,
+        to,
+        preparedBy: String(user?.name || user?.email || ''),
+      }))
+      setReportOpen(false)
+    } catch (err: any) {
+      toast.error(err?.message || 'Unable to prepare the report')
+    } finally {
+      setPrinting(false)
+    }
+  }
 
   const load = useCallback(async () => {
     try {
@@ -143,12 +179,41 @@ export function AdminReachFundPage() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="flex items-center gap-2 text-3xl font-bold"><FiHeart /> Donation Fund</h1>
-        <p className="mt-1 text-sm text-muted">
-          Community outreach fund, filled by games for a cause and outside donations. It's kept in its own ledger, and spending can't exceed the fund balance.
-        </p>
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div>
+          <h1 className="flex items-center gap-2 text-3xl font-bold"><FiHeart /> Donation Fund</h1>
+          <p className="mt-1 text-sm text-muted">
+            Community outreach fund, filled by games for a cause and outside donations. It's kept in its own ledger, and spending can't exceed the fund balance.
+          </p>
+        </div>
+        <Button variant="ghost" className="shrink-0" disabled={loading} onClick={() => { setReportError(''); setReportOpen(true) }}>
+          <FiPrinter /> Print report
+        </Button>
       </div>
+
+      {reportOpen ? (
+        <Modal
+          eyebrow="Donation fund"
+          title="Print report"
+          onClose={() => setReportOpen(false)}
+          confirmDiscard={false}
+          footer={(
+            <>
+              <Button variant="ghost" onClick={() => setReportOpen(false)} disabled={printing}>Cancel</Button>
+              <Button onClick={() => void printReport()} disabled={printing}><FiPrinter /> {printing ? 'Preparing…' : 'Print'}</Button>
+            </>
+          )}
+        >
+          <p className="text-sm text-muted">
+            The totals, the games for a cause and the ledger with a running balance. Leave the dates empty to print everything. Choose "Save as PDF" in the print window to keep a copy.
+          </p>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <Input label="From (optional)" type="date" value={reportRange.from} onChange={(e) => { setReportRange((r) => ({ ...r, from: e.target.value })); setReportError('') }} />
+            <Input label="To (optional)" type="date" value={reportRange.to} onChange={(e) => { setReportRange((r) => ({ ...r, to: e.target.value })); setReportError('') }} />
+          </div>
+          <FieldError>{reportError}</FieldError>
+        </Modal>
+      ) : null}
 
       <div className="grid grid-cols-2 gap-2 md:grid-cols-2 xl:grid-cols-4">
         {tiles.map((tile) => (

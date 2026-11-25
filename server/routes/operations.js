@@ -463,7 +463,9 @@ async function reachSummary(db) {
 router.get('/reach-fund', requireAuth, requireRole('admin'), async (req, res) => {
   try {
     const db = await getDb()
-    const entries = await db.collection('reach_fund_ledger').find({}).sort({ atISO: -1 }).limit(listLimit(req)).toArray()
+    // ?all=1: the whole ledger, for the printed report (its running balance needs every entry).
+    const limit = req.query.all === '1' ? 20000 : listLimit(req)
+    const entries = await db.collection('reach_fund_ledger').find({}).sort({ atISO: -1 }).limit(limit).toArray()
     return res.json({ ok: true, summary: await reachSummary(db), data: entries })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })

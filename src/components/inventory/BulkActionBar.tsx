@@ -140,10 +140,9 @@ export function BulkUpdateModal({
             <select value={branch} onChange={(e) => setBranch(e.target.value)} className={`${fieldClass} mt-1`}>
               <option value="">Choose a branch…</option>
               {BRANCHES.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
-              <option value="none">Unassigned (any branch)</option>
             </select>
           </label>
-          <Button disabled={busy || !branch} onClick={() => onApply({ locationId: branch === 'none' ? '' : branch })}>Apply</Button>
+          <Button disabled={busy || !branch} onClick={() => onApply({ locationId: branch })}>Apply</Button>
         </div>
         <div className="border-t border-white/10 pt-4">
           <Button variant="danger-soft" className="w-full" disabled={busy} onClick={onRemove}>
