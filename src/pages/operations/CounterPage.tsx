@@ -474,7 +474,8 @@ function LedgerPanel({ reservationId, canTakePayment, onLoaded, active = true, o
         </ul>
       </Card>
 
-      <div className="space-y-4">
+      {/* Flex column so the payment card can sit at the top (order-first) while staying last in code. */}
+      <div className="flex flex-col gap-4">
         {/* Ammo and guns: added to the bill by the registrar. */}
         {canHandleGear ? (
         <>
@@ -500,7 +501,7 @@ function LedgerPanel({ reservationId, canTakePayment, onLoaded, active = true, o
 
         {/* Field fees and anything else: the registrar's, kept out of the way until needed. */}
         {!canBill ? null : !otherOpen ? (
-          <button type="button" onClick={() => setOtherOpen(true)} className="flex items-center gap-1.5 text-xs font-semibold text-accent hover:underline">
+          <button type="button" onClick={() => setOtherOpen(true)} className="flex items-center gap-1.5 self-start text-xs font-semibold text-accent hover:underline">
             <FiPlusCircle /> Other charge (field fee, etc.)
           </button>
         ) : (
@@ -533,12 +534,12 @@ function LedgerPanel({ reservationId, canTakePayment, onLoaded, active = true, o
         {finished ? (
           <div className="rounded-2xl border border-white/10 bg-white/5 p-3 text-xs text-muted">
             The game is completed, so the bill is closed: charges can no longer be added or removed.
-            {ledger.balanceDue > 0 ? ' The unpaid balance can still be collected below.' : ''}
+            {ledger.balanceDue > 0 ? ' The unpaid balance can still be collected above.' : ''}
           </div>
         ) : null}
 
         {canTakePayment && !(finished && ledger.balanceDue <= 0) ? (
-        <Card className="p-4">
+        <Card className="order-first p-4">
           <div className="flex items-center gap-2 text-sm font-bold"><FiCreditCard /> Record onsite payment</div>
 
           {/* Two parts: the booking balance (collect any time, usually at check-in), then the
@@ -629,6 +630,16 @@ function GameDialog({ reservationId, game, canTakePayment, canGroupTeams, canSee
   const slotHours = useSlotHours()
   // Today's chronograph results for the game's guns (filled when the FPS tab loads or on Start).
   const [fpsStatus, setFpsStatus] = useState<FpsStatus | null>(null)
+  // The booking itself (not counter extras like ammo, billed after) must be paid before the game starts.
+  // Loaded here too so staff who can't see the bill still get the notice.
+  const loadLedger = useCallback(() =>
+    apiGet<{ data: Ledger }>(`/api/reservations/${encodeURIComponent(reservationId)}/ledger`).then((res) => {
+      setLedger(res.data)
+      return res.data
+    }), [reservationId])
+  useEffect(() => { void loadLedger().catch(() => null) }, [loadLedger])
+  const bookingDue = ledger ? Math.max(0, Number(ledger.bookingBalanceDue ?? ledger.balanceDue)) : 0
+  const unpaidBlocksStart = canStart && bookingDue > 0
 
   const changeStatus = async (next: 'Ongoing' | 'Completed') => {
     const id = String(game?.id || game?._id?.$oid || game?._id || '')
@@ -649,6 +660,14 @@ function GameDialog({ reservationId, game, canTakePayment, canGroupTeams, canSee
     setSavingStatus(true)
     try {
       if (next === 'Ongoing') {
+        // The booking's remaining balance is settled before play.
+        const fresh = await loadLedger().catch(() => ledger)
+        const due = fresh ? Number(fresh.bookingBalanceDue ?? fresh.balanceDue) : 0
+        if (due > 0) {
+          toast.error(`Collect the remaining ${formatPHP(due)} on the booking before starting the game.`)
+          if (canSeeBill) setTab('bill')
+          return
+        }
         // Every gun in the game must pass the chronograph today before it starts.
         const fps = await loadFpsStatus(reservationId).catch(() => null)
         if (fps?.blockReason) {
@@ -717,12 +736,27 @@ function GameDialog({ reservationId, game, canTakePayment, canGroupTeams, canSee
           </span>
           <span className="flex gap-2">
             {canStart ? (
-              <Button size="sm" variant="ghost" disabled={savingStatus} onClick={() => void changeStatus('Ongoing')}>Start game</Button>
+              <Button size="sm" variant="ghost" disabled={savingStatus || unpaidBlocksStart} onClick={() => void changeStatus('Ongoing')}>Start game</Button>
             ) : null}
             {ongoing || canStart ? (
               <Button size="sm" disabled={savingStatus} onClick={() => void changeStatus('Completed')}><FiCheck /> Mark game done</Button>
             ) : null}
           </span>
+        </div>
+      ) : null}
+      {game && unpaidBlocksStart ? (
+        <div className="-mt-2 mb-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-warning/30 bg-warning/10 px-4 py-2.5 text-sm">
+          <span className="flex items-center gap-2">
+            <FiAlertTriangle className="shrink-0 text-warning" />
+            <span>
+              <span className="font-semibold">{formatPHP(bookingDue)}</span> is still unpaid on this booking. Collect the remaining balance to start the game.
+            </span>
+          </span>
+          {canSeeBill ? (
+            <button type="button" onClick={() => setTab('bill')} className="font-semibold text-accent hover:underline">Go to Bill & ammo →</button>
+          ) : (
+            <span className="text-xs text-muted">The registrar collects it at the counter.</span>
+          )}
         </div>
       ) : null}
       {finished ? (
