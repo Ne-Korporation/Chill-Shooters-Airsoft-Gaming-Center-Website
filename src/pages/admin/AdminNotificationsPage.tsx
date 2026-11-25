@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { confirmDialog } from '../../components/ui/ConfirmDialog'
-import { FiArchive, FiArrowLeft, FiCheck, FiRotateCcw, FiSearch, FiSend, FiUser, FiUsers, FiX } from 'react-icons/fi'
+import { FiArchive, FiArrowLeft, FiArrowRight, FiCheck, FiRotateCcw, FiSearch, FiSend, FiUser, FiUsers, FiX } from 'react-icons/fi'
 import { useNavigate } from 'react-router-dom'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
@@ -12,6 +12,7 @@ import { kindOf, timeLabel } from '../../utils/notificationDisplay'
 import toast from 'react-hot-toast'
 import { Paged } from '../../components/ui/Pagination'
 import { apiBase, apiGet, apiGetAll, getApiAuthHeaders } from '../../utils/apiClient'
+import { formatDateTime } from '../../utils/dates'
 import { useLiveRefresh } from '../../utils/liveUpdates'
 
 type Role = 'user' | 'registrar' | 'marshal' | 'admin'
@@ -62,6 +63,9 @@ export function AdminNotificationsPage() {
   const [feedFilter, setFeedFilter] = useState<FeedFilter>('all')
   // Notifications are archived, never cleared: the Archived view lists them and can restore them.
   const [showArchived, setShowArchived] = useState(false)
+  // In the Archived view a row opens in place to show the whole notification.
+  const [expandedId, setExpandedId] = useState<string | null>(null)
+  useEffect(() => setExpandedId(null), [showArchived])
   const now = new Date()
 
   // Everything the system has sent, to anyone (the bell only shows the admin's own).
@@ -224,7 +228,15 @@ export function AdminNotificationsPage() {
     }
   }
 
+  const goToNotification = (item: SentNotification) => {
+    const destination = resolveNotificationRoute(item, user?.role, user?.id)
+    if (destination) navigate(destination)
+  }
   const openNotification = (item: SentNotification) => {
+    if (showArchived) {
+      setExpandedId((current) => (current === item.id ? null : item.id))
+      return
+    }
     if (isMine(item)) markAsRead(item.id)
     const destination = resolveNotificationRoute(item, user?.role, user?.id)
     if (destination) navigate(destination)
@@ -431,11 +443,14 @@ export function AdminNotificationsPage() {
             <Paged items={visible}>{(pageItems) => pageItems.map((item) => {
               const kind = kindOf(item)
               const Icon = kind.icon
+              const expanded = showArchived && expandedId === item.id
+              const destination = expanded ? resolveNotificationRoute(item, user?.role, user?.id) : null
               return (
                 <div
                   key={item.id}
                   role="button"
                   tabIndex={0}
+                  aria-expanded={showArchived ? expanded : undefined}
                   onClick={() => openNotification(item)}
                   onKeyDown={(event) => {
                     if (event.key === 'Enter' || event.key === ' ') {
@@ -457,7 +472,27 @@ export function AdminNotificationsPage() {
                       <span className="shrink-0 text-xs text-muted">{timeLabel(item.createdAtISO, now)}</span>
                     </div>
                     <div className="mt-0.5 text-xs text-muted">{kind.label} · To {recipientsOf(item)}</div>
-                    <p className="mt-1 line-clamp-2 break-words text-sm text-muted">{item.message}</p>
+                    <p className={`mt-1 break-words text-sm text-muted ${expanded ? 'whitespace-pre-wrap' : 'line-clamp-2'}`}>{item.message}</p>
+                    {expanded ? (
+                      <div className="mt-2 space-y-2">
+                        {item.imageUrl ? <img src={item.imageUrl} alt="" className="max-h-64 rounded-xl border border-white/10 object-contain" /> : null}
+                        <div className="text-xs text-muted">
+                          Sent {formatDateTime(item.createdAtISO)}{item.archivedAtISO ? ` · Archived ${formatDateTime(item.archivedAtISO)}` : ''}
+                        </div>
+                        {destination ? (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              goToNotification(item)
+                            }}
+                          >
+                            Open <FiArrowRight />
+                          </Button>
+                        ) : null}
+                      </div>
+                    ) : null}
                   </div>
                   <button
                     type="button"

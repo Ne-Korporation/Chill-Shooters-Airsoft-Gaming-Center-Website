@@ -1,13 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { FiArchive, FiArrowLeft, FiChevronDown, FiFolder, FiFolderMinus, FiSearch, FiShield, FiX } from 'react-icons/fi'
+import { FiArchive, FiArrowLeft, FiChevronDown, FiEye, FiFolder, FiFolderMinus, FiSearch, FiX } from 'react-icons/fi'
 import { toast } from 'react-hot-toast'
 
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { apiGetAll } from '../../utils/apiClient'
 import { Pagination, usePagination } from '../../components/ui/Pagination'
-import { DAYS_PER_PAGE, folderLabel, gameDayOf, locationName, slotOf } from './RegistrarOngoingGamesPage'
+import { DAYS_PER_PAGE, folderLabel, GameDetailsDialog, gameDayOf, loadGameGear, locationName, slotOf } from './RegistrarOngoingGamesPage'
 import { formatDateTime } from '../../utils/dates'
 
 type GameplayStatus = 'Scheduled' | 'Ongoing' | 'Completed' | 'Cancelled' | 'Archived'
@@ -60,6 +60,14 @@ export function RegistrarArchivedGamesPage({ embedded = false }: { embedded?: bo
   const [items, setItems] = useState<GameplayDoc[]>([])
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
+  // The archived game whose details are open (read-only: no status actions).
+  const [detail, setDetail] = useState<GameplayDoc | null>(null)
+  const [gear, setGear] = useState<React.ComponentProps<typeof GameDetailsDialog>['gear']>(null)
+  const openDetails = (doc: GameplayDoc) => {
+    setDetail(doc)
+    setGear(null)
+    void loadGameGear(doc.reservationId).then(setGear)
+  }
 
   // Only the first load shows "Loading"; the 10-second refreshes update the list quietly
   // (they used to flash the loading state and pop up an error on every failed try).
@@ -225,8 +233,13 @@ export function RegistrarArchivedGamesPage({ embedded = false }: { embedded?: bo
                               {[rowId(doc) || '—', doc.Mode, doc.Group, doc.Package].filter((value) => value && value !== '—').join(' · ')}
                             </div>
                           </div>
-                          <div className="text-xs text-muted sm:text-right">
-                            Archived {formatDateTime(doc.archivedAtISO)}
+                          <div className="flex items-center justify-between gap-3 sm:justify-end">
+                            <div className="text-xs text-muted sm:text-right">
+                              Archived {formatDateTime(doc.archivedAtISO)}
+                            </div>
+                            <Button size="sm" variant="ghost" onClick={() => openDetails(doc)}>
+                              <FiEye /> Game details
+                            </Button>
                           </div>
                         </li>
                       ))}
@@ -239,6 +252,8 @@ export function RegistrarArchivedGamesPage({ embedded = false }: { embedded?: bo
         </div>
         <Pagination page={page} pageCount={pageCount} total={total} pageSize={DAYS_PER_PAGE} noun="days" onPageChange={setPage} />
       </Card>
+
+      {detail ? <GameDetailsDialog doc={detail} gear={gear} onClose={() => setDetail(null)} /> : null}
     </div>
   )
 }
