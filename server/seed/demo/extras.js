@@ -110,7 +110,6 @@ export async function buildReachFund({ db, ratePercent, historyStart, todayISO, 
       dateISO: breakdown.range.end, atISO: new Date(atManila(`${next}-03`, '09:00')).toISOString(), recordedBy: owner, ...DEMO_FLAG,
     })
   }
-  const allocated = entries.reduce((s, e) => s + e.amount, 0)
 
   const programDefs = [
     { id: 'RCH-000001', title: 'Airsoft Safety Clinic for SK Youth', offset: 55, status: 'completed', venue: 'Chill Shooters Salawag', beneficiaries: 'Sangguniang Kabataan of Brgy. Salawag', participants: 35, partner: 'SK Salawag', spend: 0.55 },
@@ -126,8 +125,13 @@ export async function buildReachFund({ db, ratePercent, historyStart, todayISO, 
     if (dateISO >= todayISO) continue
     entries.push({ type: 'donation', amount: d.amount, description: d.description, donorName: d.donorName, dateISO, atISO: new Date(atManila(dateISO, '15:00')).toISOString(), recordedBy: owner, ...DEMO_FLAG })
   }
-  const donated = entries.filter((e) => e.type === 'donation').reduce((s, e) => s + e.amount, 0)
-  let balance = allocated + donated
+  // Spending is sized from what was in the fund on the day it was spent (money dated on or
+  // before it, less what was already spent), so the balance never dips below zero on any date,
+  // including in the printed report's running balance.
+  let spentSoFar = 0
+  const availableOn = (dateISO) => entries
+    .filter((e) => e.type !== 'expenditure' && e.dateISO <= dateISO)
+    .reduce((s, e) => s + e.amount, 0) - spentSoFar
   for (const p of programDefs) {
     const dateISO = p.offset === null ? `${todayISO.slice(0, 4)}-12-19` : addDays(historyStart, p.offset)
     const createdISO = new Date(atManila(p.offset === null ? addDays(todayISO, -8) : addDays(dateISO, -20), '11:00')).toISOString()
@@ -136,10 +140,11 @@ export async function buildReachFund({ db, ratePercent, historyStart, todayISO, 
       partnerOrganization: p.partner, description: '', photoUrls: [], createdAtISO: createdISO, updatedAtISO: createdISO, createdBy: owner, ...DEMO_FLAG,
     })
     if (p.status === 'completed' && dateISO < todayISO) {
-      const amount = Math.floor(Math.min(balance * p.spend, balance) / 50) * 50
+      const available = availableOn(dateISO)
+      const amount = Math.floor(Math.max(0, available * p.spend) / 50) * 50
       if (amount > 0) {
         entries.push({ type: 'expenditure', amount, description: p.title, donorName: null, programId: p.id, dateISO, atISO: new Date(atManila(dateISO, '18:00')).toISOString(), recordedBy: owner, ...DEMO_FLAG })
-        balance -= amount
+        spentSoFar += amount
       }
     }
   }
@@ -184,7 +189,8 @@ export function buildComms({ now, todayISO, staff, files, people, reservations, 
   }
 
   const messageDefs = [
-    { daysAgo: 30, name: 'Arnel Bautista', email: `arnel.bautista@${DEMO_EMAIL_DOMAIN}`, message: 'Good day! Can we book the whole field for a company team building of 25 people on a weekday?', reply: 'Hi Arnel! Yes, weekdays are for private games. For 25 players we open two grounds. Book on the Reservations page or call us to plan the layout.' },
+    // Answered and filed away: shows in the inbox's Archived view, reply included.
+    { daysAgo: 30, name: 'Arnel Bautista', email: `arnel.bautista@${DEMO_EMAIL_DOMAIN}`, message: 'Good day! Can we book the whole field for a company team building of 25 people on a weekday?', reply: 'Hi Arnel! Yes, weekdays are for private games. For 25 players we open two grounds. Book on the Reservations page or call us to plan the layout.', archived: true },
     { daysAgo: 12, name: 'Mae Santiago', email: `mae.santiago@${DEMO_EMAIL_DOMAIN}`, message: 'Is there an age limit? My son is 12 and wants to try airsoft.', reply: 'Hi Mae! Players 7 and up can play with a parent or guardian on the booking. Add your son as a minor on your account and sign his waiver there.' },
     { daysAgo: 1, name: 'Paul Ignacio', email: `paul.ignacio@${DEMO_EMAIL_DOMAIN}`, message: 'Do you sell BBs and green gas at the field, or only rent?' },
     { daysAgo: 0.2, name: 'Kristine Lopez', email: `kristine.lopez@${DEMO_EMAIL_DOMAIN}`, message: 'Hello, do you accept walk-ins this Saturday? We have our own gear.' },
@@ -195,7 +201,7 @@ export function buildComms({ now, todayISO, staff, files, people, reservations, 
     const replyISO = new Date(atMs + 3 * HOUR).toISOString()
     messages.push({
       id: `MSG-${Math.floor(atMs).toString(36).toUpperCase()}DEMO`, name: m.name, email: m.email, message: m.message,
-      status: replied ? 'replied' : 'new', emailStatus: 'sent', createdAtISO: new Date(atMs).toISOString(),
+      status: m.archived ? 'archived' : replied ? 'replied' : 'new', emailStatus: 'sent', createdAtISO: new Date(atMs).toISOString(),
       ...(replied ? { updatedAtISO: replyISO, updatedBy: { id: String(staff.registrar.id), role: 'registrar' }, replies: [{ body: m.reply, byId: String(staff.registrar.id), byEmail: staff.registrar.email, atISO: replyISO }] } : {}),
       ...DEMO_FLAG,
     })
@@ -277,6 +283,13 @@ export function buildComms({ now, todayISO, staff, files, people, reservations, 
     })
     notify({ userId: rainy.userId, type: 'weather_advisory', title: 'Weather advisory for your game tomorrow', message: advisories[0].message, linkedResourceId: rainy.id, read: true, createdAtISO: at })
   }
+  // The admin has archived a few old, read notices: off the Sent list, in its Archived view, and
+  // still with the people who got them. The oldest announcement plus older front-desk notices.
+  const archivable = notifications
+    .filter((n) => n.read && Date.parse(n.createdAtISO) < now - 20 * DAY && n.userId === 'broadcast' && ['all', 'admin'].includes(String(n.targetRole)))
+    .sort((a, b) => a.createdAtISO.localeCompare(b.createdAtISO))
+    .slice(0, 4)
+  for (const n of archivable) n.archivedAtISO = new Date(Math.min(now - DAY, Date.parse(n.createdAtISO) + 2 * DAY)).toISOString()
   return { posts, messages, notifications, advisories }
 }
 

@@ -17,17 +17,23 @@ export function ForgotPasswordPage() {
   const {
     register,
     handleSubmit,
+    setError,
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({ defaultValues: { email: '' } })
 
   async function onSubmit(values: FormValues) {
     const email = values.email.trim()
     try {
-      const res = await apiPost<{ message?: string }>('/api/auth/forgot-password', { email })
+      const res = await apiPost<{ message?: string; resendsLeft?: number; retryAfterSeconds?: number }>('/api/auth/forgot-password', { email })
       toast.success(res?.message || 'Check your email for a 6-digit code.')
-      navigate(`/otp?email=${encodeURIComponent(email)}&flow=reset`)
+      // The code screen starts its resend countdown from here (3 resends, a minute apart).
+      navigate(`/otp?email=${encodeURIComponent(email)}&flow=reset`, {
+        state: { resendsLeft: res?.resendsLeft, retryAt: Date.now() + Number(res?.retryAfterSeconds || 60) * 1000 },
+      })
     } catch (err: any) {
-      toast.error(err?.message || 'Could not send the code. Please try again.')
+      // Asked too often (3 resends used, or one just sent): said under the email, not in a pop-up.
+      if (err?.status === 429) setError('email', { message: err.message })
+      else toast.error(err?.message || 'Could not send the code. Please try again.')
     }
   }
 
