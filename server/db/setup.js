@@ -33,6 +33,7 @@ const REQUIRED_COLLECTIONS = [
   'reservations',
   'settings',
   'site_settings',
+  'saved_teams',
   'slot_holds',
   'team_assignments',
   'uploaded_files',
@@ -91,6 +92,7 @@ async function ensureUniqueEmails(db) {
 async function ensureInventoryIndexes(db) {
   await db.collection('inventory_holds').createIndex({ status: 1, reservationDate: 1, reservationTime: 1 })
   await db.collection('audit_logs').createIndex({ createdAtISO: -1 })
+  await db.collection('saved_teams').createIndex({ ownerId: 1, nameKey: 1 })
   await db.collection('audit_logs').createIndex({ module: 1, createdAtISO: -1 })
   await db.collection('audit_logs').createIndex({ actorId: 1, createdAtISO: -1 })
   await db.collection('inventory_holds').createIndex({ reservationId: 1 })

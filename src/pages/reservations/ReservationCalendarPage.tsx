@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect, useCallback, useRef } from 'react'
 import { useLiveRefresh } from '../../utils/liveUpdates'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import toast from 'react-hot-toast'
 import {
@@ -48,6 +48,8 @@ import { DEFAULT_SLOT_HOURS, formatSlotRange, manilaTodayISO, slotHasStarted, us
 import { causeDayMessage, useCauseDays } from '../../utils/causeDays'
 import { closedDayMessage, useClosedDays } from '../../utils/closedDays'
 import { bookingRoles } from '../../utils/bookingRoles'
+import { canBook, createSavedTeam, listSavedTeams, updateSavedTeam, type SavedTeam } from '../../utils/savedTeams'
+import { promptDialog } from '../../components/ui/ConfirmDialog'
 import { addDaysISO, BOOKING_WINDOW_DAYS, monthsBetween } from '../../utils/bookingWindow'
 import { pieceAtBranch } from '../../utils/branches'
 import { emptySpots, fieldCountForPlayers, fieldCountMinimum, PRIVATE_MIN_PLAYERS } from '../../utils/privateGames'
@@ -1871,6 +1873,115 @@ export function ReservationCalendarPage() {
     if (publicGame && step === 4) setStep(5)
   }, [soloBooking, publicGame, step])
   const hasCurrentUserWaiver = !user?.id ? false : waiverEligibleSet.has(String(user.id))
+
+  // Saved team rosters (My Teams): pick one to add every teammate who can be booked right now, or
+  // save the teammates picked here as a team for next time.
+  const [savedTeams, setSavedTeams] = useState<SavedTeam[]>([])
+  const [appliedTeamId, setAppliedTeamId] = useState('')
+  const [savingTeam, setSavingTeam] = useState(false)
+  useEffect(() => {
+    if (!user?.id || user.role !== 'user') return
+    let alive = true
+    listSavedTeams().then((teams) => { if (alive) setSavedTeams(teams) }).catch(() => null)
+    return () => { alive = false }
+  }, [user?.id, user?.role])
+
+  // `fitPlayers`: raise the number of players so the whole team fits (opening the form from a
+  // team's "Book with this team"); otherwise only as many as the current player count allows.
+  const applySavedTeam = (team: SavedTeam, { fitPlayers = false } = {}) => {
+    if (!hasCurrentUserWaiver) {
+      setTeamError('Your waiver must be approved before you can add teammates.')
+      return
+    }
+    const already = new Set(selectedTeammateIds)
+    const ready = team.members.filter((member) => canBook(member) && !already.has(member.id))
+    const blocked = team.members.filter((member) => !canBook(member))
+    const room = fitPlayers ? ready.length : Math.max(0, maxTeammates - selectedTeammates.length)
+    const added = ready.slice(0, room)
+    const left = ready.slice(room)
+    if (fitPlayers && selectedTeammates.length + added.length + 1 > players) setPlayers(selectedTeammates.length + added.length + 1)
+    if (added.length) {
+      setSelectedTeammates((current) => [...current, ...added.map((member) => ({
+        id: member.id,
+        name: member.name,
+        email: member.email,
+        status: 'active',
+        waiverSubmitted: true,
+        hasApprovedWeapon: false,
+      }))])
+    }
+    if (!teamName.trim()) setTeamName(team.name)
+    setAppliedTeamId(team.id)
+    setTeamError(null)
+    void updateSavedTeam(team.id, { used: true }).catch(() => null)
+    const notes = [
+      blocked.length ? `Skipped ${blocked.map((member) => `${member.name} (${member.blockedReason.toLowerCase()})`).join(', ')}.` : '',
+      left.length ? `${left.length} more didn't fit: raise the number of players to add ${left.length === 1 ? 'them' : 'everyone'}.` : '',
+    ].filter(Boolean).join(' ')
+    if (added.length) toast.success(`Added ${added.length} teammate${added.length === 1 ? '' : 's'} from ${team.name}.${notes ? ` ${notes}` : ''}`, { duration: notes ? 7000 : 4000 })
+    else toast.error(notes || `Everyone in ${team.name} is already on this booking.`, { duration: 6000 })
+  }
+
+  // "Book with this team" on My Teams opens the form with ?team=<id>: fill it in once, as soon
+  // as the teams and the player's own waiver status are known.
+  const teamFromLink = useMemo(() => new URLSearchParams(location.search).get('team') || '', [location.search])
+  const teamLinkApplied = useRef(false)
+  useEffect(() => {
+    if (!teamFromLink || teamLinkApplied.current || loadingWaiverEligibility || !savedTeams.length) return
+    const team = savedTeams.find((entry) => entry.id === teamFromLink)
+    teamLinkApplied.current = true
+    if (team) applySavedTeam(team, { fitPlayers: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teamFromLink, loadingWaiverEligibility, savedTeams])
+
+  const adultTeammates = selectedTeammates.filter((member) => !member.isMinor)
+  const appliedTeam = savedTeams.find((team) => team.id === appliedTeamId) || null
+  // The applied team, changed here (teammates added or removed): offer to update it.
+  const appliedTeamChanged = Boolean(appliedTeam) && (() => {
+    const saved = new Set(appliedTeam!.members.map((member) => member.id))
+    return adultTeammates.length !== saved.size || adultTeammates.some((member) => !saved.has(member.id))
+  })()
+
+  const saveTeammatesAsTeam = async () => {
+    const name = await promptDialog({
+      title: 'Save these teammates as a team',
+      message: `Next time, pick it under "Use a saved team" and all ${adultTeammates.length} teammate${adultTeammates.length === 1 ? ' is' : 's are'} added at once. Minors aren't saved.`,
+      label: 'Team name',
+      placeholder: 'e.g., Bravo Squad',
+      defaultValue: teamName.trim(),
+      confirmLabel: 'Save team',
+      required: true,
+      maxLength: 60,
+    })
+    if (!name) return
+    setSavingTeam(true)
+    try {
+      const saved = await createSavedTeam(name, adultTeammates.map((member) => member.id))
+      setSavedTeams((current) => [saved, ...current])
+      setAppliedTeamId(saved.id)
+      if (!teamName.trim()) setTeamName(saved.name)
+      toast.success(`${saved.name} saved to My Teams.`)
+    } catch (err: any) {
+      toast.error(err?.message || 'Could not save the team.')
+    } finally {
+      setSavingTeam(false)
+    }
+  }
+
+  const updateAppliedTeam = async () => {
+    if (!appliedTeam) return
+    setSavingTeam(true)
+    try {
+      const saved = await updateSavedTeam(appliedTeam.id, { memberIds: adultTeammates.map((member) => member.id) })
+      setSavedTeams((current) => current.map((team) => (team.id === saved.id ? saved : team)))
+      toast.success(`${saved.name} updated with these teammates.`)
+    } catch (err: any) {
+      toast.error(err?.message || 'Could not update the team.')
+    } finally {
+      setSavingTeam(false)
+    }
+  }
+
   // Only registered players can be booked: every spot besides the captain needs a teammate account.
   const teamSelectionComplete = maxTeammates === 0 || selectedTeammateIds.length === maxTeammates
   const missingTeammates = Math.max(0, maxTeammates - selectedTeammateIds.length)
@@ -3062,6 +3173,42 @@ export function ReservationCalendarPage() {
                   maxLength={60}
                 />
 
+                {/* Saved team rosters (My Teams): one pick adds everyone who can be booked now. */}
+                {savedTeams.length > 0 ? (
+                  <div className="rounded-2xl border border-accent/20 bg-accent/5 p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-sm font-semibold">Use a saved team</div>
+                      <Link to="/app/my-teams" className="text-xs font-semibold text-accent hover:underline">Manage teams</Link>
+                    </div>
+                    <div className="mt-1 text-xs text-muted">Adds every teammate who can be booked right now (ID verified and waiver approved).</div>
+                    <select
+                      value=""
+                      onChange={(event) => {
+                        const team = savedTeams.find((entry) => entry.id === event.target.value)
+                        if (team) applySavedTeam(team)
+                      }}
+                      disabled={!hasCurrentUserWaiver || selectedTeammates.length >= maxTeammates}
+                      className="mt-2 w-full rounded-xl border border-white/10 bg-background px-3 py-2 text-sm text-text [&>option]:bg-background"
+                      aria-label="Use a saved team"
+                    >
+                      <option value="">{selectedTeammates.length >= maxTeammates ? 'Every player spot is filled' : 'Choose a team…'}</option>
+                      {savedTeams.map((team) => {
+                        const ready = team.members.filter(canBook).length
+                        const blocked = team.members.length - ready
+                        return (
+                          <option key={team.id} value={team.id}>
+                            {team.name} · {ready} ready{blocked ? `, ${blocked} not cleared` : ''}
+                          </option>
+                        )
+                      })}
+                    </select>
+                  </div>
+                ) : user?.role === 'user' ? (
+                  <div className="text-xs text-muted">
+                    Play with the same people often? <Link to="/app/my-teams" className="font-semibold text-accent hover:underline">Save them as a team</Link> and add everyone in one step next time.
+                  </div>
+                ) : null}
+
                 <form
                   className="flex flex-col gap-2 sm:flex-row sm:items-end"
                   onSubmit={(event) => {
@@ -3197,6 +3344,19 @@ export function ReservationCalendarPage() {
                       </div>
                     )}
                   </div>
+
+                  {user?.role === 'user' && adultTeammates.length > 0 && (!appliedTeam || appliedTeamChanged) ? (
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      {appliedTeam && appliedTeamChanged ? (
+                        <Button type="button" size="sm" variant="accent-soft" disabled={savingTeam} onClick={() => void updateAppliedTeam()}>
+                          <FiUsers /> Update {appliedTeam.name}
+                        </Button>
+                      ) : null}
+                      <Button type="button" size="sm" variant="ghost" disabled={savingTeam} onClick={() => void saveTeammatesAsTeam()}>
+                        <FiPlus /> {appliedTeam ? 'Save as a new team' : 'Save as a team'}
+                      </Button>
+                    </div>
+                  ) : null}
                 </div>
 
                 {maxTeammates > 0 && missingTeammates > 0 && (

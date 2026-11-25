@@ -12,6 +12,7 @@ import { UnlockPage } from './pages/auth/UnlockPage'
 import { DashboardHomePage } from './pages/dashboard/DashboardHomePage'
 import { ReservationCalendarPage } from './pages/reservations/ReservationCalendarPage'
 import { MyReservationsPage } from './pages/reservations/MyReservationsPage'
+import { MyTeamsPage } from './pages/teams/MyTeamsPage'
 
 import { WaiverPage } from './pages/waiver/WaiverPage'
 import { PaymentPage } from './pages/payments/PaymentPage'
@@ -147,6 +148,7 @@ export default function App() {
         <Route index element={<AppHomePage />} />
         <Route path="reservations" element={<RequireRole roles={['user']}><ReservationCalendarPage /></RequireRole>} />
         <Route path="my-reservations" element={<RequireRole roles={['user']}><MyReservationsPage /></RequireRole>} />
+        <Route path="my-teams" element={<RequireRole roles={['user']}><MyTeamsPage /></RequireRole>} />
         {/* Packages are chosen in Book a game now; old links land there. */}
         <Route path="packages" element={<Navigate to="/app/reservations" replace />} />
         <Route path="waiver" element={<RequireRole roles={['user']}><WaiverPage /></RequireRole>} />
