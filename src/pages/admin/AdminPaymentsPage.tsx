@@ -42,7 +42,9 @@ const KNOWN_STATUSES: PaymentStatus[] = ['paid', 'pending', 'failed', 'review', 
 const VERIFIED: PaymentStatus[] = ['paid', 'confirmed']
 
 // Tabs: every payment, bookings with money still to collect, then the payment statuses that need
-// (or needed) a person. "Needs review" holds what the gateway flagged and older proof uploads.
+// (or needed) a person. "Needs review" holds online payments Xendit couldn't settle on its own (paid
+// after the reservation was cancelled, or a different amount than was due) and ones staff flagged;
+// it only shows while there is something in it.
 type Tab = 'all' | 'balance' | 'review' | 'failed' | 'cancelled'
 
 // A booking that isn't fully paid yet: the 50% downpayment with the rest due at the field, or a
@@ -202,6 +204,10 @@ export function AdminPaymentsPage() {
   )
   const { page, setPage, pageCount, pageItems, total } = usePagination(filtered, undefined, active)
   const reviewCount = payments.filter(needsReview).length
+  // The last one reviewed: back to every payment, since the tab goes away.
+  useEffect(() => {
+    if (active === 'review' && reviewCount === 0 && !loading) setActive('all')
+  }, [active, reviewCount, loading])
   const todayISO = manilaToday()
   const paidToday = payments.filter((payment) => VERIFIED.includes(payment.status) && new Date(Date.parse(payment.date) + 8 * 3600_000).toISOString().slice(0, 10) === todayISO)
   const collectedToday = paidToday.reduce((sum, p) => sum + p.amount, 0)
@@ -293,7 +299,7 @@ export function AdminPaymentsPage() {
   const tabs: Array<{ value: Tab; label: string; count: number }> = [
     { value: 'all', label: 'All payments', count: payments.length },
     { value: 'balance', label: 'Pending balance', count: balances.length },
-    { value: 'review', label: 'Needs review', count: reviewCount },
+    ...(reviewCount ? [{ value: 'review' as const, label: 'Needs review', count: reviewCount }] : []),
     ...(sentBackCount ? [{ value: 'failed' as const, label: 'Sent back', count: sentBackCount }] : []),
     ...(cancelledCount ? [{ value: 'cancelled' as const, label: 'Cancelled', count: cancelledCount }] : []),
   ]
@@ -304,11 +310,11 @@ export function AdminPaymentsPage() {
         <h1 className="text-3xl font-bold">Payments</h1>
         <p className="mt-1 max-w-3xl text-sm text-muted">
           Online payments go through the payment gateway and confirm bookings automatically. Here you track the balances still to
-          collect at the field, check anything the gateway flagged, and print receipts.
+          collect at the field, settle any payment that needs a person, and print receipts.
         </p>
       </div>
 
-      <div className="grid gap-2 sm:grid-cols-3">
+      <div className={`grid gap-2 ${reviewCount ? 'sm:grid-cols-3' : 'sm:grid-cols-2'}`}>
         <Card className="rounded-xl px-4 py-3">
           <div className="text-[11px] font-semibold uppercase tracking-wider text-muted">Collected today</div>
           <div className="mt-1 text-xl font-bold text-success">{peso(collectedToday)}</div>
@@ -321,13 +327,15 @@ export function AdminPaymentsPage() {
             <div className="text-xs text-muted">{balances.length} booking{balances.length === 1 ? '' : 's'} not fully paid</div>
           </Card>
         </button>
-        <button type="button" onClick={() => setActive('review')} className="text-left">
-          <Card className="h-full rounded-xl px-4 py-3 transition hover:border-accent/40">
-            <div className="text-[11px] font-semibold uppercase tracking-wider text-muted">Needs review</div>
-            <div className={`mt-1 text-xl font-bold ${reviewCount ? 'text-danger' : 'text-text'}`}>{reviewCount}</div>
-            <div className="text-xs text-muted">{reviewCount ? 'Flagged by the gateway or a proof upload' : 'Nothing to check'}</div>
-          </Card>
-        </button>
+        {reviewCount ? (
+          <button type="button" onClick={() => setActive('review')} className="text-left">
+            <Card className="h-full rounded-xl px-4 py-3 transition hover:border-accent/40">
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-muted">Needs review</div>
+              <div className="mt-1 text-xl font-bold text-danger">{reviewCount}</div>
+              <div className="text-xs text-muted">Payment{reviewCount === 1 ? '' : 's'} Xendit couldn't settle on its own</div>
+            </Card>
+          </button>
+        ) : null}
       </div>
 
       <Card className="p-4">
@@ -380,7 +388,7 @@ export function AdminPaymentsPage() {
         ) : (
         <>
         {active === 'review' ? (
-          <p className="mt-3 text-sm text-muted">Payments the gateway held for a person (e.g. paid after the booking was cancelled), and older proof uploads.</p>
+          <p className="mt-3 text-sm text-muted">Online payments Xendit couldn't settle on its own: paid after the reservation was cancelled, or a different amount than was due. Payments staff flagged for review are here too.</p>
         ) : null}
         <div className="mt-3 overflow-x-auto rounded-2xl border border-white/5">
           <div className="hidden lg:grid lg:grid-cols-12 bg-white/5 px-3 py-2 text-xs uppercase tracking-widest text-muted">
