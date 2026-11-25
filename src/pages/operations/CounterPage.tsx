@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { FiAlertTriangle, FiCheck, FiChevronRight, FiClock, FiCreditCard, FiCrosshair, FiMapPin, FiPlusCircle, FiPrinter, FiRefreshCw, FiSearch, FiTarget, FiTrash2, FiUsers, FiZap } from 'react-icons/fi'
+import { FiAlertTriangle, FiCheck, FiChevronRight, FiClock, FiCreditCard, FiCrosshair, FiMapPin, FiPlusCircle, FiPrinter, FiRefreshCw, FiTarget, FiTrash2, FiUsers, FiZap } from 'react-icons/fi'
 
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
@@ -254,11 +254,13 @@ function AddGunCard({ reservationId, ledger, onLedger, refreshKey = 0 }: { reser
 // the onsite payment form.
 // `canTakePayment`: only admins and registrars take payment. The bill (ammo and guns included) is the
 // registrar's; marshals don't see it.
-function LedgerPanel({ reservationId, canTakePayment, onLoaded, active = true, onGoToRentals, onGameCompleted }: { reservationId: string; canTakePayment: boolean; onLoaded?: (ledger: Ledger) => void; active?: boolean; onGoToRentals?: () => void; onGameCompleted?: () => void }) {
+// `finished`: the game is completed, so the bill is closed: nothing can be added or taken off,
+// and only an unpaid balance can still be collected.
+function LedgerPanel({ reservationId, canTakePayment, onLoaded, active = true, onGoToRentals, onGameCompleted, finished = false }: { reservationId: string; canTakePayment: boolean; onLoaded?: (ledger: Ledger) => void; active?: boolean; onGoToRentals?: () => void; onGameCompleted?: () => void; finished?: boolean }) {
   // The registrar runs the whole bill: ammo, guns, other charges and the payments.
   const { user } = useAuth()
-  const canHandleGear = user?.role === 'admin' || user?.role === 'registrar'
-  const canBill = user?.role === 'admin' || user?.role === 'registrar'
+  const canHandleGear = !finished && (user?.role === 'admin' || user?.role === 'registrar')
+  const canBill = !finished && (user?.role === 'admin' || user?.role === 'registrar')
   // The same rule as the server: registrars fix any line, marshals only ammo and gun lines.
   const canRemove = (type: string) => canBill || (canHandleGear && ['ammo_reload', 'gun_rental'].includes(type))
   // Rentals not yet checked in: payment waits until they're all back.
@@ -528,7 +530,14 @@ function LedgerPanel({ reservationId, canTakePayment, onLoaded, active = true, o
         </Card>
         )}
 
-        {canTakePayment ? (
+        {finished ? (
+          <div className="rounded-2xl border border-white/10 bg-white/5 p-3 text-xs text-muted">
+            The game is completed, so the bill is closed: charges can no longer be added or removed.
+            {ledger.balanceDue > 0 ? ' The unpaid balance can still be collected below.' : ''}
+          </div>
+        ) : null}
+
+        {canTakePayment && !(finished && ledger.balanceDue <= 0) ? (
         <Card className="p-4">
           <div className="flex items-center gap-2 text-sm font-bold"><FiCreditCard /> Record onsite payment</div>
 
@@ -591,7 +600,7 @@ function LedgerPanel({ reservationId, canTakePayment, onLoaded, active = true, o
             </Button>
           </form>
         </Card>
-        ) : (
+        ) : canTakePayment ? null : (
           <p className="text-xs text-muted">The registrar collects the balance at the counter.</p>
         )}
       </div>
@@ -716,6 +725,9 @@ function GameDialog({ reservationId, game, canTakePayment, canGroupTeams, canSee
           </span>
         </div>
       ) : null}
+      {finished ? (
+        <p className="-mt-2 mb-4 text-xs text-muted">This game is completed: its check-in, teams, charges and FPS readings are on record and can't be changed.</p>
+      ) : null}
       <Tabs
         value={tab}
         onChange={setTab}
@@ -738,7 +750,7 @@ function GameDialog({ reservationId, game, canTakePayment, canGroupTeams, canSee
       {/* All tabs stay mounted so switching keeps what was typed and what was loaded. */}
       <div className={`mt-4 ${tab === 'checkin' ? '' : 'hidden'}`}>
         {session ? (
-          <TeamCheckIn key={sessionId(session)} session={session} reservationId={reservationId} />
+          <TeamCheckIn key={sessionId(session)} session={session} reservationId={reservationId} readOnly={finished} />
         ) : r ? (
           <BookingPlayersSection reservationId={reservationId} />
         ) : (
@@ -748,7 +760,7 @@ function GameDialog({ reservationId, game, canTakePayment, canGroupTeams, canSee
       {canGroupTeams ? (
         <div className={`mt-4 ${tab === 'teams' ? '' : 'hidden'}`}>
           {session ? (
-            <SessionTeams key={sessionId(session)} session={session} active={tab === 'teams'} />
+            <SessionTeams key={sessionId(session)} session={session} active={tab === 'teams'} readOnly={finished} />
           ) : (
             <div className="text-sm text-muted">{r ? 'This booking has no session to group.' : 'Loading teams…'}</div>
           )}
@@ -756,7 +768,7 @@ function GameDialog({ reservationId, game, canTakePayment, canGroupTeams, canSee
       ) : null}
       {canSeeBill ? (
       <div className={`mt-4 ${tab === 'bill' ? '' : 'hidden'}`}>
-        <LedgerPanel reservationId={reservationId} canTakePayment={canTakePayment} onLoaded={setLedger} active={tab === 'bill'} onGoToRentals={() => setTab('rentals')} onGameCompleted={setCompletedNow} />
+        <LedgerPanel reservationId={reservationId} canTakePayment={canTakePayment} onLoaded={setLedger} active={tab === 'bill'} onGoToRentals={() => setTab('rentals')} onGameCompleted={setCompletedNow} finished={finished} />
       </div>
       ) : null}
       <div className={`mt-4 ${tab === 'rentals' ? '' : 'hidden'}`}>
@@ -770,6 +782,7 @@ function GameDialog({ reservationId, game, canTakePayment, canGroupTeams, canSee
           active={tab === 'fps'}
           onChange={setFpsStatus}
           onGoToRentals={() => setTab('rentals')}
+          readOnly={finished}
         />
       </div>
       ) : null}
@@ -816,7 +829,6 @@ export function CounterPage() {
   const [bookings, setBookings] = useState<Map<string, BookingSummary>>(new Map())
   const [arrivals, setArrivals] = useState<Map<string, { arrived: number; total: number; label?: string }>>(new Map())
   const [loading, setLoading] = useState(true)
-  const [lookup, setLookup] = useState('')
   const [stillOut, setStillOut] = useState<number | null>(null)
   const [open, setOpen] = useState<{ reservationId: string; game?: GameDoc } | null>(fromLink ? { reservationId: fromLink } : null)
   const slotHours = useSlotHours()
@@ -953,21 +965,6 @@ export function CounterPage() {
                 : 'Click a game to check players in, add ammo and charges, hand out rentals, and collect payment.'}
           </p>
         </div>
-        <form
-          className="flex w-full gap-2 sm:w-auto"
-          onSubmit={(e) => { e.preventDefault(); if (lookup.trim()) setOpen({ reservationId: lookup.trim() }) }}
-        >
-          <div className="relative min-w-0 flex-1 sm:flex-none">
-            <FiSearch className="absolute left-3 top-3 h-4 w-4 text-muted" />
-            <input
-              value={lookup}
-              onChange={(e) => setLookup(e.target.value)}
-              placeholder="Open by reservation ID (R-…)"
-              className="h-10 w-full rounded-2xl border sm:w-64 border-white/10 bg-white/5 pl-9 pr-3 text-sm outline-none focus:border-accent/40"
-            />
-          </div>
-          <Button type="submit" variant="ghost">Open</Button>
-        </form>
       </div>
 
       <div className="flex items-center justify-between gap-2">

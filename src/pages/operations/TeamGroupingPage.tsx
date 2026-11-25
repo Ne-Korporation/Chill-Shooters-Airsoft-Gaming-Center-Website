@@ -58,7 +58,8 @@ const smallSelect = 'rounded-lg border border-white/10 bg-background px-2 py-1 t
 // players and saves the final teams together with the list of who was present.
 // `active`: the tab is showing. Each time it opens the session is read again, so players just
 // checked in are picked up, unless the marshal has unsaved changes.
-export function SessionTeams({ session, active }: { session: CheckInSession; active: boolean }) {
+// `readOnly`: the game is completed; the saved teams are shown as they were played.
+export function SessionTeams({ session, active, readOnly = false }: { session: CheckInSession; active: boolean; readOnly?: boolean }) {
   const { location, date, slot } = session
   const [teamCount, setTeamCount] = useState(2)
   const [roster, setRoster] = useState<RosterPlayer[] | null>(null)
@@ -202,6 +203,10 @@ export function SessionTeams({ session, active }: { session: CheckInSession; act
   }
 
   if (roster === null) return <div className="text-sm text-muted">Loading teams…</div>
+  if (readOnly && !savedAt) {
+    return <div className="rounded-2xl border border-white/10 bg-white/5 p-4 text-sm text-muted">No teams were saved for this game.</div>
+  }
+  const editable = !readOnly
 
   return (
     <div className="space-y-4">
@@ -223,6 +228,7 @@ export function SessionTeams({ session, active }: { session: CheckInSession; act
               {roster.length} of {booked} booked player{booked === 1 ? '' : 's'} checked in ·{' '}
               {savedAt ? `Saved ${formatDateTime(savedAt)}` : dirty ? 'Unsaved changes' : 'Suggested, not saved yet'}
             </div>
+            {editable ? (
             <div className="flex flex-wrap gap-2">
               <select
                 value={teamCount}
@@ -240,6 +246,7 @@ export function SessionTeams({ session, active }: { session: CheckInSession; act
                 <FiSave /> {saving ? 'Saving…' : 'Save teams'}
               </Button>
             </div>
+            ) : null}
           </div>
 
           <div className="grid gap-4 md:grid-cols-2">
@@ -250,7 +257,7 @@ export function SessionTeams({ session, active }: { session: CheckInSession; act
               return (
                 <div
                   key={teamIndex}
-                  {...dropProps(teamIndex)}
+                  {...(editable ? dropProps(teamIndex) : {})}
                   // The team's color runs down its left edge, and fills the outline while a player is dragged over it.
                   className="rounded-2xl border-l-4 transition"
                   style={{
@@ -264,6 +271,7 @@ export function SessionTeams({ session, active }: { session: CheckInSession; act
                     <span className="h-3 w-3 flex-none rounded-full" style={{ backgroundColor: color.hex }} aria-hidden />
                     <input
                       value={team.name}
+                      readOnly={!editable}
                       onChange={(e) => {
                         setTeams((current) => current.map((t, i) => (i === teamIndex ? { ...t, name: e.target.value } : t)))
                         setDirty(true)
@@ -282,6 +290,7 @@ export function SessionTeams({ session, active }: { session: CheckInSession; act
                         aria-checked={option.id === color.id}
                         aria-label={option.label}
                         title={option.label}
+                        disabled={!editable}
                         onClick={() => setTeamColor(teamIndex, option.id)}
                         className={`h-5 w-5 rounded-full transition ${option.id === color.id ? 'ring-2 ring-white/80 ring-offset-2 ring-offset-background' : 'opacity-50 hover:opacity-100'}`}
                         style={{ backgroundColor: option.hex }}
@@ -307,11 +316,11 @@ export function SessionTeams({ session, active }: { session: CheckInSession; act
                     {stats.players.map((player) => (
                       <li
                         key={player.key}
-                        {...dragProps(player.key)}
-                        title="Drag to another team"
-                        className={`flex cursor-grab items-center justify-between gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 active:cursor-grabbing ${dragKey === player.key ? 'opacity-40' : ''}`}
+                        {...(editable ? dragProps(player.key) : {})}
+                        title={editable ? 'Drag to another team' : undefined}
+                        className={`flex ${editable ? 'cursor-grab' : ''} items-center justify-between gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 active:cursor-grabbing ${dragKey === player.key ? 'opacity-40' : ''}`}
                       >
-                        <FiMenu className="h-4 w-4 flex-none text-muted" aria-hidden />
+                        {editable ? <FiMenu className="h-4 w-4 flex-none text-muted" aria-hidden /> : null}
                         <div className="min-w-0 flex-1">
                           <div className="truncate text-sm font-semibold">{player.name}</div>
                           <div className="text-[11px] text-muted">
@@ -323,6 +332,7 @@ export function SessionTeams({ session, active }: { session: CheckInSession; act
                           <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${levelClass[player.experienceLevel] || levelClass.Beginner}`}>
                             {player.experienceLevel}
                           </span>
+                          {editable ? (
                           <select
                             value={teamIndex}
                             onChange={(e) => movePlayer(player.key, Number(e.target.value))}
@@ -331,6 +341,7 @@ export function SessionTeams({ session, active }: { session: CheckInSession; act
                           >
                             {teams.map((t, i) => <option key={i} value={i}>{t.name} ({colorOf(t, i).label})</option>)}
                           </select>
+                          ) : null}
                         </div>
                       </li>
                     ))}
@@ -341,7 +352,7 @@ export function SessionTeams({ session, active }: { session: CheckInSession; act
             })}
           </div>
 
-          {unassigned.length > 0 ? (
+          {editable && unassigned.length > 0 ? (
             <Card className="p-4">
               <div className="text-sm font-bold">Not on a team ({unassigned.length})</div>
               <div className="mt-1 text-xs text-muted">Players who checked in after these teams were saved. Drag them onto a team.</div>

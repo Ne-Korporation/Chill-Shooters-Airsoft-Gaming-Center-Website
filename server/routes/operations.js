@@ -91,6 +91,13 @@ router.post('/fps-logs', requireAuth, requireRole('admin', 'marshal'), async (re
 
   try {
     const db = await getDb()
+    // A reading for a game that is already completed can't be added to it (its checks are closed).
+    if (body.gameplayId) {
+      const game = await db.collection('gameplay').findOne({ id: String(body.gameplayId) }, { projection: { Status: 1, status: 1 } })
+      if (game && /^(compl|arch)/i.test(String(game.Status || game.status || ''))) {
+        return res.status(409).json({ ok: false, error: 'This game is completed, so it can no longer be changed.' })
+      }
+    }
     const weapon = body.weaponId && !ownGunId ? await findById(db, 'weapons', body.weaponId) : null
     if (body.weaponId && !ownGunId && !weapon) return res.status(404).json({ ok: false, error: 'Weapon not found' })
     const weaponName = String(weapon?.name || body.weaponName || '').trim().slice(0, 120)

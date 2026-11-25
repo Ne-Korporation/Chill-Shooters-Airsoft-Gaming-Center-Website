@@ -38,9 +38,10 @@ export async function fetchCheckInTeams(session: CheckInSession) {
 // Field check-in for one booking, shown in a game's pop-up on the Games page: registrars and
 // marshals tick off each player as they arrive. It refreshes on its own, so everyone sees who
 // from the team is on the field.
-export function TeamCheckIn({ session, reservationId }: { session: CheckInSession; reservationId: string }) {
+// `readOnly`: the game is completed, so who came is on record and can't change.
+export function TeamCheckIn({ session, reservationId, readOnly = false }: { session: CheckInSession; reservationId: string; readOnly?: boolean }) {
   const { user } = useAuth()
-  const canEdit = user?.role === 'registrar' || user?.role === 'marshal' || user?.role === 'admin'
+  const canEdit = !readOnly && (user?.role === 'registrar' || user?.role === 'marshal' || user?.role === 'admin')
   const [team, setTeam] = useState<CheckInTeam | null | undefined>(undefined)
   const [savingKey, setSavingKey] = useState<string | null>(null)
   const [search, setSearch] = useState('')
